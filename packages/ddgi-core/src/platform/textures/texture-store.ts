@@ -1,6 +1,7 @@
 /**
  * The platform's texture store (docs/design/m4-materials.md §2): one
- * `texture_2d_array` of 256 × 256 layers, each with a full mip chain, that
+ * `texture_2d_array` of 256 × 256 layers (smaller with
+ * `GIPlatformOptions.textureLayerSize`), each with a full mip chain, that
  * hit shading samples where rays hit (`giSurfaceAtCone`, shade/wgsl.ts).
  *
  * - **Format:** `rgba8unorm-srgb`. The texels are stored sRGB-encoded (8 bits
@@ -34,21 +35,15 @@ import { stageSource, type StagedSource, type UnusableSource } from './texture-s
 import {
     BUILD_LAYERS_PER_PASS,
     BUILD_STEP_BYTES,
-    BUILD_STEP_UNIFORM_BYTES,
     BUILD_WORKGROUP_SIZE,
-    buildStepOffset,
-    buildStepWords,
     FILL_ENCODED_ENTRY_POINT,
     FILL_LINEAR_ENTRY_POINT,
-    LAYER_BUILD_BYTES,
-    levelByteOffset,
-    levelRowBytes,
-    levelSize,
-    LINEAR_SCRATCH_TEXELS,
     MIP_ENTRY_POINT,
     STORE_LAYER_SIZE,
-    STORE_MIP_LEVELS,
-    TEXTURE_STORE_WGSL,
+    storeLayout,
+    textureStoreWgsl,
+    type StoreLayout,
+    type TextureLayerSize,
 } from './texture-store-wgsl.ts';
 
 /** `GPUTextureUsage` and `GPUBufferUsage` bits; the globals don't exist in Node, where tests import this file. */
@@ -63,12 +58,8 @@ export const TEXTURE_STORE_PASS = 'gi/texture-store';
 /** Layers the array starts with (see the file comment for why two). */
 const FIRST_LAYER_CAPACITY = 2;
 
-/** Bytes of one layer with its mips: 4 bytes a texel, 256² × 4/3. */
-export const LAYER_BYTES = (() => {
-    let texels = 0;
-    for (let level = 0; level < STORE_MIP_LEVELS; level++) texels += levelSize(level) * levelSize(level);
-    return texels * 4;
-})();
+/** Bytes of one layer with its mips at the default size: 4 bytes a texel, 256² × 4/3. */
+export const LAYER_BYTES = storeLayout(STORE_LAYER_SIZE).layerBytes;
 
 /** One texture to make into a layer. */
 export interface TextureLayerRequest {
@@ -118,6 +109,8 @@ export type { TextureStoreBinding } from './texture-sampling-wgsl.ts';
 export interface PlatformTextureStoreOptions {
     readonly label?: string;
     readonly warn?: (message: string) => void;
+    /** Texels on a side of each layer (`GIPlatformOptions.textureLayerSize`). Default 256. */
+    readonly layerSize?: TextureLayerSize;
 }
 
 interface BuildPipelines {
@@ -140,6 +133,8 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
     private readonly device: GPUDevice;
     private readonly label: string;
     private readonly warn: (message: string) => void;
+    /** The layer size's mip chain and build-buffer layout. */
+    private readonly layout: StoreLayout;
     private array: GPUTexture | null = null;
     private arrayView: GPUTextureView | null = null;
     private capacity = 0;
@@ -160,6 +155,12 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         this.device = device;
         this.label = options.label ?? 'gi';
         this.warn = options.warn ?? ((message) => console.warn(message));
+        this.layout = storeLayout(options.layerSize ?? STORE_LAYER_SIZE);
+    }
+
+    /** Texels on a side of each layer. */
+    get layerSize(): TextureLayerSize {
+        return this.layout.layerSize;
     }
 
     /** Compiles `gi/texture-store` (once). Called by the platform's `prepare`. */
@@ -180,7 +181,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
                 label: `${label} source`,
                 entries: [{ binding: 0, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } }],
             });
-            const module = device.createShaderModule({ label, code: TEXTURE_STORE_WGSL });
+            const module = device.createShaderModule({ label, code: textureStoreWgsl(this.layout.layerSize) });
             const fillLayout = device.createPipelineLayout({ label: `${label} fill`, bindGroupLayouts: [sharedLayout, sourceLayout] });
             const mipLayout = device.createPipelineLayout({ label: `${label} mip`, bindGroupLayouts: [sharedLayout] });
             const [fillEncoded, fillLinear, mip] = await Promise.all([
@@ -216,7 +217,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
 
     samplingModule(sceneModule: WgslModule): WgslModule {
         if (this.module && this.module.dependencies[0] !== sceneModule) throw new Error('@pmndrs/ddgi: one texture store samples for one scene copy');
-        this.module ??= createTextureSamplingModule(sceneModule, this);
+        this.module ??= createTextureSamplingModule(sceneModule, this, this.layout.layerSize);
         return this.module;
     }
 
@@ -231,7 +232,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
     }
 
     get memoryBytes(): number {
-        let bytes = this.capacity * LAYER_BYTES;
+        let bytes = this.capacity * this.layout.layerBytes;
         if (this.buffers) bytes += this.buffers.linear.size + this.buffers.bytes.size + this.buffers.steps.size;
         for (const texture of this.retired) bytes += stagingBytes(texture);
         return bytes;
@@ -271,7 +272,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
                 continue;
             }
             const label = `${this.label} texture${request.label ? ` "${request.label}"` : ''}`;
-            const source = stageCatching(this.device, request, label);
+            const source = stageCatching(this.device, request, label, this.layout.layerSize);
             if ('reason' in source) {
                 this.warn(source.reason);
                 failed.push(request.layer);
@@ -362,29 +363,30 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         batch: readonly { readonly layer: number; readonly source: StagedSource }[],
         timer: GpuTimerScope | undefined,
     ): void {
+        const layout = this.layout;
         const pass = encoder.beginComputePass({ label: `${this.label} ${TEXTURE_STORE_PASS}`, timestampWrites: timer?.computePass(TEXTURE_STORE_PASS) });
         batch.forEach(({ source }, place) => {
             const sourceGroup = this.device.createBindGroup({ label: `${this.label} ${TEXTURE_STORE_PASS} source`, layout: pipelines.sourceLayout, entries: [{ binding: 0, resource: source.view }] });
             // Level 0 from the source; the layers of a pass share the linear scratch, one after another.
             pass.setPipeline(source.encoded ? pipelines.fillEncoded : pipelines.fillLinear);
-            pass.setBindGroup(0, buffers.group, [buildStepOffset(place, 0)]);
+            pass.setBindGroup(0, buffers.group, [layout.buildStepOffset(place, 0)]);
             pass.setBindGroup(1, sourceGroup);
-            const tiles = Math.ceil(STORE_LAYER_SIZE / BUILD_WORKGROUP_SIZE);
+            const tiles = Math.ceil(layout.layerSize / BUILD_WORKGROUP_SIZE);
             pass.dispatchWorkgroups(tiles, tiles);
             pass.setPipeline(pipelines.mip);
-            for (let level = 1; level < STORE_MIP_LEVELS; level++) {
-                pass.setBindGroup(0, buffers.group, [buildStepOffset(place, level)]);
-                const levelTiles = Math.ceil(levelSize(level) / BUILD_WORKGROUP_SIZE);
+            for (let level = 1; level < layout.mipLevels; level++) {
+                pass.setBindGroup(0, buffers.group, [layout.buildStepOffset(place, level)]);
+                const levelTiles = Math.ceil(layout.levelSize(level) / BUILD_WORKGROUP_SIZE);
                 pass.dispatchWorkgroups(levelTiles, levelTiles);
             }
         });
         pass.end();
         const array = this.array!;
         batch.forEach(({ layer }, place) => {
-            for (let level = 0; level < STORE_MIP_LEVELS; level++) {
-                const size = levelSize(level);
+            for (let level = 0; level < layout.mipLevels; level++) {
+                const size = layout.levelSize(level);
                 encoder.copyBufferToTexture(
-                    { buffer: buffers.bytes, offset: place * LAYER_BUILD_BYTES + levelByteOffset(level), bytesPerRow: levelRowBytes(level), rowsPerImage: size },
+                    { buffer: buffers.bytes, offset: place * layout.layerBuildBytes + layout.levelByteOffset(level), bytesPerRow: layout.levelRowBytes(level), rowsPerImage: size },
                     { texture: array, mipLevel: level, origin: { x: 0, y: 0, z: layer } },
                     { width: size, height: size, depthOrArrayLayers: 1 },
                 );
@@ -404,8 +406,8 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         const capacity = Math.min(limit, Math.max(layers, FIRST_LAYER_CAPACITY, this.capacity * 2));
         const array = this.device.createTexture({
             label: `${this.label} texture store`,
-            size: { width: STORE_LAYER_SIZE, height: STORE_LAYER_SIZE, depthOrArrayLayers: capacity },
-            mipLevelCount: STORE_MIP_LEVELS,
+            size: { width: this.layout.layerSize, height: this.layout.layerSize, depthOrArrayLayers: capacity },
+            mipLevelCount: this.layout.mipLevels,
             format: 'rgba8unorm-srgb',
             // COPY_DST for the layers made; COPY_SRC to copy them into a bigger array (and for tests to read them).
             usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copyDst | TEXTURE_USAGE.copySrc,
@@ -413,8 +415,8 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         const previous = this.array;
         if (previous) {
             if (!encoder) throw new Error('growing the texture store needs an encoder for the copies');
-            for (let level = 0; level < STORE_MIP_LEVELS; level++) {
-                const size = levelSize(level);
+            for (let level = 0; level < this.layout.mipLevels; level++) {
+                const size = this.layout.levelSize(level);
                 encoder.copyTextureToTexture({ texture: previous, mipLevel: level }, { texture: array, mipLevel: level }, { width: size, height: size, depthOrArrayLayers: this.capacity });
             }
             this.retired.push(previous);
@@ -429,10 +431,11 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         if (this.buffers) return this.buffers;
         const device = this.device;
         const label = `${this.label} ${TEXTURE_STORE_PASS}`;
-        const linear = device.createBuffer({ label: `${label} linear scratch`, size: LINEAR_SCRATCH_TEXELS * 16, usage: BUFFER_USAGE.storage });
-        const bytes = device.createBuffer({ label: `${label} texels`, size: BUILD_LAYERS_PER_PASS * LAYER_BUILD_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
-        const steps = device.createBuffer({ label: `${label} steps`, size: BUILD_STEP_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        device.queue.writeBuffer(steps, 0, buildStepWords());
+        const layout = this.layout;
+        const linear = device.createBuffer({ label: `${label} linear scratch`, size: layout.linearScratchTexels * 16, usage: BUFFER_USAGE.storage });
+        const bytes = device.createBuffer({ label: `${label} texels`, size: BUILD_LAYERS_PER_PASS * layout.layerBuildBytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
+        const steps = device.createBuffer({ label: `${label} steps`, size: layout.buildStepUniformBytes, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        device.queue.writeBuffer(steps, 0, layout.buildStepWords());
         const group = device.createBindGroup({
             label: `${label} build`,
             layout: pipelines.sharedLayout,
@@ -465,9 +468,9 @@ type HostTextureCheck = 'checking' | 'usable' | { readonly reason: string };
  * threw out of the whole `encode`, and every texture asked for in that frame
  * stayed pending for good (T4.1's review).
  */
-function stageCatching(device: GPUDevice, request: TextureLayerRequest, label: string): StagedSource | UnusableSource {
+function stageCatching(device: GPUDevice, request: TextureLayerRequest, label: string, layerSize: number): StagedSource | UnusableSource {
     try {
-        return stageSource(device, request.source, request.srgb, STORE_LAYER_SIZE, label);
+        return stageSource(device, request.source, request.srgb, layerSize, label);
     } catch (error) {
         const why = error instanceof Error ? error.message : String(error);
         return { reason: `@pmndrs/ddgi: a texture source${request.label ? ` ("${request.label}")` : ''} could not be read (${why}); the materials using it keep their flat colour.` };

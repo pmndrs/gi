@@ -13,7 +13,10 @@
  * - `ev`, `tone` exposure in stops and the tone mapper; without `ev` the scene's own default (manifest `exposureEv`)
  * - `nav`        `orbit` or `fly`
  * - `upscale`    an upscaler quality preset; absent means off
- * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default 2)
+ * - `preset`     DDGI's quality preset, `low` or `medium` (absent: `high`, the defaults); it sets the
+ *                rays per probe, the tile sizes and the texture store, and the budget when the link
+ *                has no `budget`. Changing it starts DDGI over
+ * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default: the preset's, 2 for `high`)
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
@@ -45,6 +48,7 @@
 import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
+import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
 
 /**
  * The wind slider's start, a share of the strongest wind (`MAX_WIND_REACH_M`,
@@ -98,6 +102,8 @@ export interface ViewerUrlState {
     tone: string;
     nav: 'orbit' | 'fly';
     upscale: UpscaleQuality | null;
+    /** DDGI's quality preset (`ddgiPreset`); `high` is the defaults. */
+    preset: DDGIPresetName;
     budgetMs: number;
     probes: boolean;
     probeColor: ProbeColorName;
@@ -141,6 +147,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     tone: 'aces',
     nav: 'orbit',
     upscale: null,
+    preset: 'high',
     budgetMs: DEFAULT_BUDGET_MS,
     probes: false,
     probeColor: 'state',
@@ -174,6 +181,7 @@ const URL_KEYS = new Set([
     'tone',
     'nav',
     'upscale',
+    'preset',
     'budget',
     'probes',
     'debug',
@@ -205,6 +213,11 @@ function finiteNumber(text: string | null): number | null {
     if (text === null || text.trim() === '') return null;
     const value = Number(text);
     return Number.isFinite(value) ? value : null;
+}
+
+/** A quality preset's budget in GPU milliseconds: what the budget slider moves to when the preset is picked. */
+export function presetBudgetMs(preset: DDGIPresetName): number {
+    return ddgiPreset(preset).budget.gpuMs;
 }
 
 /** Reads a query string. Unknown or malformed values fall back to the defaults. */
@@ -242,6 +255,10 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (params.get('nav') === 'fly') state.nav = 'fly';
     state.upscale = UPSCALE_QUALITIES.find((quality) => quality === params.get('upscale')) ?? null;
 
+    const preset = params.get('preset');
+    if (isDDGIPresetName(preset)) state.preset = preset;
+    // Without a budget of its own, the link's budget is the preset's.
+    state.budgetMs = presetBudgetMs(state.preset);
     const budget = finiteNumber(params.get('budget'));
     if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
     state.probes = params.get('probes') === '1';
@@ -290,7 +307,8 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.tone !== DEFAULT_URL_STATE.tone) params.set('tone', state.tone);
     if (state.nav !== 'orbit') params.set('nav', state.nav);
     if (state.upscale) params.set('upscale', state.upscale);
-    if (state.budgetMs !== DEFAULT_BUDGET_MS) params.set('budget', String(state.budgetMs));
+    if (state.preset !== DEFAULT_URL_STATE.preset) params.set('preset', state.preset);
+    if (state.budgetMs !== presetBudgetMs(state.preset)) params.set('budget', String(state.budgetMs));
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);

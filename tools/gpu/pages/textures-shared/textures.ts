@@ -6,7 +6,7 @@
  * Not a page itself (no index.html).
  */
 
-import { levelSize, STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../../../../packages/ddgi-core/src/platform/textures/texture-store-wgsl.ts';
+import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../../../../packages/ddgi-core/src/platform/textures/texture-store-wgsl.ts';
 
 // ---------------------------------------------------------------------------
 // Colour
@@ -111,8 +111,9 @@ export type LayerLevels = Uint8Array[];
 export async function readLayer(device: GPUDevice, store: GPUTexture, layer: number): Promise<LayerLevels> {
     const levels: { offset: number; rowBytes: number; size: number }[] = [];
     let total = 0;
-    for (let level = 0; level < STORE_MIP_LEVELS; level++) {
-        const size = levelSize(level);
+    // The store's own size and mips, so a smaller store (a quality preset's) reads back too.
+    for (let level = 0; level < store.mipLevelCount; level++) {
+        const size = store.width >> level;
         const rowBytes = Math.ceil((size * 4) / 256) * 256;
         levels.push({ offset: total, rowBytes, size });
         total += rowBytes * size;

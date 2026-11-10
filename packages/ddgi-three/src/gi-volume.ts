@@ -43,9 +43,13 @@ import type { ThreeGI } from './three-gi.ts';
 import { toLightProbeGrid, type ExportedLightProbeGrid, type ToLightProbeGridOptions } from './light-probe-grid.ts';
 import { restartVolume, startVolume, type GIVolumeStartOptions, type StartedGI } from './volume-start.ts';
 
-/** `LightProbeGrid`'s default probe count for an axis: one per unit of length, at least one. */
-function defaultProbes(length: number): number {
-    return Math.max(1, Math.round(length));
+/**
+ * `LightProbeGrid`'s default probe count for an axis: one per unit of length,
+ * at least one. With a quality preset (`start`'s `preset`), one per
+ * `spacing` metres instead.
+ */
+function defaultProbes(length: number, spacing = 1): number {
+    return Math.max(1, Math.round(length / spacing));
 }
 
 export class GIVolume extends Light {
@@ -60,6 +64,13 @@ export class GIVolume extends Light {
     readonly boundingBox = new Box3();
     /** Where probe-like lights overlap, the highest priority lights the fragment. */
     priority = GI_LIGHT_PRIORITY;
+    /**
+     * The probe counts the constructor chose itself (none given), per axis,
+     * or null where the caller gave one: a quality preset's spacing replaces
+     * these at `start` ({@link useDefaultSpacing}), unless `resolution` was
+     * changed since.
+     */
+    private readonly defaultCounts: readonly (number | null)[];
     /** What `start` made, while it lives. */
     private started: StartedGI | null = null;
     private starting: Promise<void> | null = null;
@@ -71,6 +82,23 @@ export class GIVolume extends Light {
         this.height = height;
         this.depth = depth;
         this.resolution = new Vector3(widthProbes ?? defaultProbes(width), heightProbes ?? defaultProbes(height), depthProbes ?? defaultProbes(depth));
+        this.defaultCounts = [widthProbes, heightProbes, depthProbes].map((given, axis) => (given === undefined ? this.resolution.getComponent(axis) : null));
+    }
+
+    /**
+     * Where the volume was made without probe counts, and `resolution` still
+     * holds the counts the constructor chose (one a metre), spaces those axes'
+     * probes `spacing` metres apart instead (at least one probe). `start`
+     * calls it with its preset's `probeSpacing`; counts the caller gave or set
+     * are kept.
+     */
+    useDefaultSpacing(spacing: number): void {
+        if (!(spacing > 0) || !Number.isFinite(spacing)) return;
+        const lengths = [this.width, this.height, this.depth];
+        this.defaultCounts.forEach((count, axis) => {
+            if (count === null || this.resolution.getComponent(axis) !== count) return;
+            this.resolution.setComponent(axis, defaultProbes(lengths[axis], spacing));
+        });
     }
 
     /**

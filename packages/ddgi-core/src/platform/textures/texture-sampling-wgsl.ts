@@ -23,7 +23,7 @@
  */
 
 import type { BindingSlot, ModuleBindingEntry, WgslModule } from '../contract/wgsl.ts';
-import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from './texture-store-wgsl.ts';
+import { STORE_LAYER_SIZE, storeLayout, type TextureLayerSize } from './texture-store-wgsl.ts';
 
 /** `GPUShaderStage.COMPUTE`. The global does not exist in Node, where the tests import this file. */
 const SHADER_STAGE_COMPUTE = 0x4;
@@ -52,20 +52,25 @@ export const TEXTURE_STORE_SAMPLER: GPUSamplerDescriptor = {
     addressModeV: 'repeat',
 };
 
-/** The module's source, with its bindings at `slot`: the array, then the sampler. */
-export function textureSamplingWgsl(slot: BindingSlot): string {
+/**
+ * The module's source, with its bindings at `slot`: the array, then the
+ * sampler. `layerSize` is the store's (the ray cone's mip and the wrap's half
+ * texel are worked out in its texels); the default is 256.
+ */
+export function textureSamplingWgsl(slot: BindingSlot, layerSize: TextureLayerSize = STORE_LAYER_SIZE): string {
+    const { mipLevels } = storeLayout(layerSize);
     return /* wgsl */ `
 // ---- Texture store sampling (platform/textures/texture-sampling-wgsl.ts) --------------
 
-// One ${STORE_LAYER_SIZE}² layer with mips per texture (a material's texture words name
+// One ${layerSize}² layer with mips per texture (a material's texture words name
 // its layer). rgba8unorm-srgb, so samples are linear light; alpha is linear.
 @group(${slot.group}) @binding(${slot.firstBinding}) var giTextureStore: texture_2d_array<f32>;
 // Linear in and between mips, repeating: clamp and mirror are worked out on the uv (giTextureWrap).
 @group(${slot.group}) @binding(${slot.firstBinding + 1}) var giTextureSampler: sampler;
 
 // The store's layers: texels on a side, and the last mip.
-const GI_TEXTURE_SIZE: f32 = ${STORE_LAYER_SIZE}.0;
-const GI_TEXTURE_LAST_LOD: f32 = ${STORE_MIP_LEVELS - 1}.0;
+const GI_TEXTURE_SIZE: f32 = ${layerSize}.0;
+const GI_TEXTURE_LAST_LOD: f32 = ${mipLevels - 1}.0;
 
 // One axis of a mapped uv, wrapped as the mapping says. 'repeat' is left to
 // the sampler (it repeats). 'clamp' keeps the coordinate half a texel inside
@@ -109,11 +114,11 @@ fn giTextureSampleMapped(layer: u32, mapping: GiUvMapping, uvs: GiTriangleUvs, w
  * (`PlatformTextureStore.samplingModule`), so hit shading and the walk list
  * the same object and a kernel with both binds the store once.
  */
-export function createTextureSamplingModule(sceneModule: WgslModule, binding: TextureStoreBinding): WgslModule {
+export function createTextureSamplingModule(sceneModule: WgslModule, binding: TextureStoreBinding, layerSize: TextureLayerSize = STORE_LAYER_SIZE): WgslModule {
     return {
         name: 'gi-texture-store',
         dependencies: [sceneModule],
-        code: (slot: BindingSlot) => textureSamplingWgsl(slot),
+        code: (slot: BindingSlot) => textureSamplingWgsl(slot, layerSize),
         entries: TEXTURE_SAMPLING_ENTRIES,
         resources: () => [binding.view, binding.sampler],
         get version() {

@@ -37,11 +37,14 @@
 import { PerspectiveCamera, type Camera, type Scene, type WebGPURenderer } from 'three/webgpu';
 import {
     createGI,
+    ddgiPreset,
     DDGITechnique,
     DEFAULT_WARM_UP_MAX_SECONDS,
     DEFAULT_WARM_UP_MIN_PASSES,
     DEFAULT_WARM_UP_PASSES,
     GILimitError,
+    type DDGIPreset,
+    type DDGIPresetName,
     type DDGISettingsInput,
     type EnvironmentDescriptor,
     type FrameBudget,
@@ -86,9 +89,18 @@ const WARM_UP_MAX_STEPS = 100_000;
 export const DEFAULT_GI_BUDGET: FrameBudget = { gpuMs: 2 };
 
 export interface GIVolumeStartOptions {
-    /** GPU work per frame for GI updates after the warm-up. Default `{ gpuMs: 2 }`. */
+    /**
+     * A quality preset (`'low'`, `'medium'`, `'high'`, or a preset object from
+     * `ddgiPreset` with fields changed): its rays and tile sizes, its budget,
+     * its texture store size, and its probe spacing for a volume made without
+     * probe counts. `budget` and `ddgi` below win over it. Default: none, which
+     * is the same as `'high'`. `recommendPreset(adapter.info, adapter.limits)`
+     * suggests one.
+     */
+    readonly preset?: DDGIPresetName | DDGIPreset;
+    /** GPU work per frame for GI updates after the warm-up. Default the preset's, or `{ gpuMs: 2 }`. */
     readonly budget?: FrameBudget;
-    /** DDGI settings over the defaults (rays per probe, hysteresis, ...). The probe grid comes from the volume. */
+    /** DDGI settings over the preset's and the defaults (rays per probe, hysteresis, ...). The probe grid comes from the volume. */
     readonly ddgi?: Partial<Omit<DDGISettingsInput, 'volume'>>;
     /** An environment for GI rays instead of the scene's (environment.ts). */
     readonly environment?: EnvironmentDescriptor | null;
@@ -226,10 +238,18 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
     if (volume.parent === null) scene.add(volume);
     scene.updateMatrixWorld();
 
-    const platform = createGI(device, { gpuTiming: device.features.has('timestamp-query'), label: options.label ?? (volume.name || 'GIVolume') });
+    const preset = typeof options.preset === 'string' ? ddgiPreset(options.preset) : (options.preset ?? null);
+    if (preset) volume.useDefaultSpacing(preset.probeSpacing);
+    const platform = createGI(device, {
+        gpuTiming: device.features.has('timestamp-query'),
+        label: options.label ?? (volume.name || 'GIVolume'),
+        textureLayerSize: preset?.textureLayerSize,
+    });
     let threeGI: ThreeGI | null = null;
     try {
-        const technique = platform.addTechnique(new DDGITechnique({ ...options.ddgi, ...warmUpTechniqueSettings(options.warmUp), volume: volume.ddgiVolume() }));
+        // The preset first, so the host's own `ddgi` settings win over it.
+        const settings = { ...preset?.ddgi, ...options.ddgi, ...warmUpTechniqueSettings(options.warmUp), volume: volume.ddgiVolume() };
+        const technique = platform.addTechnique(new DDGITechnique(settings));
         platform.setOutput(technique);
         // The scene is copied in while the kernels compile (T2.14): `prepare` asks for every
         // compile at once, and the copy is CPU work on this thread, so the two overlap.
@@ -262,7 +282,7 @@ export async function startVolume(volume: GIVolume, renderer: WebGPURenderer, sc
         threeGI.update(camera, 0);
         await (platform as unknown as TreesBuiltSignal).rays?.whenBuilt?.();
         threeGI.update(camera, 0);
-        const budget = options.budget ?? DEFAULT_GI_BUDGET;
+        const budget = options.budget ?? (preset ? { ...preset.budget } : DEFAULT_GI_BUDGET);
         if (options.warmUp === false) {
             threeGI.budget = budget;
         } else {

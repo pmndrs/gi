@@ -18,6 +18,19 @@ describe('url state', () => {
         });
     });
 
+    it('reads the quality preset, whose budget is the default budget', () => {
+        expect(parseUrlState('').preset).toBe('high');
+        const low = parseUrlState('?preset=low');
+        expect(low).toMatchObject({ preset: 'low', budgetMs: 1 });
+        expect(serializeUrlState(low)).toBe('preset=low');
+        // A budget of its own wins, and is written only when it isn't the preset's.
+        const lowFaster = parseUrlState('?preset=low&budget=3');
+        expect(lowFaster.budgetMs).toBe(3);
+        expect(parseUrlState(serializeUrlState(lowFaster))).toEqual(lowFaster);
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, budgetMs: 2 })).toBe('');
+        expect(parseUrlState('?preset=ultra').preset).toBe('high');
+    });
+
     it('falls back to defaults for nonsense', () => {
         const state = parseUrlState('?technique=banana&gi=maybe&wipe=lpg,lpg&split=abc&ev=999&upscale=ludicrous&cam=1,2,3&budget=-4&debug=nope&probes=yes');
         expect(state.technique).toBe('ddgi');

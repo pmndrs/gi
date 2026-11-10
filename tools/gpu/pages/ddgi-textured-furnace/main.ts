@@ -28,7 +28,9 @@
  * Field mean: `ddgiSampleIrradiance` at a grid of wall, floor and ceiling
  * points, as `ddgi-furnace` reads it, over every point and channel.
  *
- * `VITE_DDGI_FRAMES` replaces FRAMES.
+ * `VITE_DDGI_FRAMES` replaces FRAMES. `VITE_DDGI_PRESET=low|medium|high`
+ * runs it with that preset's rays, tile sizes and texture store (T5.1;
+ * ddgi-shared/page-preset.ts): low's 128² store is checked here.
  */
 
 import { assert, runGpuTest } from '../../client.ts';
@@ -36,6 +38,10 @@ import type { PixelData } from '../../../../packages/ddgi-core/src/platform/cont
 import { FURNACE_SIZE_M } from '../../../../scenes/src/procedural/furnace-room.ts';
 import { createDdgiScene, FieldProbe, releaseDeviceOnPageHide, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
 import { readLayer, srgbToLinear } from '../textures-shared/textures.ts';
+import { pagePreset, presetReport } from '../ddgi-shared/page-preset.ts';
+
+/** The quality preset, when a run names one (T5.1). */
+const PRESET = pagePreset();
 
 const env = import.meta.env as Record<string, unknown>;
 /** As ddgi-furnace: 30 s of DDGI's clock at 60 Hz, which its adaptive hysteresis needs to settle. */
@@ -136,7 +142,7 @@ interface VariantResult {
 }
 
 async function runVariant(device: GPUDevice, variant: Variant, log: (line: string) => void): Promise<VariantResult> {
-    const scene = await createDdgiScene(device, 'furnace-room');
+    const scene = await createDdgiScene(device, 'furnace-room', { ...PRESET?.ddgi }, { textureLayerSize: PRESET?.textureLayerSize });
     const field = scene.ddgi.field;
     assert(field, 'DDGI has no field after prepare');
     let textureMean: number | undefined;
@@ -194,7 +200,7 @@ await runGpuTest(
         );
         assert(Math.abs(texturedDifference) <= TEXTURED_TOLERANCE, `the textured furnace's mean is ${(texturedDifference * 100).toFixed(3)}% from the flat one's (limit ${TEXTURED_TOLERANCE * 100}%)`);
         assert(Math.abs(texturesOffDifference) <= TEXTURES_OFF_TOLERANCE, `with sampleTextures off the mean is ${(texturesOffDifference * 100).toFixed(4)}% from the closed form for the stored texture mean (limit ${TEXTURES_OFF_TOLERANCE * 100}%): flat ${flat.meanEOverPi.toFixed(5)}, off ${texturesOff.meanEOverPi.toFixed(5)}, stored mean ${texturesOff.textureMean.toFixed(5)}, textured ${textured.meanEOverPi.toFixed(5)}`);
-        return { frames: FRAMES, flat, textured, texturesOff, texturedDifference, texturesOffDifference };
+        return { ...presetReport(PRESET), frames: FRAMES, flat, textured, texturesOff, texturedDifference, texturesOffDifference };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
 );

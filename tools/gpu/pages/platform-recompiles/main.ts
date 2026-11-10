@@ -21,12 +21,20 @@
  * again in random order, with some edited on the way, still with DDGI
  * updating. The light table starts with room for 64 and doubles to 4,096 on
  * the way, and the counter must stay 0 through that too.
+ *
+ * Under a quality preset (T5.1): `VITE_DDGI_PRESET=low|medium|high` runs it
+ * with that preset's rays, tile sizes and texture store, so the counter is
+ * checked within each preset (ddgi-shared/page-preset.ts).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { InstanceHandle, LightHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
 import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import { createDdgiScene, releaseDeviceOnPageHide, runFrame } from '../ddgi-shared/harness.ts';
+import { pagePreset, presetReport } from '../ddgi-shared/page-preset.ts';
+
+/** The quality preset, when a run names one (T5.1). */
+const PRESET = pagePreset();
 
 /** Instances created (and destroyed) over the run: the done-when's 1,000. */
 const INSTANCES = 1000;
@@ -53,7 +61,7 @@ const SPOT_EVERY = 3;
 await runGpuTest(
     async ({ device, log }) => {
         releaseDeviceOnPageHide(device);
-        const scene = await createDdgiScene(device, 'cabinet-row');
+        const scene = await createDdgiScene(device, 'cabinet-row', { ...PRESET?.ddgi }, { textureLayerSize: PRESET?.textureLayerSize });
         const platform = scene.platform;
         const api = platform.scene;
         const random = createRandom(0x7e3);
@@ -223,6 +231,7 @@ await runGpuTest(
         );
         platform.dispose();
         return {
+            ...presetReport(PRESET),
             created,
             destroyed,
             livePeak,

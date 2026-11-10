@@ -36,7 +36,7 @@ import { LightingControls, type LightingHandlers } from './ui/lighting-controls'
 import { Panel, type DdgiPanelSettings, type PanelState, type ProbeLegendEntry } from './ui/panel';
 import { RegionPicker } from './ui/region-picker';
 import { ScenarioControls, type ScenarioHandlers } from './ui/scenario-controls';
-import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState, type GiChoice, type ViewerUrlState } from './ui/url-state';
+import { DEFAULT_URL_STATE, parseUrlState, presetBudgetMs, serializeUrlState, type GiChoice, type ViewerUrlState } from './ui/url-state';
 
 export interface ViewerAutomationState {
     ready: boolean;
@@ -348,6 +348,7 @@ export class ViewerApp {
     /** DDGI's settings from the link and the lighting controls. */
     private ddgiSettings(): DdgiViewerSettings {
         return {
+            preset: this.url.preset,
             budgetMs: this.url.budgetMs,
             showProbes: this.url.probes,
             probeColor: this.url.probeColor,
@@ -389,6 +390,7 @@ export class ViewerApp {
             gi: this.url.gi,
             technique: this.url.technique,
             ddgi: {
+                preset: this.url.preset,
                 budgetMs: this.url.budgetMs,
                 followCamera: this.url.followCamera,
                 probes: this.url.probes,
@@ -465,7 +467,9 @@ export class ViewerApp {
             onTechnique: (id: ViewerUrlState['technique']) => change({ technique: id }),
             onDdgiSettings: (settings: DdgiPanelSettings) =>
                 change({
-                    budgetMs: settings.budgetMs,
+                    preset: settings.preset,
+                    // A newly picked preset brings its own budget; otherwise the slider's.
+                    budgetMs: settings.preset !== this.url.preset ? presetBudgetMs(settings.preset) : settings.budgetMs,
                     followCamera: settings.followCamera,
                     probes: settings.probes,
                     probeColor: settings.probeColor,

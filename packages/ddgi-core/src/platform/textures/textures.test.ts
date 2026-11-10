@@ -35,8 +35,11 @@ import {
     linearLevelTexel,
     STORE_LAYER_SIZE,
     STORE_MIP_LEVELS,
+    storeLayout,
     TEXTURE_STORE_WGSL,
+    textureStoreWgsl,
 } from './texture-store-wgsl.ts';
+import { textureSamplingWgsl } from './texture-sampling-wgsl.ts';
 
 describe('texture formats', () => {
     it('knows each compressed family, its feature and its blocks', () => {
@@ -115,6 +118,28 @@ describe('the build layout gi/texture-store and its copies share', () => {
         expect(TEXTURE_STORE_WGSL).toContain('fn giTextureStoreFillEncoded(');
         expect(TEXTURE_STORE_WGSL).toContain('fn giTextureStoreFillLinear(');
         expect(TEXTURE_STORE_WGSL).toContain('fn giTextureStoreMip(');
+    });
+
+    it('lays out smaller stores the same way (the presets\' textureLayerSize), and the default exactly as before', () => {
+        const small = storeLayout(128);
+        expect(small.mipLevels).toBe(8);
+        expect(small.levelSize(0)).toBe(128);
+        expect(small.levelSize(7)).toBe(1);
+        expect(small.linearScratchTexels).toBe(21845);
+        expect(small.layerBytes).toBe(21845 * 4);
+        expect(storeLayout(64).mipLevels).toBe(7);
+        expect(small.buildStepWords().length).toBe(BUILD_LAYERS_PER_PASS * 8 * (BUILD_STEP_STRIDE / 4));
+        expect(textureStoreWgsl(128)).toContain('const GI_STORE_LAYER_SIZE: u32 = 128u;');
+        const slot = { group: 0, firstBinding: 0 };
+        expect(textureSamplingWgsl(slot, 128)).toContain('const GI_TEXTURE_SIZE: f32 = 128.0;');
+        expect(textureSamplingWgsl(slot, 128)).toContain('const GI_TEXTURE_LAST_LOD: f32 = 7.0;');
+        // The default is the 256² store M4 was checked with, to the character.
+        expect(textureStoreWgsl()).toBe(TEXTURE_STORE_WGSL);
+        expect(textureSamplingWgsl(slot)).toContain('const GI_TEXTURE_SIZE: f32 = 256.0;');
+        expect(storeLayout().layerBytes).toBe(LAYER_BYTES);
+        expect(STORE_LAYER_SIZE).toBe(256);
+        expect(() => storeLayout(100)).toThrow(/one of 64, 128, 256/);
+        expect(() => storeLayout(512)).toThrow(RangeError);
     });
 });
 

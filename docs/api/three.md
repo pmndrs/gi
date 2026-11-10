@@ -95,13 +95,30 @@ renderer.setAnimationLoop(() => pipeline.render());
 
 | Option | What it does |
 | --- | --- |
-| `budget` | GPU work per frame for GI updates after the warm-up, default `{ gpuMs: 2 }`. |
-| `ddgi` | DDGI settings over the defaults (rays per probe, hysteresis…). The probe grid comes from the volume. |
+| `preset` | A quality preset: `'low'`, `'medium'` or `'high'`, or a preset object from `ddgiPreset` with fields changed (below). Default none, which is the same as `'high'`. |
+| `budget` | GPU work per frame for GI updates after the warm-up. Default the preset's, or `{ gpuMs: 2 }`. |
+| `ddgi` | DDGI settings over the preset's and the defaults (rays per probe, hysteresis…). The probe grid comes from the volume. |
 | `environment`, `sky` | GI's sky, as for `ThreeGI` below. |
 | `light` | Settings for the GI light. |
 | `warmUp` | `false` to skip it (GI then fills in live), or `{ passes, maxSeconds, minPasses, calibrate }`. |
 | `camera` | The camera the warm-up runs with, read each frame; default one at the volume's centre. Pass the camera you render with when `ddgi.volumes` has a camera-following volume, so its window warms up where the camera is (otherwise it jumps there afterwards and warms up again). `restart` takes it too. |
 | `warn` | Where warnings go. |
+
+**Quality presets** (T5.1; the table and what each costs is in [platform.md, "Quality presets"](platform.md#quality-presets)). One word sets the rays per probe, the probe tiles, the budget and the size of GI's copy of the textures. A volume made without probe counts also takes the preset's spacing (2 m for `low`); counts you give are kept. `budget` and `ddgi` still win over the preset:
+
+```ts
+import { ddgiPreset, recommendPreset } from '@pmndrs/ddgi/core';
+
+const adapter = await navigator.gpu.requestAdapter();
+await volume.start(renderer, scene, { preset: recommendPreset(adapter.info, adapter.limits) });
+
+// Or start from a preset and change one field:
+const preset = ddgiPreset('low');
+preset.ddgi.raysPerProbe = 160;
+await volume.start(renderer, scene, { preset });
+```
+
+`recommendPreset` is advice only: it gives `low` for integrated and mobile GPUs and `high` otherwise, and nothing applies it unless you pass it. Changing presets later means `dispose()` and `start` again: rays and tile sizes size DDGI's buffers when it starts.
 
 If the scene needs more than the renderer's device allows, `start` throws a `GILimitError` (`ThreeGILimitError`) naming the limit. three makes its device with default limits (a 128 MiB storage binding), which large scenes such as Sponza with its curtains outgrow. The fix is to make the renderer with the platform's limits: `const { renderer } = await createGIRenderer()`, or `new WebGPURenderer({ requiredLimits: requiredLimits(adapter) })` with `requiredLimits` from `@pmndrs/ddgi/core`.
 
