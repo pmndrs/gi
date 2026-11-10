@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-10 · asset tool on the Mac (unzip, gitignore, size mismatches) · implementer (sonnet)
+Did: `tools/assets/fetch.ts` unpacks zips with `bsdtar -xf` on non-Windows, falling back to `unzip` only if bsdtar does not exist (a failing bsdtar is an error, not a fallback). `.gitignore`: `/assets/downloads` without the trailing slash (so a symlinked folder is ignored); removed the temporary line from the shared `.git/info/exclude`. Diagnosis of the Mac size mismatches (no recorded hash or check changed): see NOTES "Test assets".
+Verified (macOS, M5 Pro, Blender 4.5.0): `BLENDER=... pnpm assets:fetch`: ivy now extracts and converts. 10 assets: 2 up to date, 1 skipped (khronos license), 7 failed output checks (bistro-exterior, bistro-interior, courtyard-tree, sponza-intel, curtains, ivy, trees). The four .gltf fail only by line endings (LF to CRLF reproduces all four recorded sha256). Bistro-exterior: 65 of 7,671 pinned bufferViews differ (24 primitives; NORMAL in most, POSITION/TEXCOORD/indices in 5 meshes); bistro-interior has 11,033 bufferViews against 11,036 recorded. `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,233) pass.
+Not verified: the Windows bytes are not available here, so the size of the Mac/Windows NORMAL difference is not measured. No unit test covers the extract command (extractWithCache takes a stub), so none was added.
+Next: Dennis/lead decide what the Mac check should do with the glb and gltf differences (line endings could be normalized in the check without touching hashes; the glb ones need a Windows copy to compare).
+
 ## 2026-11-10 · radiance-cache divergence causes · lead (opus, Mac)
 Did: added "Why each difference exists (the challenge list)" to `docs/design/radiance-cache.md`. It gives every register row (D1-D24, plus D30-D33 from `rc3-2`) a cause (forced, rule, shortcut, same, fix, license), its evidence (measured, cited, assumed) and how much it changes the image. It also has a short summary and the rules that keep the list honest. Also: a "How we work" pointer in the same doc, a standing rule in `docs/HANDOFF-radiance-cache.md`, DECISIONS 2026-11-10, and a check in `.claude/agents/reviewer.md` and `implementer.md`.
 Verified: docs only. Each cause was classified from the register text; no Capsaicin or WebGPU claim was re-checked in this session.

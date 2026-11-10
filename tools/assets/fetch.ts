@@ -20,7 +20,8 @@
  *      %SystemRoot%\System32\curl.exe. A file downloaded by hand and put at
  *      .cache/<sha256> is checked and used like a downloaded one.
  *   3. Unpack zips: `tar` (bsdtar, ships with Windows 10+) on Windows,
- *      PowerShell `Expand-Archive` if tar is missing, `unzip` elsewhere.
+ *      PowerShell `Expand-Archive` if tar is missing. Elsewhere `bsdtar`
+ *      (macOS has it), else `unzip` (Apple's unzip fails on non-ASCII names).
  *      No npm dependency. The unpacked files are kept once in
  *      .cache/extracted/<sha256>/ and hard-linked into the asset folder, which
  *      then holds exactly the archive's files plus the downloads and outputs.
@@ -1333,13 +1334,29 @@ async function extractZip(archive: string, destination: string): Promise<void> {
         if (code !== 0) throw new Error(`Expand-Archive exited with code ${code} while extracting ${archive}`);
         return;
     }
+    // bsdtar first: Apple's unzip 6.00 cannot write file names with non-ASCII
+    // characters ("Illegal byte sequence", exit code 50), and the Intel ivy
+    // package has one. macOS ships /usr/bin/bsdtar; on Linux it comes from
+    // libarchive-tools. (GNU `tar`, the usual Linux `tar`, cannot read zips.)
+    try {
+        const code = await run('bsdtar', ['-xf', archive, '-C', destination]);
+        if (code !== 0) throw new Error(`bsdtar exited with code ${code} while extracting ${archive}`);
+        return;
+    } catch (error) {
+        if (!isCommandNotFound(error)) throw error;
+    }
     let code: number;
     try {
         code = await run('unzip', ['-o', '-q', archive, '-d', destination]);
     } catch {
-        throw new Error('The "unzip" command was not found. Install it (for example apt install unzip) and run again.');
+        throw new Error('Neither "bsdtar" nor "unzip" was found. Install one (for example apt install libarchive-tools or apt install unzip) and run again.');
     }
     if (code !== 0) throw new Error(`unzip exited with code ${code} while extracting ${archive}`);
+}
+
+/** True when spawning failed because the program does not exist (not because it ran and failed). */
+function isCommandNotFound(error: unknown): boolean {
+    return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
 }
 
 /** Limits for a conversion process (a Blender run). */
