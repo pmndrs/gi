@@ -223,12 +223,14 @@ function filterPass(
  * atlas (gi1.cpp:2540-2541), across the screen from the atlas into it, then
  * down it from there back into the atlas (gi1.cpp:2597-2611). The first
  * pass's results are stored as halves before the second reads them; the
- * second's are returned unrounded.
+ * second's are returned unrounded. `atlasUndecided` (one flag per texel)
+ * marks input texels the caller isn't sure of: any result that reads one is
+ * undecided too.
  */
-export function filterScreenProbes(inputs: ProbeFilterInputs, atlas: ProbeAtlas): ProbeFilterResult {
+export function filterScreenProbes(inputs: ProbeFilterInputs, atlas: ProbeAtlas, atlasUndecided?: Uint8Array): ProbeFilterResult {
     const screen = new FilterScreen(inputs);
     const texelCount = atlas.width * atlas.height;
-    const noneUndecided = new Uint8Array(texelCount);
+    const noneUndecided = atlasUndecided ?? new Uint8Array(texelCount);
     const firstOutput = Float32Array.from(atlas.texels);
     const firstUndecided = new Uint8Array(texelCount);
     const across = filterPass(screen, inputs, BLUR_DIRECTIONS[0], atlas, noneUndecided, firstOutput, firstUndecided, true);
