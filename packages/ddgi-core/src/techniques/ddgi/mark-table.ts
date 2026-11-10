@@ -13,7 +13,8 @@
  * removed, shown or hidden) gives one entry over the probes within
  * FAR_SET_SPACINGS of it: the kernel sorts them into the near set (within
  * NEAR_SET_SPACINGS) and the far set (those that can see the box, or whose
- * mover mask has the object's bit).
+ * mover mask has the object's bit; every active one for an object that gives
+ * off light, T3.4, flagged MARK_ENTRY_FLAG.emitter).
  *
  * Receivers (T3.4, m3-moving.md §5.3): each box in `SceneChanges.receivers`
  * gives one entry over the probes within WAKE_SPACINGS of it, which the
@@ -26,7 +27,7 @@ import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { Aabb } from '../../platform/contract/math.ts';
 import type { LightDescriptor } from '../../platform/contract/scene.ts';
 import type { DirtyRegion, LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
-import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
+import { MARK_ENTRY_FLAG, MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
 import type { ProbeGrid } from './settings.ts';
 
 /**
@@ -202,9 +203,11 @@ interface GeometryRecord {
     /** Metres; negative for a whole change (added, removed, shown, hidden). */
     readonly moved: number;
     readonly moverBit: number;
+    /** The object gives off light (`DirtyRegion.emits`): MARK_ENTRY_FLAG.emitter. */
+    readonly emitter: boolean;
 }
 
-const NO_GEOMETRY: GeometryRecord = { regionMin: [0, 0, 0], regionMax: [0, 0, 0], moved: 0, moverBit: 0 };
+const NO_GEOMETRY: GeometryRecord = { regionMin: [0, 0, 0], regionMax: [0, 0, 0], moved: 0, moverBit: 0, emitter: false };
 
 /** A light as the kernel reads it (MARK_LIGHT_WORD). */
 export interface LightRecord {
@@ -576,6 +579,7 @@ export function buildMarkTable(
         words.set(entry.boxSize, base + MARK_ENTRY_WORD.boxSize);
         words[base + MARK_ENTRY_WORD.firstThread] = threadCount;
         floats[base + MARK_ENTRY_WORD.globalChange] = entry.globalChange;
+        words[base + MARK_ENTRY_WORD.flags] = entry.geometry.emitter ? MARK_ENTRY_FLAG.emitter : 0;
         writeLight(words, floats, base + MARK_ENTRY_WORD.before, entry.before);
         writeLight(words, floats, base + MARK_ENTRY_WORD.after, entry.after);
         threadCount += entry.boxSize[0] * entry.boxSize[1] * entry.boxSize[2];
@@ -611,6 +615,7 @@ function geometryEntry(region: DirtyRegion, grid: ProbeGrid, movers: MoverBits):
             regionMax: [max[0], max[1], max[2]],
             moved: region.moved ?? -1,
             moverBit: region.instance === undefined ? 0 : movers.bitFor(region.instance),
+            emitter: region.emits === true,
         },
     };
 }
@@ -633,7 +638,7 @@ function receiverEntry(box: Aabb, grid: ProbeGrid): Entry | null {
         globalChange: 0,
         before: NO_LIGHT,
         after: NO_LIGHT,
-        geometry: { regionMin: [min[0], min[1], min[2]], regionMax: [max[0], max[1], max[2]], moved: 0, moverBit: 0 },
+        geometry: { regionMin: [min[0], min[1], min[2]], regionMax: [max[0], max[1], max[2]], moved: 0, moverBit: 0, emitter: false },
     };
 }
 

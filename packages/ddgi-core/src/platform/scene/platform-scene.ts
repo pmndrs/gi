@@ -690,11 +690,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.pendingMeshes.add(entry);
         for (const instance of entry.instances) {
             const traceable = this.isTraceable(instance);
-            if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
+            if (traceable) this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot, 0, this.emits(instance));
             this.transforms.setMeshBounds(instance.slot, layout.bounds);
             this.writeInstanceRecord(instance);
             if (traceable) {
-                this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot);
+                this.changeLog.addRegion(this.transforms.box(instance.slot), 'geometry', instance.handle, undefined, instance.slot, 0, this.emits(instance));
                 this.topLevelDirty = true;
             }
         }
@@ -881,7 +881,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.mirror.writeList(entry.listOffset, materials.map((material) => material.slot));
         this.writeInstanceRecord(entry);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot);
+            this.changeLog.addRegion(this.transforms.box(slot), 'geometry', handle, undefined, slot, 0, this.emits(entry));
             this.topLevelDirty = true;
         } else if (this.isReceiver(entry)) {
             this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
@@ -981,8 +981,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const at = slot * BOX_NUMBERS;
         for (let index = 0; index < BOX_NUMBERS; index++) boundsBefore[index] = transforms.bounds[at + index];
         const moved = this.writeInstanceWords(entry, linearChanged);
-        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
-        this.changeLog.addRegion(transforms.bounds, 'geometry', entry.handle, moved, slot, at);
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot, 0, this.emits(entry));
+        this.changeLog.addRegion(transforms.bounds, 'geometry', entry.handle, moved, slot, at, this.emits(entry));
         this.topLevelDirty = true;
         this.cachedBounds = null;
     }
@@ -1026,8 +1026,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
             floats[base + INSTANCE_WORD.boundsMin + axis] = bounds[at + axis];
             floats[base + INSTANCE_WORD.boundsMax + axis] = bounds[at + 3 + axis];
         }
-        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot);
-        this.changeLog.addRegion(bounds, 'geometry', entry.handle, moved, slot, at);
+        this.changeLog.addRegion(boundsBefore, 'geometry', entry.handle, moved, slot, 0, this.emits(entry));
+        this.changeLog.addRegion(bounds, 'geometry', entry.handle, moved, slot, at, this.emits(entry));
         this.topLevelDirty = true;
         this.cachedBounds = null;
         return true;
@@ -1040,7 +1040,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         entry.visible = visible;
         this.writeInstanceRecord(entry);
         if (entry.contributesToGi) {
-            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot, 0, this.emits(entry));
             this.topLevelDirty = true;
             this.cachedBounds = null;
         } else if (visible) {
@@ -1069,7 +1069,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.checkLive();
         const entry = this.instance(instance);
         if (this.isTraceable(entry)) {
-            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot);
+            this.changeLog.addRegion(this.transforms.box(entry.slot), 'geometry', instance, undefined, entry.slot, 0, this.emits(entry));
             this.topLevelDirty = true;
         }
         if (entry.contributesToGi) this.instanceSetDirty = true;
@@ -1376,14 +1376,14 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 const traceable = this.isTraceable(instance);
                 const slot = instance.slot;
                 if (grew) {
-                    if (traceable) this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, undefined, slot);
+                    if (traceable) this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, undefined, slot, 0, this.emits(instance));
                     this.transforms.setMeshBounds(slot, mesh.layout.bounds);
                     this.writeInstanceRecord(instance);
                     if (traceable) this.topLevelDirty = true;
                 }
                 if (traceable) {
                     const moved = travelled * largestScale(this.transforms.matrices, slot);
-                    this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, moved, slot);
+                    this.changeLog.addRegion(this.transforms.box(slot), 'geometry', instance.handle, moved, slot, 0, this.emits(instance));
                 } else if (this.isReceiver(instance)) {
                     this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
                 }
@@ -1852,6 +1852,21 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     private isTraceable(instance: InstanceEntry): boolean {
         return instance.contributesToGi && instance.visible;
+    }
+
+    /**
+     * Whether an instance gives off light (`DirtyRegion.emits`): one of its
+     * materials has a non-black emissive colour and a positive intensity
+     * (emission is emissive × intensity × texture, and emissive defaults to
+     * black). Read from the materials as they are now, so a material edited
+     * to glow counts from its next region on.
+     */
+    private emits(instance: InstanceEntry): boolean {
+        return instance.materials.some(({ descriptor }) => {
+            const emissive = descriptor.emissive;
+            const intensity = descriptor.emissiveIntensity ?? 1;
+            return emissive !== undefined && intensity > 0 && (emissive[0] > 0 || emissive[1] > 0 || emissive[2] > 0);
+        });
     }
 
     /** Shown, but left out of rays: it only receives GI (`SceneChanges.receivers`). */

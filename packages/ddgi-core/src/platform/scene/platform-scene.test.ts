@@ -365,6 +365,41 @@ describe('moves (T2.M1)', () => {
         expect(turned[0].moved).toBeCloseTo(1, 5);
     });
 
+    it('says when a moved instance gives off light, from its materials, also in a merged region (T3.4)', () => {
+        const { gpu, scene, model } = setup();
+        const { mesh, material } = unitCube(model);
+        const glowing = model.createMaterial({ emissive: [1, 0.5, 0.1], emissiveIntensity: 3 });
+        const switchedOff = model.createMaterial({ emissive: [1, 0.5, 0.1], emissiveIntensity: 0 });
+        const plain = model.createInstance({ mesh, materials: [material], transform: composeTransform([0, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        const lamp = model.createInstance({ mesh, materials: [material, glowing], transform: composeTransform([3, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        const dark = model.createInstance({ mesh, materials: [switchedOff], transform: composeTransform([6, 0, 0], [0, 1, 0], 0, [1, 1, 1]) });
+        const created = encodeAndSubmit(gpu, scene).changes.regions;
+        expect(created.map((region) => region.emits === true)).toEqual([false, true, false]);
+
+        // setTransform (moveInstance) and setTransforms' slide both carry it, on where it was and where it is.
+        model.setTransform(lamp, composeTransform([3, 1, 0], [0, 1, 0], 0, [1, 1, 1]));
+        model.setTransform(plain, composeTransform([0, 1, 0], [0, 1, 0], 0, [1, 1, 1]));
+        expect(encodeAndSubmit(gpu, scene).changes.regions.map((region) => [region.instance, region.emits === true])).toEqual([
+            [scene.instanceSlot(lamp), true],
+            [scene.instanceSlot(lamp), true],
+            [scene.instanceSlot(plain), false],
+            [scene.instanceSlot(plain), false],
+        ]);
+        scene.setTransforms(Uint32Array.of(lamp, dark), new Float32Array([...composeTransform([3, 2, 0], [0, 1, 0], 0, [1, 1, 1]), ...composeTransform([6, 2, 0], [0, 1, 0], 0, [1, 1, 1])]));
+        expect(encodeAndSubmit(gpu, scene).changes.regions.map((region) => region.emits === true)).toEqual([true, true, false, false]);
+
+        // Past MAX_DIRTY_REGIONS the one merged region emits when any of its regions did.
+        const crowd = Array.from({ length: 300 }, (_, index) => model.createInstance({ mesh, materials: [material], transform: composeTransform([index, 5, 0], [0, 1, 0], 0, [1, 1, 1]) }));
+        encodeAndSubmit(gpu, scene);
+        const matrices = new Float32Array((crowd.length + 1) * 16);
+        crowd.forEach((_, index) => matrices.set(composeTransform([index, 6, 0], [0, 1, 0], 0, [1, 1, 1]), index * 16));
+        matrices.set(composeTransform([3, 3, 0], [0, 1, 0], 0, [1, 1, 1]), crowd.length * 16);
+        scene.setTransforms(Uint32Array.from([...crowd, lamp]), matrices);
+        const merged = encodeAndSubmit(gpu, scene).changes.regions;
+        expect(merged).toHaveLength(1);
+        expect(merged[0].emits).toBe(true);
+    });
+
     it('setTransforms moves instances exactly as setTransform does, with the same regions', () => {
         const one = setup();
         const batch = setup();

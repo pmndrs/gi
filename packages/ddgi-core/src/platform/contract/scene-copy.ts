@@ -94,6 +94,20 @@ export interface DirtyRegion {
      * merged because a frame had more than `MAX_DIRTY_REGIONS` have none.
      */
     readonly instance?: number;
+    /**
+     * For a geometry region about one instance: true when the instance gives
+     * off light (one of its materials has a non-black `emissive` and a
+     * positive `emissiveIntensity`), as its materials are when the region is
+     * logged. A merged region emits if any region in it did.
+     *
+     * Why: an emitter that moves or deforms changes the light everywhere its
+     * light reaches, also through bounces at points that can't see it (an
+     * emissive panel that is a room's only light changes every probe in the
+     * room), where a plain object mostly changes what sees it. A technique
+     * can then treat such a change more like a light's (DDGI's `ddgi/mark`,
+     * T3.4).
+     */
+    readonly emits?: boolean;
 }
 
 /**

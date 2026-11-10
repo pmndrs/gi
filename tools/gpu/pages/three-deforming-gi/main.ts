@@ -25,15 +25,15 @@
  *   pose into a texture the platform copies and refits from; every pose
  *   must go out in that GPU form, never as a CPU array.
  *
- * **A known miss, not gated (T3.4's):** with `morphed`'s exact box, GI
- * doesn't come all the way back when the panel unfolds (floor 6% and wall
- * 13% under rest, on both runs of 2026-11-09), and on folding the wall
- * darkens 13% where the larger boxes give 18%. The pose is right: rays find
- * the upright panel on exactly rest's pixels, and with the larger box the
- * same morph returns within 0.1%. DDGI re-traces only the probes its mark
- * finds near the change's box, and a deforming emitter changes the light on
- * walls further off, whose probes a still scene then never updates. So
- * `morphed`'s return is reported, and the two other cases are gated on it.
+ * **`morphed`'s exact box** was a known miss until T3.4's fix: unfolded,
+ * GI stayed 6% (floor) and 13% (wall) under rest, and folded, the wall
+ * darkened 13-16% where the larger boxes give 18-22%. DDGI's mark took only
+ * the probes that could see the box into a geometry change's far set, and
+ * the panel, the room's only light, changes the others too, through the
+ * walls it lights: 392 of about 1,434 active probes were never marked, 66%
+ * off on average, and a still scene never updates them. Now the platform
+ * flags an emitter's regions (`DirtyRegion.emits`) and the mark takes every
+ * active probe in reach, as for a light; every case is gated on its return.
  *
  * Each case, through `ThreeGI` with three rendering every frame (update,
  * then render):
@@ -95,7 +95,7 @@ const SETTLE_FRAMES = 360;
 const BUDGET = { gpuMs: 4 };
 /** The floor in front of the panel must brighten by at least this share when it folds. */
 const FLOOR_GAIN = 0.15;
-/** Unfolded again, both regions must come back within this share of the first rest (where gated; see the known miss above). */
+/** Unfolded again, both regions must come back within this share of the first rest. */
 const RETURN_TOLERANCE = 0.05;
 /** The pose must reach the platform within this many updates of the change. */
 const POSE_UPDATES = 2;
@@ -106,7 +106,7 @@ interface Case {
     readonly kind: 'morphed' | 'skinned';
     /** `userData.giDeformBounds`, in the panel's own space; absent, the adapter estimates the box. */
     readonly deformBounds?: { readonly min: [number, number, number]; readonly max: [number, number, number] };
-    /** Whether `rest again` must match `rest` (the file comment's known miss). */
+    /** Whether `rest again` must match `rest` (every case since T3.4's fix; the file comment). */
     readonly gateReturn: boolean;
     /** Give ThreeGI the renderer, so a skinned panel is posed by three's GPU skinning (T3.3). */
     readonly gpuSkinning?: boolean;
@@ -116,7 +116,7 @@ interface Case {
 const LARGER_BOX = { min: [-PANEL_WIDTH / 2 - 0.8, -0.8, -0.8] as [number, number, number], max: [PANEL_WIDTH / 2 + 0.8, PANEL_HEIGHT + 0.8, 0.8] as [number, number, number] };
 
 const CASES: readonly Case[] = [
-    { name: 'morphed', kind: 'morphed', gateReturn: false },
+    { name: 'morphed', kind: 'morphed', gateReturn: true },
     { name: 'morphed, giDeformBounds', kind: 'morphed', deformBounds: LARGER_BOX, gateReturn: true },
     { name: 'skinned', kind: 'skinned', gateReturn: true },
     { name: 'skinned, GPU skinning', kind: 'skinned', gateReturn: true, gpuSkinning: true },

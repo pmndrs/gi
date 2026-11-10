@@ -47,7 +47,9 @@
  *     direction enters the box, less half a spacing (a test against the
  *     centre itself would fail for the old box, since the object hid its own
  *     centre); or their mover mask has the object's bit (they saw it at their
- *     last update). `r = min(1, Ω / Ω_ref × contrast) × s` (T3.4): Ω the
+ *     last update); for an object that gives off light (the entry's
+ *     emitter flag, T3.4), every active probe within reach, since its light
+ *     reaches the others through bounces. `r = min(1, Ω / Ω_ref × contrast) × s` (T3.4): Ω the
  *     box's projected area over the distance squared, the share of the view
  *     the object covers; contrast the brightest stored mean near the box's
  *     centre over the probe's own, at least 1; Ω_ref a hemisphere
@@ -114,6 +116,7 @@ import {
     CENSUS_PROBES_MARKED,
     CENSUS_PROBES_MARKED_TOTAL,
     CHANGE_CLOCK_UNITS,
+    MARK_ENTRY_FLAG,
     MARK_KIND,
     MARK_LIGHT_KIND,
     PROBE_HISTORY_FLAG,
@@ -209,6 +212,7 @@ const DDGI_MARK_DIRECTIONAL_LIGHT: u32 = ${MARK_KIND.directionalLight}u;
 const DDGI_MARK_ENVIRONMENT: u32 = ${MARK_KIND.environment}u;
 const DDGI_MARK_LIGHT_SPOT: u32 = ${MARK_LIGHT_KIND.spot}u;
 const DDGI_MARK_GEOMETRY: u32 = ${MARK_KIND.geometry}u;
+const DDGI_MARK_FLAG_EMITTER: u32 = ${MARK_ENTRY_FLAG.emitter}u;
 // Geometry changes (m3-moving.md §5.1; NEAR_SET_SPACINGS etc. in mark-table.ts).
 const DDGI_NEAR_SET_SPACINGS: f32 = ${NEAR_SET_SPACINGS};
 const DDGI_FAR_SET_SPACINGS: f32 = ${FAR_SET_SPACINGS};
@@ -284,7 +288,7 @@ struct DdgiMarkEntry {
     boxSize: vec3u,
     firstThread: u32,       // the threads before this entry's
     globalChange: f32,      // r for the global kinds, worked out on the CPU
-    spare0: f32,
+    flags: u32,             // MARK_ENTRY_FLAG
     spare1: f32,
     spare2: f32,
     before: DdgiMarkLight,
@@ -682,7 +686,15 @@ fn ddgiMarkGeometry(entry: DdgiMarkEntry, probe: vec3i, probeIndex: u32, data: D
     let distance = max(length(toCentre), 1.0e-6);
     let direction = toCentre / distance;
     let entryDistance = ddgiRayBoxEntry(position, direction, geometry.regionMin, geometry.regionMax);
-    let seen = ddgiMarkSeesRegion(probe, direction, entryDistance, smallestSpacing) || (geometry.moverBit != 0u && ddgiMarkSawMover(probeIndex, geometry.moverBit));
+    // An object that gives off light changes the light at probes that can't
+    // see it too, through the surfaces it lights: an emissive panel that is a
+    // room's only light changes every probe in the room. So its far set is
+    // every active probe in reach, as a light's is; the visibility test is
+    // for objects that only block or bounce light (T3.4: with the test, an
+    // unfolded emissive panel left 392 of 1,434 probes unmarked, 66% off on
+    // average, and the room 6-15% under rest for good).
+    let emitter = (entry.flags & DDGI_MARK_FLAG_EMITTER) != 0u;
+    let seen = emitter || ddgiMarkSeesRegion(probe, direction, entryDistance, smallestSpacing) || (geometry.moverBit != 0u && ddgiMarkSawMover(probeIndex, geometry.moverBit));
     if (!seen) {
         return 0.0;
     }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LightHandle } from '../../platform/contract/handles.ts';
 import type { LightDescriptor, PointLightDescriptor } from '../../platform/contract/scene.ts';
 import type { LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
-import { MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_GEOMETRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
+import { MARK_ENTRY_FLAG, MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_GEOMETRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
 import {
     buildMarkTable,
     ENVIRONMENT_CHANGE,
@@ -46,6 +46,7 @@ function entry(table: NonNullable<ReturnType<typeof buildMarkTable>>, index: num
         boxSize: [...words.subarray(base + MARK_ENTRY_WORD.boxSize, base + MARK_ENTRY_WORD.boxSize + 3)],
         firstThread: words[base + MARK_ENTRY_WORD.firstThread],
         globalChange: floats[base + MARK_ENTRY_WORD.globalChange],
+        flags: words[base + MARK_ENTRY_WORD.flags],
         before: light(MARK_ENTRY_WORD.before),
         after: light(MARK_ENTRY_WORD.after),
         geometry: {
@@ -341,6 +342,18 @@ describe("ddgi/mark's table", () => {
         expect(old.boxMin).toEqual([0, 0, 0]);
         expect(old.boxSize).toEqual([16, 7, 9]);
         expect(table.threadCount).toBe(old.boxSize[0] * 7 * 9 + now.boxSize[0] * 7 * 9 + hidden.boxSize[0] * 7 * 9);
+    });
+
+    it("flags a geometry entry whose object gives off light, so the kernel's far set skips the visibility test (T3.4)", () => {
+        const box = { min: [2.5, 0, 2.5] as [number, number, number], max: [3.5, 1, 3.5] as [number, number, number] };
+        const regions = [
+            { bounds: box, reason: 'geometry' as const, moved: 0.25, instance: 7, emits: true },
+            { bounds: box, reason: 'geometry' as const, moved: 0.25, instance: 9 },
+        ];
+        const table = buildMarkTable({ ...NONE, regions, receivers: [box], lights: [change(null, lamp([2, 2.45, 2]), 14)] }, grid)!;
+        expect(table.entryCount).toBe(4);
+        // The light first, then the two regions, then the receiver: only the emitter's entry has the flag.
+        expect([0, 1, 2, 3].map((index) => entry(table, index).flags)).toEqual([0, MARK_ENTRY_FLAG.emitter, 0, 0]);
     });
 
     it('gives each receiver one entry over the probes within the wake reach, with its box and no move (T3.4)', () => {
