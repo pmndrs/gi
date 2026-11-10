@@ -48,8 +48,11 @@
  * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
  * the projection weight is a cell's solid angle (D25), the SH live in a
  * texture (D26), the interpolation's jitter is white noise (D27), SH
- * coefficients are clamped to the half range (D28). Without SSGI (phase 4)
- * the interpolation runs Capsaicin's `#ifndef HAS_OCCLUSION` branch, below.
+ * coefficients are clamped to the half range (D28), linear depth comes from
+ * the rebuilt point (D29), a missing neighbour probe is skipped rather than
+ * read and weighted 0 (D38), and one normal, the host's, does the geometry
+ * normal's work too (D17). Without SSGI (phase 4) the interpolation runs
+ * Capsaicin's `#ifndef HAS_OCCLUSION` branch, below.
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
@@ -94,7 +97,8 @@ export const SCREEN_PROBES_CONSTANTS_OFFSETS = {
  * (`toLinearDepth`, transform.hlsl:144-148): the distance along the view
  * axis. We take the same distance from the reconstructed position, the dot
  * product with the camera's forward axis, which holds for any depth
- * convention the host draws with.
+ * convention the host draws with (register D29; the two agree, by a unit
+ * test in screen-irradiance.test.ts).
  */
 const SCREEN_PROBES_CONSTANTS_WGSL = /* wgsl */ `
 struct RcScreenProbesConstants {
@@ -219,7 +223,7 @@ ${WORKGROUP_INDEX_WGSL}
 // How a cell counts in the projection (register D25). The coefficients are meant to be the SH of
 // the radiance, c_i = the integral of L Y_i over the hemisphere: here a sum over the 64
 // equal-area cells of the cell's radiance, its solid angle 2 pi / 64 and the basis at the cell's
-// centre, as Capsaicin takes it (gi1.comp:1468-1473). Capsaicin's weight is 1 / probe_size, which
+// centre, as Capsaicin takes it (gi1.comp:1466-1474). Capsaicin's weight is 1 / probe_size, which
 // is 4 / pi times the solid angle; nothing downstream divides that back out (the GI denoiser and
 // ResolveGI1 keep the scale), so a constant sky of radiance L reads 1.30 pi L there. With the solid
 // angle it reads 1.021 pi L: the 2.1% left is the centre point leaning towards the normal, which
@@ -380,7 +384,7 @@ fn rcFindClosestProbeWithOffset(position: vec2u, offset: vec2i) -> u32 {
 }
 
 // toLinearDepth(depth, g_NearFar) (transform.hlsl:144-148) for a reconstructed point: its
-// distance along the camera's view axis (RcScreenProbesConstants).
+// distance along the camera's view axis (RcScreenProbesConstants; register D29).
 fn rcLinearDepth(worldPosition: vec3f) -> f32 {
     return dot(worldPosition - rcFrame.eye, rcScreenProbes.viewForward);
 }
@@ -406,8 +410,9 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
         return; // discard sky pixels
     }
 
+    // Capsaicin's geometry normal here (gi1.comp:1518, 1598); ours is FrameScreen.normal, the host's
+    // shading normal, for the plane tests and weights below as well as the SH (register D17).
     var normal = rcLoadNormal(did);
-    let depth = rcLoadDepth(did);
 
     var pos = did;
     let worldPos = rcWorldPositionAt(did);
@@ -479,18 +484,20 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
 
     w /= w.x + w.y + w.z + w.w; // weights must sum up to 1
 
-    // Capsaicin's '#ifndef HAS_OCCLUSION' branch (gi1.comp:1612-1615), what it runs without its
+    // Capsaicin's '#ifndef HAS_OCCLUSION' branch (gi1.comp:1617-1620), what it runs without its
     // SSGI technique: no ambient occlusion (ao 1, so the cone is the whole hemisphere), no
     // near-field light to start from, and the shading normal. With SSGI (phase 4) ao, the
-    // near-field light and the bent normal come from SSGI's output instead (gi1.comp:1616-1621).
+    // near-field light and the bent normal come from SSGI's output instead (gi1.comp:1621-1626).
     // Our one normal is FrameScreen.normal, the host's shading normal (register D17).
     let ao = 1.0;
     var irradiance = vec3f(0.0);
     normal = rcLoadNormal(did);
 
     for (var j = 0u; j < 4u; j++) {
-        // A missing neighbour has weight 0; its 'probe' is a tile past the screen, so it is
-        // skipped rather than read (Capsaicin reads it and multiplies by 0).
+        // A missing neighbour has weight 0. Capsaicin reads it anyway, a tile past the buffer that
+        // D3D12 reads as 0, and multiplies by 0 (gi1.comp:1629-1634). WGSL leaves an out-of-bounds
+        // textureLoad to the implementation (a texel inside, or 0; WGSL 17.7.4), so it is skipped
+        // rather than read (register D38).
         if (w[j] > 0.0) {
             let probe = rcUnpackSeed(probes[j]) / RC_PROBE_SIZE;
 

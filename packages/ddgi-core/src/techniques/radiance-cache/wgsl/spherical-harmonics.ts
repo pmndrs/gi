@@ -36,9 +36,13 @@
  * i]`, `index = p.x + p.y * probe_count.x`, a structured buffer of `uint2`
  * (each coefficient's rgb and a weight as four halves, `packHalf4`). We keep
  * the same packed values in an `rg32uint` texture, the nine coefficients of
- * probe tile `p` in the 3 × 3 block at `3 p`: the shading module's debug view
- * reads them in fragment shaders, where storage buffers can't be bound
- * (contract rule: fragment-readable data lives in textures).
+ * probe tile `p` in the 3 × 3 block at `3 p`, because the shading module's
+ * debug view reads them in fragment shaders and our rule is that
+ * fragment-readable data lives in textures (DECISIONS, "The three.js
+ * integration"; behind it, three r187 has no supported way to bind an
+ * outside buffer, and WebGPU's compatibility mode may allow no storage
+ * buffers in the fragment stage: NOTES). Core WebGPU itself would allow it:
+ * a read-only storage buffer can be bound in a fragment shader.
  */
 
 /** Coefficients per probe: SH bands 0 to 2. */
@@ -115,7 +119,7 @@ const RC_SH_LARGEST_HALF: f32 = 65504.0;
 
 // ScreenProbes_PackSHColor (screen_probes.hlsl:169-172): packHalf4 (pack.hlsl:423-428).
 // f32tof16 turns a value past the half range into infinity; WGSL's pack2x16float gives an
-// indeterminate value there (WGSL 16.9), so the coefficient is clamped first (D28).
+// indeterminate value there (WGSL 17.9.9; 16.9 in older drafts), so the coefficient is clamped first (D28).
 fn rcPackSHColor(shColor: vec4f) -> vec2u {
     let clamped = clamp(shColor, vec4f(-RC_SH_LARGEST_HALF), vec4f(RC_SH_LARGEST_HALF));
     return vec2u(pack2x16float(clamped.xy), pack2x16float(clamped.zw));

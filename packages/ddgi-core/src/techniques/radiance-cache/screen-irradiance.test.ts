@@ -107,14 +107,14 @@ describe('the projection and its units (ProjectScreenProbes, InterpolateScreenPr
         expect(WGSL_SH_CELL_SOLID_ANGLE).toBeCloseTo(SH_CELL_SOLID_ANGLE, 12);
         const radiance = 0.7;
         for (const normal of normals) {
-            // Ours: each cell's solid angle and the basis at its centre (as Capsaicin, gi1.comp:1468-1473). The centre
+            // Ours: each cell's solid angle and the basis at its centre (as Capsaicin, gi1.comp:1466-1474). The centre
             // leans towards the normal, so E is 2.1% high: Capsaicin's own discretisation (DECISIONS 2026-11-10).
             const ours = shIrradiance(projectProbe(() => radiance, normal), normal);
             expect(ours / (Math.PI * radiance)).toBeCloseTo(1.021, 3);
             // The cell-mean lever (design doc, "Levers"): the basis averaged over 4 x 4 points per cell is within 0.2%.
             const cellMean = shIrradiance(projectProbe(() => radiance, normal, SH_CELL_SOLID_ANGLE, 4), normal);
             expect(Math.abs(cellMean / (Math.PI * radiance) - 1)).toBeLessThan(0.002);
-            // Capsaicin: 1 / probe_size and the centre (gi1.comp:1468-1473): 4 / pi times ours, 4.08 L.
+            // Capsaicin: 1 / probe_size and the centre (gi1.comp:1466-1474): 4 / pi times ours, 4.08 L.
             const capsaicin = shIrradiance(projectProbe(() => radiance, normal, CAPSAICIN_SH_CELL_WEIGHT), normal);
             expect(capsaicin / ours).toBeCloseTo(4 / Math.PI, 9);
             expect(capsaicin / radiance).toBeCloseTo(4.084, 2);
@@ -238,6 +238,27 @@ describe('the camera the screen stage reads', () => {
         const u = [0, 1, 2, 3].map((row) => unjittered[row] * ndc[0] + unjittered[4 + row] * ndc[1] + unjittered[8 + row] * ndc[2] + unjittered[12 + row]);
         const error = Math.hypot(...[0, 1, 2].map((axis) => eye[axis] + u[axis] / u[3] - point[axis]));
         expect(error).toBeGreaterThan(1e-3);
+    });
+
+    it("reads Capsaicin's linear depth as the distance along the view axis (register D29)", () => {
+        // Capsaicin's toLinearDepth (transform.hlsl:144-148) takes a reversed-Z depth and the camera planes;
+        // InterpolateScreenProbes takes dot(p - eye, forward) of the rebuilt point. Both are the view-axis distance.
+        const near = 0.1;
+        const far = 100;
+        const reversed = [...projection];
+        reversed[10] = near / (far - near);
+        reversed[14] = (near * far) / (far - near);
+        const toLinearDepth = (depth: number): number => (near * far) / (near + depth * (far - near));
+        const forward = viewForward({ view });
+        for (const point of [
+            [2, 1, 0],
+            [-4, 0.5, -20],
+            [3.2, 2.1, 9.5],
+        ]) {
+            const depth = project(multiplyMat4(reversed, view), point)[2];
+            const alongAxis = (point[0] - eye[0]) * forward[0] + (point[1] - eye[1]) * forward[1] + (point[2] - eye[2]) * forward[2];
+            expect(toLinearDepth(depth)).toBeCloseTo(alongAxis, 9);
+        }
     });
 
     it("gives the view's forward axis and Capsaicin's cell size", () => {

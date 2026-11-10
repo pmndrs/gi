@@ -532,7 +532,7 @@ The port reads AMD's source directly: Capsaicin v1.3 (`914b915`) at `src/core/sr
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | done (2026-11-10; Opus review passed with notes; both GPUs; the sky check amended to Capsaicin backup rule; viewer entry moved to RC2.2; D16-D21) |
-| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | active (implementer, 2026-11-10) |
+| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | review (2026-11-10; Opus review failed, fixes in; M5; D25-D29, D38) |
 
 - **RC2.1 done-when.**
   - `packages/ddgi-core/src/techniques/radiance-cache/` exists, importing only `platform/contract` (the RC1.2 rule), declaring the screen channels it needs, with its settings as Capsaicin's defaults (`gi1.h` `RenderOptions`, `probe_size` 8, `QuarterSpp`), each named and cited.
@@ -552,7 +552,7 @@ The port reads AMD's source directly: Capsaicin v1.3 (`914b915`) at `src/core/sr
 
     Units are checked against `ResolveGI1` so the output is irradiance E, and three's composite applies `albedo/π × E`.
   - The technique's shading module returns E by `screenUV` from the interpolated screen texture. The three composite (T1.14) and the viewer's technique switcher take it like DDGI, with GI off/on/only and the split wipe against DDGI.
-  - **Lambert check (GPU test):** an open plane under a constant sky of radiance L reads E = πL within 1% per pixel (mean and p95) at the interpolated output.
+  - **Lambert check (GPU test):** an open plane under a constant sky of radiance L reads E = πL within 1% per pixel (mean and p95) at the interpolated output. *Amended (lead, 2026-11-10, RC2.2 review):* within 2.5%, since the projection takes Capsaicin's cell-centre SH basis, whose own error is 2.1% (2.04% measured on the M5; DECISIONS 2026-11-10).
   - A single-bounce image on Cornell, two-room and Sponza in the viewer, with no errors and no NaN or negative pixels (checked by readback). A contact sheet in PROGRESS beside DDGI's image of the same view.
   - Debug views of the SH (irradiance from the probe's SH along the normal) join the atlas and mask views, and all three reach the viewer's debug menu (moved from RC2.1): `giDebugColor` gets the pixel's `screenUV` as `giIrradiance` has it.
   - From RC2.1's review: a direction-varying sky (or an occluder) in a GPU test, so an atlas transposed in its tile or a hemi-octahedral map mirrored the same way on the CPU and GPU fails; fixed Capsaicin reference values in the CPU map tests; spawn checked at several frames; the uniform block packed by named offsets, not bare word indices (`radiance-cache-technique.ts:487-493`); a unit test that `encodeScreen` gets the frame's camera.
