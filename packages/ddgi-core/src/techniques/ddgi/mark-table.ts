@@ -142,6 +142,15 @@ export const ENVIRONMENT_CHANGE = 1;
 export const OVERFLOW_CHANGE = 1;
 
 /**
+ * A saved field loaded for a scene that changed since it was saved
+ * (saved-field.ts): every probe, as a whole change. Not MAX_GLOBAL_CHANGE:
+ * the loaded value is a better start than nothing, so each probe is owed
+ * its K updates at priority and takes the new light in as after any other
+ * whole change, instead of throwing its history away at once.
+ */
+export const STALE_FIELD_CHANGE = 1;
+
+/**
  * Up to this many changes of lights with no range in one frame are each
  * marked over every probe, against each probe's own light (T2.4b's rule).
  * Past it the frame's unranged changes are folded (T2.1, DECISIONS
@@ -497,6 +506,9 @@ function byLayer(changes: readonly LightChange[], groupLayers: readonly number[]
  *   switched on where it is (byLayer), so the probes of both layers settle as
  *   after a light switch. With groups off (one layer) a group change alone
  *   marks nothing: the light's numbers didn't change.
+ * - A stale saved field (`staleField`, the first frame after loading a field
+ *   saved for another scene): one entry over every probe
+ *   (STALE_FIELD_CHANGE).
  */
 export function buildMarkTable(
     changes: SceneChanges,
@@ -504,9 +516,13 @@ export function buildMarkTable(
     movers: MoverBits = NO_MOVERS,
     groupLayers: readonly number[] = ONE_LAYER,
     sunLayer: SunLayerMarks | null = null,
+    staleField = false,
 ): MarkTable | null {
     const entries: Entry[] = [];
     const everywhere = { boxMin: [0, 0, 0] as Vec3, boxSize: [grid.counts[0], grid.counts[1], grid.counts[2]] as Vec3, geometry: NO_GEOMETRY };
+    if (staleField) {
+        entries.push({ kind: MARK_KIND.everywhere, ...everywhere, globalChange: STALE_FIELD_CHANGE, before: NO_LIGHT, after: NO_LIGHT });
+    }
     // The sun keeps its layer this frame: its changes are judged at the white reference.
     const steadySun = sunLayer && sunLayer.sun !== null && sunLayer.sun === sunLayer.previousSun ? sunLayer.sun : null;
     const lightChanges = byLayer(changes.lights, groupLayers, steadySun);

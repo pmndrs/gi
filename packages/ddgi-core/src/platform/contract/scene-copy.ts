@@ -53,6 +53,33 @@ export interface SceneCopy {
      * another light.
      */
     readonly firstDirectionalLight: { readonly light: LightHandle; readonly descriptor: DirectionalLightDescriptor } | null;
+    /**
+     * Content hashes of the scene as it is now (SPEC, "content fingerprints
+     * for saved bakes"): one per part, so a saved field can say what changed
+     * since it was baked. platform/scene/scene-fingerprint.ts lists what each
+     * part covers. Worked out on the CPU when called (a few ms, for a save
+     * or a load); never in a frame.
+     */
+    fingerprint(): SceneFingerprint;
+}
+
+/**
+ * What {@link SceneCopy.fingerprint} gives: a hash (16 hex digits) per part
+ * of the scene, and the version of the rules that made them. Two
+ * fingerprints of different versions are never compared part by part.
+ */
+export interface SceneFingerprint {
+    readonly version: number;
+    /** Each GI instance's mesh content, transform and visibility. */
+    readonly geometry: string;
+    /** Each GI instance's materials, with their textures by content. */
+    readonly materials: string;
+    /** The content of every texture those materials use. */
+    readonly textures: string;
+    /** Every light's numbers and shadow parameters. */
+    readonly lights: string;
+    /** The environment's settings. */
+    readonly sky: string;
 }
 
 /**

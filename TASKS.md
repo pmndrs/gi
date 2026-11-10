@@ -519,7 +519,7 @@ Status: **started 2026-11-10** on the Mac, on branch `m34` (M3 and M4 land first
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T5.1 | Quality presets: `ddgiPreset('low' / 'medium' / 'high')`, `recommendPreset`, three's `preset` option, the viewer's picker, `ddgi-presets` page | implementer | S | M3, M4 on `m34` | todo |
-| T5.2 | Saved bakes: `saveField` / `loadField` in core (the `.ddgibake` format, scene fingerprint, stale load), three's `saveBake` / `loadBake`, viewer Save and Load | implementer | M | M3, M4 on `m34` | todo |
+| T5.2 | Saved bakes: `saveField` / `loadField` in core (the `.ddgibake` format, scene fingerprint, stale load), three's `saveBake` / `loadBake`, viewer Save and Load | implementer | M | M3, M4 on `m34` | active (implementer, 2026-11-10, Mac) |
 | T5.3 | The `LightProbeGrid` export: L2 SH projection on the GPU (core), `toLightProbeGrid` and the JSON (three), check against live GI | implementer (scout first for PR #33658's format) | M | M3, M4 on `m34` | todo |
 | T5.4 | Docs: platform and three API docs brought up to date, the adapter guide on the hello example (hello passes every material slot and textures first), getting-started, the docs-cover-exports check | implementer | M | T5.1-T5.3 for their sections | todo |
 | T5.5 | Coverage note (`docs/milestones/M5.md`): every v1 feature, its check, its Mac result, its known misses, then the proposed tuning pass; Dennis's look | main session | S | all M5 | todo |
