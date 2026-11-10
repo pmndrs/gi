@@ -1,7 +1,7 @@
 /*
  * Ported from AMD Capsaicin v1.3 (914b915): src/core/src/render_techniques/gi1/gi1.hlsl,
- * screen_probes.hlsl and gi1.comp; src/core/src/math/sampling.hlsl, pack.hlsl and
- * transform.hlsl; src/core/src/components/random_number_generator/random_number_generator.hlsl.
+ * screen_probes.hlsl and gi1.comp; src/core/src/math/sampling.hlsl, pack.hlsl, color.hlsl,
+ * math.hlsl and transform.hlsl; src/core/src/components/random_number_generator/random_number_generator.hlsl.
  *
  * Copyright © 2023 Advanced Micro Devices, Inc.
  *
@@ -34,6 +34,13 @@
  */
 
 import { PROBE_CELLS, PROBE_SIZE, PROBE_SPAWN_TILE_SIZE } from '../settings.ts';
+
+/**
+ * The largest quantized hit distance one sample adds to a probe cell's sum
+ * (register D48): 64 of them, a whole probe's rays in one cell, still fit a
+ * `u32`. `floor((2^32 - 1) / 64)`, about 6,711 m at `kGI1_FloatQuantize`.
+ */
+export const LARGEST_QUANTIZED_HIT_DISTANCE = Math.floor(0xffffffff / PROBE_CELLS);
 
 export const CAPSAICIN_WGSL = /* wgsl */ `
 // ---- Capsaicin constants -------------------------------------------------------------------
@@ -113,14 +120,48 @@ fn rcUnpackRadiance(packedRadiance: vec2u) -> vec4f {
     return vec4f(unpack2x16float(packedRadiance.x), unpack2x16float(packedRadiance.y));
 }
 
-// ScreenProbes_QuantizeRadiance (screen_probes.hlsl:231-234).
+// The largest quantized hit distance one sample adds to a cell (register D48): a cell's sum of
+// 64 such stays below 2^32.
+const RC_LARGEST_QUANTIZED_HIT_DISTANCE: u32 = ${LARGEST_QUANTIZED_HIT_DISTANCE}u;
+
+// ScreenProbes_QuantizeRadiance (screen_probes.hlsl:231-234), with the hit distance capped
+// (register D48). A missed ray's distance is 65,504 here (D19), 655,040,000 once quantized, so
+// seven of them in one cell wrapped the u32 sum; ray guiding can send all 64 rays of a probe into
+// one sky cell. Capsaicin's own miss is f32tof16(FLT_MAX), infinity, which D3D converts to
+// 0xffffffff, so its sum wraps from the second ray.
 fn rcQuantizeRadiance(radiance: vec4f) -> vec4u {
-    return vec4u(round(RC_FLOAT_QUANTIZE * radiance));
+    let quantized = vec4u(round(RC_FLOAT_QUANTIZE * radiance));
+    return vec4u(quantized.xyz, min(quantized.w, RC_LARGEST_QUANTIZED_HIT_DISTANCE));
 }
 
 // ScreenProbes_RecoverRadiance (screen_probes.hlsl:237-246).
 fn rcRecoverRadiance(quantized: vec4u) -> vec4f {
     return vec4f(quantized) / RC_FLOAT_QUANTIZE;
+}
+
+// ---- math/color.hlsl, math/math.hlsl, math/pack.hlsl ----------------------------------------
+
+// luminance (color.hlsl:34-37): Rec. 709 weights.
+fn rcLuminance(color: vec3f) -> f32 {
+    return dot(color, vec3f(0.2126, 0.7152, 0.0722));
+}
+
+// squared (math.hlsl:63-66).
+fn rcSquared(value: f32) -> f32 {
+    return value * value;
+}
+
+// packNormal (pack.hlsl:468-472): three 10-bit snorms, rounded away from zero.
+fn rcPackNormal(value: vec3f) -> u32 {
+    let scaled = vec3i(clamp(value, vec3f(-1.0), vec3f(1.0)) * 511.0 + 0.5 * sign(value));
+    let packedValue = bitcast<vec3u>(scaled) & vec3u(0x3ffu);
+    return packedValue.x | (packedValue.y << 10u) | (packedValue.z << 20u);
+}
+
+// unpackNormal (pack.hlsl:479-483): each 10-bit field sign-extended by an arithmetic shift.
+fn rcUnpackNormal(packedValue: u32) -> vec3f {
+    let value = bitcast<vec3i>(vec3u(packedValue << 22u, packedValue << 12u, packedValue << 2u)) >> vec3u(22u);
+    return vec3f(value) * (1.0 / 511.0);
 }
 
 // ---- math/sampling.hlsl ---------------------------------------------------------------------
