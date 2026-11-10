@@ -47,8 +47,8 @@
  *    irradiance E, which `ResolveGI1` (gi1.frag:76-150) turns into reflected
  *    light with `albedo / pi`, as three's composite does.
  *
- * The GI denoiser that reads the interpolated image is RC4.3; until then the
- * shading module reads this kernel's output directly.
+ * The interpolated image goes on to GI-1's denoiser (RC4.3, gi-denoiser.ts),
+ * whose output the shading module reads.
  *
  * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
  * the projection weight is a cell's solid angle (D25), the SH live in a

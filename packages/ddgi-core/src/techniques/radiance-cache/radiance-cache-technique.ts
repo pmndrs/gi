@@ -37,7 +37,10 @@
  * 8. `FilterProbeMask` (gi1.comp:249), `FilterScreenProbes` twice
  *    (gi1.comp:1357; RC4.2), `ProjectScreenProbes` (gi1.comp:1446) and
  *    `InterpolateScreenProbes` (gi1.comp:1515), the last with SSGI's outputs:
- *    screen-irradiance.ts (gi1.cpp:2561-2636);
+ *    screen-irradiance.ts (gi1.cpp:2561-2636); then the image-space GI
+ *    denoiser, `ReprojectGI` and `FilterGI` ×2 (gi1.cpp:2882-2927;
+ *    gi-denoiser.ts, `@pmndrs/denoiser-gi1`, RC4.3), whose output the shading
+ *    module reads;
  * 9. the history kept for the next frame: the filtered atlas (which
  *    Capsaicin's flip makes the next frame's previous one, gi1.cpp:2606-2610,
  *    3097), the mask, the SH, the host's depth and normals, and the camera
@@ -56,6 +59,7 @@
  * largest screen the device can draw.
  */
 
+import type { GI1Denoiser } from '@pmndrs/denoiser-gi1';
 import type { GpuCompaction, GpuIndirectArgs, GpuPrefixScan } from '../../platform/contract/compute.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import type { FrameCamera, FrameScreen } from '../../platform/contract/frame.ts';
@@ -69,6 +73,7 @@ import { ScreenIrradiance, screenProbeCellSize } from './screen-irradiance.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { ScreenSpaceGI } from './ssgi.ts';
+import { createGIDenoiser, encodeGIDenoiser } from './gi-denoiser.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
@@ -317,6 +322,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private irradiance: ScreenIrradiance | null = null;
     /** Capsaicin's SSGI technique (RC4.2): made in `prepare`. */
     private ssgi: ScreenSpaceGI | null = null;
+    /** GI-1's image-space denoiser (RC4.3): made in `prepare`. */
+    private giDenoiser: GI1Denoiser | null = null;
+    /** The latest frame's denoised irradiance, which the shading module reads; null when `useGIDenoiser` is off. */
+    private denoisedIrradiance: GPUTexture | null = null;
     private latestFrameIndex = 0;
     /** The LRU half this frame reads (Capsaicin's `probe_buffer_index_` for the LRU buffers, gi1.cpp:2119, 2141). */
     private lruHalf: 0 | 1 = 0;
@@ -382,7 +391,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             copyPreviousScreen: history[HISTORY_ENTRY_POINT.copyPreviousScreen],
             debug,
         };
-        const [irradiance, ssgi] = await Promise.all([ScreenIrradiance.create(context), ScreenSpaceGI.create(context)]);
+        const [irradiance, ssgi, giDenoiser] = await Promise.all([ScreenIrradiance.create(context), ScreenSpaceGI.create(context), createGIDenoiser(context)]);
 
         // The spawn and probe tiles of the largest screen the device can draw: the platform's scans
         // and compaction take their buffers when they are made (asynchronously), so a resize never
@@ -427,6 +436,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.cache = cache;
         this.irradiance = irradiance;
         this.ssgi = ssgi;
+        this.giDenoiser = giDenoiser;
         this.screenHistoryResetPending = true;
         this.prepared = {
             kernels,
@@ -575,6 +585,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // 8: the mask's mips, the probe filter, the SH and the irradiance per pixel (RC2.2, RC4.2),
         // after the blend as in Capsaicin (gi1.cpp:2561-2636).
         this.encodeIrradiance(encoder, frame, prepared, resources);
+        // 8b: the image-space GI denoiser, before the resolve (RC4.3, gi-denoiser.ts).
+        this.encodeDenoiser(encoder, frame);
 
         // 9: what the next frame reprojects from.
         this.encodeHistoryKeep(encoder, prepared, resources, groups);
@@ -663,6 +675,21 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         );
     }
 
+    /**
+     * GI-1's denoiser on this frame's interpolated irradiance, with the
+     * previous frame's camera (this frame's after a history reset).
+     */
+    private encodeDenoiser(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame): void {
+        const interpolated = this.irradiance?.irradiance;
+        const denoiser = this.giDenoiser;
+        if (!this.settings.useGIDenoiser || !denoiser || !interpolated) {
+            this.denoisedIrradiance = null;
+            return;
+        }
+        // Turned back on: its history is from frames ago, under another camera.
+        if (this.denoisedIrradiance === null) denoiser.resetHistory();
+        this.denoisedIrradiance = encodeGIDenoiser(denoiser, encoder, frame.screen, frame.camera, this.previousCamera ?? frame.camera, interpolated);
+    }
 
     /** What the shading module binds: the latest frame's textures, or 1 × 1 placeholders before the first. */
     private shadingTextures(): { irradiance: GPUTexture; probeAtlas: GPUTexture; probeMask: GPUTexture; probeSH: GPUTexture; occlusionAndBentNormal: GPUTexture } {
@@ -670,7 +697,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (!irradiance) throw new Error('@pmndrs/ddgi: the radiance cache has no shading textures before prepare');
         const placeholders = irradiance.placeholders;
         return {
-            irradiance: irradiance.irradiance ?? placeholders.irradiance,
+            irradiance: this.denoisedIrradiance ?? irradiance.irradiance ?? placeholders.irradiance,
             probeAtlas: this.screenResources?.probeAtlas ?? placeholders.probeAtlas,
             probeMask: this.screenResources?.probeMask ?? placeholders.probeMask,
             probeSH: irradiance.probeSH ?? placeholders.probeSH,
@@ -773,6 +800,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         };
     }
 
+    /** GI-1's image-space denoiser once prepared (its output and history), for tests; null before `prepare`. */
+    get denoiser(): GI1Denoiser | null {
+        return this.giDenoiser;
+    }
+
     /** The world cache (Capsaicin's hash grid) once prepared, for tests and debug views; null before `prepare`. */
     get worldCache(): HashGridCache | null {
         return this.cache;
@@ -786,12 +818,12 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         return { ...screen, ...worldCacheCounters(this.cache) };
     }
 
-    /** GPU bytes: the screen probes' buffers, the SH and irradiance (RC2.2), SSGI's outputs (RC4.2) and the world cache's (about 1 GiB at Capsaicin's default capacity). */
+    /** GPU bytes: the screen probes' buffers, the SH and irradiance (RC2.2), SSGI's outputs (RC4.2), the GI denoiser's (RC4.3) and the world cache's (about 1 GiB at Capsaicin's default capacity). */
     get memoryBytes(): number {
         const prepared = this.prepared;
         if (!prepared) return 0;
         const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + (this.screenResources?.bytes ?? 0);
-        return screenProbes + (this.irradiance?.memoryBytes ?? 0) + (this.ssgi?.memoryBytes ?? 0) + (this.cache?.memoryBytes ?? 0);
+        return screenProbes + (this.irradiance?.memoryBytes ?? 0) + (this.ssgi?.memoryBytes ?? 0) + (this.giDenoiser?.memoryBytes ?? 0) + (this.cache?.memoryBytes ?? 0);
     }
 
     /**
@@ -811,6 +843,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      */
     resetScreenProbes(): void {
         this.screenHistoryResetPending = true;
+        // The denoiser's history is the screen's too (Capsaicin's starts empty when it is made).
+        this.giDenoiser?.resetHistory();
     }
 
     dispose(): void {
@@ -1152,6 +1186,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.irradiance = null;
         this.ssgi?.dispose();
         this.ssgi = null;
+        this.giDenoiser?.dispose();
+        this.giDenoiser = null;
+        this.denoisedIrradiance = null;
         this.prepared = null;
     }
 }

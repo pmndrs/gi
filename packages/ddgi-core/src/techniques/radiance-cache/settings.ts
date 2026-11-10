@@ -84,6 +84,13 @@ export interface RadianceCacheSettings {
     ssgiViewRadius: number;
     /** `ssgi_falloff_range_` (default 0.05): the outer share of the radius over which a sample's weight falls to 0. */
     ssgiFalloffRange: number;
+    /**
+     * Ours, not Capsaicin's (default true): run GI-1's image-space denoiser
+     * (`ReprojectGI`, `FilterGI` ×2; RC4.3, gi-denoiser.ts), which Capsaicin
+     * always runs. Off, the shading module reads `InterpolateScreenProbes`'
+     * output directly, for comparisons. Read every frame.
+     */
+    useGIDenoiser: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71; SSGI's, ssgi.h:48-51). */
@@ -106,6 +113,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     ssgiStepCount: 2,
     ssgiViewRadius: 0.2,
     ssgiFalloffRange: 0.05,
+    useGIDenoiser: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

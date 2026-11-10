@@ -46,6 +46,8 @@ const PACKAGES_DIR = fileURLToPath(new URL('./packages/', import.meta.url));
 const TECHNIQUE_IMPORT_MESSAGE = 'A technique may import only platform/contract and its own folder. Reach platform features through the contract (add to it if something is missing), not through platform internals, the core entry point, the BVH package or another technique.';
 const PLATFORM_IMPORT_MESSAGE = 'The platform may not import a technique (or the core entry point that assembles them): techniques depend on the platform, never the other way round. Put shared code in the platform and export it through platform/contract.';
 // Package names that lead into the repo's own packages from a bare specifier.
+// `@pmndrs/denoiser-gi1` is not one: it is self-contained and meant to leave
+// for pmndrs/denoiser, so a technique uses it as it would an npm package.
 const OWN_PACKAGE_PREFIXES = ['@pmndrs/bvh', '@pmndrs/ddgi-core'];
 
 /** Path segments of `file` below ddgi-core's `src/`, or null when it is outside. */
@@ -103,7 +105,46 @@ const coreLayersRule = {
         };
     },
 };
-const localPlugin = { rules: { 'core-layers': coreLayersRule } };
+// The GI-1 denoiser (RC4.3) is written to move into pmndrs/denoiser as it is,
+// so it may import nothing outside its own folder: no ddgi-core, no other
+// package of this repo, no engine, no npm package (tests may use vitest).
+// Relative imports are resolved against the importing file and must land in
+// the package's own folder.
+const SELF_CONTAINED_PACKAGES = [fileURLToPath(new URL('./packages/denoiser-gi1/', import.meta.url))];
+const SELF_CONTAINED_MESSAGE = 'packages/denoiser-gi1 is self-contained (it moves into pmndrs/denoiser): import only files in its own folder. WebGPU types are ambient (the tsconfig `types` list), so they need no import; needing anything from ddgi-core is a sign the interface is wrong.';
+const SELF_CONTAINED_TEST_IMPORTS = ['vitest'];
+
+function selfContainedViolation(importer, specifier) {
+    const root = SELF_CONTAINED_PACKAGES.find((folder) => {
+        const relative = path.relative(folder, importer);
+        return !relative.startsWith('..') && !path.isAbsolute(relative);
+    });
+    if (!root) return null;
+    if (!specifier.startsWith('.')) {
+        const isTest = /\.test\.ts$/.test(importer);
+        return isTest && SELF_CONTAINED_TEST_IMPORTS.includes(specifier) ? null : SELF_CONTAINED_MESSAGE;
+    }
+    const target = path.relative(root, path.resolve(path.dirname(importer), specifier));
+    return target.startsWith('..') || path.isAbsolute(target) ? SELF_CONTAINED_MESSAGE : null;
+}
+
+const selfContainedRule = {
+    meta: { type: 'problem', schema: [] },
+    create(context) {
+        const check = (node, source) => {
+            if (!source || source.type !== 'Literal' || typeof source.value !== 'string') return;
+            const message = selfContainedViolation(context.filename, source.value);
+            if (message) context.report({ node: source, message });
+        };
+        return {
+            ImportDeclaration: (node) => check(node, node.source),
+            ExportNamedDeclaration: (node) => check(node, node.source),
+            ExportAllDeclaration: (node) => check(node, node.source),
+            ImportExpression: (node) => check(node, node.source),
+        };
+    },
+};
+const localPlugin = { rules: { 'core-layers': coreLayersRule, 'self-contained': selfContainedRule } };
 
 export default tseslint.config(
     { ignores: ['**/dist/', 'node_modules/', '.claude/', 'native/', 'research/', 'assets/downloads/', 'tools/emsdk/'] },
@@ -143,6 +184,14 @@ export default tseslint.config(
         plugins: { local: localPlugin },
         rules: {
             'local/core-layers': 'error',
+        },
+    },
+    {
+        // The GI-1 denoiser imports nothing outside its own folder (selfContainedRule above).
+        files: ['packages/denoiser-gi1/**/*.ts'],
+        plugins: { local: localPlugin },
+        rules: {
+            'local/self-contained': 'error',
         },
     },
     {

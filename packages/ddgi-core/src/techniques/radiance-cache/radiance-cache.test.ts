@@ -13,6 +13,9 @@ import { cameraRelativeInverseViewProjection, invertMat4, multiplyMat4 } from '.
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_CELLS, PROBE_SIZE, PROBE_SPAWN_TILE_SIZE, screenProbeLayout } from './settings.ts';
 import { RadianceCacheTechnique } from './radiance-cache-technique.ts';
 import { COUNTER_NAMES, COUNTERS_BYTES } from './wgsl/screen-probes.ts';
+import { CAPSAICIN_FORMATS, CORE_FORMATS, denoiserKernels, reprojectionCellSize } from '@pmndrs/denoiser-gi1';
+import { denoiserCamera, GI_DENOISER_LABEL } from './gi-denoiser.ts';
+import { screenProbeCellSize } from './screen-irradiance.ts';
 
 describe('settings (gi1.h)', () => {
     it("are Capsaicin's defaults", () => {
@@ -117,6 +120,7 @@ function budgetDevice(maxStorageBuffersPerShaderStage: number): GPUDevice {
         createComputePipelineAsync: (descriptor: GPUComputePipelineDescriptor) => Promise.resolve({ label: descriptor.label }),
         createBindGroup: (descriptor: GPUBindGroupDescriptor) => descriptor,
         queue: { writeBuffer() {}, writeTexture() {} },
+        features: new Set<string>(),
     } as unknown as GPUDevice;
 }
 
@@ -242,5 +246,51 @@ describe("the technique's binding budget (register D6): the platform's 8 storage
         expect(refusedLabels.sort()).toEqual(atEight.sort());
         expect(refusedLabels).toContain('radiance-cache/PopulateScreenProbes (ray-order)');
         for (const label of Object.keys(SCREEN_KERNELS)) expect(storageBuffers.has(label), label).toBe(true);
+    });
+});
+
+// ---- The GI denoiser (RC4.3): a package of its own, built outside the kernel builder ----
+
+describe('the GI denoiser in the technique (RC4.3)', () => {
+    const storage = (layout: GPUBindGroupLayoutDescriptor, kind: 'buffer' | 'storageTexture'): number =>
+        [...layout.entries].filter((entry) => (kind === 'buffer' ? entry.buffer?.type === 'storage' || entry.buffer?.type === 'read-only-storage' : entry.storageTexture !== undefined)).length;
+
+    it("fits the platform's 8 storage buffers and WebGPU's 4 storage textures per stage, and prepare compiles it", async () => {
+        for (const kernel of [...denoiserKernels(CAPSAICIN_FORMATS), ...denoiserKernels(CORE_FORMATS)]) {
+            expect(storage(kernel.layout, 'buffer'), kernel.entryPoint).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
+            expect(storage(kernel.layout, 'storageTexture'), kernel.entryPoint).toBeLessThanOrEqual(MIN_STORAGE_TEXTURES_PER_STAGE);
+        }
+        const device = budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE);
+        const compiled: string[] = [];
+        const createPipeline = device.createComputePipelineAsync.bind(device);
+        device.createComputePipelineAsync = (descriptor: GPUComputePipelineDescriptor) => {
+            if (descriptor.label?.startsWith(GI_DENOISER_LABEL)) compiled.push(descriptor.compute.entryPoint ?? '');
+            return createPipeline(descriptor);
+        };
+        const { context } = budgetContext(device);
+        const technique = new RadianceCacheTechnique();
+        technique.attach(context);
+        await technique.prepare();
+        expect(technique.settings.useGIDenoiser).toBe(true);
+        expect(technique.denoiser).not.toBeNull();
+        expect(compiled.sort()).toEqual(denoiserKernels(CORE_FORMATS).map((kernel) => kernel.entryPoint).sort());
+    });
+
+    it("sizes its reprojection cell as the screen probes' (Capsaicin's one cell_size, gi1.cpp:1839-1843)", () => {
+        const f = 1 / Math.tan(0.6);
+        const projection = [f / (16 / 9), 0, 0, 0, 0, f, 0, 0, 0, 0, -1, -1, 0, 0, -0.1, 0];
+        expect(reprojectionCellSize(projection, 1280, 720)).toBeCloseTo(screenProbeCellSize({ projection }, 1280, 720), 12);
+    });
+
+    it("hands the denoiser the jitter in pixels, y down (FrameCamera.jitter is NDC, y up)", () => {
+        const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+        const camera = { position: [0, 0, 0] as [number, number, number], view: identity, projection: identity, near: 0.1, far: 100, jitter: [2 / 1280, -2 / 720] as [number, number] };
+        const converted = denoiserCamera(camera, camera, { width: 1280, height: 720 });
+        expect(converted.jitter?.[0]).toBeCloseTo(1, 12);
+        expect(converted.jitter?.[1]).toBeCloseTo(1, 12);
+        // And back, as the denoiser turns it into NDC (its jitterToNdc): the same offset.
+        const ndc = [(2 * (converted.jitter?.[0] ?? 0)) / 1280, (-2 * (converted.jitter?.[1] ?? 0)) / 720];
+        expect(ndc[0]).toBeCloseTo(camera.jitter[0], 12);
+        expect(ndc[1]).toBeCloseTo(camera.jitter[1], 12);
     });
 });

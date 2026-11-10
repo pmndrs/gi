@@ -127,6 +127,9 @@ importers:
       '@pmndrs/bvh':
         specifier: workspace:*
         version: link:../bvh
+      '@pmndrs/denoiser-gi1':
+        specifier: workspace:*
+        version: link:../denoiser-gi1
 
   packages/ddgi-three:
     dependencies:
@@ -140,6 +143,8 @@ importers:
       three:
         specifier: 0.187.0
         version: 0.187.0
+
+  packages/denoiser-gi1: {}
 
   scenes:
     dependencies:

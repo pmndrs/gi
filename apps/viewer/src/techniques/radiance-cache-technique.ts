@@ -9,7 +9,8 @@
  *      `encodeScreen` on the pass's depth and normals
  *   -> the composite (`ddgi(pass, threeGI)`): the pass's colour plus
  *      `giAlbedo × E / π`, E read by screen position from the technique's
- *      interpolated irradiance.
+ *      irradiance, after GI-1's image-space denoiser (RC4.3; on by default,
+ *      as in Capsaicin).
  *
  * Each frame `ThreeGI.update` runs before the pipeline (the frame's `encode`,
  * then the stage's `encodeScreen` with that camera). GI off draws the same

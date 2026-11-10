@@ -2,8 +2,9 @@
  * The radiance cache's shading module, in the shape every technique
  * publishes (`platform/contract/shading-module.ts`).
  *
- * - **`giIrradiance`** reads the irradiance image `InterpolateScreenProbes`
- *   wrote this frame (screen-irradiance.ts) at the pixel `screenUV` names:
+ * - **`giIrradiance`** reads this frame's irradiance image at the pixel
+ *   `screenUV` names: GI-1's denoiser's output (gi-denoiser.ts, RC4.3), or
+ *   with `useGIDenoiser` off `InterpolateScreenProbes`' (screen-irradiance.ts):
  *   irradiance E, which the renderer turns into reflected light with
  *   `albedo / π` (three's composite does; Capsaicin's `ResolveGI1`,
  *   gi1.frag:76-150, does the same with `evaluateLambert`). Position, normal
