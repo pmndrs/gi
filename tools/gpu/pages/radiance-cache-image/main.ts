@@ -35,7 +35,6 @@
  */
 
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { equirectUvToDirection } from '../../../../packages/ddgi-core/src/platform/sky/equirect.ts';
 import { INVALID_ID, integrateHemisphereSH, probeCellMeanRadiance, projectProbe, shIrradiance, unpackSeed, type Direction } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
@@ -46,6 +45,7 @@ import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/tec
 import { SH_BLOCK_SIZE, SH_COEFFICIENTS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/spherical-harmonics.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
+import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { PageScreen, frameCamera, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -280,7 +280,9 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // The adapter's storage limits, but the platform's 8 storage buffers per stage (budget-device.ts), as the
+    // other radiance-cache pages: the technique's kernels, the world cache's included, must fit a default device.
+    const { device, adapterStorageBuffersPerStage } = await requestBudgetDevice(adapter);
     window.addEventListener('pagehide', () => device.destroy(), { once: true });
     deviceErrors = watchDevice(device);
     document.body.style.background = '#222';
@@ -294,7 +296,7 @@ try {
     const fail = (message: string): void => {
         if (failures.length < 30) failures.push(message);
     };
-    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT };
+    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT, adapterStorageBuffersPerStage };
 
     // 1. Lambert: a constant sky of radiance L reads E = pi L.
     const lambert = await runFloor(device, 'lambert', { type: 'color', color: [CONSTANT_SKY, CONSTANT_SKY, CONSTANT_SKY], intensity: 1 });

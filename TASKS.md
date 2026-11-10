@@ -531,7 +531,7 @@ The port reads AMD's source directly: Capsaicin v1.3 (`914b915`) at `src/core/sr
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | done (2026-11-10; Opus review passed with notes; both GPUs; the sky check amended to Capsaicin backup rule; viewer entry moved to RC2.2; D16-D21) |
+| RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | done (2026-11-10; Opus review passed with notes; both GPUs; the sky check amended to Capsaicin backup rule; viewer entry moved to RC2.2; D16-D21). M5 follow-up: review (implementer, 2026-11-10; branch `rc2-1-m5`, D34) |
 | RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | review (2026-11-10; Opus review failed, fixes in; M5; D25-D29, D38) |
 
 - **RC2.1 done-when.**
@@ -565,7 +565,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | done (2026-11-10; Opus review failed on the ray offset, fixed; both GPUs; 1,024 MiB at default capacity; wiring moved to RC3.2; D22-D24) |
-| RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | active (implementer, 2026-11-10; beside RC2.2) |
+| RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | done (2026-11-10, Mac lead; Opus review failed on the binding budget, fixed, re-review passed with notes; the small-cache tile-list bug fixed with a test; M5 pages pass: hash-grid, world-cache, probes, overflow (0 refused on Sponza and Bistro exterior); RTX 3060 and Intel UHD not re-run since the packing; D30-D33, D35-D37) |
 | RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | todo |
 
 - **RC3.1 done-when.**

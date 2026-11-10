@@ -16,7 +16,7 @@ export const TEST_WORKGROUP_SIZE = 64;
 export const HIT_WORDS = 8;
 
 /** Results per thread, by kernel. */
-export const RESULT_WORDS = { hashes: 2, descriptors: 4, insert: 3, find: 2 } as const;
+export const RESULT_WORDS = { hashes: 2, descriptors: 4, insert: 3, find: 2, packHalves: 2 } as const;
 
 /** Counter words: how many inserts found a new tile. */
 export const COUNTER = { newTiles: 0 } as const;
@@ -27,6 +27,7 @@ export const TEST_ENTRY_POINT = {
     insert: 'testInsert',
     find: 'testFind',
     touch: 'testTouch',
+    packHalves: 'testPackHalves',
 } as const;
 
 export type TestKernelName = keyof typeof TEST_ENTRY_POINT;
@@ -113,6 +114,18 @@ fn ${TEST_ENTRY_POINT.find}(@builtin(global_invocation_id) id: vec3u) {
     let found = HashGridCache_FindCell(testHitData(id.x));
     test_results[id.x * 2u] = found.cell_index;
     test_results[id.x * 2u + 1u] = found.tile_index;
+}
+
+// One f32 (its bits in the input) to a half both ways (register D31): the GPU's own
+// pack2x16float, and the cache's HashGridCache_PackHalf2, which corrects it to the nearest half.
+@compute @workgroup_size(${TEST_WORKGROUP_SIZE})
+fn ${TEST_ENTRY_POINT.packHalves}(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= test_params.item_count) {
+        return;
+    }
+    let value = bitcast<f32>(test_input[id.x]);
+    test_results[id.x * 2u] = pack2x16float(vec2f(value, 0.0)) & 0xffffu;
+    test_results[id.x * 2u + 1u] = HashGridCache_PackHalf2(vec2f(value, 0.0)) & 0xffffu;
 }
 
 // A reader touching what it finds (Capsaicin's reflections, gi1.comp:2882-2888).

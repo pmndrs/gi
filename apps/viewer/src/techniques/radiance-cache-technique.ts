@@ -1,5 +1,5 @@
 /**
- * The radiance cache (AMD GI-1.0/1.2, phase 2: single bounce, no history),
+ * The radiance cache (AMD GI-1.0/1.2: single bounce through the world cache, no screen-probe history yet),
  * through the three.js adapter, the way a three user builds a screen-space
  * technique (docs/api/three.md):
  *
@@ -119,7 +119,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         // Chrome sends the compile requests when this JavaScript task ends (ThreeGI's file comment).
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (this.disposed) return;
-        // The radiance cache has no world-space budget in phase 2: its work is the screen stage.
+        // The radiance cache has no world-space budget: all its work, the world cache's too, is the screen stage.
         const threeGI = new ThreeGI(platform, loaded.scene, { preparing, budget: { units: 0 }, environment: environmentFor(loaded.manifest), warn: (message) => this.warn(message) });
         this.threeGI = threeGI;
         // Only this technique's camera sees its GI light; the adapter keeps the layers when it replaces the light.
@@ -219,7 +219,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
                 return `Could not start: ${this.failure}`;
             case 'ready': {
                 const tiles = this.technique?.counters['spawn tiles'] ?? 0;
-                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each; one bounce, no history yet (phase 2)`;
+                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each; one bounce through the world cache, no screen-probe history yet`;
             }
         }
     }

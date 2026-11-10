@@ -13,18 +13,27 @@
  *
  * Capsaicin keeps about 30 separate buffers in unbounded arrays
  * (`hash_grid_cache.hlsl:52-86`); WebGPU limits the storage buffers a shader
- * stage binds (register D6), so the arrays are packed into three buffers at
- * fixed offsets, one per element type and use:
+ * stage binds (register D6), so the arrays are packed into two buffers at
+ * fixed offsets, one per element type:
  *
- * - **tile words** (`u32`, atomics): the cache's counters, then per tile the
- *   hash (checksum) slot, the decay stamp and the two ping-pong packed tile
- *   lists. A few MiB.
+ * - **cache words** (`u32`, atomics): the cache's counters; then per tile the
+ *   hash (checksum) slot, the decay stamp, the two ping-pong packed tile
+ *   lists and the frame it was last put on the update list (register D32);
+ *   then per cell the two update scratch arrays (`UpdateCellValueBuffer`,
+ *   `UpdateCellValueIndirectBuffer`, four words per cell each).
  * - **cell values** (`vec2u`): `ValueBuffer` then `ValueIndirectBuffer`.
- * - **update scratch** (`u32`, atomics): `UpdateCellValueBuffer` then
- *   `UpdateCellValueIndirectBuffer`, four words per cell each.
+ *
+ * Why two and not three: the passes that light the hits (`GenerateReservoirs`,
+ * `PopulateCells`) also bind the platform's hit shading, whose tracer and
+ * scene copy take 5 of the platform's 8 storage buffers per stage
+ * (`MIN_STORAGE_BUFFERS_PER_STAGE`). Those passes need the counters and the
+ * update scratch, so the two share a buffer; they don't read the cell
+ * values, so they leave that buffer out of their layout
+ * (`hash-grid-wgsl.ts`, `HashGridCacheBindingSet`).
  *
  * The per-ray lists Capsaicin sizes from the screen (visibility, query and
- * resolve lists, `gi1.cpp:640-695`) come with population in RC3.2.
+ * resolve lists, `gi1.cpp:637-695`) are in a third buffer, made for the
+ * screen's probe-ray count (`hash-grid-population-wgsl.ts`).
  */
 
 import { GILimitError } from '../../../platform/contract/errors.ts';
@@ -54,6 +63,12 @@ export interface HashGridCacheOptions {
     hashGridCacheDiscardMultibounceRayProbability: number;
     /** `gi1_hash_grid_cache_max_multibounce_sample_count` (gi1.h:65, default 16): the same cap for the indirect values. */
     hashGridCacheMaxMultibounceSampleCount: number;
+    /**
+     * `gi1_use_direct_lighting` (gi1.h:53, default true), GI-1's own option,
+     * which `GenerateReservoirs` reads: with it, a hit on an emissive front
+     * face gives the probe ray its emission and bypasses the cache.
+     */
+    useDirectLighting: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:58-65). */
@@ -66,6 +81,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheMaxSampleCount: 16,
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
+    useDirectLighting: true,
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */
@@ -132,7 +148,7 @@ export function hashGridCacheCapacity(options: Pick<HashGridCacheOptions, 'hashG
 const WORD_BYTES = 4;
 
 /**
- * Words of the counter block at the start of the tile words. Capsaicin has
+ * Words of the counter block at the start of the cache words. Capsaicin has
  * one single-`uint` buffer per counter (`gi1_shared.h:100-127`); here each is
  * a word. The block is 64 words (256 bytes) so the per-tile arrays after it
  * start on WebGPU's storage-binding alignment, should a pass ever bind one
@@ -141,7 +157,7 @@ const WORD_BYTES = 4;
 export const COUNTER_WORDS = 64;
 
 /**
- * Word offsets of the counters in the tile words, named after Capsaicin's
+ * Word offsets of the counters in the cache words, named after Capsaicin's
  * buffers (`HashGridBufferNamesUint`, gi1_shared.h:100-127). The two packed
  * tile counts are a ping-pong pair, selected by `buffer_ping_pong`
  * (`hash_grid_cache.hlsl:75-76`).
@@ -161,16 +177,33 @@ export const HASH_GRID_COUNTER = {
      * on, cleared with the others each frame (register D23).
      */
     bucketOverflowCount: 7,
+    /**
+     * The frame's probe-ray count, copied from the screen cache's buffer at
+     * the start of the cache's work, where the indirect arguments of the
+     * insert pass (made once, at `prepare`) can read it.
+     */
+    probeRayCount: 8,
 } as const;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
 export interface HashGridCacheBufferLayout {
-    /** Tile words: counters, then hash, decay, packed tile index 0 and 1, `numTiles` words each. */
-    readonly tileWords: {
+    /**
+     * Cache words, in words: the counters ({@link HASH_GRID_COUNTER}), then
+     * `numTiles` words each of hash, decay, packed tile index 0 and 1 and the
+     * update-listed frame, then `4 × numCells` words each of the direct and
+     * the indirect update scratch.
+     */
+    readonly words: {
         readonly hashBuffer: number;
         readonly decayTileBuffer: number;
         readonly packedTileIndexBuffer0: number;
         readonly packedTileIndexBuffer1: number;
+        /** Ours (register D32): per tile, the frame (plus one) it was last put on the update list. */
+        readonly updateListedTileBuffer: number;
+        /** `UpdateCellValueBuffer`: four words per cell. */
+        readonly updateCellValueBuffer: number;
+        /** `UpdateCellValueIndirectBuffer`: four words per cell. */
+        readonly updateCellValueIndirectBuffer: number;
         readonly bytes: number;
     };
     /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells`. */
@@ -179,13 +212,7 @@ export interface HashGridCacheBufferLayout {
         readonly valueIndirectBuffer: number;
         readonly bytes: number;
     };
-    /** Update scratch, in words: `UpdateCellValueBuffer` at 0, `UpdateCellValueIndirectBuffer` at `4 × numCells`. */
-    readonly updateScratch: {
-        readonly updateCellValueBuffer: number;
-        readonly updateCellValueIndirectBuffer: number;
-        readonly bytes: number;
-    };
-    /** All three. */
+    /** Both buffers. */
     readonly totalBytes: number;
 }
 
@@ -193,22 +220,32 @@ export interface HashGridCacheBufferLayout {
 export const CELL_VALUE_BYTES = 8;
 /** Words of a cell's update scratch: quantised rgb and a sample count (`HashGridCache_QuantizeRadiance`, hash_grid_cache.hlsl:301-306; `num_cells << 2`, gi1.cpp:527). */
 export const UPDATE_SCRATCH_WORDS_PER_CELL = 4;
+/** WebGPU's storage-binding offset alignment in words (256 bytes): each array starts on it, should a pass ever bind one alone. */
+const ARRAY_ALIGNMENT_WORDS = 64;
+
+function alignWords(words: number): number {
+    return Math.ceil(words / ARRAY_ALIGNMENT_WORDS) * ARRAY_ALIGNMENT_WORDS;
+}
 
 export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): HashGridCacheBufferLayout {
     const { numTiles, numCells } = capacity;
     const hashBuffer = COUNTER_WORDS;
-    const decayTileBuffer = hashBuffer + numTiles;
-    const packedTileIndexBuffer0 = decayTileBuffer + numTiles;
-    const packedTileIndexBuffer1 = packedTileIndexBuffer0 + numTiles;
-    const tileWordsBytes = (packedTileIndexBuffer1 + numTiles) * WORD_BYTES;
-    const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
+    const decayTileBuffer = alignWords(hashBuffer + numTiles);
+    const packedTileIndexBuffer0 = alignWords(decayTileBuffer + numTiles);
+    const packedTileIndexBuffer1 = alignWords(packedTileIndexBuffer0 + numTiles);
+    const updateListedTileBuffer = alignWords(packedTileIndexBuffer1 + numTiles);
     const scratchWordsPerArray = UPDATE_SCRATCH_WORDS_PER_CELL * numCells;
-    const updateScratchBytes = 2 * scratchWordsPerArray * WORD_BYTES;
+    const updateCellValueBuffer = alignWords(updateListedTileBuffer + numTiles);
+    const updateCellValueIndirectBuffer = alignWords(updateCellValueBuffer + scratchWordsPerArray);
+    const wordCount = updateCellValueIndirectBuffer + scratchWordsPerArray;
+    // Word indices are u32 on the GPU, the scratch's included.
+    if (wordCount > 0xffffffff) throw new RangeError(`@pmndrs/ddgi: the world cache's ${wordCount} cache words are too many to index with 32 bits`);
+    const wordsBytes = wordCount * WORD_BYTES;
+    const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
     return {
-        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, bytes: tileWordsBytes },
+        words: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, updateCellValueBuffer, updateCellValueIndirectBuffer, bytes: wordsBytes },
         cellValues: { valueBuffer: 0, valueIndirectBuffer: numCells, bytes: cellValuesBytes },
-        updateScratch: { updateCellValueBuffer: 0, updateCellValueIndirectBuffer: scratchWordsPerArray, bytes: updateScratchBytes },
-        totalBytes: tileWordsBytes + cellValuesBytes + updateScratchBytes,
+        totalBytes: wordsBytes + cellValuesBytes,
     };
 }
 
@@ -220,7 +257,7 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): Hash
  * fails on `maxStorageBufferBindingSize`.
  */
 export function checkHashGridCacheLimits(layout: HashGridCacheBufferLayout, limits: Pick<GPUSupportedLimits, 'maxStorageBufferBindingSize' | 'maxBufferSize'>): void {
-    const largest = Math.max(layout.tileWords.bytes, layout.cellValues.bytes, layout.updateScratch.bytes);
+    const largest = Math.max(layout.words.bytes, layout.cellValues.bytes);
     if (largest > limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', largest, limits.maxStorageBufferBindingSize);
     if (largest > limits.maxBufferSize) throw new GILimitError('maxBufferSize', largest, limits.maxBufferSize);
 }

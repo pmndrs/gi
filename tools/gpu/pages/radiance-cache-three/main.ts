@@ -1,16 +1,17 @@
 /**
  * RC2.2: the radiance cache's first image through the three adapter, beside
  * DDGI's, on `cornell-box`, `two-room` and `sponza` (with curtains) from each
- * scene's first bookmark at 1280 × 720, single bounce (phase 2 has no world
- * cache).
+ * scene's first bookmark at 1280 × 720, single bounce: the probe rays' hits
+ * are lit through the world cache (RC3.2), which holds one bounce until
+ * GI-1.2's multi-bounce cells (RC3.3).
  *
  * One platform per scene, the viewer's loader and `ThreeGI` (the shared
  * composite harness), with DDGI as the output technique (warmed for 120
  * frames, as the composite pages do) and the radiance cache attached beside
  * it. DDGI there runs with `bounceEnergy: 0`: its probe rays return the
  * hit's emission and `albedo / π ×` direct light and the sky on a miss, never
- * the field's own light, so it holds one bounce as the radiance cache does in
- * phase 2. A second platform per scene runs DDGI with its default (all
+ * the field's own light, so it holds one bounce as the radiance cache does
+ * before RC3.3. A second platform per scene runs DDGI with its default (all
  * bounces) for the contact sheet only. Two pictures, each the way a three
  * user builds it:
  * - **DDGI:** `pass()` with `mrt({ output, giAlbedo, normal })` and the
@@ -47,6 +48,7 @@
 import type { Node } from 'three/webgpu';
 import { isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { RADIANCE_CACHE_DEBUG_VIEW } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
 import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { GILight } from '../../../../packages/ddgi-three/src/gi-light.ts';
@@ -62,8 +64,14 @@ const SCENES = ['cornell-box', 'two-room', 'sponza'] as const;
 /** DDGI's warm-up, as the composite pages (three-composite, three-composite-sponza). */
 const GI_FRAMES = 120;
 const PROBES_PER_FRAME = 4096;
-/** Frames of the radiance cache before the picture that counts (phase 2 keeps no history, so one would do). */
-const WARM_FRAMES = 3;
+/**
+ * Frames of the radiance cache before the picture that counts. The screen
+ * probes keep no history (phase 4), but the world cache does: each cell is a
+ * running mean of up to `hashGridCacheMaxSampleCount` frames (16, gi1.h:63),
+ * so the picture is taken once its cells have a full history, and the
+ * comparisons are against the cache's converged value, not its first frames.
+ */
+const WARM_FRAMES = DEFAULT_RADIANCE_CACHE_SETTINGS.hashGridCacheMaxSampleCount;
 /** Contact sheet thumbnails, CSS pixels. */
 const THUMBNAIL_WIDTH = 250;
 /** The sheet's exposure puts one-bounce DDGI's mean surface luminance here before tone mapping. */
@@ -183,7 +191,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
     const { device, renderer, log } = context;
     const allBounces = await renderAllBouncesDdgi(context, sceneId);
     const radianceCache = new RadianceCacheTechnique();
-    // One bounce in DDGI (file comment): like for like with phase 2's radiance cache.
+    // One bounce in DDGI (file comment): like for like with the radiance cache before RC3.3.
     const scene = await loadCompositeScene(device, sceneId, {
         ...SIZE,
         giFrames: GI_FRAMES,

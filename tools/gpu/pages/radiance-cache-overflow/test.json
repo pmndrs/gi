@@ -1,0 +1,4 @@
+{
+    "description": "RC3.2: the radiance cache's world-cache bucket overflow, counted over 300 still frames from the first bookmark of sponza and bistro-exterior at 1280x720 (refused inserts, live tiles, hits). Information, not a gate: fails only on errors. Run on the RTX with VITE_DDGI_MAX_TEXTURE_SIZE=1024.",
+    "timeoutMs": 600000
+}

@@ -5,10 +5,14 @@
  *
  * - **Reference:** cosine-sampled rays from the probe's own ray origin (the
  *   pixel's position pushed off the surface, as its probe rays start), each
- *   hit shaded as phase 2 shades it: an emissive front face its emission,
- *   any other hit (back faces too, as Capsaicin) `albedo / π ×`
- *   `giDirectIrradiance` (the platform's direct light with its shadow ray,
- *   the same light choice `gi/direct` makes), the sky on a miss. Over the
+ *   hit shaded with the one bounce the world cache holds before RC3.3's
+ *   multi-bounce cells: an emissive front face its emission, any other hit
+ *   (back faces too, as Capsaicin) `albedo / π ×` `giDirectIrradiance` (the
+ *   platform's direct light with its shadow ray, from the same candidates the
+ *   cache's `GenerateReservoirs` draws its one light from), the sky on a
+ *   miss. The cache stores that light per cell, averaged over the cell's hits
+ *   and up to 16 frames and read back filtered, so the probes' rays measure
+ *   the cache's discretisation against this exact per-point value. Over the
  *   platform's own tracer and hit shading, so it shares both techniques'
  *   scene and lights exactly (the ddgi-irradiance-check page's path tracer,
  *   one bounce). DDGI's rays differ in one way: a back face is black there
@@ -72,7 +76,7 @@ fn refCosineDirection(normal: vec3f) -> vec3f {
     return normalize(tangent * radius * cos(angle) + bitangent * radius * sin(angle) + normal * sqrt(max(0.0, 1.0 - u)));
 }
 
-// One workgroup per point, 64 threads sharing its rays. One bounce, shaded as phase 2's probe rays.
+// One workgroup per point, 64 threads sharing its rays. One bounce, the light the world cache holds per hit.
 @compute @workgroup_size(64)
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) thread: u32) {
     let pointIndex = group.x;
@@ -91,7 +95,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
             sum += giSkyRadiance(direction);
             continue;
         }
-        // As phase 2's probe rays (and Capsaicin, gi1.comp:2427-2452): an emissive front face gives its
+        // As the world cache lights a hit (and Capsaicin, gi1.comp:2427-2452): an emissive front face gives its
         // emission alone; any other hit, a back face too (giSurfaceAt turns its normal to the ray's
         // side), reflects its direct light.
         let surface = giSurfaceAt(ray, hit);
