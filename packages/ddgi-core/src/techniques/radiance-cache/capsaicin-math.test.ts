@@ -6,12 +6,16 @@ import {
     getOrthoVectors,
     halfBitsToFloat,
     INVALID_ID,
+    makeRandom,
     mapToHemiOctahedron,
     mapToHemiOctahedronInverse,
     packHalf3,
     packSeed,
     probeCellOf,
     quantizeRadiance,
+    rand,
+    rand2,
+    sampleBRDFAndEvaluateDiffuse,
     spawnJitter,
     spawnScreenProbes,
     spawnTileCounts,
@@ -228,5 +232,63 @@ describe('packing (screen_probes.hlsl, pack.hlsl)', () => {
         expect(quantizeRadiance(0.00005)).toBe(0);
         expect(quantizeRadiance(0.00006)).toBe(1);
         expect(quantizeRadiance(0.12344)).toBe(1234);
+    });
+});
+
+describe('MakeRandom and rand (random_number_generator.hlsl:38-116, seeded as register D18)', () => {
+    /** The WGSL's rcMakeRandom and rcRand written out in BigInt, mod 2^32 at every step. */
+    function referenceRandoms(seed: number, index: number, count: number): number[] {
+        const mask = 0xffffffffn;
+        const pcg = (value: bigint): bigint => {
+            const state = (value * 747796405n + 2891336453n) & mask;
+            const word = (((state >> ((state >> 28n) + 4n)) ^ state) * 277803737n) & mask;
+            return (word >> 22n) ^ word;
+        };
+        const increment = ((BigInt(index) << 1n) | 1n) & mask;
+        let state = (((pcg(BigInt(seed)) + increment) & mask) * 747796405n + increment) & mask;
+        const out: number[] = [];
+        for (let n = 0; n < count; n++) {
+            const word = (((state >> ((state >> 28n) + 4n)) ^ state) * 277803737n) & mask;
+            state = (state * 747796405n + 2891336453n) & mask;
+            out.push(Number(((word >> 22n) ^ word) >> 8n) / 16777216);
+        }
+        return out;
+    }
+
+    it('gives the BigInt reference, three draws deep, for several seeds and frames', () => {
+        for (const [seed, frame] of [[0, 0], [1, 7], [123456, 4000000000], [0xffffffff, 1]]) {
+            const random = makeRandom(seed, frame);
+            const first = rand(random);
+            const [second, third] = rand2(random);
+            expect([first, second, third]).toEqual(referenceRandoms(seed, frame, 3));
+            for (const value of [first, second, third]) expect(value >= 0 && value < 1).toBe(true);
+        }
+    });
+});
+
+describe('sampleBRDFAndEvaluateDiffuse (material_sampling.hlsl:741-773), Lambert', () => {
+    const albedo: Direction = [0.5, 0.25, 0.75];
+
+    it('samples about +z unturned: the cosine-hemisphere point itself', () => {
+        const sample = sampleBRDFAndEvaluateDiffuse(albedo, [0, 0, 1], [0.36, 0.25]);
+        expect(sample.direction[0]).toBeCloseTo(0, 12);
+        expect(sample.direction[1]).toBeCloseTo(0.6, 12);
+        expect(sample.direction[2]).toBeCloseTo(0.8, 12);
+        expect(sample.pdf).toBeCloseTo(0.8 / Math.PI, 12);
+    });
+
+    it('keeps the cosine to the normal at sqrt(1 - u) for every normal, -z (the special case) included', () => {
+        for (const normal of testNormals()) {
+            for (const samples of [[0, 0], [0.5, 0.3], [0.99, 0.9], [0.2, 0.75]] as const) {
+                const sample = sampleBRDFAndEvaluateDiffuse(albedo, normal, samples);
+                expect(length(sample.direction)).toBeCloseTo(1, 12);
+                expect(dot(sample.direction, normal)).toBeCloseTo(Math.sqrt(1 - samples[0]), 4);
+            }
+        }
+    });
+
+    it('has brdf / pdf = albedo, the estimator UpdateMultibounceCells takes', () => {
+        const sample = sampleBRDFAndEvaluateDiffuse(albedo, [0, 1, 0], [0.7, 0.1]);
+        sample.brdf.forEach((value, channel) => expect(value / sample.pdf).toBeCloseTo(albedo[channel], 12));
     });
 });
