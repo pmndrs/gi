@@ -606,7 +606,8 @@ export const SCHEDULE_STATE_WORDS = SCHEDULE_STATE_WORD.histogram + PRIORITY_BUC
  * sum of the boxes before it, so a thread finds its entry by binary search.
  *
  * An entry: box min (3 u32) and kind ({@link MARK_KIND}), box size (3 u32)
- * and first thread, the global change r and 3 spare words, then the light
+ * and first thread, the global change r, the entry's flags
+ * ({@link MARK_ENTRY_FLAG}) and 2 spare words, then the light
  * before and after, `MARK_LIGHT_WORDS` each ({@link MARK_LIGHT_WORD}), then
  * the geometry block (T2.M1, {@link MARK_GEOMETRY_WORD}): a changed
  * region's world box, how far it moved and its mover bit.
@@ -619,10 +620,22 @@ export const MARK_ENTRY_WORD = {
     boxSize: 4,
     firstThread: 7,
     globalChange: 8,
+    flags: 9,
     before: 12,
     after: 12 + MARK_LIGHT_WORDS,
     geometry: 12 + 2 * MARK_LIGHT_WORDS,
 } as const;
+/** Bits of an entry's `flags` word. */
+export const MARK_ENTRY_FLAG = {
+    /**
+     * A geometry entry whose object gives off light (`DirtyRegion.emits`,
+     * T3.4): its far set takes every active probe within reach, not only
+     * those that can see the box, since its light reaches the others through
+     * bounces (wgsl/mark.ts, ddgiMarkGeometry).
+     */
+    emitter: 1 << 0,
+} as const;
+
 /** The geometry block of an entry (MARK_KIND.geometry), from MARK_ENTRY_WORD.geometry. */
 export const MARK_GEOMETRY_WORD = {
     /** The region's world box min (3 f32)... */
