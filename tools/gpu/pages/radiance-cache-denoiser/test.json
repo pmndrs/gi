@@ -1,0 +1,4 @@
+{
+    "description": "RC4.3: GI-1's image-space GI denoiser (@pmndrs/denoiser-gi1: ReprojectGI, FilterGI x2) against its CPU reference on a ray-cast scene at 480x270: a still constant input stays constant; blur mask, colour delta, history and both filter passes on captured frames; reprojection under a known camera move lands on the right pixels, disoccluded pixels get the full blur mask and are blurred, converged ones aren't; a NaN and an infinity in the input (information). Then in the radiance cache at 1280x720: flicker of the denoised irradiance beside the interpolated E on Cornell and Sponza (information), no NaN or negative values. Correctness only.",
+    "timeoutMs": 900000
+}
