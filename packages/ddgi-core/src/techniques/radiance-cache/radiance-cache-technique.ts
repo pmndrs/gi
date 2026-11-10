@@ -663,21 +663,6 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         );
     }
 
-    /**
-     * Runs `FilterScreenProbes` again on the latest frame's atlas, with that
-     * frame's probes, mask and screen, as the frame runs it: Capsaicin's copy
-     * of the atlas into the previous atlas, then both passes, leaving the
-     * filtered probes in the atlas. For tests that write an atlas of their
-     * own into `probes.probeAtlas` first; the next frame's history is then
-     * this atlas's previous copy, not the frame's. Nothing before the first
-     * `encodeScreen`.
-     */
-    encodeProbeFilter(encoder: GPUCommandEncoder): void {
-        const resources = this.screenResources;
-        if (!resources || !this.irradiance) return;
-        copyWholeTexture(encoder, resources.probeAtlas, resources.previousProbeAtlas);
-        this.irradiance.encodeProbeFilter(encoder);
-    }
 
     /** What the shading module binds: the latest frame's textures, or 1 × 1 placeholders before the first. */
     private shadingTextures(): { irradiance: GPUTexture; probeAtlas: GPUTexture; probeMask: GPUTexture; probeSH: GPUTexture; occlusionAndBentNormal: GPUTexture } {
@@ -882,9 +867,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const atlas = (label: string, usage: number): GPUTexture =>
             device.createTexture({ label: `${TECHNIQUE_ID} ${label}`, size: [layout.atlasSize[0], layout.atlasSize[1]], format: 'rgba16float', usage });
         // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by the filter, the projection and the
-        // debug view, copied into last frame's after the blend and the filter. COPY_DST lets a test
-        // write an atlas of its own for the filter (encodeProbeFilter).
-        const probeAtlas = atlas('probe atlas', TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst);
+        // debug view, copied into last frame's after the blend and the filter.
+        const probeAtlas = atlas('probe atlas', TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc);
         // The other of Capsaicin's two (register D45): last frame's atlas, then SampleScreenProbes'
         // history for the blend. COPY_DST also lets a test write a history of its own.
         const previousProbeAtlas = atlas('previous probe atlas', TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst);

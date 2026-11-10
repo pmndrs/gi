@@ -23,13 +23,10 @@ import type { FrameCamera } from '../../platform/contract/frame.ts';
 import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { PROBE_SIZE, type ScreenProbeLayout } from './settings.ts';
+import { ScreenProbeFilter } from './screen-probe-filter.ts';
 import {
-    BLUR_DIRECTION_BYTES,
-    BLUR_DIRECTIONS,
     FILTER_PROBE_MASK_GROUP,
     FILTER_PROBE_MASK_WGSL,
-    FILTER_PROBES_GROUP,
-    FILTER_PROBES_WGSL,
     INTERPOLATE_GROUP,
     INTERPOLATE_WGSL,
     PROJECT_GROUP,
@@ -80,7 +77,6 @@ export interface ScreenIrradianceInputs {
 
 interface Kernels {
     readonly filterProbeMask: ComputeKernel;
-    readonly filterProbes: ComputeKernel;
     readonly project: ComputeKernel;
     readonly interpolate: ComputeKernel;
 }
@@ -108,8 +104,6 @@ interface InputGroups {
     readonly inputs: ScreenIrradianceInputs;
     /** One group per mip level from 1: level − 1 read, level written. */
     readonly filterLevels: readonly GPUBindGroup[];
-    /** FilterScreenProbes' two passes: the atlas into the previous atlas, then back. */
-    readonly filterProbes: readonly [GPUBindGroup, GPUBindGroup];
     readonly project: GPUBindGroup;
     readonly interpolate: GPUBindGroup;
 }
@@ -133,8 +127,8 @@ export class ScreenIrradiance {
         private readonly context: TechniqueContext,
         private readonly kernels: Kernels,
         private readonly constants: GPUBuffer,
-        /** `g_BlurDirection` of each filter pass, written once. */
-        private readonly blurDirections: readonly [GPUBuffer, GPUBuffer],
+        /** `FilterScreenProbes` (screen-probe-filter.ts). */
+        private readonly probeFilter: ScreenProbeFilter,
     ) {
         this.placeholders = makePlaceholders(context.device);
     }
@@ -144,9 +138,9 @@ export class ScreenIrradiance {
         const kernel = (label: string, code: string, entryPoint: string, group: GPUBindGroupLayoutDescriptor) =>
             context.kernels.computeKernel({ label: `${TECHNIQUE_ID}/${label}`, modules: [], code, entryPoint, ownGroups: [group] });
         const entry = SCREEN_IRRADIANCE_ENTRY_POINT;
-        const [filterProbeMask, filterProbes, project, interpolate] = await Promise.all([
+        const [filterProbeMask, probeFilter, project, interpolate] = await Promise.all([
             kernel(entry.filterProbeMask, FILTER_PROBE_MASK_WGSL, entry.filterProbeMask, FILTER_PROBE_MASK_GROUP),
-            kernel(entry.filterProbes, FILTER_PROBES_WGSL, entry.filterProbes, FILTER_PROBES_GROUP),
+            ScreenProbeFilter.create(context),
             kernel(entry.project, PROJECT_WGSL, entry.project, PROJECT_GROUP),
             kernel(entry.interpolate, INTERPOLATE_WGSL, entry.interpolate, INTERPOLATE_GROUP),
         ]);
@@ -156,13 +150,7 @@ export class ScreenIrradiance {
             size: SCREEN_PROBES_CONSTANTS_BYTES,
             usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst,
         });
-        const blurDirection = (direction: readonly [number, number], label: string): GPUBuffer => {
-            const buffer = device.createBuffer({ label: `${TECHNIQUE_ID} FilterScreenProbes ${label}`, size: BLUR_DIRECTION_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-            device.queue.writeBuffer(buffer, 0, new Int32Array([direction[0], direction[1], 0, 0]));
-            return buffer;
-        };
-        const blurDirections = [blurDirection(BLUR_DIRECTIONS[0], 'across'), blurDirection(BLUR_DIRECTIONS[1], 'down')] as const;
-        return new ScreenIrradiance(context, { filterProbeMask, filterProbes, project, interpolate }, constants, blurDirections);
+        return new ScreenIrradiance(context, { filterProbeMask, project, interpolate }, constants, probeFilter);
     }
 
     /** The latest frame's irradiance image (screen-sized), or null before the first {@link encode}. */
@@ -192,7 +180,7 @@ export class ScreenIrradiance {
     }
 
     get memoryBytes(): number {
-        return SCREEN_PROBES_CONSTANTS_BYTES + 2 * BLUR_DIRECTION_BYTES + (this.sized?.bytes ?? 0);
+        return SCREEN_PROBES_CONSTANTS_BYTES + this.probeFilter.memoryBytes + (this.sized?.bytes ?? 0);
     }
 
     /**
@@ -220,7 +208,18 @@ export class ScreenIrradiance {
             pass.setBindGroup(1, group);
             pass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
         });
-        this.recordProbeFilter(pass, groups, layout);
+        // FilterScreenProbes, both passes (gi1.cpp:2588-2614).
+        this.probeFilter.record(pass, {
+            layout,
+            frameUniforms: inputs.frameUniforms,
+            screenConstants: this.constants,
+            probeSpawn: inputs.probeSpawn,
+            probeMask: inputs.probeMask,
+            depth: inputs.depth,
+            normal: inputs.normal,
+            atlas: inputs.probeAtlas,
+            secondAtlas: inputs.previousProbeAtlas,
+        });
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
         kernels.project.bind(pass);
         pass.setBindGroup(1, groups.project);
@@ -232,39 +231,10 @@ export class ScreenIrradiance {
         pass.end();
     }
 
-    /**
-     * `FilterScreenProbes` alone again, on the latest frame's inputs, after
-     * the caller has copied the atlas into the previous atlas (as the frame
-     * does after the blend): what a test runs on an atlas of its own. Does
-     * nothing before the first {@link encode}.
-     */
-    encodeProbeFilter(encoder: GPUCommandEncoder): void {
-        const groups = this.groups;
-        if (!groups) return;
-        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/FilterScreenProbes` });
-        this.recordProbeFilter(pass, groups, groups.inputs.layout);
-        pass.end();
-    }
-
-    /**
-     * FilterScreenProbes' two passes over every possible ray (gi1.cpp:2588-2614):
-     * across the screen from the atlas into the previous atlas, then down it
-     * from there back into the atlas. Each dispatch is its own usage scope, so
-     * the second reads what the first wrote.
-     */
-    private recordProbeFilter(pass: GPUComputePassEncoder, groups: InputGroups, layout: ScreenProbeLayout): void {
-        const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
-        this.kernels.filterProbes.bind(pass);
-        for (const group of groups.filterProbes) {
-            pass.setBindGroup(1, group);
-            dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
-        }
-    }
-
     dispose(): void {
         this.releaseSized();
         this.constants.destroy();
-        for (const buffer of this.blurDirections) buffer.destroy();
+        this.probeFilter.dispose();
         for (const texture of Object.values(this.placeholders)) texture.destroy();
     }
 
@@ -345,25 +315,10 @@ export class ScreenIrradiance {
         const uniforms = { buffer: inputs.frameUniforms };
         const normal = screenTextureView(inputs.normal);
         const wholeMask = (): GPUTextureView => inputs.probeMask.createView({ baseMipLevel: 0, mipLevelCount: inputs.layout.probeMaskMipCount });
-        // g_ScreenProbes_PreviousProbeBuffer and g_ScreenProbes_ProbeBuffer of each pass (gi1.cpp:2605-2610).
-        const filterPass = (pass: 0 | 1, read: GPUTexture, write: GPUTexture): GPUBindGroup =>
-            group(`${SCREEN_IRRADIANCE_ENTRY_POINT.filterProbes} pass ${pass + 1}`, kernels.filterProbes, [
-                uniforms,
-                { buffer: this.constants },
-                screenTextureView(inputs.depth),
-                normal,
-                // The whole mip chain: FindClosestProbe walks up it.
-                wholeMask(),
-                { buffer: inputs.probeSpawn },
-                read.createView(),
-                write.createView(),
-                { buffer: this.blurDirections[pass] },
-            ]);
         const groups: InputGroups = {
             sized,
             inputs,
             filterLevels,
-            filterProbes: [filterPass(0, inputs.probeAtlas, inputs.previousProbeAtlas), filterPass(1, inputs.previousProbeAtlas, inputs.probeAtlas)],
             project: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, inputs.probeAtlas.createView(), sized.probeSH.createView()]),
             interpolate: group(SCREEN_IRRADIANCE_ENTRY_POINT.interpolate, kernels.interpolate, [
                 uniforms,

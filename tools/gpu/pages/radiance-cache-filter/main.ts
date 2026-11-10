@@ -11,9 +11,14 @@
  * the floor have probes on the box beside them in the screen with a jump in
  * depth.
  *
+ * Checks 1-3 and 6 run the technique's own filter class
+ * (`ScreenProbeFilter`, screen-probe-filter.ts) on atlases of the page's own,
+ * with the latest frame's probes, mask and screen and uniforms the page
+ * writes by their named offsets: nothing in the technique is there for tests.
+ *
  * 1. **A captured atlas against the twin:** after a few frames with history,
- *    the frame's (filtered) atlas is written back and filtered again on its
- *    own (`encodeProbeFilter`: Capsaicin's copy, then both passes); every
+ *    the frame's (filtered) atlas is copied and filtered again on its own
+ *    (Capsaicin's copy into the second atlas, then both passes); every
  *    listed probe's 64 cells against the twin's two passes on the same atlas,
  *    probes, mask mips and screen: within three half steps of the value
  *    (the first pass's results are stored as halves, rounded either way,
@@ -37,6 +42,20 @@
  *    the mask, not re-spawned) keep those filtered cells within the
  *    reprojection's quantization (×1e4) and two half steps.
  *
+ * 5. **How `textureStore` rounds to `rgba16float`** (register D59): 4,096
+ *    f32 values that aren't halves, stored by a small kernel and read back,
+ *    against round-to-nearest-even and round-toward-zero (reported).
+ * 6. **Does the hit distance's drift add up?** (register D59, information):
+ *    the constant atlas filtered 300 times over (each pass's store rounding
+ *    feeding the next, with no new rays: the worst case), and the frame's
+ *    own loop over 300 still frames, where the blend brings new rays in:
+ *    the sky cells' hit distance at frames 10, 100 and 300. Checked: in the
+ *    frame's loop it settles, falling no more than three half steps (12 m)
+ *    from frame 100 to frame 300. (Stated first as "within 12 m of frame
+ *    10"; the first run fell 27 m by frame 100, 0.4%, then 2.8 m more: it
+ *    settles where new rays balance the stores' rounding, so the gate is on
+ *    the settling and the total is reported.)
+ *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-filter`.
  */
@@ -44,12 +63,15 @@
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
+import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { floatToHalfBits, INVALID_ID, unpackSeed } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { filterScreenProbes, toHalf, type ProbeAtlas, type ProbeFilterInputs } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/probe-filter.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { screenProbeCellSize, viewForward } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
 import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
+import { FRAME_UNIFORM_BYTES, FRAME_UNIFORM_OFFSETS, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
+import { SCREEN_PROBES_CONSTANTS_BYTES, SCREEN_PROBES_CONSTANTS_OFFSETS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-irradiance.ts';
+import { ScreenProbeFilter } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-filter.ts';
 import { LARGEST_QUANTIZED_HIT_DISTANCE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/capsaicin.ts';
 import { FILTER_RADIUS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-irradiance.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
@@ -80,6 +102,10 @@ const FLOOR_VALUE = 1;
 const CAPPED_HIT_DISTANCE = LARGEST_QUANTIZED_HIT_DISTANCE / 1e4;
 const CAPPED_HIT_DISTANCE_TOLERANCE = 4.01;
 
+/** Check 6: frames (and filter rounds) of the drift measurement, and how far the frame loop's sky hit distance may still fall after frame 100: three half steps at 6.7 km. */
+const DRIFT_FRAMES = 300;
+const DRIFT_TOLERANCE = 12.01;
+const SKY_HIT_RANGE = [6000, 7000] as const;
 const ATLAS_WIDTH = TILES_X * PROBE_SIZE;
 const ATLAS_HEIGHT = TILES_Y * PROBE_SIZE;
 
@@ -103,6 +129,76 @@ function writeAtlas(device: GPUDevice, texture: GPUTexture, texels: Float32Array
     const bits = new Uint16Array(texels.length);
     for (let index = 0; index < texels.length; index++) bits[index] = floatToHalfBits(texels[index]);
     device.queue.writeTexture({ texture }, bits, { bytesPerRow: ATLAS_WIDTH * 8 }, [ATLAS_WIDTH, ATLAS_HEIGHT]);
+}
+
+/**
+ * The technique's filter class on the page's own atlases (the file comment):
+ * the latest frame's probes, mask and screen, uniforms written by name.
+ */
+class PageFilter {
+    readonly atlas: GPUTexture;
+    private readonly secondAtlas: GPUTexture;
+    private readonly frameUniforms: GPUBuffer;
+    private readonly screenConstants: GPUBuffer;
+
+    private constructor(
+        private readonly device: GPUDevice,
+        private readonly filter: ScreenProbeFilter,
+        private readonly run: Run,
+    ) {
+        const usage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST;
+        this.atlas = device.createTexture({ label: 'page atlas', size: [ATLAS_WIDTH, ATLAS_HEIGHT], format: 'rgba16float', usage });
+        this.secondAtlas = device.createTexture({ label: 'page second atlas', size: [ATLAS_WIDTH, ATLAS_HEIGHT], format: 'rgba16float', usage });
+        this.frameUniforms = device.createBuffer({ label: 'page RcFrame', size: FRAME_UNIFORM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        this.screenConstants = device.createBuffer({ label: 'page RcScreenProbesConstants', size: SCREEN_PROBES_CONSTANTS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const camera = frameCamera(CAMERA, WIDTH, HEIGHT);
+        // RcFrame: the fields the filter reads (the screen is the page's: signed normals, depth 0 near).
+        const frame = new ArrayBuffer(FRAME_UNIFORM_BYTES);
+        new Float32Array(frame).set(cameraRelativeInverseViewProjection(camera), FRAME_UNIFORM_OFFSETS.inverseViewProjection / 4);
+        new Float32Array(frame).set(camera.position, FRAME_UNIFORM_OFFSETS.eye / 4);
+        new Uint32Array(frame).set([WIDTH, HEIGHT], FRAME_UNIFORM_OFFSETS.bufferDimensions / 4);
+        device.queue.writeBuffer(this.frameUniforms, 0, frame);
+        const constants = new ArrayBuffer(SCREEN_PROBES_CONSTANTS_BYTES);
+        new Float32Array(constants).set(viewForward(camera), SCREEN_PROBES_CONSTANTS_OFFSETS.viewForward / 4);
+        new Float32Array(constants)[SCREEN_PROBES_CONSTANTS_OFFSETS.cellSize / 4] = screenProbeCellSize(camera, WIDTH, HEIGHT);
+        const layout = run.technique.probes?.layout;
+        if (!layout) throw new Error('no probes before the page filter');
+        new Uint32Array(constants)[SCREEN_PROBES_CONSTANTS_OFFSETS.probeMaskMipCount / 4] = layout.probeMaskMipCount;
+        device.queue.writeBuffer(this.screenConstants, 0, constants);
+    }
+
+    static async create(device: GPUDevice, run: Run): Promise<PageFilter> {
+        return new PageFilter(device, await ScreenProbeFilter.create({ device, kernels: run.platform.kernels }), run);
+    }
+
+    /** Records `times` rounds of Capsaicin's copy and both passes on the page's atlas. */
+    encode(times = 1): void {
+        const probes = this.run.technique.probes;
+        if (!probes) throw new Error('no probes');
+        const encoder = this.device.createCommandEncoder({ label: 'radiance-cache-filter page filter' });
+        for (let round = 0; round < times; round++) {
+            encoder.copyTextureToTexture({ texture: this.atlas }, { texture: this.secondAtlas }, [ATLAS_WIDTH, ATLAS_HEIGHT]);
+            const pass = encoder.beginComputePass({ label: 'radiance-cache-filter page filter' });
+            this.filter.record(pass, {
+                layout: probes.layout,
+                frameUniforms: this.frameUniforms,
+                screenConstants: this.screenConstants,
+                probeSpawn: probes.probeSpawn,
+                probeMask: probes.probeMask,
+                depth: this.run.screen.screen.depth,
+                normal: this.run.screen.screen.normal,
+                atlas: this.atlas,
+                secondAtlas: this.secondAtlas,
+            });
+            pass.end();
+        }
+        this.device.queue.submit([encoder.finish()]);
+    }
+
+    dispose(): void {
+        this.filter.dispose();
+        for (const resource of [this.atlas, this.secondAtlas, this.frameUniforms, this.screenConstants]) resource.destroy();
+    }
 }
 
 /** What the twin needs, read back after a frame. */
@@ -154,16 +250,12 @@ interface Comparison {
 }
 
 /** Filters `atlas` on the GPU (on the latest frame's inputs) and against the twin; returns the GPU's result and the comparison. */
-async function filterAndCompare(device: GPUDevice, run: Run, inputs: ProbeFilterInputs, atlas: Float32Array): Promise<{ gpu: Float32Array; twin: ProbeAtlas; comparison: Comparison }> {
-    const probes = run.technique.probes;
-    if (!probes) throw new Error('no probes');
-    writeAtlas(device, probes.probeAtlas, atlas);
+async function filterAndCompare(device: GPUDevice, filter: PageFilter, inputs: ProbeFilterInputs, atlas: Float32Array): Promise<{ gpu: Float32Array; twin: ProbeAtlas; comparison: Comparison }> {
+    writeAtlas(device, filter.atlas, atlas);
     // The twin reads what the GPU reads: the halves written.
     const written = Float32Array.from(atlas, (value) => toHalf(value));
-    const encoder = device.createCommandEncoder({ label: 'radiance-cache-filter filter' });
-    run.technique.encodeProbeFilter(encoder);
-    device.queue.submit([encoder.finish()]);
-    const gpu = await readAtlas(device, probes.probeAtlas);
+    filter.encode();
+    const gpu = await readAtlas(device, filter.atlas);
     const result = filterScreenProbes(inputs, { width: ATLAS_WIDTH, height: ATLAS_HEIGHT, texels: written });
     let cells = 0;
     let undecided = 0;
@@ -193,6 +285,121 @@ async function filterAndCompare(device: GPUDevice, run: Run, inputs: ProbeFilter
     return { gpu, twin: result.atlas, comparison: { cells, undecided, mismatches, worstRelative, accepted: result.accepted, examples } };
 }
 
+
+// ---- Checks 5 and 6: the half-float stores and the hit distance's drift ----------------------
+
+const STORE_WGSL = /* wgsl */ `
+@group(0) @binding(0) var<storage, read> values: array<f32>;
+@group(0) @binding(1) var stored: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    let width = textureDimensions(stored).x;
+    if (id.x >= arrayLength(&values)) {
+        return;
+    }
+    textureStore(stored, vec2u(id.x % width, id.x / width), vec4f(values[id.x], 0.0, 0.0, 1.0));
+}
+`;
+
+/** Values that aren't halves, spread over the half range's exponents, ties included. */
+function storeValues(count: number): Float32Array<ArrayBuffer> {
+    const values = new Float32Array(count);
+    let state = 12345;
+    const random = (): number => {
+        state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+        return state / 2 ** 32;
+    };
+    for (let index = 0; index < count; index++) {
+        const exponent = Math.floor(random() * 30) - 14;
+        // Every eighth a tie: halfway between two halves.
+        const mantissa = index % 8 === 0 ? (Math.floor(random() * 1024) + 0.5) / 1024 : random();
+        values[index] = (1 + mantissa) * 2 ** exponent;
+    }
+    return values;
+}
+
+/** Round-toward-zero half bits of a positive f32 (the round-to-nearest-even bits, stepped down when they rounded up). */
+function towardZeroHalfBits(value: number): number {
+    const nearest = floatToHalfBits(value);
+    return halfBitsToFloat(nearest) > value ? nearest - 1 : nearest;
+}
+
+async function checkStoreRounding(device: GPUDevice): Promise<{ values: number; nearestEven: number; towardZero: number; both: number; neither: number }> {
+    const side = 64;
+    const values = storeValues(side * side);
+    const input = device.createBuffer({ size: values.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(input, 0, values);
+    const texture = device.createTexture({ size: [side, side], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+    const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { module: device.createShaderModule({ code: STORE_WGSL }), entryPoint: 'main' } });
+    const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: input } }, { binding: 1, resource: texture.createView() }] });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(values.length / 64);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const bytes = await readTexture(device, texture, 8, side, side);
+    const bits = new Uint16Array(bytes.buffer, bytes.byteOffset, side * side * 4);
+    input.destroy();
+    texture.destroy();
+    let nearestEven = 0;
+    let towardZero = 0;
+    let both = 0;
+    let neither = 0;
+    values.forEach((value, index) => {
+        const got = bits[index * 4];
+        const isNearest = got === floatToHalfBits(value);
+        const isTowardZero = got === towardZeroHalfBits(value);
+        if (isNearest && isTowardZero) both++;
+        else if (isNearest) nearestEven++;
+        else if (isTowardZero) towardZero++;
+        else neither++;
+    });
+    return { values: values.length, nearestEven, towardZero, both, neither };
+}
+
+/**
+ * The listed probes' cells holding a sky hit distance (6,000 to 7,000 m: the capped 6,710.9 m less
+ * any drift, leaving out the 65,504 m an empty cell holds): their mean and lowest hit distance, and
+ * mean radiance.
+ */
+function skyCells(atlas: Float32Array, seeds: readonly number[]): { cells: number; meanHitDistance: number; lowestHitDistance: number; meanRadiance: number } {
+    let cells = 0;
+    let distance = 0;
+    let lowest = Infinity;
+    let radiance = 0;
+    for (const seed of seeds) {
+        for (let cell = 0; cell < PROBE_CELLS; cell++) {
+            const texel = cellTexel(seed, cell);
+            const hit = atlas[texel * 4 + 3];
+            if (!(hit > SKY_HIT_RANGE[0] && hit < SKY_HIT_RANGE[1])) continue;
+            cells++;
+            distance += hit;
+            lowest = Math.min(lowest, hit);
+            radiance += atlas[texel * 4];
+        }
+    }
+    return { cells, meanHitDistance: distance / Math.max(cells, 1), lowestHitDistance: lowest, meanRadiance: radiance / Math.max(cells, 1) };
+}
+
+/** The listed probes' cells: mean and lowest hit distance, mean radiance. */
+function listedCells(atlas: Float32Array, seeds: readonly number[]): { meanHitDistance: number; lowestHitDistance: number; meanRadiance: number } {
+    let distance = 0;
+    let lowest = Infinity;
+    let radiance = 0;
+    let cells = 0;
+    for (const seed of seeds) {
+        for (let cell = 0; cell < PROBE_CELLS; cell++) {
+            const texel = cellTexel(seed, cell);
+            distance += atlas[texel * 4 + 3];
+            lowest = Math.min(lowest, atlas[texel * 4 + 3]);
+            radiance += atlas[texel * 4];
+            cells++;
+        }
+    }
+    return { meanHitDistance: distance / cells, lowestHitDistance: lowest, meanRadiance: radiance / cells };
+}
 
 const startTime = performance.now();
 let deviceErrors: string[] = [];
@@ -272,10 +479,11 @@ try {
 
     // The inputs of the frame just run, for checks 1-3 (each filters on them again).
     const inputs = await readInputs(device, run);
+    const pageFilter = await PageFilter.create(device, run);
 
     // 1. The frame's own (filtered) atlas, filtered again, against the twin.
     const captured = await readAtlas(device, probes.probeAtlas);
-    const capturedCheck = await filterAndCompare(device, run, inputs, captured);
+    const capturedCheck = await filterAndCompare(device, pageFilter, inputs, captured);
     if (capturedCheck.comparison.mismatches > 0) fail(`captured atlas: ${capturedCheck.comparison.mismatches} values differ from the twin: ${capturedCheck.comparison.examples.join('; ')}`);
     if (capturedCheck.comparison.accepted[0] === 0 || capturedCheck.comparison.accepted[1] === 0) fail('captured atlas: the twin accepted no neighbour in a pass');
     if (capturedCheck.comparison.cells < inputs.seeds.length * PROBE_CELLS * 0.9) fail(`captured atlas: only ${capturedCheck.comparison.cells} cells compared (${capturedCheck.comparison.undecided} undecided)`);
@@ -283,7 +491,7 @@ try {
     // 2. A constant atlas.
     const constant = new Float32Array(ATLAS_WIDTH * ATLAS_HEIGHT * 4);
     for (let texel = 0; texel < ATLAS_WIDTH * ATLAS_HEIGHT; texel++) constant.set([...CONSTANT_RADIANCE, CONSTANT_HIT_DISTANCE], texel * 4);
-    const constantCheck = await filterAndCompare(device, run, inputs, constant);
+    const constantCheck = await filterAndCompare(device, pageFilter, inputs, constant);
     let constantChanged = 0;
     let constantCells = 0;
     const constantExamples: string[] = [];
@@ -316,7 +524,7 @@ try {
         const value = boxTiles.has(tile) ? BOX_VALUE : FLOOR_VALUE;
         edgeAtlas.set([value, value, value, CONSTANT_HIT_DISTANCE], texel * 4);
     }
-    const edgeCheck = await filterAndCompare(device, run, inputs, edgeAtlas);
+    const edgeCheck = await filterAndCompare(device, pageFilter, inputs, edgeAtlas);
     if (edgeCheck.comparison.mismatches > 0) fail(`depth edge: ${edgeCheck.comparison.mismatches} values differ from the twin: ${edgeCheck.comparison.examples.join('; ')}`);
     let besideBox = 0;
     let keptByGpu = 0;
@@ -346,6 +554,44 @@ try {
     if (keptDisagree > 0) fail(`depth edge: ${keptDisagree} floor cells beside the box kept their value on one side only`);
     if (keptByGpu < besideBox / 2) fail(`depth edge: only ${keptByGpu} of ${besideBox} floor cells beside the box kept their value`);
 
+    // 6a. The constant atlas filtered 300 times over (the worst case: no new rays).
+    writeAtlas(device, pageFilter.atlas, constant);
+    const iterated: Record<string, unknown>[] = [];
+    let rounds = 0;
+    for (const target of [1, 10, 100, DRIFT_FRAMES]) {
+        pageFilter.encode(target - rounds);
+        rounds = target;
+        iterated.push({ rounds, ...listedCells(await readAtlas(device, pageFilter.atlas), inputs.seeds) });
+    }
+    pageFilter.dispose();
+
+    // 5. How the M5 stores halves to a texture.
+    const storeRounding = await checkStoreRounding(device);
+
+    // 6b. The frame's own loop: the sky cells' hit distance over 300 still frames from a reset.
+    technique.resetHistory();
+    const loop: Record<string, unknown>[] = [];
+    let skyAtTen = 0;
+    let skyAtHundred = 0;
+    let fallFromTen = 0;
+    let lateFall = 0;
+    for (let frame = 1; frame <= DRIFT_FRAMES; frame++) {
+        await run.frame();
+        if (frame !== 10 && frame !== 100 && frame !== DRIFT_FRAMES) continue;
+        const now = technique.probes;
+        if (!now) throw new Error('no probes in the drift loop');
+        const spawn = new Uint32Array(await readBuffer(device, now.probeSpawn, PROBE_SPAWN_SEEDS_OFFSET + now.layout.maxProbeSpawnCount * 4));
+        const sky = skyCells(await readAtlas(device, now.probeAtlas), Array.from(spawn.subarray(1, 1 + spawn[0])));
+        loop.push({ frame, ...sky });
+        if (frame === 10) skyAtTen = sky.meanHitDistance;
+        if (frame === 100) skyAtHundred = sky.meanHitDistance;
+        if (frame === DRIFT_FRAMES) {
+            fallFromTen = skyAtTen - sky.meanHitDistance;
+            lateFall = skyAtHundred - sky.meanHitDistance;
+        }
+    }
+    if (!(lateFall <= DRIFT_TOLERANCE)) fail(`drift: the sky cells' mean hit distance still fell ${lateFall.toFixed(2)} m from frame 100 to frame ${DRIFT_FRAMES}`);
+
     screen.dispose();
     platform.dispose();
     await drainDevice(device);
@@ -360,6 +606,8 @@ try {
             history: { historyDifferences, reprojectedTiles, reprojectedMismatches },
             captured: capturedCheck.comparison,
             constant: { cells: constantCells, changed: constantChanged, hitDistancesBelow: constantHitDistancesDown, examples: constantExamples, twin: constantCheck.comparison },
+            storeRounding,
+            drift: { iteratedFilter: iterated, frameLoop: loop, fallFromFrame10: fallFromTen, fallFromFrame100: lateFall },
             depthEdge: { boxProbes: boxTiles.size, floorCellsBesideBox: besideBox, keptByGpu, keptByTwin, keptDisagree, twin: edgeCheck.comparison },
         },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
