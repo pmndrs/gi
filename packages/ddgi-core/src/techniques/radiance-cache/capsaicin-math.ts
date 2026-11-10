@@ -390,3 +390,96 @@ export function integrateHemisphereSH(radiance: (direction: Direction) => number
     }
     return sum;
 }
+
+// ---- Random numbers (components/random_number_generator/random_number_generator.hlsl) ----------
+
+/** Capsaicin's `Random`: one PCG state word (random_number_generator.hlsl:30-86). */
+export interface RandomState {
+    state: number;
+}
+
+/** `pcgHash` (math/hash.hlsl:33-39) in u32 arithmetic. */
+function pcgHashU32(value: number): number {
+    const state = (Math.imul(value >>> 0, 747796405) + 2891336453) >>> 0;
+    const word = Math.imul(((state >>> ((state >>> 28) + 4)) ^ state) >>> 0, 277803737) >>> 0;
+    return ((word >>> 22) ^ word) >>> 0;
+}
+
+/**
+ * `MakeRandom(seed, index)` as the WGSL's `rcMakeRandom` starts it: from
+ * `pcgHash(seed)`, not Capsaicin's seed table (register D18).
+ */
+export function makeRandom(seed: number, index: number): RandomState {
+    const increment = (((index >>> 0) << 1) | 1) >>> 0;
+    return { state: (Math.imul((pcgHashU32(seed) + increment) >>> 0, 747796405) + increment) >>> 0 };
+}
+
+/** `Random::randInt` (random_number_generator.hlsl:38-46). */
+function randInt(random: RandomState): number {
+    const state = random.state;
+    random.state = (Math.imul(state, 747796405) + 2891336453) >>> 0;
+    const word = Math.imul(((state >>> ((state >>> 28) + 4)) ^ state) >>> 0, 277803737) >>> 0;
+    return ((word >>> 22) ^ word) >>> 0;
+}
+
+/** `Random::rand` (random_number_generator.hlsl:62-67): the upper 24 bits, exact in f32. */
+export function rand(random: RandomState): number {
+    return (randInt(random) >>> 8) / 16777216;
+}
+
+/** `Random::rand2` (random_number_generator.hlsl:73-76). */
+export function rand2(random: RandomState): [number, number] {
+    const first = rand(random);
+    return [first, rand(random)];
+}
+
+// ---- The second bounce's direction (materials/material_sampling.hlsl, math/quaternion.hlsl) ----
+
+/** A quaternion: axis xyz, then w. */
+type Quaternion = readonly [number, number, number, number];
+
+/** `QuaternionRotationZ` (quaternion.hlsl:58-64): the rotation taking `direction` to +z. */
+export function quaternionRotationZ(direction: Direction): Quaternion {
+    if (!(direction[2] >= -0.99999)) return [1, 0, 0, 0];
+    const q = [direction[1], -direction[0], 0, 1 + direction[2]];
+    const length = Math.hypot(...q);
+    return [q[0] / length, q[1] / length, q[2] / length, q[3] / length];
+}
+
+/** `Quaternion::transform` (quaternion.hlsl:46-51). */
+export function quaternionTransform(q: Quaternion, v: Direction): [number, number, number] {
+    const [x, y, z, w] = q;
+    const axisDotV = x * v[0] + y * v[1] + z * v[2];
+    const axisLengthSq = x * x + y * y + z * z;
+    const cross = [y * v[2] - z * v[1], z * v[0] - x * v[2], x * v[1] - y * v[0]];
+    return [0, 1, 2].map((i) => 2 * axisDotV * [x, y, z][i] + (w * w - axisLengthSq) * v[i] + 2 * w * cross[i]) as [number, number, number];
+}
+
+/** A Lambert sample: its direction, reflectance (cosine included) and density. */
+export interface DiffuseSample {
+    readonly direction: [number, number, number];
+    readonly brdf: [number, number, number];
+    readonly pdf: number;
+}
+
+/**
+ * `sampleBRDFAndEvaluateDiffuse` (material_sampling.hlsl:741-773) for a
+ * Lambert surface, as the WGSL's `HashGridCache_SampleBRDFAndEvaluateDiffuse`:
+ * `mapToCosineHemisphere(samples)` (sampling.hlsl:161-169) about +z, turned
+ * to `normal` by the inverse of `QuaternionRotationZ(normal)`; reflectance
+ * albedo / π × cos and density cos / π (register D8).
+ */
+export function sampleBRDFAndEvaluateDiffuse(albedo: Direction, normal: Direction, samples: readonly [number, number]): DiffuseSample {
+    const rotation = quaternionRotationZ(normal);
+    const sinTheta = Math.sqrt(samples[0]);
+    const phi = 2 * Math.PI * samples[1];
+    const local: Direction = [sinTheta * Math.cos(phi), sinTheta * Math.sin(phi), Math.sqrt(1 - samples[0])];
+    const cosine = Math.min(Math.max(local[2], 0), 1);
+    const world = quaternionTransform([-rotation[0], -rotation[1], -rotation[2], rotation[3]], local);
+    const length = Math.hypot(...world);
+    return {
+        direction: [world[0] / length, world[1] / length, world[2] / length],
+        brdf: [(albedo[0] / Math.PI) * cosine, (albedo[1] / Math.PI) * cosine, (albedo[2] / Math.PI) * cosine],
+        pdf: cosine / Math.PI,
+    };
+}

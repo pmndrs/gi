@@ -14,9 +14,11 @@
  *    tile count, `ClearCounters` and `PurgeTiles` (RC3.1);
  * 2. `PopulateScreenProbesCells`: the cache half of `PopulateScreenProbes`,
  *    over the probe rays the screen cache traced (RC3.2);
- * 3. `GenerateReservoirs`, `PopulateRadianceCache` (`PopulateCells`),
- *    `UpdateRadianceCache` (`GenerateUpdateTilesDispatch`, `UpdateTiles`) and
- *    `ResolveCells` (RC3.2; `hash-grid-population-wgsl.ts`).
+ * 3. `PopulateMultibounceCells` (RC3.3, with `useMultibounce`);
+ * 4. `GenerateReservoirs`, `GenerateMultibounceReservoirs` (RC3.3),
+ *    `PopulateRadianceCache` (`PopulateCells`), `UpdateRadianceCache`
+ *    (`GenerateUpdateTilesDispatch`, `UpdateTiles`), `UpdateMultibounceCells`
+ *    (RC3.3) and `ResolveCells` (RC3.2; `hash-grid-population-wgsl.ts`).
  *
  * Every pass after the purge is sized on the GPU, through the platform's
  * indirect-dispatch arguments, where Capsaicin dispatches indirectly
@@ -34,21 +36,25 @@ import {
     type HashGridCacheBufferLayout,
     type HashGridCacheCapacity,
     type HashGridCacheOptions,
+    UPDATE_SCRATCH_WORDS_PER_CELL,
 } from './capacity.ts';
 import { hashGridCacheCellSizeConstant, verticalFieldOfView } from './hash-grid-cpu.ts';
 import {
+    generateMultibounceReservoirsWgsl,
     generateReservoirsWgsl,
     hashGridCacheRayListLayout,
     POPULATION_BINDINGS,
     POPULATION_ENTRY_POINT,
     POPULATION_WORKGROUP_SIZE,
     populateCellsWgsl,
+    populateMultibounceCellsWgsl,
     populateScreenProbesWgsl,
     RAY_DATA_BINDING,
     RAY_DATA_GROUP,
     rayDataGroupEntries,
     RAY_LISTS_UNIFORM_BYTES,
     resolveCellsWgsl,
+    updateMultibounceCellsWgsl,
     updateTilesPerWorkgroup,
     updateTilesWgsl,
     type HashGridCacheRayListLayout,
@@ -109,6 +115,9 @@ interface PopulationPasses {
     readonly populateCells: PopulationPass;
     readonly updateTiles: PopulationPass;
     readonly resolveCells: PopulationPass;
+    readonly populateMultibounceCells: PopulationPass;
+    readonly generateMultibounceReservoirs: PopulationPass;
+    readonly updateMultibounceCells: PopulationPass;
 }
 
 type PopulationPassName = keyof PopulationPasses;
@@ -151,6 +160,8 @@ export class HashGridCache implements WorldCache {
     private bufferPingPong = 0;
     /** The value the last `encodeFrame` used, or null before the first. */
     private lastFramePingPong: number | null = null;
+    /** `useMultibounce` as the last `encodeFrame` ran it, or null before the first. */
+    private lastUseMultibounce: boolean | null = null;
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
     constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
@@ -305,6 +316,9 @@ export class HashGridCache implements WorldCache {
             populationKernel('PopulateCells', 'populateCells', populateCellsWgsl(layout), true),
             populationKernel('UpdateTiles', 'updateTiles', updateTilesWgsl(layout), false),
             populationKernel('ResolveCells', 'resolveCells', resolveCellsWgsl(layout), false),
+            populationKernel('PopulateMultibounceCells', 'populateMultibounceCells', populateMultibounceCellsWgsl(layout), true),
+            populationKernel('GenerateMultibounceReservoirs', 'generateMultibounceReservoirs', generateMultibounceReservoirsWgsl(layout), true),
+            populationKernel('UpdateMultibounceCells', 'updateMultibounceCells', updateMultibounceCellsWgsl(layout), false),
             // Capsaicin dispatches PopulateScreenProbes over every possible ray; here it is its own
             // pass after the screen cache's trace, so it runs on the probe-ray count.
             indirectArgs('PopulateScreenProbes (cache half) args', HASH_GRID_COUNTER.probeRayCount, POPULATION_WORKGROUP_SIZE.populateScreenProbes),
@@ -316,9 +330,16 @@ export class HashGridCache implements WorldCache {
             indirectArgs('GenerateUpdateTilesDispatch', HASH_GRID_COUNTER.updateTileCount, tilesPerUpdateGroup),
             // generateDispatch(radiance_cache_resolve_count_buffer_, ...) (gi1.cpp:2523-2527)
             indirectArgs('ResolveCells args', HASH_GRID_COUNTER.resolveCount, POPULATION_WORKGROUP_SIZE.resolveCells),
+            // generateDispatch(radiance_cache_visibility_count_buffer0_, ...) (gi1.cpp:2389)
+            indirectArgs('PopulateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount0, POPULATION_WORKGROUP_SIZE.populateMultibounceCells),
+            // generateDispatch(radiance_cache_visibility_count_buffer1_, ...) (gi1.cpp:2430, 2511)
+            indirectArgs('GenerateMultibounceReservoirs args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs),
+            indirectArgs('UpdateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.updateMultibounceCells),
         ]);
-        const [populateScreenProbes, generateReservoirs, populateCells, updateTiles, resolveCells] = population.slice(0, 5) as ComputeKernel[];
-        const [populateArgs, reservoirArgs, cellArgs, updateArgs, resolveArgs] = population.slice(5) as GpuIndirectArgs[];
+        const kernelCount = 8;
+        const [populateScreenProbes, generateReservoirs, populateCells, updateTiles, resolveCells, populateMultibounceCells, generateMultibounceReservoirs, updateMultibounceCells] =
+            population.slice(0, kernelCount) as ComputeKernel[];
+        const [populateArgs, reservoirArgs, cellArgs, updateArgs, resolveArgs, multibounceCellArgs, multibounceReservoirArgs, multibounceUpdateArgs] = population.slice(kernelCount) as GpuIndirectArgs[];
         const pass = (name: PopulationPassName, kernel: ComputeKernel, args: GpuIndirectArgs): PopulationPass => ({
             kernel,
             args,
@@ -334,11 +355,14 @@ export class HashGridCache implements WorldCache {
             populateCells: pass('populateCells', populateCells, cellArgs),
             updateTiles: pass('updateTiles', updateTiles, updateArgs),
             resolveCells: pass('resolveCells', resolveCells, resolveArgs),
+            populateMultibounceCells: pass('populateMultibounceCells', populateMultibounceCells, multibounceCellArgs),
+            generateMultibounceReservoirs: pass('generateMultibounceReservoirs', generateMultibounceReservoirs, multibounceReservoirArgs),
+            updateMultibounceCells: pass('updateMultibounceCells', updateMultibounceCells, multibounceUpdateArgs),
         };
         const rayListsUniform = device.createBuffer({ label: 'radiance-cache/hash-grid ray lists', size: RAY_LISTS_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
 
         const purgeArgs = [purgeArgs0, purgeArgs1] as const;
-        const argsBytes = [...purgeArgs, populateArgs, reservoirArgs, cellArgs, updateArgs, resolveArgs].reduce((sum, args) => sum + args.memoryBytes, 0);
+        const argsBytes = [...purgeArgs, ...Object.values(populationPasses).map((populationPass) => populationPass.args)].reduce((sum, args) => sum + args.memoryBytes, 0);
         const memoryBytes = layout.totalBytes + HASH_GRID_CONSTANTS_BYTES + RAY_LISTS_UNIFORM_BYTES + argsBytes;
         this.prepared = {
             device,
@@ -357,6 +381,7 @@ export class HashGridCache implements WorldCache {
         };
         this.bufferPingPong = 0;
         this.lastFramePingPong = null;
+        this.lastUseMultibounce = null;
     }
 
     /**
@@ -366,8 +391,11 @@ export class HashGridCache implements WorldCache {
      * The cell values and the update scratch after them stay: a tile's finest
      * cells are cleared when it is inserted again (`HashGridCache_AddNewTile`),
      * its coarser levels are rewritten in the same frame (`UpdateTiles`), and
-     * the scratch is zero between frames (`UpdateTiles` clears what it reads,
-     * gi1.comp:2213-2224).
+     * the direct scratch is zero between frames (`UpdateTiles` clears what it
+     * reads, gi1.comp:2213-2224). The indirect scratch can hold the second
+     * bounce `UpdateMultibounceCells` added after `UpdateTiles` (the one-frame
+     * lag); it stays too, as Capsaicin's reset clears only the hash buffer and
+     * the packed tile counts (`clearHashGridCache`, gi1.cpp:3284-3291).
      */
     reset(encoder: GPUCommandEncoder): void {
         const { buffers, layout } = this.require();
@@ -388,6 +416,17 @@ export class HashGridCache implements WorldCache {
         // The probe-ray count where the insert pass's indirect arguments read it.
         encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.words, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
 
+        // Capsaicin empties the cache when gi1_use_multibounce changes, and makes the indirect
+        // buffers (scratch cleared) when it comes on (gi1.cpp:1740-1745, 535-547).
+        const useMultibounce = this.options.useMultibounce;
+        if (this.lastUseMultibounce !== null && this.lastUseMultibounce !== useMultibounce) {
+            this.reset(encoder);
+            const { words } = prepared.layout;
+            const indirectScratchBytes = UPDATE_SCRATCH_WORDS_PER_CELL * prepared.capacity.numCells * WORD_BYTES;
+            encoder.clearBuffer(prepared.buffers.words, words.updateCellValueIndirectBuffer * WORD_BYTES, indirectScratchBytes);
+        }
+        this.lastUseMultibounce = useMultibounce;
+
         const purge = this.beginPass(encoder, prepared, 'PurgeRadianceCache');
         prepared.purgeArgs[this.bufferPingPong].encode(purge);
         prepared.clearCounters.bind(purge);
@@ -398,10 +437,16 @@ export class HashGridCache implements WorldCache {
         purge.dispatchWorkgroupsIndirect(prepared.purgeArgs[this.bufferPingPong].buffer, 0);
         purge.end();
 
+        // GI1::render's order (gi1.cpp:2335-2528); the multibounce passes only with gi1_use_multibounce.
         this.encodePopulationPass(encoder, prepared, rayData, 'populateScreenProbes', 'PopulateScreenProbesCells');
+        if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'populateMultibounceCells', 'PopulateMultibounceCells');
         this.encodePopulationPass(encoder, prepared, rayData, 'generateReservoirs', 'GenerateReservoirs');
+        if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'generateMultibounceReservoirs', 'GenerateMultibounceReservoirs');
         this.encodePopulationPass(encoder, prepared, rayData, 'populateCells', 'PopulateRadianceCache');
         this.encodePopulationPass(encoder, prepared, rayData, 'updateTiles', 'UpdateRadianceCache');
+        // "Resolve bounce 1 cells into first bounce cells using last frame" (gi1.cpp:2505): after
+        // UpdateTiles, so the next frame's UpdateTiles takes these samples.
+        if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'updateMultibounceCells', 'UpdateMultibounceCells');
         this.encodePopulationPass(encoder, prepared, rayData, 'resolveCells', 'ResolveCells');
 
         this.lastFramePingPong = this.bufferPingPong;
@@ -464,6 +509,8 @@ export class HashGridCache implements WorldCache {
                 layout.visibilityRayBuffer,
                 layout.resolveBuffer,
                 layout.reservoirBuffer,
+                layout.multibounceInfoBuffer,
+                layout.visibilityBypassBuffer,
             ]),
         );
         /** The ray-data group's entries for the buffers a pass binds (POPULATION_BINDINGS). */
@@ -490,6 +537,9 @@ export class HashGridCache implements WorldCache {
                 populateCells: group('populateCells'),
                 updateTiles: group('updateTiles'),
                 resolveCells: group('resolveCells'),
+                populateMultibounceCells: group('populateMultibounceCells'),
+                generateMultibounceReservoirs: group('generateMultibounceReservoirs'),
+                updateMultibounceCells: group('updateMultibounceCells'),
             },
         };
         this.rayData = rayData;
@@ -531,6 +581,7 @@ export class HashGridCache implements WorldCache {
         floats[word.discardMultibounceRayProbability] = options.hashGridCacheDiscardMultibounceRayProbability;
         floats[word.maxMultibounceSampleCount] = options.hashGridCacheMaxMultibounceSampleCount;
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
+        words[word.useMultibounce] = options.useMultibounce ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }
 

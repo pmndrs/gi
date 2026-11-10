@@ -24,7 +24,7 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
-import { hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
+import { hashGridCacheRayListLayout, MULTIBOUNCE_INFO_WORDS, RESERVOIR_WORDS, updateTilesPerWorkgroup, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
 import {
     HASH_GRID_CACHE_GROUP_ENTRIES,
     HASH_GRID_CACHE_WORDS_ONLY,
@@ -396,7 +396,10 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         expect(layout.visibilityRayBuffer).toBe(6 * maxRayCount + entries);
         expect(layout.resolveBuffer).toBe(8 * maxRayCount + entries);
         expect(layout.reservoirBuffer).toBe(9 * maxRayCount + entries);
-        expect(layout.bytes).toBe((9 * maxRayCount + entries + RESERVOIR_WORDS * 2 * maxRayCount) * 4);
+        // The second-bounce entries' brdf and pdf (max_ray_count of them, gi1.cpp:688), then our bypass flags (register D40).
+        expect(layout.multibounceInfoBuffer).toBe(9 * maxRayCount + entries + RESERVOIR_WORDS * 2 * maxRayCount);
+        expect(layout.visibilityBypassBuffer).toBe(layout.multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount);
+        expect(layout.bytes).toBe((layout.visibilityBypassBuffer + maxRayCount) * 4);
     });
 
     it('holds at most one update entry per cell', () => {
@@ -461,27 +464,37 @@ function budgetDevice(maxStorageBuffersPerShaderStage: number): GPUDevice {
 }
 
 /** The world cache's context with the platform's real kernel builder, and every kernel's storage-buffer count as it builds them. */
-function budgetContext(device: GPUDevice): { context: WorldCacheContext; storageBuffers: Map<string, number> } {
+function budgetContext(device: GPUDevice): { context: WorldCacheContext; storageBuffers: Map<string, number>; refused: Map<string, Promise<boolean>> } {
     // The hit-shading module and what it depends on: the scene copy (2 storage buffers) and the tracer (3).
     const scene = stubModule('gi-scene', SCENE_MODULE_ENTRIES);
     const rays = stubModule('gi-rays', TRACE_MODULE_ENTRIES);
     const shade = stubModule('gi-shade', SHADE_MODULE_ENTRIES, [scene, rays]);
     const builder = new PlatformKernelBuilder(device, 'test');
     const storageBuffers = new Map<string, number>();
+    // Per kernel, whether the builder refused it with GILimitError (resolved once it has answered).
+    const refused = new Map<string, Promise<boolean>>();
     const kernels: KernelBuilder = {
         computeKernel: (options) => {
             storageBuffers.set(options.label, countStorageBuffers(orderModules(options.modules)) + countGroupStorageBuffers(options.ownGroups ?? []));
-            return builder.computeKernel(options);
+            const kernel = builder.computeKernel(options);
+            refused.set(
+                options.label,
+                kernel.then(
+                    () => false,
+                    (error: unknown) => error instanceof GILimitError,
+                ),
+            );
+            return kernel;
         },
     };
     const indirectArgs = { buffer: {}, memoryBytes: 16, encode() {}, dispose() {} };
     const compute = { indirectModule: INDIRECT_ARGS_MODULE, createIndirectArgs: () => Promise.resolve(indirectArgs) };
     const context = { device, kernels, compute, shade: { module: shade }, timer: { computePass: () => undefined } } as unknown as WorldCacheContext;
-    return { context, storageBuffers };
+    return { context, storageBuffers, refused };
 }
 
 describe("the binding budget (register D6): the platform's 8 storage buffers per stage", () => {
-    it('holds for every hash-grid kernel; the two that light hits use exactly 8', async () => {
+    it('holds for every hash-grid kernel; the three that bind hit shading and a third cache buffer use exactly 8', async () => {
         expect(MIN_STORAGE_BUFFERS_PER_STAGE).toBe(8);
         const { context, storageBuffers } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
         await new HashGridCache().prepare(context);
@@ -494,16 +507,27 @@ describe("the binding budget (register D6): the platform's 8 storage buffers per
                 'radiance-cache/PopulateCells',
                 'radiance-cache/UpdateTiles',
                 'radiance-cache/ResolveCells',
+                'radiance-cache/PopulateMultibounceCells',
+                'radiance-cache/GenerateMultibounceReservoirs',
+                'radiance-cache/UpdateMultibounceCells',
             ].sort(),
         );
         for (const [label, count] of storageBuffers) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
         expect(storageBuffers.get('radiance-cache/GenerateReservoirs')).toBe(8);
         expect(storageBuffers.get('radiance-cache/PopulateCells')).toBe(8);
+        expect(storageBuffers.get('radiance-cache/PopulateMultibounceCells')).toBe(8);
+        expect(storageBuffers.get('radiance-cache/GenerateMultibounceReservoirs')).toBe(7);
+        expect(storageBuffers.get('radiance-cache/UpdateMultibounceCells')).toBe(4);
     });
 
-    it('is what the kernel builder checks: one storage buffer fewer and prepare throws GILimitError', async () => {
-        const { context } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE - 1));
+    it('is what the kernel builder checks: one storage buffer fewer and prepare throws GILimitError, for each kernel at 8', async () => {
+        const { context, refused } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE - 1));
         await expect(new HashGridCache().prepare(context)).rejects.toThrow(/maxStorageBuffersPerShaderStage = 8, but the device allows 7/);
+        const answers = await Promise.all([...refused].map(async ([label, answer]) => [label, await answer] as const));
+        const refusedLabels = answers.filter(([, wasRefused]) => wasRefused).map(([label]) => label);
+        expect(refusedLabels.sort()).toEqual(
+            ['radiance-cache/GenerateReservoirs', 'radiance-cache/PopulateCells', 'radiance-cache/PopulateMultibounceCells'].sort(),
+        );
     });
 });
 
