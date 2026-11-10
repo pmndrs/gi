@@ -73,22 +73,6 @@ importers:
         specifier: ^6.1.0
         version: 6.4.5(@types/node@24.19.2)(tsx@4.23.15)
 
-  examples/three:
-    dependencies:
-      '@pmndrs/ddgi':
-        specifier: workspace:*
-        version: link:../../packages/ddgi
-      '@pmndrs/upscaler':
-        specifier: 0.5.0
-        version: 0.5.0(three@0.187.0)
-      three:
-        specifier: 0.187.0
-        version: 0.187.0
-    devDependencies:
-      vite:
-        specifier: ^6.1.0
-        version: 6.4.5(@types/node@24.19.2)(tsx@4.23.15)
-
   examples/webgpu/hello:
     dependencies:
       '@pmndrs/ddgi':
@@ -564,12 +548,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
-
-  '@napi-rs/lzma-linux-x64-gnu@1.5.1':
-    resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
-    engines: {node: ^22.20 || ^24.12 || >=25}
-    cpu: [x64]
-    os: [linux]
 
   '@pmndrs/upscaler@0.5.0':
     resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
@@ -1661,9 +1639,6 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
-  '@napi-rs/lzma-linux-x64-gnu@1.5.1':
-    optional: true
-
   '@pmndrs/upscaler@0.5.0(three@0.187.0)':
     dependencies:
       three: 0.187.0
@@ -2300,7 +2275,6 @@ snapshots:
     dependencies:
       '@types/estree': 1.0.10
     optionalDependencies:
-      '@napi-rs/lzma-linux-x64-gnu': 1.5.1
       '@rollup/rollup-android-arm-eabi': 4.67.4
       '@rollup/rollup-android-arm64': 4.67.4
       '@rollup/rollup-android-x64': 4.67.4

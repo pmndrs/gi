@@ -1,19 +1,19 @@
 /**
  * The scene of three r187's `webgpu_lightprobes.html`, copied as it is: a
- * 6 × 5 × 6 m Cornell box with two boxes, a sphere and a point light. Both
- * examples use it unchanged, so the only difference from three's example
+ * 6 × 5 × 6 m Cornell box with two boxes, a sphere and a point light. The
+ * first two examples use it unchanged, so the only difference from three's example
  * is the GI: `GIVolume` instead of `LightProbeGrid`.
  */
 
 import * as THREE from 'three/webgpu';
 
-export interface CornellScene {
+export interface LightProbesScene {
     readonly scene: THREE.Scene;
     readonly camera: THREE.PerspectiveCamera;
     readonly light: THREE.PointLight;
 }
 
-export function createCornellScene(aspect: number): CornellScene {
+export function createLightProbesScene(aspect: number): LightProbesScene {
     const camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 100);
     camera.position.set(0, 2.5, 8);
 
