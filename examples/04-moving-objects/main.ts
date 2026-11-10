@@ -14,7 +14,7 @@
  */
 
 import * as THREE from 'three/webgpu';
-import { GIVolume } from '@pmndrs/ddgi/three';
+import { DDGIVolume } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -36,7 +36,7 @@ box.castShadow = true;
 box.receiveShadow = true;
 scene.add(box);
 
-const volume = GIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromDDGIVolume(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

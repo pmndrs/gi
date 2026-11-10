@@ -16,7 +16,7 @@
 
 import * as THREE from 'three/webgpu';
 import GUI from 'three/addons/libs/lil-gui.module.min.js';
-import { GIVolume, lightProbeGridToJSON } from '@pmndrs/ddgi/three';
+import { DDGIVolume, lightProbeGridToJSON } from '@pmndrs/gi/three';
 import { createRenderer } from '../shared/renderer.ts';
 import { loadScene } from '../shared/scene.ts';
 import { showStats } from '../shared/stats.ts';
@@ -24,7 +24,7 @@ import { showStats } from '../shared/stats.ts';
 const renderer = await createRenderer();
 const { scene, camera, probes } = loadScene('cornell-box-point', renderer);
 
-const volume = GIVolume.fromDDGIVolume(probes);
+const volume = DDGIVolume.fromDDGIVolume(probes);
 scene.add(volume);
 await volume.start(renderer, scene);
 

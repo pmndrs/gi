@@ -5,8 +5,8 @@
  * never import it.
  */
 
-/** Where the examples' source is browsed. Changes when the repo moves to pmndrs/ddgi. */
-const SOURCE_TREE = 'https://github.com/DennisSmolek/webgpu-ddgi/tree/main/examples/';
+/** Where the examples' source is browsed. The repository is pmndrs/gi. */
+const SOURCE_TREE = 'https://github.com/pmndrs/gi/tree/main/examples/';
 
 const STYLE = `
 .example-nav {

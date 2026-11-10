@@ -272,10 +272,10 @@ function exportPipeline(device: GPUDevice): Promise<ExportPipeline> {
 export async function exportIrradianceSH(technique: DDGITechnique, options: ExportIrradianceSHOptions = {}): Promise<IrradianceSHGrid> {
     const field = technique.field;
     const device = technique.device;
-    if (!field || !device) throw new Error('@pmndrs/ddgi: exportIrradianceSH needs a prepared DDGI technique (await gi.prepare() first)');
+    if (!field || !device) throw new Error('@pmndrs/gi: exportIrradianceSH needs a prepared DDGI technique (await gi.prepare() first)');
     const volumeIndex = options.volume ?? 0;
     const volume = field.volumes[volumeIndex];
-    if (!volume) throw new Error(`@pmndrs/ddgi: exportIrradianceSH: there is no volume ${volumeIndex} (the field has ${field.volumes.length})`);
+    if (!volume) throw new Error(`@pmndrs/gi: exportIrradianceSH: there is no volume ${volumeIndex} (the field has ${field.volumes.length})`);
 
     // The volume's live sampling parameters: origin (its window's, for a camera-following volume), spacing, counts.
     const parameters = volume.sampleParameters;
@@ -285,7 +285,7 @@ export async function exportIrradianceSH(technique: DDGITechnique, options: Expo
     const probeCount = counts[0] * counts[1] * counts[2];
     const workgroups = Math.ceil(probeCount / EXPORT_SH_WORKGROUP_SIZE);
     if (workgroups > device.limits.maxComputeWorkgroupsPerDimension) {
-        throw new Error(`@pmndrs/ddgi: exportIrradianceSH: ${probeCount} probes is more than one dispatch covers on this device`);
+        throw new Error(`@pmndrs/gi: exportIrradianceSH: ${probeCount} probes is more than one dispatch covers on this device`);
     }
 
     const { layout, pipeline, directions } = await exportPipeline(device);

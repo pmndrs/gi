@@ -79,12 +79,12 @@ export function stageSource(device: GPUDevice, source: TextureSource, srgb: bool
     if (kind === 'compressed') return compressedTexture(device, source as CompressedPixelData, srgb, layerSize, label);
 
     const { width, height } = sourceSize(source, layerSize);
-    if (!(width > 0 && height > 0)) return { reason: `@pmndrs/ddgi: a texture source has no pixels yet (${width} × ${height}); the materials using it keep their flat colour. Create the texture once its image has loaded.` };
+    if (!(width > 0 && height > 0)) return { reason: `@pmndrs/gi: a texture source has no pixels yet (${width} × ${height}); the materials using it keep their flat colour. Create the texture once its image has loaded.` };
     const limit = device.limits.maxTextureDimension2D;
-    if (width > limit || height > limit) return { reason: `@pmndrs/ddgi: a ${width} × ${height} texture is over the device's maxTextureDimension2D (${limit}); the materials using it keep their flat colour.` };
+    if (width > limit || height > limit) return { reason: `@pmndrs/gi: a ${width} × ${height} texture is over the device's maxTextureDimension2D (${limit}); the materials using it keep their flat colour.` };
     if (kind === 'pixels') {
         const pixels = source as PixelData;
-        if (pixels.data.byteLength < width * height * 4) return { reason: '@pmndrs/ddgi: a PixelData texture has fewer than width × height × 4 bytes; the materials using it keep their flat colour.' };
+        if (pixels.data.byteLength < width * height * 4) return { reason: '@pmndrs/gi: a PixelData texture has fewer than width × height × 4 bytes; the materials using it keep their flat colour.' };
     }
 
     // COPY_DST for both uploads; RENDER_ATTACHMENT because copyExternalImageToTexture requires it.
@@ -122,9 +122,9 @@ function uploadOrDestroy(staging: GPUTexture, upload: () => void): void {
 }
 
 function hostTexture(texture: GPUTexture, srgb: boolean): StagedSource | UnusableSource {
-    if ((texture.usage & TEXTURE_USAGE.textureBinding) === 0) return { reason: '@pmndrs/ddgi: a GPUTexture texture source needs TEXTURE_BINDING usage; the materials using it keep their flat colour.' };
-    if (texture.dimension !== '2d') return { reason: `@pmndrs/ddgi: a GPUTexture texture source must be 2D, not ${texture.dimension}; the materials using it keep their flat colour.` };
-    if (!readableAsFloat(texture.format)) return { reason: `@pmndrs/ddgi: a GPUTexture texture source in ${texture.format} can't be read as a colour; the materials using it keep their flat colour.` };
+    if ((texture.usage & TEXTURE_USAGE.textureBinding) === 0) return { reason: '@pmndrs/gi: a GPUTexture texture source needs TEXTURE_BINDING usage; the materials using it keep their flat colour.' };
+    if (texture.dimension !== '2d') return { reason: `@pmndrs/gi: a GPUTexture texture source must be 2D, not ${texture.dimension}; the materials using it keep their flat colour.` };
+    if (!readableAsFloat(texture.format)) return { reason: `@pmndrs/gi: a GPUTexture texture source in ${texture.format} can't be read as a colour; the materials using it keep their flat colour.` };
     // Its first mip level and layer: the full image, whatever mips the host made (or didn't).
     const view = texture.createView({ dimension: '2d', baseMipLevel: 0, mipLevelCount: 1, baseArrayLayer: 0, arrayLayerCount: 1 });
     return { view, encoded: srgb && !decodesSrgb(texture.format), staging: null };
@@ -134,14 +134,14 @@ function compressedTexture(device: GPUDevice, source: CompressedPixelData, srgb:
     const format = source.format;
     const feature = compressionFeature(format);
     if (feature && !device.features.has(feature)) {
-        return { reason: `@pmndrs/ddgi: compressed textures in ${format} need the device feature '${feature}', which this device wasn't created with; the materials using them keep their flat colour.` };
+        return { reason: `@pmndrs/gi: compressed textures in ${format} need the device feature '${feature}', which this device wasn't created with; the materials using them keep their flat colour.` };
     }
     const block = compressedBlock(format) ?? { width: 1, height: 1, bytes: 4 };
     if (!feature && format !== 'rgba8unorm' && format !== 'rgba8unorm-srgb') {
-        return { reason: `@pmndrs/ddgi: CompressedPixelData in ${format} isn't supported; use a compressed format, or rgba8unorm.` };
+        return { reason: `@pmndrs/gi: CompressedPixelData in ${format} isn't supported; use a compressed format, or rgba8unorm.` };
     }
     const level = source.levels[chooseCompressedLevel(source.levels, layerSize)];
-    if (!level || !(level.width > 0 && level.height > 0)) return { reason: '@pmndrs/ddgi: a CompressedPixelData texture has no levels; the materials using it keep their flat colour.' };
+    if (!level || !(level.width > 0 && level.height > 0)) return { reason: '@pmndrs/gi: a CompressedPixelData texture has no levels; the materials using it keep their flat colour.' };
 
     // A compressed texture's size must be whole blocks. A level whose size isn't (a small or odd level)
     // still holds whole blocks, the extra texels being padding: the staging texture covers them.
@@ -149,7 +149,7 @@ function compressedTexture(device: GPUDevice, source: CompressedPixelData, srgb:
     const blocksHigh = Math.ceil(level.height / block.height);
     const bytesNeeded = blocksWide * blocksHigh * block.bytes;
     if (level.data.byteLength < bytesNeeded) {
-        return { reason: `@pmndrs/ddgi: a ${format} level of ${level.width} × ${level.height} needs ${bytesNeeded} bytes, got ${level.data.byteLength}; the materials using it keep their flat colour.` };
+        return { reason: `@pmndrs/gi: a ${format} level of ${level.width} × ${level.height} needs ${bytesNeeded} bytes, got ${level.data.byteLength}; the materials using it keep their flat colour.` };
     }
     const size = { width: blocksWide * block.width, height: blocksHigh * block.height };
     const staging = device.createTexture({ label: `${label} staging (${format})`, size, format, usage: TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copyDst });

@@ -297,7 +297,7 @@ export class TriangleFlagsKernels {
      * sizes pass 1; it loops over every instance slot whatever it is.
      */
     encode(encoder: GPUCommandEncoder, triangles: GPUBuffer, meshes: readonly MeshTriangleRange[], instanceCount: number): void {
-        if (!this.masksKernel || !this.writeKernel) throw new Error('@pmndrs/ddgi: gi/triangle-flags was used before prepare');
+        if (!this.masksKernel || !this.writeKernel) throw new Error('@pmndrs/gi: gi/triangle-flags was used before prepare');
         this.encodes++;
         this.retired = this.retired.filter((entry) => {
             const done = this.encodes - entry.encode >= ENCODES_BEFORE_DESTROY;

@@ -414,7 +414,7 @@ export class ViewerApp {
             this.automation.bake.loaded = { file: file.name, stale: loaded.stale, changedParts: loaded.changedParts, ms };
             this.automation.bake.error = null;
         } catch (error) {
-            this.bakeFailed(`Couldn't load ${file.name}: ${error instanceof Error ? error.message.replace(/^@pmndrs\/ddgi: /, '') : String(error)}`);
+            this.bakeFailed(`Couldn't load ${file.name}: ${error instanceof Error ? error.message.replace(/^@pmndrs\/gi: /, '') : String(error)}`);
         }
     }
 

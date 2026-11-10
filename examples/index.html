@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>@pmndrs/ddgi · Examples</title>
+        <title>@pmndrs/gi · Examples</title>
         <link rel="icon" href="data:," />
         <style>
             :root {
@@ -93,17 +93,17 @@
     </head>
     <body>
         <div class="wrap">
-            <h1><span>@pmndrs/ddgi</span> · Examples</h1>
+            <h1><span>@pmndrs/gi</span> · Examples</h1>
             <p>Real-time global illumination for WebGPU: light bounces off walls and floors, and follows moving lights, objects and the sun. Each example is the shortest code that shows one feature.</p>
             <p>They need WebGPU: Chrome or Edge 113+, or Safari 26+. Each one opens with a short warm-up while the probes learn the light. Drag to orbit; the line at the bottom shows what GI is doing.</p>
 
             <h2>three.js</h2>
-            <p>Through <code>@pmndrs/ddgi/three</code>: a <code>GIVolume</code> in the scene, like three's <code>LightProbeGrid</code>.</p>
+            <p>Through <code>@pmndrs/gi/three</code>: a <code>DDGIVolume</code> in the scene, like three's <code>LightProbeGrid</code>.</p>
             <div class="grid">
                 <a class="card" href="01-hello/">
                     <div class="number">01</div>
                     <div class="title">Hello GI</div>
-                    <div class="description">A <code>GIVolume</code> in place of three's <code>LightProbeGrid</code>, on three's own probe-grid scene. The copy-paste starting point.</div>
+                    <div class="description">A <code>DDGIVolume</code> in place of three's <code>LightProbeGrid</code>, on three's own probe-grid scene. The copy-paste starting point.</div>
                 </a>
                 <a class="card" href="02-composite/">
                     <div class="number">02</div>
@@ -153,7 +153,7 @@
             </div>
 
             <h2>No engine</h2>
-            <p><code>@pmndrs/ddgi/core</code> on a bare <code>GPUDevice</code>: the reference for plain WebGPU apps and for anyone writing an adapter for another engine.</p>
+            <p><code>@pmndrs/gi/core</code> and <code>@pmndrs/gi/ddgi</code> on a bare <code>GPUDevice</code>: the reference for plain WebGPU apps and for anyone writing an adapter for another engine.</p>
             <div class="grid">
                 <a class="card" href="webgpu/hello/">
                     <div class="number">W1</div>
@@ -163,7 +163,7 @@
             </div>
 
             <div class="foot">
-                The scenes are made in code (MIT). Source: <a href="https://github.com/DennisSmolek/webgpu-ddgi/tree/main/examples">examples/</a> · Docs: <a href="https://github.com/DennisSmolek/webgpu-ddgi/blob/main/docs/api/three.md">the three.js adapter</a>, <a href="https://github.com/DennisSmolek/webgpu-ddgi/blob/main/docs/guides/adapter.md">writing an adapter</a>
+                The scenes are made in code (MIT). Source: <a href="https://github.com/pmndrs/gi/tree/main/examples">examples/</a> · Docs: <a href="https://github.com/pmndrs/gi/blob/main/docs/api/three.md">the three.js adapter</a>, <a href="https://github.com/pmndrs/gi/blob/main/docs/guides/adapter.md">writing an adapter</a>
             </div>
         </div>
     </body>

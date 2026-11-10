@@ -177,7 +177,7 @@ export class PlatformHitShading implements HitShading {
      * technique. Without `lights` the grid is off.
      */
     encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number, timer?: GpuTimerScope, lights?: HitShadingLights): void {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: hit shading was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: hit shading was disposed');
         this.uploadSettings();
         this.sky.encode(encoder, environment, environmentVersion, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyHarmonics }, timer);
         const lookup = lights

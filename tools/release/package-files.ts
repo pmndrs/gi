@@ -28,7 +28,7 @@ export const PACKAGE_README_END = '<!-- The npm package README ends here. Below:
 /** The branch links point at. */
 const DEFAULT_BRANCH = 'main';
 
-/** `git+https://github.com/pmndrs/ddgi.git` → `https://github.com/pmndrs/ddgi`. */
+/** `git+https://github.com/pmndrs/gi.git` → `https://github.com/pmndrs/gi`. */
 export function githubUrl(repositoryUrl: string): string {
     const match = /github\.com[/:]([^/]+)\/([^/#]+?)(?:\.git)?$/.exec(repositoryUrl);
     if (!match) throw new Error(`Not a GitHub repository URL: ${repositoryUrl}`);

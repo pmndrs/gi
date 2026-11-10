@@ -587,7 +587,7 @@ export const CHANGE_RULE_OFF = -1;
 export function withDefaults(input: DDGISettingsInput): DDGISettings {
     // With a list of volumes, `volume` is the first of them, for hosts that read one.
     const volume = 'volume' in input && input.volume ? input.volume : input.volumes?.[0];
-    if (!volume) throw new Error('@pmndrs/ddgi: DDGI settings need a volume (or a non-empty list of volumes)');
+    if (!volume) throw new Error('@pmndrs/gi: DDGI settings need a volume (or a non-empty list of volumes)');
     return { ...DEFAULT_DDGI_SETTINGS, ...input, volume };
 }
 
@@ -610,8 +610,8 @@ export function probeGrid(volume: DDGIVolumeSettings): ProbeGrid {
     const spacing: [number, number, number] =
         typeof volume.spacing === 'number' ? [volume.spacing, volume.spacing, volume.spacing] : [volume.spacing[0], volume.spacing[1], volume.spacing[2]];
     for (let axis = 0; axis < 3; axis++) {
-        if (!(spacing[axis] > 0) || !Number.isFinite(spacing[axis])) throw new Error(`@pmndrs/ddgi: volume spacing must be a positive number, got ${spacing[axis]}`);
-        if (!(volume.size[axis] >= 0) || !Number.isFinite(volume.size[axis])) throw new Error(`@pmndrs/ddgi: volume size must be zero or more, got ${volume.size[axis]}`);
+        if (!(spacing[axis] > 0) || !Number.isFinite(spacing[axis])) throw new Error(`@pmndrs/gi: volume spacing must be a positive number, got ${spacing[axis]}`);
+        if (!(volume.size[axis] >= 0) || !Number.isFinite(volume.size[axis])) throw new Error(`@pmndrs/gi: volume size must be zero or more, got ${volume.size[axis]}`);
     }
     const counts = spacing.map((axisSpacing, axis) => Math.floor(volume.size[axis] / axisSpacing + 1e-6) + 1) as [number, number, number];
     const origin = spacing.map((axisSpacing, axis) => volume.center[axis] - ((counts[axis] - 1) * axisSpacing) / 2) as [number, number, number];

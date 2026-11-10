@@ -1,4 +1,4 @@
-// Release-version policy for @pmndrs/ddgi, adapted from @pmndrs/upscaler's
+// Release-version policy for @pmndrs/gi, adapted from @pmndrs/upscaler's
 // scripts/release-version.mjs. One difference: our commit messages aren't
 // Conventional Commits, so there is no `auto` bump. The version is always
 // given, by the tag (`v0.1.0`) or by the publish workflow's `version` input.

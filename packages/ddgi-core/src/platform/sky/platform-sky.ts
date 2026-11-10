@@ -189,7 +189,7 @@ export class PlatformSky {
         this.warn = options.warn ?? ((message) => console.warn(message));
         this.reduction = options.reduction ?? (device.features.has('subgroups') ? 'subgroups' : 'workgroup');
         if (this.reduction === 'subgroups' && !device.features.has('subgroups')) {
-            throw new Error("@pmndrs/ddgi: the sky's subgroup reduction needs a device with the 'subgroups' feature");
+            throw new Error("@pmndrs/gi: the sky's subgroup reduction needs a device with the 'subgroups' feature");
         }
 
         this.radianceMap = device.createTexture({
@@ -321,10 +321,10 @@ export class PlatformSky {
      * `PlatformScene.environmentVersion`, which every call bumps.
      */
     encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, version: number, harmonics: GPUBufferBinding, timer?: GpuTimerScope): boolean {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: the sky was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: the sky was disposed');
         if (version === this.seenVersion) return false;
         const pipelines = this.pipelines;
-        if (!pipelines) throw new Error('@pmndrs/ddgi: the sky bake is not compiled yet; call prepare() first');
+        if (!pipelines) throw new Error('@pmndrs/gi: the sky bake is not compiled yet; call prepare() first');
         this.seenVersion = version;
 
         const procedural = environment.type === 'procedural' ? proceduralSkyParameters(environment) : null;
@@ -449,7 +449,7 @@ export class PlatformSky {
             case 'texture': {
                 const problem = unusableEnvironmentTexture(environment.texture, environment.layout);
                 if (problem) {
-                    this.warn(`@pmndrs/ddgi: the environment texture can't be used (${problem}); the sky is black until setEnvironment gets one that can.`);
+                    this.warn(`@pmndrs/gi: the environment texture can't be used (${problem}); the sky is black until setEnvironment gets one that can.`);
                     return constant([0, 0, 0]);
                 }
                 const intensity = environment.intensity ?? 1;

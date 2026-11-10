@@ -93,7 +93,7 @@ function evaluate(expression: string, context: Context): string {
         'github.ref': context.ref,
         'inputs.version': context.inputs.version ?? '',
         'github.token': 'test-token',
-        'github.repository': 'pmndrs/ddgi',
+        'github.repository': 'pmndrs/gi',
     };
     if (trimmed in values) return values[trimmed];
     throw new Error(`Unsupported workflow expression: ${trimmed}`);
@@ -122,7 +122,7 @@ function configureUser(directory: string): void {
 
 function writePackage(directory: string, version: string): void {
     mkdirSync(join(directory, 'packages/ddgi'), { recursive: true });
-    writeFileSync(join(directory, 'packages/ddgi/package.json'), `${JSON.stringify({ name: '@pmndrs/ddgi', version }, null, 4)}\n`);
+    writeFileSync(join(directory, 'packages/ddgi/package.json'), `${JSON.stringify({ name: '@pmndrs/gi', version }, null, 4)}\n`);
 }
 
 function commit(directory: string, message: string): string {
@@ -187,7 +187,7 @@ if [[ "$1" == "release" && "$2" == "create" ]]; then
     printf '%s\\n' "$*" >> "$GH_LOG"
     exit 0
 fi
-[[ "$1 $2 $3" == "api --paginate repos/pmndrs/ddgi/releases" ]] || { printf 'unexpected gh: %s\\n' "$*" >&2; exit 2; }
+[[ "$1 $2 $3" == "api --paginate repos/pmndrs/gi/releases" ]] || { printf 'unexpected gh: %s\\n' "$*" >&2; exit 2; }
 case "$GH_MODE" in
     missing) printf 'v0.0.1\\tfalse\\n' ;;
     published) printf 'v0.0.1\\tfalse\\n%s\\tfalse\\n' "$TAG" ;;
@@ -484,7 +484,7 @@ describeRuns('a tag push (including a tag made in the GitHub UI)', () => {
                 expect(job.outputs.dist).toEqual({ tag: 'latest' });
                 expect(job.installs).toEqual(['pnpm install --frozen-lockfile']);
                 expect(job.publishes).toEqual(['publish --access public --tag latest']);
-                expect(job.published).toEqual(['@pmndrs/ddgi@0.2.0 from ddgi']);
+                expect(job.published).toEqual(['@pmndrs/gi@0.2.0 from ddgi']);
                 expect(job.releases).toHaveLength(1);
                 expect(job.releases[0]).toMatch(/^release create v0\.2\.0 .*--verify-tag.* --latest$/);
                 expect(job.notes).toContain('Notes for 0.2.0.');
@@ -536,7 +536,7 @@ describeRuns('a tag push (including a tag made in the GitHub UI)', () => {
                 const job = runJob(fixture, { tag: 'v0.2.0', npm: 'published' });
 
                 expect(job.failed, job.output).toBeNull();
-                expect(job.output).toContain('@pmndrs/ddgi@0.2.0 is already on npm; skipping publish.');
+                expect(job.output).toContain('@pmndrs/gi@0.2.0 is already on npm; skipping publish.');
                 expect(job.publishes).toEqual([]);
                 expect(job.installs).toEqual([]);
                 expect(job.releases).toHaveLength(1);
@@ -658,7 +658,7 @@ describeRuns('the Run workflow button', () => {
 
                 expect(job.failed, job.output).toBeNull();
                 expect(job.outputs.resolve).toEqual({ tag: 'v0.2.0', mode: 'cut' });
-                expect(job.published).toEqual(['@pmndrs/ddgi@0.2.0 from ddgi']);
+                expect(job.published).toEqual(['@pmndrs/gi@0.2.0 from ddgi']);
                 expect(job.releases).toHaveLength(1);
                 expect(job.notes).toContain('Notes for 0.2.0.');
                 expect(mainSubjects(fixture).slice(0, 2)).toEqual(['release: v0.2.0 [skip ci]', 'Notes for 0.2.0 and 0.3.0']);

@@ -79,22 +79,22 @@ export type GpuPose =
 export function checkedGpuPose(positions: DeformedPositions, vertexCount: number, what: string): GpuPose {
     if ('texture' in positions) {
         const texture = positions.texture;
-        if (texture.format !== 'rgba32float') throw new TypeError(`@pmndrs/ddgi: ${what}: a positions texture must be rgba32float, got ${texture.format}`);
-        if ((texture.usage & TEXTURE_USAGE_COPY_SRC) === 0) throw new TypeError(`@pmndrs/ddgi: ${what}: a positions texture needs COPY_SRC usage`);
+        if (texture.format !== 'rgba32float') throw new TypeError(`@pmndrs/gi: ${what}: a positions texture must be rgba32float, got ${texture.format}`);
+        if ((texture.usage & TEXTURE_USAGE_COPY_SRC) === 0) throw new TypeError(`@pmndrs/gi: ${what}: a positions texture needs COPY_SRC usage`);
         if (texture.width % POSE_TEXTURE_WIDTH_MULTIPLE !== 0) {
-            throw new RangeError(`@pmndrs/ddgi: ${what}: a positions texture's width must be a multiple of ${POSE_TEXTURE_WIDTH_MULTIPLE} (whole 256-byte rows), got ${texture.width}`);
+            throw new RangeError(`@pmndrs/gi: ${what}: a positions texture's width must be a multiple of ${POSE_TEXTURE_WIDTH_MULTIPLE} (whole 256-byte rows), got ${texture.width}`);
         }
-        if (texture.width * texture.height < vertexCount) throw new RangeError(`@pmndrs/ddgi: ${what}: the positions texture holds ${texture.width * texture.height} texels for ${vertexCount} vertices`);
+        if (texture.width * texture.height < vertexCount) throw new RangeError(`@pmndrs/gi: ${what}: the positions texture holds ${texture.width * texture.height} texels for ${vertexCount} vertices`);
         return { kind: 'texture', texture };
     }
     const buffer = positions.buffer;
     const offset = positions.offset ?? 0;
     const stride = positions.stride ?? 12;
-    if (!(Number.isInteger(offset) && offset >= 0 && offset % 4 === 0)) throw new RangeError(`@pmndrs/ddgi: ${what}: offset must be a whole number of 4-byte words, got ${offset}`);
-    if (!(Number.isInteger(stride) && stride >= 12 && stride % 4 === 0)) throw new RangeError(`@pmndrs/ddgi: ${what}: stride must be at least 12 and a multiple of 4, got ${stride}`);
-    if ((buffer.usage & BUFFER_USAGE_STORAGE) === 0) throw new TypeError(`@pmndrs/ddgi: ${what}: a positions buffer needs STORAGE usage`);
+    if (!(Number.isInteger(offset) && offset >= 0 && offset % 4 === 0)) throw new RangeError(`@pmndrs/gi: ${what}: offset must be a whole number of 4-byte words, got ${offset}`);
+    if (!(Number.isInteger(stride) && stride >= 12 && stride % 4 === 0)) throw new RangeError(`@pmndrs/gi: ${what}: stride must be at least 12 and a multiple of 4, got ${stride}`);
+    if ((buffer.usage & BUFFER_USAGE_STORAGE) === 0) throw new TypeError(`@pmndrs/gi: ${what}: a positions buffer needs STORAGE usage`);
     const end = offset + (vertexCount - 1) * stride + 12;
-    if (buffer.size < end) throw new RangeError(`@pmndrs/ddgi: ${what}: the positions buffer has ${buffer.size} bytes, but ${vertexCount} vertices need ${end}`);
+    if (buffer.size < end) throw new RangeError(`@pmndrs/gi: ${what}: the positions buffer has ${buffer.size} bytes, but ${vertexCount} vertices need ${end}`);
     return { kind: 'buffer', buffer, offsetFloats: offset / 4, strideFloats: stride / 4 };
 }
 
@@ -161,7 +161,7 @@ export class GpuPoseCopier {
         if (copies.length === 0) return;
         const pipeline = this.pipeline;
         const layout = this.layout;
-        if (!pipeline || !layout) throw new Error('@pmndrs/ddgi: the pose copy kernel is not compiled yet; await prepare() first');
+        if (!pipeline || !layout) throw new Error('@pmndrs/gi: the pose copy kernel is not compiled yet; await prepare() first');
 
         // Texture poses share one scratch buffer, one after another.
         let scratchTexels = 0;

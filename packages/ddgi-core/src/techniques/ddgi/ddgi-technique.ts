@@ -829,7 +829,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 description: 'Each probe as a dot where it really sits (after relocation), coloured by its state.',
                 texture: () => {
                     const first = this.firstVolume;
-                    if (!first) throw new Error('@pmndrs/ddgi: the probes debug view exists after prepare');
+                    if (!first) throw new Error('@pmndrs/gi: the probes debug view exists after prepare');
                     return first.points;
                 },
                 // Every volume's probes, one volume after another (volumes.ts, probeBase).
@@ -859,7 +859,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.shading = new DDGIShadingModule({
             fieldTextures: () => {
                 const first = this.firstVolume;
-                if (!first) throw new Error('@pmndrs/ddgi: the DDGI shading module has textures after prepare (await gi.prepare())');
+                if (!first) throw new Error('@pmndrs/gi: the DDGI shading module has textures after prepare (await gi.prepare())');
                 // With light groups, renderers read the composed atlas: one block, as without them.
                 return { irradiance: first.composed ?? first.irradiance, distance: first.distance, probeData: first.probeData, volumeTable: first.volumeTable };
             },
@@ -867,7 +867,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     }
 
     attach(context: TechniqueContext): void {
-        if (this.context) throw new Error('@pmndrs/ddgi: a DDGI technique can be attached to one platform only');
+        if (this.context) throw new Error('@pmndrs/gi: a DDGI technique can be attached to one platform only');
         this.context = context;
     }
 
@@ -902,8 +902,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
     async prepare(): Promise<void> {
         const context = this.context;
-        if (!context) throw new Error('@pmndrs/ddgi: attach the DDGI technique (gi.addTechnique) before prepare');
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this DDGI technique was disposed');
+        if (!context) throw new Error('@pmndrs/gi: attach the DDGI technique (gi.addTechnique) before prepare');
+        if (this.disposed) throw new Error('@pmndrs/gi: this DDGI technique was disposed');
         const device = context.device;
 
         // The volumes in priority order, each with its layers in the shared atlases (volumes.ts).
@@ -924,11 +924,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const maxProbesPerFrame = (grid: ProbeGrid): number => Math.min(maxProbesSetting, grid.probeCount);
         const hasSubgroups = device.features.has('subgroups');
         const reduction = this.options.reduction ?? (hasSubgroups ? 'subgroups' : 'workgroup');
-        if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/ddgi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
+        if (reduction === 'subgroups' && !hasSubgroups) throw new Error("@pmndrs/gi: the 'subgroups' reduction needs a device with the 'subgroups' feature");
         const directLight = this.options.directLight ?? 'deferred';
         const directWorkList = directLight === 'deferred' ? (this.options.directWorkList ?? context.shade.direct.defaultWorkList) : null;
         // The inline trace (kept for comparison) adds every light's direct light into one result.
-        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/ddgi: light groups and the sun layer need direct light deferred to gi/direct (directLight: 'deferred', the default)");
+        if (!directWorkList && layerCount > 1) throw new Error("@pmndrs/gi: light groups and the sun layer need direct light deferred to gi/direct (directLight: 'deferred', the default)");
         // Throws for a 'subgroups' work list on a device without them.
         const traceCode = directWorkList ? deferredTraceKernelWgsl(context.shade.direct.traceWgsl('ddgiRayScratch', directWorkList), plan) : DDGI_TRACE_WGSL;
 
@@ -1382,7 +1382,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         buffers: { readonly probeHistory: GPUBuffer; readonly feedbackRequests: GPUBuffer },
     ): ScrollResources {
         const kernels = shared.scrollKernels;
-        if (!kernels) throw new Error('@pmndrs/ddgi: a camera-following volume needs the ddgi/scroll kernels');
+        if (!kernels) throw new Error('@pmndrs/gi: a camera-following volume needs the ddgi/scroll kernels');
         const window = new CameraWindow(volume.grid);
         const label = `ddgi scroll (volume ${row})`;
         const uniforms = device.createBuffer({ label: `${label} uniforms`, size: SCROLL_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
@@ -1759,8 +1759,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      */
     setGroupWeight(group: number, weight: ColorRGB): void {
         const lightGroups = this.settings.lightGroups;
-        if (!lightGroups) throw new Error('@pmndrs/ddgi: light groups are off; set settings.lightGroups (and prepare) before setting a group weight');
-        if (!Number.isInteger(group) || group < 0 || group >= MAX_LIGHT_GROUPS) throw new RangeError(`@pmndrs/ddgi: light groups are 0 to ${MAX_LIGHT_GROUPS - 1}, got ${group}`);
+        if (!lightGroups) throw new Error('@pmndrs/gi: light groups are off; set settings.lightGroups (and prepare) before setting a group weight');
+        if (!Number.isInteger(group) || group < 0 || group >= MAX_LIGHT_GROUPS) throw new RangeError(`@pmndrs/gi: light groups are 0 to ${MAX_LIGHT_GROUPS - 1}, got ${group}`);
         while (lightGroups.weights.length <= group) lightGroups.weights.push([1, 1, 1]);
         lightGroups.weights[group] = [weight[0], weight[1], weight[2]];
     }
@@ -1768,7 +1768,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** Sets the environment layer's weight (the sky and emissive surfaces), as {@link setGroupWeight}. */
     setEnvironmentWeight(weight: ColorRGB): void {
         const lightGroups = this.settings.lightGroups;
-        if (!lightGroups) throw new Error('@pmndrs/ddgi: light groups are off; set settings.lightGroups (and prepare) before setting the environment weight');
+        if (!lightGroups) throw new Error('@pmndrs/gi: light groups are off; set settings.lightGroups (and prepare) before setting the environment weight');
         lightGroups.environmentWeight = [weight[0], weight[1], weight[2]];
     }
 
@@ -1781,7 +1781,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      */
     private encodeDeferredTrace(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, count: number, raysPerProbe: number, frameNumber: number): void {
         const traceRounds = resources.traceRounds;
-        if (!traceRounds) throw new Error('@pmndrs/ddgi: the deferred trace has no rounds buffer');
+        if (!traceRounds) throw new Error('@pmndrs/gi: the deferred trace has no rounds buffer');
         const stride = resources.traceRoundStride;
         const rounds = Math.ceil(count / DIRECT_ROUND_PROBES);
         const words = new Uint32Array((rounds * stride) / 4);
@@ -2177,7 +2177,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     async saveField(): Promise<Uint8Array<ArrayBuffer>> {
         const first = this.firstVolume;
         const context = this.context;
-        if (!first || !context || this.disposed) throw new Error('@pmndrs/ddgi: save the field after prepare (await gi.prepare()), and before dispose');
+        if (!first || !context || this.disposed) throw new Error('@pmndrs/gi: save the field after prepare (await gi.prepare()), and before dispose');
         const device = context.device;
         const fingerprint = context.scene.fingerprint();
         const staging: GPUBuffer[] = [];
@@ -2279,7 +2279,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     loadField(bytes: Uint8Array | ArrayBuffer, options: LoadFieldOptions = {}): LoadedField {
         const first = this.firstVolume;
         const context = this.context;
-        if (!first || !context || this.disposed) throw new Error('@pmndrs/ddgi: load a saved field after prepare (await gi.prepare()), and before dispose');
+        if (!first || !context || this.disposed) throw new Error('@pmndrs/gi: load a saved field after prepare (await gi.prepare()), and before dispose');
         const { header, sections } = decodeSavedField(fileBytes(bytes));
         const mismatch = layoutMismatch(header.layout, this.savedLayout());
         if (mismatch) throw new SavedFieldError('layout', `this saved field doesn't fit this DDGI field: ${mismatch}. Load it into a DDGI with the settings it was saved with, or save it again.`);
@@ -2348,7 +2348,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /** This field's layout as a saved field records it: what a load has to match (saved-field.ts). */
     private savedLayout(): SavedFieldLayout {
         const first = this.firstVolume;
-        if (!first) throw new Error('@pmndrs/ddgi: the field has a layout after prepare');
+        if (!first) throw new Error('@pmndrs/gi: the field has a layout after prepare');
         return {
             irradianceTexels: first.irradianceTexels,
             distanceTexels: first.distanceTexels,
@@ -2809,6 +2809,6 @@ function summedCensus(volumes: readonly PreparedResources[]): Uint32Array | null
 }
 
 function positiveInteger(value: number, name: string): number {
-    if (!Number.isInteger(value) || value < 1) throw new Error(`@pmndrs/ddgi: ${name} must be a positive whole number, got ${value}`);
+    if (!Number.isInteger(value) || value < 1) throw new Error(`@pmndrs/gi: ${name} must be a positive whole number, got ${value}`);
     return value;
 }

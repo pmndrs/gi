@@ -115,7 +115,7 @@ function sumOverLevels(below: number, value: (level: number) => number): number 
 /** The layout for one of {@link TEXTURE_LAYER_SIZES}; anything else throws. */
 export function storeLayout(layerSize: number = STORE_LAYER_SIZE): StoreLayout {
     if (!(TEXTURE_LAYER_SIZES as readonly number[]).includes(layerSize)) {
-        throw new RangeError(`@pmndrs/ddgi: the texture store's layer size must be one of ${TEXTURE_LAYER_SIZES.join(', ')}, got ${layerSize}`);
+        throw new RangeError(`@pmndrs/gi: the texture store's layer size must be one of ${TEXTURE_LAYER_SIZES.join(', ')}, got ${layerSize}`);
     }
     const mipLevels = Math.log2(layerSize) + 1;
     const levelSize = (level: number): number => layerSize >> level;

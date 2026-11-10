@@ -195,7 +195,7 @@ export class CameraWindow {
     constructor(grid: ProbeGrid) {
         for (const count of grid.counts) {
             if (count < MIN_CAMERA_VOLUME_PROBES) {
-                throw new Error(`@pmndrs/ddgi: a camera-following volume needs at least ${MIN_CAMERA_VOLUME_PROBES} probes on every axis, got ${grid.counts.join(' x ')}`);
+                throw new Error(`@pmndrs/gi: a camera-following volume needs at least ${MIN_CAMERA_VOLUME_PROBES} probes on every axis, got ${grid.counts.join(' x ')}`);
             }
         }
         this.grid = grid;
@@ -228,7 +228,7 @@ export class CameraWindow {
      */
     restore(window: readonly [number, number, number]): void {
         for (let axis = 0; axis < 3; axis++) {
-            if (!Number.isInteger(window[axis])) throw new RangeError(`@pmndrs/ddgi: a window's lattice coordinates are whole numbers, got ${window.join(', ')}`);
+            if (!Number.isInteger(window[axis])) throw new RangeError(`@pmndrs/gi: a window's lattice coordinates are whole numbers, got ${window.join(', ')}`);
             this.firstProbe[axis] = window[axis];
         }
     }

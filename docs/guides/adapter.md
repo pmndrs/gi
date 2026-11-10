@@ -24,6 +24,8 @@ A few words used below:
 - **A probe** is a point that stores the light arriving there from every direction. DDGI keeps a 3D grid of them and updates a few each frame.
 - **A handle** is the number the platform gives back for each thing you create. You pass it to change or destroy that thing later.
 
+The platform comes from `@pmndrs/gi/core` and DDGI from `@pmndrs/gi/ddgi`. Neither imports an engine, so an adapter needs nothing else from this package.
+
 The platform works in metres, right-handed with +Y up, linear-light colours, and column-major 4 × 4 matrices (the order of three.js's `Matrix4.elements` and WGSL's `mat4x4f`). Convert once in your adapter if your engine differs.
 
 ## Step 1: the device and its limits
@@ -31,7 +33,7 @@ The platform works in metres, right-handed with +Y up, linear-light colours, and
 From `main.ts`:
 
 ```ts
-import { optionalFeatures, requiredLimits } from '@pmndrs/ddgi/core';
+import { optionalFeatures, requiredLimits } from '@pmndrs/gi/core';
 
 const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
 if (!adapter) throw new Error('No WebGPU adapter found.');
@@ -59,7 +61,7 @@ If a scene still needs more than the device allows, the platform throws a `GILim
 ## Step 2: the platform
 
 ```ts
-import { createGI } from '@pmndrs/ddgi/core';
+import { createGI } from '@pmndrs/gi/core';
 
 const gi = createGI(device, { gpuTiming: device.features.has('timestamp-query'), label: 'hello' });
 ```
@@ -237,7 +239,7 @@ gi.scene.setDeformedPositions(flag, { buffer: skinnedVertices, stride: 32 }); //
 From `main.ts`:
 
 ```ts
-import { DDGITechnique } from '@pmndrs/ddgi/core';
+import { DDGITechnique } from '@pmndrs/gi/ddgi';
 
 const ddgi = gi.addTechnique(new DDGITechnique({ volume: { center: [2.78, 2.74, 2.8], size: [5.6, 5.5, 5.6], spacing: 0.5 } }));
 gi.setOutput(ddgi); // the technique your shading reads

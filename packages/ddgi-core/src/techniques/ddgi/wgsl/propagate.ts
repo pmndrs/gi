@@ -139,7 +139,7 @@ fn ddgiReserveListSlot(take: bool) -> u32 {
 export function propagateKernelWgsl(shape: PropagateKernelShape): string {
     const { irradianceTexels, irradianceLayers, reduction, listCapacity } = shape;
     const sunLayer = shape.sunLayer ?? -1;
-    if (sunLayer >= irradianceLayers) throw new RangeError(`@pmndrs/ddgi: the sun layer is ${sunLayer}, but propagation has ${irradianceLayers} layer(s)`);
+    if (sunLayer >= irradianceLayers) throw new RangeError(`@pmndrs/gi: the sun layer is ${sunLayer}, but propagation has ${irradianceLayers} layer(s)`);
     // A layer's share of the probe's mean: the sun layer weighed by the sun's light (as in ddgi/blend), the others as they are.
     const addToMean =
         sunLayer >= 0

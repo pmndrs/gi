@@ -75,11 +75,11 @@ export async function startTestSite(): Promise<TestSiteServer> {
         logLevel: 'warn',
         appType: 'mpa',
         // The published names, pointed at the source as the examples' own config does, so a page can
-        // run examples/three as a user writes it (`@pmndrs/ddgi/three`).
+        // run examples/three as a user writes it (`@pmndrs/gi/three`).
         resolve: {
             alias: [
-                { find: /^@pmndrs\/ddgi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
-                { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+                { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
+                { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
             ],
         },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.

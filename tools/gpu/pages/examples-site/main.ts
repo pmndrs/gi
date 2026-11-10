@@ -3,9 +3,9 @@
  *
  * Build it first, with the Pages base:
  *
- *   PAGES_BASE=/webgpu-ddgi/ pnpm examples:build
+ *   PAGES_BASE=/gi/ pnpm examples:build
  *
- * The test server serves examples/dist under /webgpu-ddgi/ (server.ts,
+ * The test server serves examples/dist under /gi/ (server.ts,
  * contract.ts EXAMPLES_SITE_BASE), so a link or asset that ignores the base
  * fails to load. Then:
  *

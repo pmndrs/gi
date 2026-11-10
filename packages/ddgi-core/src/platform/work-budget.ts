@@ -1035,7 +1035,7 @@ export class WorkBudget {
             if (result.units < CALIBRATION.guardShare * expected) {
                 this.remeasuring = result.units;
                 this.warn?.(
-                    `@pmndrs/ddgi: the GPU budget's calibration came out at ${result.units} units a frame, under half of the previous calibration on this device and scene (${expected}); measuring once more. Its timings: ${describeSamples(result.samples)}`,
+                    `@pmndrs/gi: the GPU budget's calibration came out at ${result.units} units a frame, under half of the previous calibration on this device and scene (${expected}); measuring once more. Its timings: ${describeSamples(result.samples)}`,
                 );
                 this.burst = new CalibrationBurst(result.shareMs, result.cap, false);
                 return false;

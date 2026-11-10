@@ -162,8 +162,8 @@ export function volumeSettingsList(settings: { readonly volume: DDGIVolumeSettin
  * volumes, and `GILimitError` past the device's array layers.
  */
 export function planVolumes(settings: readonly DDGIVolumeSettings[], maxTextureArrayLayers: number): VolumePlan {
-    if (settings.length === 0) throw new Error('@pmndrs/ddgi: a DDGI technique needs at least one volume');
-    if (settings.length > MAX_VOLUMES) throw new Error(`@pmndrs/ddgi: a DDGI technique takes at most ${MAX_VOLUMES} volumes, got ${settings.length}`);
+    if (settings.length === 0) throw new Error('@pmndrs/gi: a DDGI technique needs at least one volume');
+    if (settings.length > MAX_VOLUMES) throw new Error(`@pmndrs/gi: a DDGI technique takes at most ${MAX_VOLUMES} volumes, got ${settings.length}`);
     const ordered = settings
         .map((volume, settingsIndex) => ({ settingsIndex, grid: probeGrid(volume), priority: volumePriority(volume), followsCamera: volume.follow === 'camera' }))
         .sort((a, b) => b.priority - a.priority || a.settingsIndex - b.settingsIndex);

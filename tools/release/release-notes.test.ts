@@ -70,7 +70,7 @@ describe('renderReleaseNotes', () => {
         const section = changelogSection(CHANGELOG, '0.1.0');
         if (!section) throw new Error('fixture lacks 0.1.0');
         expect(renderReleaseNotes(section, 'v0.1.0')).toBe(
-            'The first one.\n\n**Full changelog:** https://github.com/pmndrs/ddgi/blob/v0.1.0/CHANGELOG.md\n',
+            'The first one.\n\n**Full changelog:** https://github.com/pmndrs/gi/blob/v0.1.0/CHANGELOG.md\n',
         );
     });
 });

@@ -4,7 +4,7 @@
 
 ## What we're building
 
-A **universal, open-source WebGPU dynamic diffuse GI library**, to be published as **`pmndrs/ddgi`**. It's a sibling of [`pmndrs/upscaler`](https://github.com/pmndrs/upscaler) and [`pmndrs/denoiser`](https://github.com/pmndrs/denoiser), and follows their conventions.
+A **universal, open-source WebGPU dynamic diffuse GI library**, to be published as **`pmndrs/gi`** (`@pmndrs/gi`), a GI library with DDGI as its first technique (renamed from `pmndrs/ddgi` on 2026-11-10; see [DECISIONS](docs/DECISIONS.md)). It's a sibling of [`pmndrs/upscaler`](https://github.com/pmndrs/upscaler) and [`pmndrs/denoiser`](https://github.com/pmndrs/denoiser), and follows their conventions.
 
 - It has no dependency on any rendering library.
 - three.js is the first adapter and the one we develop against.
@@ -141,11 +141,12 @@ Checked against the r187 source. Runtime confirmation is an M0 spike.
 
 ### Packages
 
-**Published shape: one package, `@pmndrs/ddgi`, with one import path per layer,** matching `@pmndrs/upscaler`:
+**Published shape: one package, `@pmndrs/gi`, with one import path per layer,** matching `@pmndrs/upscaler` (DECISIONS 2026-11-10):
 
-- `@pmndrs/ddgi/core`: the platform plus the DDGI technique, engine-free;
-- `@pmndrs/ddgi` or `@pmndrs/ddgi/three`: the three.js adapter;
-- `@pmndrs/ddgi/babylon` and `/pixi`: later;
+- `@pmndrs/gi/core`: the platform alone, engine-free;
+- `@pmndrs/gi/ddgi`: the DDGI technique, engine-free (later techniques get a subpath each);
+- `@pmndrs/gi` or `@pmndrs/gi/three`: the three.js adapter, with each technique's three-facing pieces;
+- `@pmndrs/gi/babylon` and `/pixi`: later;
 - `@react-three/ddgi`: later react-three-fiber bindings.
 
 Engines are optional peer dependencies.
@@ -613,7 +614,7 @@ We don't take its code. We do take its ideas and its measured lessons. None of t
 ## Decisions so far
 
 - **Hardware:** target hardware is the RTX 3060 Laptop and up, and a Mac M5 Pro 64 GB. Correctness devices: the Intel UHD (Windows), an iPad and an older iOS device. Android is a stretch goal (revised 2026-11-05).
-- **Name:** `pmndrs/ddgi`, published as `@pmndrs/ddgi` with `/core`, `/three`, `/babylon`, `/pixi` import paths, following `@pmndrs/upscaler`.
+- **Name:** `pmndrs/gi`, published as `@pmndrs/gi` with `/core`, `/ddgi`, `/three` (later `/babylon`, `/pixi`) import paths, following `@pmndrs/upscaler` (was `pmndrs/ddgi` until DECISIONS 2026-11-10).
 - **Neighbours:** `@pmndrs/upscaler` and `@pmndrs/denoiser`, sharing device, conventions and the test bench.
 - **Tooling:** approved. See M0.
 

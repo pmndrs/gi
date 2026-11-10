@@ -661,7 +661,7 @@ export class PlatformLightGrid {
         this.label = options.label ?? 'gi';
         this.reduction = options.reduction ?? (device.features.has('subgroups') ? 'subgroups' : 'workgroup');
         if (this.reduction === 'subgroups' && !device.features.has('subgroups')) {
-            throw new Error("@pmndrs/ddgi: the light grid's subgroup scan needs a device with the 'subgroups' feature");
+            throw new Error("@pmndrs/gi: the light grid's subgroup scan needs a device with the 'subgroups' feature");
         }
         this.buildUniforms = device.createBuffer({ label: `${this.label} light grid build`, size: LIGHT_GRID_BUILD_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         // One texel until a scene needs the grid: scenes with a few lights pay nothing for it.
@@ -711,7 +711,7 @@ export class PlatformLightGrid {
      * hit-shading module's uniforms must carry this frame.
      */
     encode(encoder: GPUCommandEncoder, frame: LightGridFrame, timer?: GpuTimerScope): LightGridLookup {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: the light grid was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: the light grid was disposed');
         const kernels = this.kernels;
         // Until the kernels have compiled, direct light keeps the exact path (correct, only slower).
         if (!kernels || !(frame.localLights > frame.exactLightLimit)) {

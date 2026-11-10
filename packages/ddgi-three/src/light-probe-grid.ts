@@ -91,7 +91,7 @@ export class ExportedLightProbeGrid extends LightProbeGrid {
         super(width, height, depth, resolution[0], resolution[1], resolution[2]);
         const probeCount = resolution[0] * resolution[1] * resolution[2];
         if (coefficients.length !== probeCount * L2_SH_FLOATS_PER_PROBE) {
-            throw new Error(`@pmndrs/ddgi/three: a ${resolution.join(' × ')} grid needs ${probeCount * L2_SH_FLOATS_PER_PROBE} coefficients, got ${coefficients.length}`);
+            throw new Error(`@pmndrs/gi/three: a ${resolution.join(' × ')} grid needs ${probeCount * L2_SH_FLOATS_PER_PROBE} coefficients, got ${coefficients.length}`);
         }
         this.coefficients = coefficients;
         this.coefficientTexture = packCoefficientAtlas(coefficients, resolution);
@@ -182,11 +182,11 @@ export function toLightProbeGrid(data: IrradianceSHGrid, options: ToLightProbeGr
  */
 export function lightProbeGridToJSON(grid: ExportedLightProbeGrid): LightProbeGridJSON {
     const coefficients = Array.from(grid.coefficients);
-    if (!coefficients.every(Number.isFinite)) throw new Error('@pmndrs/ddgi/three: the grid has coefficients that are not finite numbers, which JSON cannot hold');
+    if (!coefficients.every(Number.isFinite)) throw new Error('@pmndrs/gi/three: the grid has coefficients that are not finite numbers, which JSON cannot hold');
     return {
         formatVersion: LIGHT_PROBE_GRID_JSON_FORMAT_VERSION,
         type: 'LightProbeGrid',
-        generator: '@pmndrs/ddgi',
+        generator: '@pmndrs/gi',
         width: grid.width,
         height: grid.height,
         depth: grid.depth,
@@ -201,13 +201,13 @@ export function lightProbeGridToJSON(grid: ExportedLightProbeGrid): LightProbeGr
 /** Reads {@link lightProbeGridToJSON}'s JSON (an object, or the string) back into a grid. Refuses other formats and versions by name. */
 export function lightProbeGridFromJSON(source: LightProbeGridJSON | string): ExportedLightProbeGrid {
     const json = (typeof source === 'string' ? JSON.parse(source) : source) as Partial<LightProbeGridJSON>;
-    if (json.type !== 'LightProbeGrid') throw new Error(`@pmndrs/ddgi/three: not LightProbeGrid JSON (type ${String(json.type)})`);
+    if (json.type !== 'LightProbeGrid') throw new Error(`@pmndrs/gi/three: not LightProbeGrid JSON (type ${String(json.type)})`);
     if (json.formatVersion !== LIGHT_PROBE_GRID_JSON_FORMAT_VERSION) {
-        throw new Error(`@pmndrs/ddgi/three: LightProbeGrid JSON format version ${String(json.formatVersion)} is not supported (this version reads ${LIGHT_PROBE_GRID_JSON_FORMAT_VERSION})`);
+        throw new Error(`@pmndrs/gi/three: LightProbeGrid JSON format version ${String(json.formatVersion)} is not supported (this version reads ${LIGHT_PROBE_GRID_JSON_FORMAT_VERSION})`);
     }
     const { width, height, depth, resolution, position, coefficients } = json;
     if (typeof width !== 'number' || typeof height !== 'number' || typeof depth !== 'number' || !resolution || !position || !coefficients) {
-        throw new Error('@pmndrs/ddgi/three: LightProbeGrid JSON is missing its size, resolution, position or coefficients');
+        throw new Error('@pmndrs/gi/three: LightProbeGrid JSON is missing its size, resolution, position or coefficients');
     }
     const grid = new ExportedLightProbeGrid(width, height, depth, [resolution[0], resolution[1], resolution[2]], Float32Array.from(coefficients));
     grid.position.set(position[0], position[1], position[2]);

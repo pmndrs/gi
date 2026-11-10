@@ -1,10 +1,10 @@
-# @pmndrs/ddgi
+# @pmndrs/gi
 
-[![npm](https://img.shields.io/npm/v/@pmndrs/ddgi?color=cb3837&label=npm)](https://www.npmjs.com/package/@pmndrs/ddgi) [![examples](https://img.shields.io/badge/examples-live-7dd3fc)](https://pmndrs.github.io/ddgi/) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![npm](https://img.shields.io/npm/v/@pmndrs/gi?color=cb3837&label=npm)](https://www.npmjs.com/package/@pmndrs/gi) [![examples](https://img.shields.io/badge/examples-live-7dd3fc)](https://pmndrs.github.io/gi/) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**Real-time global illumination for WebGPU.** Light bounces around your scene and keeps up as lights, objects and the sun move. It uses Dynamic Diffuse Global Illumination (DDGI): a grid of probes that trace rays every frame. Plain WebGPU and WGSL underneath, with a three.js adapter on top.
+**Real-time global illumination for WebGPU.** Light bounces around your scene and keeps up as lights, objects and the sun move. An engine-free GI platform carries the techniques; the first is Dynamic Diffuse Global Illumination (DDGI): a grid of probes that trace rays every frame. Plain WebGPU and WGSL underneath, with a three.js adapter on top.
 
-**▶ [Examples](https://pmndrs.github.io/ddgi/)**: small pages, each showing one feature. (The site goes live once the repository has moved to `pmndrs/ddgi`; until then the examples run from a checkout, see [Working on this repository](#working-on-this-repository).)
+**▶ [Examples](https://pmndrs.github.io/gi/)**: small pages, each showing one feature. (The site goes live once the `pmndrs/gi` repository is public and its Pages site is on; until then the examples run from a checkout, see [Working on this repository](#working-on-this-repository).)
 
 ![Cornell box lit by DDGI: the red and green walls bleed colour onto the floor, ceiling and boxes](docs/images/cornell-gi.jpg)
 
@@ -13,17 +13,18 @@
 ## Install
 
 ```bash
-npm install @pmndrs/ddgi three
+npm install @pmndrs/gi three
 ```
 
-One package, three import paths:
+One package, an import path per layer:
 
 | Import | For | Needs |
 | --- | --- | --- |
-| `@pmndrs/ddgi/three` (or `@pmndrs/ddgi`) | three.js `WebGPURenderer` | `three` r187 (`~0.187.0`) |
-| `@pmndrs/ddgi/core` | Plain WebGPU on your own `GPUDevice`, or an adapter for another engine | nothing: three isn't needed |
+| `@pmndrs/gi/three` (or `@pmndrs/gi`) | three.js `WebGPURenderer`, with DDGI's `DDGIVolume` and `ddgi()` composite | `three` r187 (`~0.187.0`) |
+| `@pmndrs/gi/core` | The GI platform on your own `GPUDevice`: the scene, rays, light and sky that techniques build on, for plain WebGPU or an adapter for another engine | nothing: three isn't needed |
+| `@pmndrs/gi/ddgi` | The DDGI technique, engine-free, run on the platform from `/core` | nothing: three isn't needed |
 
-`three` is an optional peer dependency, so a project that only imports `/core` doesn't install it. With TypeScript, add `@webgpu/types` for the WebGPU types.
+`three` is an optional peer dependency, so a project that only imports `/core` and `/ddgi` doesn't install it. With TypeScript, add `@webgpu/types` for the WebGPU types.
 
 ## Getting started with three.js
 
@@ -31,7 +32,7 @@ GI takes the place of three's `LightProbeGrid`, in as many lines. You give it a 
 
 ```ts
 import * as THREE from 'three/webgpu';
-import { createGIRenderer, GIVolume } from '@pmndrs/ddgi/three';
+import { createGIRenderer, DDGIVolume } from '@pmndrs/gi/three';
 
 const { renderer } = await createGIRenderer(); // a WebGPURenderer on a device with the limits GI needs
 renderer.setSize(innerWidth, innerHeight);
@@ -40,7 +41,7 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene(); // your meshes, materials and lights, as usual
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 100);
 
-const volume = new GIVolume(6, 5, 6, 6, 6, 6); // like new LightProbeGrid(6, 5, 6, 6, 6, 6): a 6 × 5 × 6 m box, 6 probes a side
+const volume = new DDGIVolume(6, 5, 6, 6, 6, 6); // like new LightProbeGrid(6, 5, 6, 6, 6, 6): a 6 × 5 × 6 m box, 6 probes a side
 volume.position.set(0, 2.5, 0);
 scene.add(volume);
 await volume.start(renderer, scene); // like probes.bake(renderer, scene)
@@ -52,15 +53,15 @@ What's different from `LightProbeGrid`:
 
 - **It keeps updating.** Move a light, open a door or turn the sun, and GI follows within a few frames. `bake` is a one-off.
 - **It knows about walls.** Each probe keeps how far it can see in every direction, so light leaks far less through walls between probes, and probes inside walls switch themselves off.
-- **`createGIRenderer`** makes three's renderer on a GPU device with the adapter's full limits. three's own device caps a storage buffer at WebGPU's default, 128 MiB, which large scenes (Sponza, Bistro) outgrow. If you make the renderer yourself, pass it `requiredLimits(adapter)` from `@pmndrs/ddgi/core`.
+- **`createGIRenderer`** makes three's renderer on a GPU device with the adapter's full limits. three's own device caps a storage buffer at WebGPU's default, 128 MiB, which large scenes (Sponza, Bistro) outgrow. If you make the renderer yourself, pass it `requiredLimits(adapter)` from `@pmndrs/gi/core`.
 - **One word sets the quality** for slower GPUs: `await volume.start(renderer, scene, { preset: 'low' })`.
 
 Where to go next:
 
-- [The examples](https://pmndrs.github.io/ddgi/) ([source](examples/)): the code above on three's own probe-grid scene (`01-hello`), GI added once per pixel on three's post-processing pipeline (`02-composite`), and one small page for each feature.
+- [The examples](https://pmndrs.github.io/gi/) ([source](examples/)): the code above on three's own probe-grid scene (`01-hello`), GI added once per pixel on three's post-processing pipeline (`02-composite`), and one small page for each feature.
 - [docs/api/three.md](docs/api/three.md): the three.js adapter, every option, and what it does with your scene.
 - [docs/guides/adapter.md](docs/guides/adapter.md): GI from plain WebGPU, or an adapter for another engine, step by step through [examples/webgpu/hello/](examples/webgpu/hello/).
-- [docs/api/platform.md](docs/api/platform.md): the engine-free API, `@pmndrs/ddgi/core`.
+- [docs/api/platform.md](docs/api/platform.md): the engine-free API, `@pmndrs/gi/core` and `@pmndrs/gi/ddgi`.
 
 The examples run from this repository: `pnpm install`, then `pnpm examples`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
@@ -70,16 +71,16 @@ GI runs on WebGPU only; there is no WebGL fallback.
 
 - **Browsers with WebGPU:** Chrome and Edge 113 and later; Safari 26 and later (macOS, iOS and iPadOS).
 - **Checked on:** the target devices, an RTX 3060 Laptop GPU (Windows, Chrome) and an Apple M5 Pro (macOS, Chrome), and the correctness device, an Intel UHD integrated GPU (Windows, Chrome). Safari, an iPad and an older iOS device haven't been run yet.
-- **Slower GPUs:** pick a lower preset (`{ preset: 'low' }`), or let `recommendPreset` pick one from the adapter.
-- **Large scenes** need more GPU memory per buffer than WebGPU's defaults. `createGIRenderer` asks for the adapter's full limits; if you make the device yourself, pass it `requiredLimits(adapter)` from `@pmndrs/ddgi/core`.
+- **Slower GPUs:** pick a lower preset (`{ preset: 'low' }`), or let `recommendPreset` (from `@pmndrs/gi/ddgi`) pick one from the adapter.
+- **Large scenes** need more GPU memory per buffer than WebGPU's defaults. `createGIRenderer` asks for the adapter's full limits; if you make the device yourself, pass it `requiredLimits(adapter)` from `@pmndrs/gi/core`.
 
 ## Documentation
 
 - [Getting started with three.js](#getting-started-with-threejs), above.
 - [The three.js adapter](docs/api/three.md): every option, and what it does with your scene.
-- [The platform API](docs/api/platform.md): `@pmndrs/ddgi/core` on a bare `GPUDevice`.
+- [The platform API](docs/api/platform.md): `@pmndrs/gi/core` and `@pmndrs/gi/ddgi` on a bare `GPUDevice`.
 - [Writing an adapter](docs/guides/adapter.md): GI from plain WebGPU, or for another engine, step by step.
-- [Examples](https://pmndrs.github.io/ddgi/).
+- [Examples](https://pmndrs.github.io/gi/).
 - [CHANGELOG.md](CHANGELOG.md): what each release contains.
 - [THIRD_PARTY.md](THIRD_PARTY.md): code from others and the test scenes, with their licences.
 
@@ -111,7 +112,7 @@ pnpm test:release    # runs the publish workflow's steps against throwaway repos
 pnpm test:gpu        # the GPU checks, in headless Chrome on a real GPU
 ```
 
-The published package is `packages/ddgi`; it bundles the private workspace packages `ddgi-core` (the engine-free platform and DDGI), `ddgi-three` (the three.js adapter) and `bvh`. [docs/releasing.md](docs/releasing.md) says how a release is cut, and what CI checks and doesn't.
+The published package, `@pmndrs/gi`, is `packages/ddgi`; it bundles the private workspace packages `ddgi-core` (the engine-free platform, `/core`, and DDGI, `/ddgi`), `ddgi-three` (the three.js adapter) and `bvh`. The workspace folders and private names keep `ddgi` for now ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-11-10). [docs/releasing.md](docs/releasing.md) says how a release is cut, and what CI checks and doesn't.
 
 How the work is run:
 

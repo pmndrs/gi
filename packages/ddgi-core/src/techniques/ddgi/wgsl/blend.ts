@@ -158,7 +158,7 @@ export const KEY_FIRST_UPDATE_SHARE = 0.8;
  * at most 8 of the 23 mantissa bits so the distance stays precise.
  */
 export const KEY_INDEX_BITS = Math.ceil(Math.log2(FIXED_RAYS));
-if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/ddgi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
+if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/gi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
 const KEY_INDEX_MASK = (1 << KEY_INDEX_BITS) - 1;
 import { MAX_IRRADIANCE_LAYERS } from '../light-groups.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
@@ -225,7 +225,7 @@ fn ddgiReduceFixedRay(ray: DdgiFixedRayResult) {
 export function blendKernelWgsl(shape: BlendKernelShape): string {
     const { irradianceTexels, distanceTexels, scratch, reduction } = shape;
     const sunLayer = shape.sunLayer ?? -1;
-    if (sunLayer >= scratch.irradianceLayers) throw new RangeError(`@pmndrs/ddgi: the sun layer is ${sunLayer}, but the blend has ${scratch.irradianceLayers} layer(s)`);
+    if (sunLayer >= scratch.irradianceLayers) throw new RangeError(`@pmndrs/gi: the sun layer is ${sunLayer}, but the blend has ${scratch.irradianceLayers} layer(s)`);
     // The probe's mean over every layer: the sun layer weighed by the sun's light, the others as they are.
     const meanSum =
         sunLayer >= 0
@@ -248,7 +248,7 @@ export function blendKernelWgsl(shape: BlendKernelShape): string {
     // Every layer's texel estimates and old values sit in workgroup memory beside the rays' directions (the file comment).
     if (scratch.irradianceLayers > MAX_IRRADIANCE_LAYERS) {
         throw new Error(
-            `@pmndrs/ddgi: ddgi/blend keeps at most ${MAX_IRRADIANCE_LAYERS} irradiance layers in its 16 KB of workgroup memory, got ${scratch.irradianceLayers} (light-groups.ts, MAX_IRRADIANCE_LAYERS)`,
+            `@pmndrs/gi: ddgi/blend keeps at most ${MAX_IRRADIANCE_LAYERS} irradiance layers in its 16 KB of workgroup memory, got ${scratch.irradianceLayers} (light-groups.ts, MAX_IRRADIANCE_LAYERS)`,
         );
     }
     // An enable directive must come before everything else in the module.

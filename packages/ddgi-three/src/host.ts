@@ -44,9 +44,9 @@ export function deviceLimits(adapter: GPUAdapter, extra: RequiredLimits = {}): R
 
 /** An adapter and a device with every adapter feature and the platform's limits. */
 export async function requestGIDevice(options: GIDeviceOptions = {}): Promise<GIDevice> {
-    if (typeof navigator === 'undefined' || !navigator.gpu) throw new Error('@pmndrs/ddgi: WebGPU is not available in this browser.');
+    if (typeof navigator === 'undefined' || !navigator.gpu) throw new Error('@pmndrs/gi: WebGPU is not available in this browser.');
     const adapter = options.adapter ?? (await navigator.gpu.requestAdapter({ powerPreference: options.powerPreference ?? 'high-performance' }));
-    if (!adapter) throw new Error('@pmndrs/ddgi: no WebGPU adapter (requestAdapter() returned null).');
+    if (!adapter) throw new Error('@pmndrs/gi: no WebGPU adapter (requestAdapter() returned null).');
     const device = await adapter.requestDevice({
         label: options.label ?? 'ddgi',
         requiredFeatures: [...adapter.features] as GPUFeatureName[],

@@ -2,7 +2,7 @@
     "name": "@pmndrs/ddgi-scenes",
     "version": "0.0.0",
     "private": true,
-    "description": "Test scenes for @pmndrs/ddgi: manifests, engine-free procedural builders, a GLB exporter and a three.js check page. Not published.",
+    "description": "Test scenes for @pmndrs/gi: manifests, engine-free procedural builders, a GLB exporter and a three.js check page. Not published.",
     "license": "MIT",
     "type": "module",
     "scripts": {

@@ -1,4 +1,5 @@
 // DDGI, the first GI technique built on the platform (docs/design/ddgi.md).
+// Published as `@pmndrs/gi/ddgi`.
 export { DDGITechnique, type DDGIField, type LoadedField, type LoadFieldOptions } from './ddgi-technique.ts';
 // Saved bakes (T5.2): the .ddgibake format, for hosts that read a file's header or catch its errors.
 export {

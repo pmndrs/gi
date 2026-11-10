@@ -4,19 +4,19 @@ import { describe, expect, test } from 'vitest';
 
 import { PACKAGE_README_END, absoluteLink, githubUrl, headingAnchor, packageReadme } from './package-files.ts';
 
-const REPOSITORY = 'https://github.com/pmndrs/ddgi';
+const REPOSITORY = 'https://github.com/pmndrs/gi';
 
 describe('githubUrl', () => {
     test.each([
-        ['git+https://github.com/pmndrs/ddgi.git', REPOSITORY],
-        ['https://github.com/pmndrs/ddgi', REPOSITORY],
-        ['git@github.com:pmndrs/ddgi.git', REPOSITORY],
+        ['git+https://github.com/pmndrs/gi.git', REPOSITORY],
+        ['https://github.com/pmndrs/gi', REPOSITORY],
+        ['git@github.com:pmndrs/gi.git', REPOSITORY],
     ])('%s', (url, expected) => {
         expect(githubUrl(url)).toBe(expected);
     });
 
     test('refuses a host other than GitHub', () => {
-        expect(() => githubUrl('https://gitlab.com/pmndrs/ddgi')).toThrow();
+        expect(() => githubUrl('https://gitlab.com/pmndrs/gi')).toThrow();
     });
 });
 
@@ -25,7 +25,7 @@ describe('absoluteLink', () => {
         expect(absoluteLink('docs/api/three.md', REPOSITORY, false)).toBe(`${REPOSITORY}/blob/main/docs/api/three.md`);
         expect(absoluteLink('./docs/api/three.md#options', REPOSITORY, false)).toBe(`${REPOSITORY}/blob/main/docs/api/three.md#options`);
         expect(absoluteLink('examples/three/', REPOSITORY, false)).toBe(`${REPOSITORY}/tree/main/examples/three/`);
-        expect(absoluteLink('docs/images/a.png', REPOSITORY, true)).toBe('https://raw.githubusercontent.com/pmndrs/ddgi/main/docs/images/a.png');
+        expect(absoluteLink('docs/images/a.png', REPOSITORY, true)).toBe('https://raw.githubusercontent.com/pmndrs/gi/main/docs/images/a.png');
     });
 
     test('leaves absolute URLs and anchors alone', () => {
@@ -71,8 +71,8 @@ describe('packageReadme', () => {
 
     test('makes links absolute, including a link around a badge, and images load from raw', () => {
         expect(result).toContain(`[![license](https://img.shields.io/badge/license-MIT-blue)](${REPOSITORY}/blob/main/LICENSE)`);
-        expect(result).toContain('![shot](https://raw.githubusercontent.com/pmndrs/ddgi/main/docs/images/shot.png "A shot")');
-        expect(result).toContain('<img src="https://raw.githubusercontent.com/pmndrs/ddgi/main/docs/images/small.png" width="200">');
+        expect(result).toContain('![shot](https://raw.githubusercontent.com/pmndrs/gi/main/docs/images/shot.png "A shot")');
+        expect(result).toContain('<img src="https://raw.githubusercontent.com/pmndrs/gi/main/docs/images/small.png" width="200">');
         expect(result).toContain(`[three](${REPOSITORY}/blob/main/docs/api/three.md)`);
     });
 

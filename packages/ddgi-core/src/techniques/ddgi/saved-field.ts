@@ -56,7 +56,7 @@ export const SAVED_FIELD_PREAMBLE_BYTES = 12;
  * version). saved-field.test.ts checks it against packages/ddgi/package.json,
  * so it can't drift.
  */
-export const SAVED_FIELD_WRITER = '@pmndrs/ddgi 0.0.0';
+export const SAVED_FIELD_WRITER = '@pmndrs/gi 0.0.0';
 
 /** One volume's shape as the field was baked: what has to match to load it. */
 export interface SavedVolumeLayout {
@@ -142,7 +142,7 @@ export type SavedFieldProblem = 'not a saved field' | 'format version' | 'layout
 export class SavedFieldError extends Error {
     readonly problem: SavedFieldProblem;
     constructor(problem: SavedFieldProblem, message: string) {
-        super(`@pmndrs/ddgi: ${message}`);
+        super(`@pmndrs/gi: ${message}`);
         this.name = 'SavedFieldError';
         this.problem = problem;
     }

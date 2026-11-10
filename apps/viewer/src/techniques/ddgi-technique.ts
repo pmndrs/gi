@@ -1,5 +1,5 @@
 /**
- * Our DDGI, through the three.js adapter (`@pmndrs/ddgi/three`).
+ * Our DDGI, through the three.js adapter (`@pmndrs/gi/three`).
  *
  * The scene is drawn like the probe grid's: a plain `renderer.render` into a
  * multisampled target. GI reaches three's materials through the adapter's
@@ -8,7 +8,7 @@
  * render, `ThreeGI.update` mirrors scene changes and submits the GI update
  * within the frame budget (2 ms by default).
  *
- * Start-up goes through the library's own `GIVolume.start` (T2.4b), the
+ * Start-up goes through the library's own `DDGIVolume.start` (T2.4b), the
  * simple path any three user takes, so the viewer shows what they get. In
  * the order the viewer shows it:
  *  1. **Preparing:** the platform compiles its kernels (`gi.prepare()`).
@@ -22,7 +22,7 @@
  *     millisecond budget, GPU-bound (two in flight, so the GPU never waits)
  *     and not paced by the display. `start` runs those frames and resolves
  *     when the platform reports it calibrated and confirmed. "Start the
- *     probes over" runs them again (`GIVolume.restart`).
+ *     probes over" runs them again (`DDGIVolume.restart`).
  *  4. **Ready:** the calibrated number of probes every frame, and the field
  *     keeps converging live. The viewer then runs the GI frames itself
  *     (`updateOnRender` off), so "GI off" means no GI work at all.
@@ -47,7 +47,7 @@ import { DdgiDebugMaterial } from '../ddgi/debug-material';
 import { FrameChangeView } from '../ddgi/frame-change';
 import {
     DDGI_DEBUG_VIEW,
-    GIVolume,
+    DDGIVolume,
     PROBE_STATE_LABELS,
     type DDGIPresetName,
     type DDGITechnique,
@@ -256,7 +256,7 @@ export class DdgiTechnique extends ScenePassTechnique {
     readonly startup: DdgiStartupTimes = { preparedMs: null, firstGiMs: null, warmedMs: null };
 
     /** The library's volume on the manifest's probe grid; `start` makes the platform, DDGI and ThreeGI on it. */
-    private readonly volume: GIVolume;
+    private readonly volume: DDGIVolume;
     /** What `volume.start` made, from the moment it exists (before the warm-up). */
     private gi: StartedGI | null = null;
     private readonly createdAt = performance.now();
@@ -312,7 +312,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         // The base class chose layers before the settings existed; choose again with them.
         this.applyLayers();
         const { manifest } = context.loaded;
-        this.volume = GIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
+        this.volume = DDGIVolume.fromDDGIVolume({ center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing });
         // Only DDGI's camera sees the volume (a light in three's terms), as its GI light.
         this.volume.layers.set(LAYER_DDGI);
         let created: () => void = () => {};
@@ -333,7 +333,7 @@ export class DdgiTechnique extends ScenePassTechnique {
                 // The weights are set once the technique exists (`applyGroupWeights`); they are live.
                 lightGroups: this.settings.lightGroups > 0 ? { count: this.settings.lightGroups, weights: [], environmentWeight: [1, 1, 1] } : null,
                 sunLayer: this.settings.sunLayer,
-                // Several volumes only with the camera's; one volume stays exactly M2's path (the GIVolume's own).
+                // Several volumes only with the camera's; one volume stays exactly M2's path (the DDGIVolume's own).
                 ...(this.settings.cameraVolume ? { volumes: ddgiVolumes(loaded.manifest, true, loaded.manifest.cameras[0].position) } : {}),
             },
             environment: this.environmentOverride ?? environmentFor(loaded.manifest),
@@ -575,7 +575,7 @@ export class DdgiTechnique extends ScenePassTechnique {
     }
 
     /**
-     * Saves the probes as a `.ddgibake` file's bytes (`GIVolume.saveBake`):
+     * Saves the probes as a `.ddgibake` file's bytes (`DDGIVolume.saveBake`):
      * one GPU readback. Only once DDGI is running (warm), so the file holds
      * converged probes.
      */
@@ -585,7 +585,7 @@ export class DdgiTechnique extends ScenePassTechnique {
     }
 
     /**
-     * Loads a `.ddgibake` file into the running probes (`GIVolume.loadBake`):
+     * Loads a `.ddgibake` file into the running probes (`DDGIVolume.loadBake`):
      * from the next frame the picture shows the loaded probes, which keep
      * updating. Throws (with a message that says why) for a file that isn't
      * a bake or doesn't fit this scene's probes; a bake of a changed scene
@@ -601,7 +601,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         return this.ddgi?.counters['saved fields loaded'] ?? 0;
     }
 
-    /** "Start the probes over": forget the field and the calibration, and warm up again (`GIVolume.restart`). */
+    /** "Start the probes over": forget the field and the calibration, and warm up again (`DDGIVolume.restart`). */
     restartPrepare(): void {
         this.generation++;
         this.finishedWallMs = null;

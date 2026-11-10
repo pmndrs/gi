@@ -1,4 +1,4 @@
-# @pmndrs/ddgi examples
+# @pmndrs/gi examples
 
 Small, single-purpose pages, each the shortest code that shows one feature. WebGPU only: Chrome or Edge 113+, or Safari 26+.
 
@@ -8,13 +8,13 @@ pnpm examples          # http://localhost:5203, the landing page links every exa
 pnpm examples:build    # the site, into examples/dist
 ```
 
-The library is read straight from `packages/` (aliased as `@pmndrs/ddgi`, `/core` and `/three`), so a change to it shows up here at once. Each example's `main.ts` imports only the library, three.js, `@pmndrs/upscaler` (02) and the helpers in `shared/`.
+The library is read straight from `packages/` (aliased as `@pmndrs/gi`, `/core`, `/ddgi` and `/three`), so a change to it shows up here at once. Each example's `main.ts` imports only the library, three.js, `@pmndrs/upscaler` (02) and the helpers in `shared/`.
 
 ## The examples
 
 | # | Example | Shows |
 | --- | --- | --- |
-| 01 | **Hello GI** (`01-hello`) | A `GIVolume` in place of three's `LightProbeGrid`, on three's own `webgpu_lightprobes.html` scene: the getting-started code from the README. GI updates itself inside `renderer.render`. |
+| 01 | **Hello GI** (`01-hello`) | A `DDGIVolume` in place of three's `LightProbeGrid`, on three's own `webgpu_lightprobes.html` scene: the getting-started code from the README. GI updates itself inside `renderer.render`. |
 | 02 | **GI composite with the upscaler** (`02-composite`) | The same scene through three's `RenderPipeline`: `ddgi()` adds GI once per pixel, and `@pmndrs/upscaler` renders at half resolution and upscales. The path for dense scenes. |
 | 03 | **Lights** (`03-lights`) | The Cornell box with one lamp to move, dim, recolour and switch off. GI follows within a few frames, and the room never goes dark meanwhile. |
 | 04 | **Moving objects** (`04-moving-objects`) | Two rooms: a door swings on its hinge and a box slides. Nothing is called; the far room goes dark when the door shuts. |
@@ -29,7 +29,7 @@ The library is read straight from `packages/` (aliased as `@pmndrs/ddgi`, `/core
 
 | # | Example | Shows |
 | --- | --- | --- |
-| W1 | **Plain WebGPU** (`webgpu/hello`) | `@pmndrs/ddgi/core` on a bare `GPUDevice`: a small renderer of its own, the scene described through the platform's scene API, DDGI encoded into the frame's command encoder. The example [docs/guides/adapter.md](../docs/guides/adapter.md) walks through. It is also its own package (`pnpm --filter @pmndrs/ddgi-example-hello dev`). |
+| W1 | **Plain WebGPU** (`webgpu/hello`) | `@pmndrs/gi/core` and `/ddgi` on a bare `GPUDevice`: a small renderer of its own, the scene described through the platform's scene API, DDGI encoded into the frame's command encoder. The example [docs/guides/adapter.md](../docs/guides/adapter.md) walks through. It is also its own package (`pnpm --filter @pmndrs/ddgi-example-hello dev`). |
 
 ## How they're built
 
@@ -41,12 +41,12 @@ The library is read straight from `packages/` (aliased as `@pmndrs/ddgi`, `/core
 
 ## The published site
 
-`.github/workflows/deploy-pages.yml` builds the site with `PAGES_BASE=/webgpu-ddgi/` (GitHub Pages serves a project site under `/<repo>/`) and deploys it on every push to `main`, once Pages is enabled for the repository. Links between pages are relative, so the site works under any base.
+`.github/workflows/deploy-pages.yml` builds the site with `PAGES_BASE=/gi/` (GitHub Pages serves a project site under `/<repo>/`; the site is `https://pmndrs.github.io/gi/`) and deploys it on every push to `main`, once Pages is enabled for the repository. Links between pages are relative, so the site works under any base.
 
 To check a build the way Pages serves it (on a machine with a GPU):
 
 ```bash
-PAGES_BASE=/webgpu-ddgi/ pnpm examples:build
+PAGES_BASE=/gi/ pnpm examples:build
 pnpm test:gpu --filter examples-site      # every example in headless Chrome: GI shows, no errors
 node tools/examples/screenshots.ts         # a picture of each, into bench/screenshots/t5.6
 ```

@@ -361,7 +361,7 @@ type ObjectFlags = Object3D & {
     isSkyMesh?: boolean;
     isBatchedMesh?: boolean;
     isGILight?: boolean;
-    isGIVolume?: boolean;
+    isDDGIVolume?: boolean;
     isLightProbeGrid?: boolean;
     isAmbientLight?: boolean;
     isHemisphereLight?: boolean;
@@ -478,7 +478,7 @@ export class SceneSync {
 
     constructor(api: SceneApi, options: SceneSyncOptions) {
         this.api = api;
-        const warn = options.warn ?? ((message: string) => console.warn(`@pmndrs/ddgi/three: ${message}`));
+        const warn = options.warn ?? ((message: string) => console.warn(`@pmndrs/gi/three: ${message}`));
         this.warnOnce = (message) => {
             if (this.warned.has(message)) return;
             this.warned.add(message);
@@ -1342,7 +1342,7 @@ export class SceneSync {
             if (!this.probeGrids.includes(light)) this.probeGrids.push(light);
             return;
         }
-        if (flags.isGILight || flags.isGIVolume) return;
+        if (flags.isGILight || flags.isDDGIVolume) return;
         if (flags.isAmbientLight || flags.isHemisphereLight || flags.isLightProbe) {
             if (visible && light.intensity > 0) this.warnOnce(`${light.type} adds diffuse light on top of GI in three (it isn't part of GI's light): light is counted twice where GI covers.`);
             return;

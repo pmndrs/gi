@@ -216,7 +216,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
     }
 
     samplingModule(sceneModule: WgslModule): WgslModule {
-        if (this.module && this.module.dependencies[0] !== sceneModule) throw new Error('@pmndrs/ddgi: one texture store samples for one scene copy');
+        if (this.module && this.module.dependencies[0] !== sceneModule) throw new Error('@pmndrs/gi: one texture store samples for one scene copy');
         this.module ??= createTextureSamplingModule(sceneModule, this, this.layout.layerSize);
         return this.module;
     }
@@ -248,7 +248,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
      * host has submitted by now).
      */
     encode(encoder: GPUCommandEncoder, requests: readonly TextureLayerRequest[], timer?: GpuTimerScope): TextureLayerResults {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: the texture store was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: the texture store was disposed');
         for (const texture of this.retired) texture.destroy();
         this.retired = [];
         for (const buffer of this.retiredBuffers) buffer.destroy();
@@ -259,7 +259,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
             return { built: [], failed: [], waiting: [] };
         }
         const pipelines = this.pipelines;
-        if (!pipelines) throw new Error('@pmndrs/ddgi: the texture store kernel is not compiled yet; await prepare() first');
+        if (!pipelines) throw new Error('@pmndrs/gi: the texture store kernel is not compiled yet; await prepare() first');
 
         const layerLimit = this.device.limits.maxTextureArrayLayers;
         const failed: number[] = [];
@@ -267,7 +267,7 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         const staged: { readonly layer: number; readonly source: StagedSource }[] = [];
         for (const request of requests) {
             if (request.layer >= layerLimit) {
-                this.warn(`@pmndrs/ddgi: the scene has more textures than the device's maxTextureArrayLayers (${layerLimit}); the materials using the rest keep their flat colour. requiredLimits(adapter) asks for the adapter's maximum.`);
+                this.warn(`@pmndrs/gi: the scene has more textures than the device's maxTextureArrayLayers (${layerLimit}); the materials using the rest keep their flat colour. requiredLimits(adapter) asks for the adapter's maximum.`);
                 failed.push(request.layer);
                 continue;
             }
@@ -327,11 +327,11 @@ export class PlatformTextureStore implements TextureLayerStore, TextureStoreBind
         this.device.createBindGroup({ label: `${this.label} texture source check`, layout, entries: [{ binding: 0, resource: view }] });
         this.device.popErrorScope().then(
             (error) => {
-                const reason = `@pmndrs/ddgi: a GPUTexture texture source can't be used on the device the platform was made with (${error?.message ?? ''}); is it another device's? The materials using it keep their flat colour.`;
+                const reason = `@pmndrs/gi: a GPUTexture texture source can't be used on the device the platform was made with (${error?.message ?? ''}); is it another device's? The materials using it keep their flat colour.`;
                 this.hostTextureChecks.set(texture, error ? { reason } : 'usable');
             },
             // The device was lost meanwhile: nothing will be built anyway.
-            () => this.hostTextureChecks.set(texture, { reason: '@pmndrs/ddgi: the device was lost while a GPUTexture texture source was checked.' }),
+            () => this.hostTextureChecks.set(texture, { reason: '@pmndrs/gi: the device was lost while a GPUTexture texture source was checked.' }),
         );
         this.hostTextureChecks.set(texture, 'checking');
         return 'checking';
@@ -473,7 +473,7 @@ function stageCatching(device: GPUDevice, request: TextureLayerRequest, label: s
         return stageSource(device, request.source, request.srgb, layerSize, label);
     } catch (error) {
         const why = error instanceof Error ? error.message : String(error);
-        return { reason: `@pmndrs/ddgi: a texture source${request.label ? ` ("${request.label}")` : ''} could not be read (${why}); the materials using it keep their flat colour.` };
+        return { reason: `@pmndrs/gi: a texture source${request.label ? ` ("${request.label}")` : ''} could not be read (${why}); the materials using it keep their flat colour.` };
     }
 }
 

@@ -1,13 +1,13 @@
 /// <reference types="node" />
 /**
  * Screenshots of every page of the built examples site, for looking at:
- * serves examples/dist under /webgpu-ddgi/ with the GPU test server (as
+ * serves examples/dist under /gi/ with the GPU test server (as
  * the `examples-site` GPU page does), opens each page in headless Chrome
  * at 1280 × 720, waits until it reports GI (`window.ddgiExample`, or the
  * hello example's `window.helloState`) and a few seconds more, and saves a
  * PNG. Prints any browser error it saw on the way.
  *
- *   PAGES_BASE=/webgpu-ddgi/ pnpm examples:build
+ *   PAGES_BASE=/gi/ pnpm examples:build
  *   node tools/examples/screenshots.ts [--out <dir>]   default bench/screenshots/t5.6 (gitignored)
  *
  * The GPU page is the check; this is for eyes. Run it under the bench lock.

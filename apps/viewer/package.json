@@ -2,7 +2,7 @@
     "name": "@pmndrs/ddgi-viewer",
     "version": "0.0.0",
     "private": true,
-    "description": "Viewer for developing and comparing @pmndrs/ddgi. Not published.",
+    "description": "Viewer for developing and comparing @pmndrs/gi. Not published.",
     "license": "MIT",
     "type": "module",
     "scripts": {
@@ -12,7 +12,7 @@
         "scenario-shots": "node scripts/scenario-shots.ts"
     },
     "dependencies": {
-        "@pmndrs/ddgi": "workspace:*",
+        "@pmndrs/gi": "workspace:*",
         "@pmndrs/upscaler": "0.5.0",
         "gputex": "0.14.0",
         "three": "0.187.0"

@@ -1,6 +1,6 @@
 name: Publish to npm
 
-# Publishes @pmndrs/ddgi (the package in packages/ddgi) to npm and creates its
+# Publishes @pmndrs/gi (the package in packages/ddgi) to npm and creates its
 # GitHub Release. Adapted from @pmndrs/upscaler's publish.yml. Merges to main
 # never publish. Nothing runs until Dennis registers this file as the package's
 # trusted publisher on npmjs.com (docs/releasing.md, "Once").
@@ -46,7 +46,7 @@ name: Publish to npm
 #
 # Auth is npm Trusted Publishing (OIDC): no token or secret, and provenance is
 # attached automatically. The trusted publisher registered on npmjs.com names
-# this file (pmndrs / ddgi / publish.yml), so keep the filename.
+# this file (pmndrs / gi / publish.yml), so keep the filename.
 
 on:
   push:

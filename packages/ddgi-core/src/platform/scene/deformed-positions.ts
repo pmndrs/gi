@@ -73,10 +73,10 @@ export function boxDiagonal(box: ArrayLike<number>): number {
 export function checkedDeformBounds(bounds: Aabb, what: string): Float32Array {
     const flat = new Float32Array([...bounds.min, ...bounds.max]);
     if (flat.length !== BOX_NUMBERS || !flat.every((value) => Number.isFinite(value))) {
-        throw new RangeError(`@pmndrs/ddgi: ${what}: deformBounds must be a box of finite numbers`);
+        throw new RangeError(`@pmndrs/gi: ${what}: deformBounds must be a box of finite numbers`);
     }
     for (let axis = 0; axis < 3; axis++) {
-        if (flat[axis] > flat[axis + 3]) throw new RangeError(`@pmndrs/ddgi: ${what}: deformBounds has min above max on axis ${axis}`);
+        if (flat[axis] > flat[axis + 3]) throw new RangeError(`@pmndrs/gi: ${what}: deformBounds has min above max on axis ${axis}`);
     }
     return flat;
 }
@@ -88,7 +88,7 @@ export function copyCheckedPositions(source: Float32Array, target: Float32Array,
     for (let index = 0; index < source.length; index++) check += source[index] * 0;
     if (check !== 0) {
         const bad = source.findIndex((value) => !Number.isFinite(value));
-        throw new RangeError(`@pmndrs/ddgi: ${what}: vertex ${Math.floor(bad / 3)} has a non-finite position`);
+        throw new RangeError(`@pmndrs/gi: ${what}: vertex ${Math.floor(bad / 3)} has a non-finite position`);
     }
     target.set(source);
 }

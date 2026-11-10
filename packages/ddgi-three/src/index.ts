@@ -1,12 +1,12 @@
 // three.js r187 adapter (T1.7, T1.14): a Light subclass with a registered node reads
 // the platform's shading module; the scene sync mirrors three's scene into
 // `gi.scene`; ThreeGI runs both once per frame. The simple path is
-// `GIVolume.start`; the fast path for dense scenes is `ddgi()` with `giAlbedo`
+// `DDGIVolume.start`; the fast path for dense scenes is `ddgi()` with `giAlbedo`
 // on three's own pass() and mrt() (docs/api/three.md).
 export { ThreeGI, type ThreeGIOptions, type ThreeGITimings } from './three-gi.ts';
 export { GILight, GI_LIGHT_PRIORITY, entryWgsl, wgslParameterType, type GILightOptions } from './gi-light.ts';
 export { wrapGpuTexture, type GpuTextureWrapOptions } from './external-texture.ts';
-export { GIVolume } from './gi-volume.ts';
+export { DDGIVolume } from './ddgi-volume.ts';
 export {
     ExportedLightProbeGrid,
     LIGHT_PROBE_GRID_JSON_FORMAT_VERSION,
@@ -17,7 +17,7 @@ export {
     type LightProbeGridJSON,
     type ToLightProbeGridOptions,
 } from './light-probe-grid.ts';
-export { DEFAULT_GI_BUDGET, DEFAULT_WARM_UP, ThreeGILimitError, type GIVolumeStartOptions, type StartedGI, type WarmUpSettings } from './volume-start.ts';
+export { DEFAULT_GI_BUDGET, DEFAULT_WARM_UP, ThreeGILimitError, type DDGIVolumeStartOptions, type StartedGI, type WarmUpSettings } from './volume-start.ts';
 export {
     ddgi,
     giAlbedo,

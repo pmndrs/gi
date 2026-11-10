@@ -1,12 +1,15 @@
-// Checks that the build produced every public entry with its types, and that
+// Checks that the build produced every public entry with its types, that
 // nothing in dist names a private workspace package (a consumer could not
-// resolve it).
+// resolve it), and that each entry loads only its own layers' chunks
+// (layer-chunks.ts): `/core` no DDGI or three code, `/ddgi` no three code.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
+
+import { ENTRY_LAYERS, LAYER_CHUNKS } from '../layer-chunks.ts';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const dist = resolve(packageRoot, 'dist');
-const publicEntries = ['index', 'core', 'three'];
+const publicEntries = ['index', 'core', 'ddgi', 'three'];
 const privatePackagePrefix = '@pmndrs/ddgi-';
 
 const problems = [];
@@ -58,8 +61,61 @@ for (const file of existsSync(dist) ? walk(dist) : []) {
     }
 }
 
+// The layers each entry may load (ENTRY_LAYERS). Reaching a file of a layer outside its list
+// means code of a higher layer leaked into a lower entry (the platform
+// importing DDGI, or DDGI importing three), whatever the entry's name says.
+const entryLayer = { core: 'platform', ddgi: 'ddgi', three: 'three', index: 'three' };
+const chunksDirectory = resolve(dist, 'chunks');
+
+/** The layer a dist file belongs to: a chunk's by its name, an entry's by `entryLayer`. */
+function layerOf(file) {
+    const name = basename(file).replace(/\.d\.ts$|\.js$/, '');
+    if (dirname(file) === chunksDirectory) return LAYER_CHUNKS.find((layer) => name.startsWith(`${layer}-`));
+    if (dirname(file) === dist) return entryLayer[name];
+    return undefined;
+}
+
+/** The relative files an entry reaches, following `from './x.js'` and `import('./x.js')` (.d.ts files import chunks as .js). */
+function reachedFiles(entryFile) {
+    const reached = new Set();
+    const queue = [entryFile];
+    while (queue.length) {
+        const file = queue.pop();
+        if (reached.has(file) || !existsSync(file)) continue;
+        reached.add(file);
+        const text = readFileSync(file, 'utf8');
+        for (const match of text.matchAll(/(?:from\s*|import\s*\(\s*|import\s+)["'](\.{1,2}\/[^"']+)["']/g)) {
+            let target = resolve(dirname(file), match[1]);
+            if (file.endsWith('.d.ts') && target.endsWith('.js')) target = `${target.slice(0, -'.js'.length)}.d.ts`;
+            queue.push(target);
+        }
+    }
+    return reached;
+}
+
+for (const [entry, layers] of Object.entries(ENTRY_LAYERS)) {
+    for (const extension of ['js', 'd.ts']) {
+        for (const file of reachedFiles(resolve(dist, `${entry}.${extension}`))) {
+            const layer = layerOf(file);
+            if (layer && !layers.includes(layer)) {
+                problems.push(`dist/${entry}.${extension} loads ${basename(file)}, which holds ${layer} code; /${entry} may load only ${layers.join(', ')}`);
+            }
+        }
+    }
+}
+// The layer chunks must exist, or the check above checked nothing.
+const chunkNames = existsSync(chunksDirectory) ? readdirSync(chunksDirectory) : [];
+for (const layer of LAYER_CHUNKS) {
+    for (const extension of ['js', 'd.ts']) {
+        const isKind = (name) => (extension === 'd.ts' ? name.endsWith('.d.ts') : name.endsWith('.js') && !name.endsWith('.d.ts'));
+        if (!chunkNames.some((name) => name.startsWith(`${layer}-`) && isKind(name))) {
+            problems.push(`dist/chunks has no ${layer}-*.${extension}: the layer chunks (layer-chunks.ts) weren't made`);
+        }
+    }
+}
+
 if (problems.length) {
     console.error(problems.join('\n'));
     process.exit(1);
 }
-console.log(`Verified dist: entries ${publicEntries.join(', ')} with types, no private package names; README, LICENSE, THIRD_PARTY.md and licenses/ present.`);
+console.log(`Verified dist: entries ${publicEntries.join(', ')} with types; /core loads only the platform chunk, /ddgi no three chunk; no private package names; README, LICENSE, THIRD_PARTY.md and licenses/ present.`);

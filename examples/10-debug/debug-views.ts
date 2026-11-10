@@ -16,8 +16,9 @@
 
 import * as THREE from 'three/webgpu';
 import { float, instanceIndex, int, ivec2, normalView, positionLocal, positionWorld, normalWorld, select, texture, texture3D, textureLoad, uniform, uv, varying, vec2, vec3, vec4, wgsl, wgslFn } from 'three/tsl';
-import { DDGI_DEBUG_COLORS, DDGI_SHADING_PARAMETER_NAMES, PROBE_STATE, type DDGITechnique, type DebugView, type ShadingModule } from '@pmndrs/ddgi/core';
-import { GI_USER_DATA, wgslParameterType, wrapGpuTexture } from '@pmndrs/ddgi/three';
+import { type DebugView, type ShadingModule } from '@pmndrs/gi/core';
+import { DDGI_DEBUG_COLORS, DDGI_SHADING_PARAMETER_NAMES, PROBE_STATE, type DDGITechnique } from '@pmndrs/gi/ddgi';
+import { GI_USER_DATA, wgslParameterType, wrapGpuTexture } from '@pmndrs/gi/three';
 
 type Node<Type = unknown> = THREE.Node<Type>;
 

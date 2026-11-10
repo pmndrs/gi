@@ -22,7 +22,7 @@
  * file with the core loaded straight from source.
  */
 
-import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi/core';
+import type { ShadingModule, ShadingParameter } from '@pmndrs/gi/core';
 import { cameraMatrices, lookAt, multiply, normalMatrix, perspective, type CameraMatrices, type Vec3 } from './camera.ts';
 import type { DescribedScene } from './scene.ts';
 import { DEPTH_PREPASS_SHADER, DISPLAY_SHADER, FORWARD_BINDING, forwardShader, GI_GROUP, SHADOW_BINDING, SHADOW_FACES, SHADOW_SHADER, VIEW_MODE, type GiSource } from './shaders.ts';

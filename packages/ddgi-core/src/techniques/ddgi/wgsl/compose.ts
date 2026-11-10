@@ -59,7 +59,7 @@ export interface ComposeKernelShape {
 export function composeKernelWgsl(shape: ComposeKernelShape): string {
     const { irradianceTexels, irradianceLayers } = shape;
     if (irradianceLayers < 2 || irradianceLayers > MAX_IRRADIANCE_LAYERS) {
-        throw new RangeError(`@pmndrs/ddgi: ddgi/compose adds 2 to ${MAX_IRRADIANCE_LAYERS} layers, got ${irradianceLayers}`);
+        throw new RangeError(`@pmndrs/gi: ddgi/compose adds 2 to ${MAX_IRRADIANCE_LAYERS} layers, got ${irradianceLayers}`);
     }
     return /* wgsl */ `
 ${DDGI_COMMON_WGSL}

@@ -130,7 +130,7 @@ const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Nu
 /**
  * When three compiles its materials for the GI light. `after-first-step`
  * (default): after the first warm-up step, in series, as T2.12's check 1 is
- * judged (lead ruling 2026-11-08: `GIVolume.start` can't compile for the
+ * judged (lead ruling 2026-11-08: `DDGIVolume.start` can't compile for the
  * host's own render passes, so hosts get it in series). `when-light-joins`:
  * as soon as the light joins the scene (`prepare` resolved), alongside the
  * tree builds, as a host that draws every frame and renders straight to the

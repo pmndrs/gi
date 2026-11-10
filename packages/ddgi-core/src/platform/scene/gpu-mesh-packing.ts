@@ -348,7 +348,7 @@ export class GpuMeshPacker {
             this.retireUnused();
             return;
         }
-        if (!this.pipeline || !this.bindGroupLayout) throw new Error('@pmndrs/ddgi: the mesh packing kernel is not compiled yet; await prepare() first');
+        if (!this.pipeline || !this.bindGroupLayout) throw new Error('@pmndrs/gi: the mesh packing kernel is not compiled yet; await prepare() first');
 
         const byStaging = new Map<StagingBuffer, MeshToPack[]>();
         for (const mesh of meshes) {
