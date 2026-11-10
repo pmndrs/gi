@@ -27,6 +27,17 @@ export interface DDGIVolumeSettings {
      * (docs/design/m3-moving.md §4.1, volumes.ts).
      */
     readonly priority?: number;
+    /**
+     * `fixed` (the default): the probes stay where `center` and `size` put
+     * them. `camera`: the box is a window of probes that follows the camera
+     * (docs/design/m3-moving.md §4.2, scroll.ts). Its probes sit on a lattice
+     * fixed in world space, through the box's probes at `spacing` steps; the
+     * window starts where `center` and `size` put it, keeps its size, and
+     * moves by whole planes of probes to stay centred on the camera, reusing
+     * the planes it leaves behind for the planes entering ahead. Needs at
+     * least 4 probes on every axis.
+     */
+    readonly follow?: 'fixed' | 'camera';
 }
 
 export interface DDGISettings {

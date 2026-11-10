@@ -227,9 +227,10 @@ export const UNIFORM_WORD = {
     holdFineProbes: 91,
     sunLight: 92,
     probeBase: 96,
+    volumeWindow: 100,
 } as const;
-/** 100 words: 97 used, rounded up to a whole number of the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 100;
+/** 104 words: probeBase padded to the next vec4f, then the window. */
+export const UNIFORM_WORDS = 104;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,

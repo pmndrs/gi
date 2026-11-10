@@ -65,6 +65,7 @@ import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
 import type { GIVolume } from './gi-volume.ts';
 import { SceneSync, type SyncFrameReport } from './scene-sync.ts';
+import type { WebGPURenderer } from 'three/webgpu';
 
 export interface ThreeGIOptions {
     /** GPU work allowed per frame for GI updates. Default `{ gpuMs: 2 }`. A live object: change it any time. */
@@ -95,6 +96,13 @@ export interface ThreeGIOptions {
      * (file comment, T2.14). Without it the platform must be ready.
      */
     readonly preparing?: Promise<void>;
+    /**
+     * The renderer that draws the scene (on the platform's device). Given,
+     * skinned meshes that contribute to GI (`userData.giContributes`) are
+     * posed on the GPU by three's own skinning, and no position reaches the
+     * CPU (gpu-skinning.ts). Without it they are posed on the CPU.
+     */
+    readonly renderer?: WebGPURenderer;
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -164,7 +172,7 @@ export class ThreeGI {
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
         this.renderTimeUpdate = options.updateOnRender ?? false;
         this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/ddgi/three: ${message}`));
-        this.sync = new SceneSync(gi.scene, { device: gi.device, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame, lightsPerFrame: options.lightsPerFrame });
+        this.sync = new SceneSync(gi.scene, { device: gi.device, renderer: options.renderer, warn: options.warn, objectsPerFrame: options.objectsPerFrame, editChecksPerFrame: options.editChecksPerFrame, lightsPerFrame: options.lightsPerFrame });
         this.sync.environment = options.environment ?? null;
         this.sync.sky = options.sky ?? null;
         const shading = gi.shading;

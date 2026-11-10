@@ -55,6 +55,14 @@
  * the clock, the hot movers, the layer weights and the warm-up are the
  * technique's, once a frame. One volume is the one-element case.
  *
+ * **The camera-following volume** (M3, m3-moving.md §4.2, scroll.ts): a
+ * volume with `follow: 'camera'` is a window of probes over a lattice fixed
+ * in world space. Before any volume's passes, each such window follows the
+ * frame's camera (`CameraWindow`, on the CPU), and `ddgi/scroll`
+ * (wgsl/scroll.ts) resets the slots of the planes that entered and moves the
+ * valid extent, which it copies into the volume table. The kernels then work
+ * in slots, as for a fixed volume, whose window never moves.
+ *
  * It sees only its `TechniqueContext`: the scene copy, the `rays` backend,
  * hit shading, the kernel builder and the timer. Never the host or an engine.
  * Renderers read the field through its shading module (`shading`,
@@ -151,14 +159,31 @@ import {
     UnitSharer,
     volumeFloorUnits,
     volumeSettingsList,
+    VOLUME_SAMPLING_FLOATS,
+    VOLUME_TABLE_CPU_TEXELS,
     VOLUME_TABLE_FORMAT,
     VOLUME_TABLE_ROW_FLOATS,
+    VOLUME_TABLE_TEXEL,
     VOLUME_TABLE_TEXEL_BYTES,
     VOLUME_TABLE_TEXELS,
+    FIXED_VOLUME_FADE,
+    wholeGridExtent,
     writeVolumeParameters,
+    writeVolumeWindow,
     type PlacedVolume,
     type VolumePlan,
 } from './volumes.ts';
+import { CameraWindow, windowProbeOf, type WindowMove } from './scroll.ts';
+import {
+    DDGI_SCROLL_WGSL,
+    SCROLL_ENTRY_POINTS,
+    SCROLL_EXTENT_BYTES,
+    SCROLL_EXTENT_SIDES,
+    SCROLL_UNIFORM_BYTES,
+    SCROLL_UNIFORM_WORD,
+    SCROLL_UNIFORM_WORDS,
+    SCROLL_WORKGROUP_SIZE,
+} from './wgsl/scroll.ts';
 import { buildMarkTable, type MarkTable, type SunLayerMarks } from './mark-table.ts';
 import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, sunLayerWeight, sunLightOf, writeLayerWeights, type LayerPlan } from './light-groups.ts';
 import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
@@ -236,10 +261,21 @@ export interface DDGIFieldVolume {
     readonly layerBase: number;
     /** Its first probe in the `points` debug view. */
     readonly probeBase: number;
-    /** Its four `vec4f` parameters of `ddgiSampleIrradiance` (its volume-table row): 16 floats, refreshed on every read of `field`. */
+    /**
+     * Its four `vec4f` parameters of `ddgiSampleIrradiance` (the start of its
+     * volume-table row): 16 floats, refreshed on every read of `field`. For a
+     * camera-following volume the origin is its window's first probe, and its
+     * data is in wrapping slots: read it through the volume table.
+     */
     readonly sampleParameters: Float32Array;
-    /** Its probes' hysteresis histories, as `DDGIField.probeHistory`. */
+    /** Its probes' hysteresis histories, as `DDGIField.probeHistory` (in slot order). */
     readonly probeHistory: GPUBuffer;
+    /** It follows the camera (`follow: 'camera'`, scroll.ts). */
+    readonly followsCamera: boolean;
+    /** Lattice coordinates of its window's first probe (scroll.ts); [0, 0, 0] for a fixed volume. Read when `field` is read. */
+    readonly window: readonly [number, number, number];
+    /** A camera-following volume's valid extent, as `ddgi/scroll` keeps it (8 floats: min xyz, spare, max xyz, spare; lattice units); null for a fixed one. */
+    readonly validExtent: GPUBuffer | null;
 }
 
 /**
@@ -334,6 +370,8 @@ interface SharedResources {
     readonly markClockKernel: ComputeKernel;
     /** The scheduler's four kernels (wgsl/schedule.ts), one bind group for all. */
     readonly scheduleKernels: Readonly<Record<keyof typeof SCHEDULE_ENTRY_POINTS, ComputeKernel>>;
+    /** `ddgi/scroll`'s two kernels (wgsl/scroll.ts); null when no volume follows the camera (they are not compiled then). */
+    readonly scrollKernels: Readonly<Record<keyof typeof SCROLL_ENTRY_POINTS, ComputeKernel>> | null;
     /** Deferred only: the byte distance between two rounds' `DdgiTraceRound`s (dynamic offsets). */
     readonly traceRoundStride: number;
     /** Bytes of the shared textures and buffers. */
@@ -395,6 +433,24 @@ interface PreparedResources extends SharedResources {
     /** Bytes of this volume's own buffers (the ray scratch apart: it grows). */
     readonly ownBytes: number;
     readonly state: VolumeFrameState;
+    /** A camera-following volume's window and `ddgi/scroll`'s buffers; null for a fixed volume. */
+    readonly scroll: ScrollResources | null;
+}
+
+/** One camera-following volume's window and `ddgi/scroll`'s buffers and bind groups (scroll.ts, wgsl/scroll.ts). */
+interface ScrollResources {
+    readonly window: CameraWindow;
+    /** Its row of the volume table. */
+    readonly row: number;
+    readonly uniforms: GPUBuffer;
+    /** The valid extent (SCROLL_EXTENT_WORDS floats), copied into the table's row every frame. */
+    readonly extent: GPUBuffer;
+    readonly resetGroup: GPUBindGroup;
+    readonly extentGroup: GPUBindGroup;
+    /** The next scroll resets every slot (a teleport). */
+    resetEverySlot: boolean;
+    /** The next scroll sets the valid extent to its targets outright (after prepare, resetHistory or a teleport). */
+    extentToTarget: boolean;
 }
 
 /** The ray scratch and the groups that bind it (`createRayBuffer`). */
@@ -598,6 +654,28 @@ const COMPOSE_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
+/** `ddgi/scroll`'s reset (wgsl/scroll.ts): history, feedback requests, probe data and points, written. */
+const SCROLL_RESET_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/scroll-reset group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 2, visibility: COMPUTE, buffer: { type: 'storage' } },
+        { binding: 3, visibility: COMPUTE, storageTexture: { access: 'write-only', format: PROBE_DATA_FORMAT, viewDimension: '2d-array' } },
+        { binding: 4, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba32float', viewDimension: '2d' } },
+    ],
+};
+
+/** `ddgi/scroll`'s valid extent (wgsl/scroll.ts): the probe data, read, and the extent. */
+const SCROLL_EXTENT_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'ddgi/scroll-extent group 1',
+    entries: [
+        { binding: 0, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        { binding: 5, visibility: COMPUTE, texture: SAMPLED_ARRAY },
+        { binding: 6, visibility: COMPUTE, buffer: { type: 'storage' } },
+    ],
+};
+
 /** `ddgi/census` group 1 (wgsl/census.ts). */
 const CENSUS_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'ddgi/census group 1',
@@ -627,6 +705,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private volumes: readonly PreparedResources[] = [];
     private readonly uniformData = new Float32Array(UNIFORM_WORDS);
     private readonly uniformWords = new Uint32Array(this.uniformData.buffer);
+    /** `ddgi/scroll`'s uniforms (`DdgiScroll`), filled per camera-following volume. */
+    private readonly scrollData = new Float32Array(SCROLL_UNIFORM_WORDS);
+    private readonly scrollWords = new Int32Array(this.scrollData.buffer);
     /** The volume table as last written to the GPU (a row per volume), so it is written only when a bias changes. */
     private volumeTableRows = new Float32Array(0);
     /** The rate the platform last asked Budget v2's floor for (`minUnitsPerFrame`); null under a units budget. */
@@ -789,6 +870,13 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             context.kernels.computeKernel({ label: `ddgi/${name} (${reduction})`, modules: [], code: propagateCode, entryPoint, ownGroups: [group] });
         const scheduleKernel = (entryPoint: string, name: string): Promise<ComputeKernel> =>
             context.kernels.computeKernel({ label: `ddgi/schedule-${name} (${reduction})`, modules: [], code: scheduleCode, entryPoint, ownGroups: [SCHEDULE_GROUP] });
+        // ddgi/scroll only when a volume follows the camera, so fixed volumes compile what they did before.
+        const scrollKernelsReady = volumePlan.volumes.some((volume) => volume.followsCamera)
+            ? Promise.all([
+                  context.kernels.computeKernel({ label: 'ddgi/scroll-reset', modules: [], code: DDGI_SCROLL_WGSL, entryPoint: SCROLL_ENTRY_POINTS.reset, ownGroups: [SCROLL_RESET_GROUP] }),
+                  context.kernels.computeKernel({ label: 'ddgi/scroll-extent', modules: [], code: DDGI_SCROLL_WGSL, entryPoint: SCROLL_ENTRY_POINTS.extent, ownGroups: [SCROLL_EXTENT_GROUP] }),
+              ]).then(([reset, extent]) => ({ reset, extent }))
+            : Promise.resolve(null);
         const [
             traceKernel,
             blendKernel,
@@ -872,6 +960,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             // gi/direct (also for the inline path: its ray scratch comes from the same place). Last, so it sits past the named kernels.
             context.shade.direct.prepare(),
         ]);
+        const scrollKernels = await scrollKernelsReady;
         if (this.disposed) return;
 
         this.releaseResources();
@@ -895,8 +984,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const probeData = arrayTexture('probe data', layout.probeData, PROBE_DATA_FORMAT, TEXTURE_USAGE.copyDst);
         const pointsTexture = device.createTexture({ label: 'ddgi points', size: points, format: 'rgba32float', usage: atlasUsage | TEXTURE_USAGE.copyDst });
         const movers = device.createBuffer({ label: 'ddgi movers', size: MOVER_TABLE_WORDS * 4, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        // A row per volume, in priority order. Written by the CPU when a bias changes; a storage texture as well, because
-        // the camera-following volume's scroll will write its row on the GPU (m3-moving.md §4.2).
+        // A row per volume, in priority order. The CPU writes the sampling parameters and the window (when a bias changes
+        // or a window moves); a camera-following volume's valid extent is copied in by ddgi/scroll (m3-moving.md §4.2).
         const volumeTable = device.createTexture({
             label: 'ddgi volume table',
             size: { width: VOLUME_TABLE_TEXELS, height: volumePlan.volumes.length },
@@ -931,6 +1020,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             markKernel,
             markClockKernel,
             scheduleKernels: { count: scheduleCount, select: scheduleSelect, write: scheduleWrite, fill: scheduleFill },
+            scrollKernels,
             // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
             traceRoundStride: Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment),
             sharedBytes:
@@ -947,10 +1037,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.volumes = volumePlan.volumes.map((volume, index) =>
             this.createVolumeResources(context, shared, kernels, volume, index, { maxProbesPerFrame: maxProbesPerFrame(volume.grid), propagationCapacity }),
         );
-        // The table is written from the settings at the first frame (refreshVolumeTable), and here so it is whole before any.
+        // The table is written from the settings at the first frame (refreshVolumeTable), and here, whole, so it is
+        // complete before any: every row's valid extent too, which only ddgi/scroll changes after this.
         this.volumeTableRows = new Float32Array(0);
         this.unitSharer = new UnitSharer(this.volumes.map((volume) => volume.grid.probeCount));
-        this.refreshVolumeTable(context);
+        this.refreshVolumeTable(context, true);
         this.markFrames = 0;
         this.latestMarkEntries = 0;
         this.clockSeconds = 0;
@@ -1144,7 +1235,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             };
         }
 
+        const scroll = volume.followsCamera ? this.createScrollResources(device, shared, volume, index, { probeHistory, feedbackRequests }) : null;
         const ownBytes =
+            (scroll ? scroll.uniforms.size + scroll.extent.size : 0) +
             UNIFORM_BYTES +
             updateList.size +
             scratchBuffer.size +
@@ -1178,13 +1271,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             traceRounds,
             stride: scrambleStride(grid.probeCount),
             ownBytes,
+            scroll,
             state: {
                 latestCensus: null,
                 changeIntake: new ChangeIntakeBatch(),
                 probesUpdated: 0,
                 lastUpdateCount: 0,
                 warmUpProbeUpdates: 0,
-                sampleParameters: new Float32Array(VOLUME_TABLE_ROW_FLOATS),
+                sampleParameters: new Float32Array(VOLUME_SAMPLING_FLOATS),
             },
         };
         return {
@@ -1192,6 +1286,125 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             rays: this.createRayBuffer(context, partial, Math.min(INITIAL_RAY_CAPACITY, maxProbesPerFrame * 256), effectiveRaysPerProbe(this.settings.raysPerProbe)),
             mark: this.createMarkTable(device, partial, INITIAL_MARK_TABLE_BYTES),
         };
+    }
+
+    /**
+     * A camera-following volume's `ddgi/scroll` buffers and bind groups
+     * (wgsl/scroll.ts). The valid extent starts as the window less a plane on
+     * each side, and the first frame sets it from the camera.
+     */
+    private createScrollResources(
+        device: GPUDevice,
+        shared: SharedResources,
+        volume: PlacedVolume,
+        row: number,
+        buffers: { readonly probeHistory: GPUBuffer; readonly feedbackRequests: GPUBuffer },
+    ): ScrollResources {
+        const kernels = shared.scrollKernels;
+        if (!kernels) throw new Error('@pmndrs/ddgi: a camera-following volume needs the ddgi/scroll kernels');
+        const window = new CameraWindow(volume.grid);
+        const label = `ddgi scroll (volume ${row})`;
+        const uniforms = device.createBuffer({ label: `${label} uniforms`, size: SCROLL_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        const extent = device.createBuffer({ label: `${label} valid extent`, size: SCROLL_EXTENT_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const initial = window.initialExtent();
+        device.queue.writeBuffer(extent, 0, new Float32Array([...initial.min, 0, ...initial.max, 0]));
+        const arrayView = (target: GPUTexture): GPUTextureView => target.createView({ dimension: '2d-array' });
+        const resetGroup = device.createBindGroup({
+            label: 'ddgi/scroll-reset group 1',
+            layout: kernels.reset.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 1, resource: { buffer: buffers.probeHistory } },
+                { binding: 2, resource: { buffer: buffers.feedbackRequests } },
+                { binding: 3, resource: arrayView(shared.probeData) },
+                { binding: 4, resource: shared.points.createView() },
+            ],
+        });
+        const extentGroup = device.createBindGroup({
+            label: 'ddgi/scroll-extent group 1',
+            layout: kernels.extent.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: uniforms } },
+                { binding: 5, resource: arrayView(shared.probeData) },
+                { binding: 6, resource: { buffer: extent } },
+            ],
+        });
+        return { window, row, uniforms, extent, resetGroup, extentGroup, resetEverySlot: false, extentToTarget: true };
+    }
+
+    /**
+     * Each camera-following volume's window follows this frame's camera
+     * (scroll.ts): a move enters planes, which `ddgi/scroll` resets this
+     * frame. A teleport resets every slot and runs the warm-up again
+     * (m3-moving.md §4.2), as after a scene load.
+     */
+    private followCamera(frame: TechniqueFrame): Map<PreparedResources, WindowMove> {
+        const moves = new Map<PreparedResources, WindowMove>();
+        for (const volume of this.volumes) {
+            const scroll = volume.scroll;
+            if (!scroll) continue;
+            const move = scroll.window.follow(frame.camera.position);
+            if (move.teleport) {
+                scroll.resetEverySlot = true;
+                scroll.extentToTarget = true;
+                this.startWarmUp();
+            }
+            moves.set(volume, move);
+        }
+        return moves;
+    }
+
+    /**
+     * `ddgi/scroll` for one camera-following volume (wgsl/scroll.ts), one
+     * timed pass: the reset of the slots that entered (only in a frame where
+     * some did), then the valid extent; then the extent is copied into the
+     * volume's row of the table.
+     */
+    private encodeScroll(encoder: GPUCommandEncoder, context: TechniqueContext, resources: PreparedResources, move: WindowMove, frame: TechniqueFrame): void {
+        const scroll = resources.scroll;
+        const kernels = resources.scrollKernels;
+        if (!scroll || !kernels) return;
+        const { window } = scroll;
+        const grid = window.grid;
+        const targets = window.extentTargets(frame.camera.position);
+        const everySlot = scroll.resetEverySlot;
+        const data = this.scrollData;
+        const words = this.scrollWords;
+        data.fill(0);
+        data.set(window.windowOrigin, SCROLL_UNIFORM_WORD.origin);
+        data.set(grid.spacing, SCROLL_UNIFORM_WORD.spacing);
+        words.set(grid.counts, SCROLL_UNIFORM_WORD.counts);
+        words.set(window.window, SCROLL_UNIFORM_WORD.window);
+        words.set(move.moved, SCROLL_UNIFORM_WORD.moved);
+        data.set(targets.min, SCROLL_UNIFORM_WORD.targetMin);
+        data.set(targets.max, SCROLL_UNIFORM_WORD.targetMax);
+        data.set(window.coverageReach, SCROLL_UNIFORM_WORD.coverageReach);
+        words[SCROLL_UNIFORM_WORD.layerBase] = resources.volume.layerBase;
+        words[SCROLL_UNIFORM_WORD.probeBase] = resources.volume.probeBase;
+        words[SCROLL_UNIFORM_WORD.everySlotEnters] = everySlot ? 1 : 0;
+        words[SCROLL_UNIFORM_WORD.extentToTarget] = scroll.extentToTarget ? 1 : 0;
+        context.device.queue.writeBuffer(scroll.uniforms, 0, data);
+        scroll.resetEverySlot = false;
+        scroll.extentToTarget = false;
+
+        const pass = encoder.beginComputePass({ label: 'ddgi/scroll', timestampWrites: context.timer.computePass('ddgi/scroll') });
+        if (everySlot || move.probesEntering > 0) {
+            const groups = Math.ceil(grid.probeCount / SCROLL_WORKGROUP_SIZE);
+            const groupsX = Math.min(groups, context.device.limits.maxComputeWorkgroupsPerDimension);
+            kernels.reset.bind(pass);
+            pass.setBindGroup(1, scroll.resetGroup);
+            pass.dispatchWorkgroups(groupsX, Math.ceil(groups / groupsX));
+        }
+        kernels.extent.bind(pass);
+        pass.setBindGroup(1, scroll.extentGroup);
+        pass.dispatchWorkgroups(SCROLL_EXTENT_SIDES);
+        pass.end();
+        // The two extent texels of the volume's row. One row, so bytesPerRow only has to be a valid pitch.
+        encoder.copyBufferToTexture(
+            { buffer: scroll.extent, bytesPerRow: 256 },
+            { texture: resources.volumeTable, origin: { x: VOLUME_TABLE_TEXEL.validMin, y: scroll.row } },
+            { width: VOLUME_TABLE_TEXELS - VOLUME_TABLE_TEXEL.validMin, height: 1 },
+        );
     }
 
     /**
@@ -1237,8 +1450,12 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const sun = context.scene.firstDirectionalLight;
         const sunMarks = first.plan.sunLayer >= 0 ? { sun: sun?.light ?? null, previousSun: this.sunInLayer } : null;
         this.sunInLayer = sun?.light ?? null;
-        // The biases are live settings, and renderers read them from the table.
+        // Camera-following volumes move their windows with this frame's camera (scroll.ts): before the table is written,
+        // and before any volume's passes, so this frame's kernels and renderers all see the moved windows.
+        const windowMoves = this.followCamera(frame);
+        // The biases are live settings, and renderers read them from the table; so are the windows.
         this.refreshVolumeTable(context);
+        for (const [volume, move] of windowMoves) this.encodeScroll(encoder, context, volume, move, frame);
         // Light groups and the sun layer: a weight changed since the last frame (or the composed atlas is new), so every
         // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
         const composeAll = this.updateLayerWeights(context, first, sun?.descriptor ?? null);
@@ -1285,8 +1502,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const probeCount = resources.grid.probeCount;
         // Marks land even in a frame that updates no probe: they wait in the
         // history for each probe's next update.
+        // In window probes: the kernel finds each one's slot (wgsl/mark.ts).
         const markTable =
-            this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, resources.grid, this.movers, resources.plan.groupLayers, shared.sunMarks) : null;
+            this.settings.changeDrivenHistory !== false ? buildMarkTable(frame.changes, windowGrid(resources), this.movers, resources.plan.groupLayers, shared.sunMarks) : null;
         shared.marks.entries += markTable?.entryCount ?? 0;
         state.changeIntake.noteFrame(frame.frame, markTable !== null);
         const raysPerProbe = effectiveRaysPerProbe(this.settings.raysPerProbe);
@@ -1606,6 +1824,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             probeBase: volume.volume.probeBase,
             sampleParameters: this.volumeParameters(volume),
             probeHistory: volume.probeHistory,
+            followsCamera: volume.scroll !== null,
+            window: volume.scroll?.window.window ?? [0, 0, 0],
+            validExtent: volume.scroll?.extent ?? null,
         }));
         return {
             grid: first.grid,
@@ -1671,6 +1892,15 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'taking in a change': volumes.some((volume) => volume.state.changeIntake.takingInChange) ? 1 : 0,
         };
         if (sweep !== undefined) updates['seconds per full sweep'] = sweep;
+        // Camera-following volumes (scroll.ts), summed over them: frames their windows moved in, planes and probes
+        // cleared, and teleports, since prepare.
+        const windows = volumes.flatMap((volume) => (volume.scroll ? [volume.scroll.window] : []));
+        if (windows.length > 0) {
+            updates['window moves'] = windows.reduce((sum, window) => sum + window.moves, 0);
+            updates['planes cleared (total)'] = windows.reduce((sum, window) => sum + window.planesCleared, 0);
+            updates['probes cleared (total)'] = windows.reduce((sum, window) => sum + window.probesCleared, 0);
+            updates['teleports'] = windows.reduce((sum, window) => sum + window.teleports, 0);
+        }
         if (!census || !first?.state.latestCensus) return updates;
         return {
             ...updates,
@@ -1717,14 +1947,24 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * Budget v2's floor for each volume at `rate`. One volume: the
      * technique's floor, as before volumes. Several: each its own
      * (`volumeFloorUnits`), so a small volume beside a big one is still swept
-     * within FLOOR_SWEEP_SECONDS and never gets 0 probes a frame.
+     * within FLOOR_SWEEP_SECONDS and never gets 0 probes a frame. A
+     * camera-following volume adds the warming updates its entering planes
+     * have owed lately (scroll.ts, `warmingDemand`).
      */
     private volumeFloors(rate: { readonly framesPerSecond: number; readonly calibratedUnits: number }): number[] {
         const volumes = this.volumes;
         const setting = this.settings.minProbesPerFrame;
-        if (volumes.length === 1) return [minProbesPerFrame(setting, volumes[0].grid.probeCount, volumes[0].maxProbesPerFrame, rate)];
         const total = totalProbes(volumes);
-        return volumes.map((volume) => volumeFloorUnits(setting, { probeCount: volume.grid.probeCount, maxProbesPerFrame: volume.maxProbesPerFrame }, total, rate));
+        return volumes.map((volume) => {
+            const floor =
+                volumes.length === 1
+                    ? minProbesPerFrame(setting, volume.grid.probeCount, volume.maxProbesPerFrame, rate)
+                    : volumeFloorUnits(setting, { probeCount: volume.grid.probeCount, maxProbesPerFrame: volume.maxProbesPerFrame }, total, rate);
+            // A camera-following volume's entering planes owe their warming updates on top (scroll.ts,
+            // WARMING_DEMAND_FRAMES): served from the whole frame's probes, as the floor is.
+            const warming = volume.scroll ? Math.ceil(volume.scroll.window.warmingDemand) : 0;
+            return Math.min(volume.maxProbesPerFrame, floor + warming);
+        });
     }
 
     /**
@@ -1753,7 +1993,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const probeCount = totalProbes(volumes);
         if (volumes.length === 1) {
             const offered = Math.min(units, volumes[0].maxProbesPerFrame, probeCount);
-            return [{ units, floor: this.volumeFloors(this.floorRate(offered))[0] }];
+            const floor = this.volumeFloors(this.floorRate(offered))[0];
+            // A camera-following volume's warming is owed whatever the host hands out (as several volumes' floors are).
+            return [{ units: volumes[0].scroll ? Math.max(units, floor) : units, floor }];
         }
         const floors = this.volumeFloors(this.floorRate(Math.min(units, maxTotal, probeCount)));
         if (units === Number.POSITIVE_INFINITY) return floors.map((floor) => ({ units, floor }));
@@ -1807,7 +2049,11 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         if (!this.firstVolume) return;
         this.historyClearPending = true;
         this.movers.clear();
-        for (const volume of this.volumes) volume.state.changeIntake.reset();
+        for (const volume of this.volumes) {
+            volume.state.changeIntake.reset();
+            // Every probe is cold again: the valid extent takes its targets at the next frame (the warm-up covers it).
+            if (volume.scroll) volume.scroll.extentToTarget = true;
+        }
         this.startWarmUp();
         this.markAllNotUpdated();
     }
@@ -2011,6 +2257,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             }
             resources.rays.scratch.destroy();
             resources.traceRounds?.destroy();
+            resources.scroll?.uniforms.destroy();
+            resources.scroll?.extent.destroy();
             for (const staging of resources.censusStaging) staging.buffer.destroy();
         }
     }
@@ -2029,14 +2277,16 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         const points = first.points;
         const pointData = new Float32Array(points.width * points.height * 4);
-        for (const { grid, volume } of this.volumes) {
+        for (const resources of this.volumes) {
+            const { grid, volume } = resources;
             const [nx, , nz] = grid.counts;
+            // A camera-following volume's slots hold its window's probes (scroll.ts); a fixed volume's window is at 0.
+            const window = resources.scroll?.window.window ?? [0, 0, 0];
+            const origin = windowGrid(resources).origin;
             for (let probe = 0; probe < grid.probeCount; probe++) {
-                const x = probe % nx;
-                const z = Math.floor(probe / nx) % nz;
-                const y = Math.floor(probe / (nx * nz));
-                const point = [grid.origin[0] + x * grid.spacing[0], grid.origin[1] + y * grid.spacing[1], grid.origin[2] + z * grid.spacing[2], PROBE_STATE.notUpdatedYet];
-                pointData.set(point, (volume.probeBase + probe) * 4);
+                const slot = [probe % nx, Math.floor(probe / (nx * nz)), Math.floor(probe / nx) % nz];
+                const at = slot.map((index, axis) => origin[axis] + windowProbeOf(index, window[axis], grid.counts[axis]) * grid.spacing[axis]);
+                pointData.set([...at, PROBE_STATE.notUpdatedYet], (volume.probeBase + probe) * 4);
             }
         }
         queue.writeTexture({ texture: points }, pointData, { bytesPerRow: points.width * POINT_TEXEL_BYTES }, { width: points.width, height: points.height });
@@ -2054,28 +2304,48 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             view: resolveBias(this.settings.viewBias, grid, AUTO_VIEW_BIAS_SHARE),
         };
         const texels = { irradiance: resources.irradianceTexels, distance: resources.distanceTexels };
-        writeVolumeParameters(resources.state.sampleParameters, 0, resources.volume, resources.volumePlan, texels, bias);
+        // A camera-following volume's origin is its window's first probe, where the window is this frame (scroll.ts).
+        writeVolumeParameters(resources.state.sampleParameters, 0, resources.volume, resources.volumePlan, texels, bias, windowGrid(resources).origin);
         return resources.state.sampleParameters;
     }
 
     /**
-     * Writes the volume table (a row per volume, priority order) when a row
-     * changed since it was last written: after `prepare`, and when a bias
-     * setting changes. Lands before the host's next submit.
+     * Writes the volume table's CPU part (a row per volume, priority order:
+     * the sampling parameters and the window, VOLUME_TABLE_CPU_TEXELS) when a
+     * row changed since it was last written: after `prepare`, when a bias
+     * setting changes, and when a camera-following volume's window moves.
+     * `whole` (after `prepare`) writes the valid extents too: a fixed
+     * volume's every probe, a camera-following volume's starting extent;
+     * after that only `ddgi/scroll` writes them. Lands before the host's next
+     * submit.
      */
-    private refreshVolumeTable(context: TechniqueContext): void {
+    private refreshVolumeTable(context: TechniqueContext, whole = false): void {
         const volumes = this.volumes;
         const first = this.firstVolume;
         if (!first) return;
         const rows = new Float32Array(volumes.length * VOLUME_TABLE_ROW_FLOATS);
-        volumes.forEach((volume, row) => rows.set(this.volumeParameters(volume), row * VOLUME_TABLE_ROW_FLOATS));
-        const same = rows.length === this.volumeTableRows.length && rows.every((value, index) => Object.is(value, this.volumeTableRows[index]));
+        volumes.forEach((volume, row) => {
+            const offset = row * VOLUME_TABLE_ROW_FLOATS;
+            rows.set(this.volumeParameters(volume), offset);
+            const window = volume.scroll?.window;
+            writeVolumeWindow(rows, offset, window?.window ?? [0, 0, 0], window?.fadeSpacings ?? FIXED_VOLUME_FADE, window ? window.initialExtent() : wholeGridExtent(volume.grid));
+        });
+        // Compare the CPU texels only: the extents in `rows` are the starting ones, not what the GPU holds.
+        const cpuFloats = VOLUME_TABLE_CPU_TEXELS * 4;
+        const same =
+            !whole &&
+            rows.length === this.volumeTableRows.length &&
+            rows.every((value, index) => index % VOLUME_TABLE_ROW_FLOATS >= cpuFloats || Object.is(value, this.volumeTableRows[index]));
         if (same) return;
+        const texels = whole ? VOLUME_TABLE_TEXELS : VOLUME_TABLE_CPU_TEXELS;
+        // The rows' first `texels` texels, packed.
+        const written = new Float32Array(volumes.length * texels * 4);
+        for (let row = 0; row < volumes.length; row++) written.set(rows.subarray(row * VOLUME_TABLE_ROW_FLOATS, row * VOLUME_TABLE_ROW_FLOATS + texels * 4), row * texels * 4);
         context.device.queue.writeTexture(
             { texture: first.volumeTable },
-            rows,
-            { bytesPerRow: VOLUME_TABLE_TEXELS * VOLUME_TABLE_TEXEL_BYTES, rowsPerImage: volumes.length },
-            { width: VOLUME_TABLE_TEXELS, height: volumes.length },
+            written,
+            { bytesPerRow: texels * VOLUME_TABLE_TEXEL_BYTES, rowsPerImage: volumes.length },
+            { width: texels, height: volumes.length },
         );
         this.volumeTableRows = rows;
     }
@@ -2084,8 +2354,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const { grid } = resources;
         const data = this.uniformData;
         const words = this.uniformWords;
-        // The first four vec4s: the volume, as its volume-table row.
+        // The first four vec4s: the volume, as its volume-table row; and where its window is on the lattice (scroll.ts).
         data.set(this.volumeParameters(resources), UNIFORM_WORD.volumeOrigin);
+        data.set([...(resources.scroll?.window.window ?? [0, 0, 0]), 0], UNIFORM_WORD.volumeWindow);
         // Its probes' points from here on in the points debug view (volumes.ts).
         words[UNIFORM_WORD.probeBase] = resources.volume.probeBase;
         const rotation = frameRayRotation(frame.frame);
@@ -2171,6 +2442,16 @@ export function changeServing(grid: ProbeGrid, batch: number, settings: DDGISett
     const keysFitWindow = (keyProbeCount(grid.counts) * fullUpdates) / Math.max(1, priorityCount(batch, blend.priorityShare)) <= FAR_RULE_FRAMES;
     const changeOutlastsWindow = bigVolume && (!blend.keyProbes || !keysFitWindow);
     return { bigVolume, keysFitWindow, changeOutlastsWindow };
+}
+
+/**
+ * A volume's grid where its window is this frame: a camera-following
+ * volume's origin is its window's first probe (scroll.ts); a fixed volume's
+ * grid as it is. What `ddgi/mark`'s table is built on (in window probes).
+ */
+function windowGrid(resources: Pick<PreparedResources, 'grid' | 'scroll'>): ProbeGrid {
+    const window = resources.scroll?.window;
+    return window ? { ...resources.grid, origin: window.windowOrigin } : resources.grid;
 }
 
 /** Probes over every volume. */

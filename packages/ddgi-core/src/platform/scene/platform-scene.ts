@@ -55,7 +55,8 @@ import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, WgslModule } from '../contract/wgsl.ts';
 import { invertAffineInto } from '../trace/top-level.ts';
 import { ChangeLog, copyLight, toAabb, type LightLookup } from './change-log.ts';
-import { boxInside, checkedDeformBounds, copyCheckedPositions, DeformState, growBox, largestScale, scanPose } from './deformed-positions.ts';
+import { boxDiagonal, boxInside, checkedDeformBounds, copyCheckedPositions, DeformState, growBox, largestScale, scanPose } from './deformed-positions.ts';
+import { checkedGpuPose, GpuPoseCopier, type PoseCopy } from './gpu-pose-copy.ts';
 import { BOX_NUMBERS, InstanceTransforms, MATRIX_NUMBERS } from './instance-transforms.ts';
 import {
     ALPHA_MODE,
@@ -125,17 +126,14 @@ export interface PlatformSceneOptions {
     readonly textureStore?: TextureLayerStore;
     /** Where one-time warnings go (a texture that can't be used; deformed positions outside `deformBounds`). Defaults to `console.warn`. */
     readonly warn?: (message: string) => void;
-}
-
-/** Options for one {@link PlatformScene.encode}. */
-export interface SceneEncodeOptions {
     /**
-     * Keep deformed positions waiting this frame (the newest is kept). The
-     * platform sets it while the tracer is still building mesh trees: each
-     * new pose starts a tree build that replaces the one before, so a mesh
-     * deformed every frame would otherwise never get a tree.
+     * Whether the tracer can follow deformed positions (it refits mesh trees
+     * on the GPU, which needs subgroups). False: `setDeformedPositions` is
+     * checked and then ignored, with one warning, so the scene copy keeps the
+     * rest pose the tree was built for (rays and hit points agree). Default
+     * true.
      */
-    readonly holdDeformedPositions?: boolean;
+    readonly posesTraced?: boolean;
 }
 
 /**
@@ -169,6 +167,19 @@ export interface UploadedMesh {
     readonly geometry: MeshGeometryCopy;
 }
 
+/**
+ * A deforming mesh given new positions in this `encode`: the scene copy's
+ * vertex buffer holds them (written before, or recorded ahead of, anything
+ * the tracer records afterwards), so the tracer refits the mesh's tree from
+ * it. Positions at `vertexOffset + layout.offsets.positions`, 3 floats a
+ * vertex; indices at `layout.offsets.indices`.
+ */
+export interface PosedMesh {
+    readonly slot: number;
+    readonly layout: MeshLayout;
+    readonly vertexOffset: number;
+}
+
 /** One instance as the tracer's top level needs it. */
 export interface InstanceSnapshot {
     readonly slot: number;
@@ -191,11 +202,14 @@ export interface PackedGiInstances {
 /** What one {@link PlatformScene.encode} did. */
 export interface SceneUpload {
     readonly changes: SceneChanges;
-    /**
-     * Meshes created, reshaped or given a new pose (`setDeformedPositions`) since the last encode.
-     * A slot may also be in `meshesRemoved` (reused).
-     */
+    /** Meshes created or reshaped since the last encode. A slot may also be in `meshesRemoved` (reused). */
     readonly meshesUploaded: readonly UploadedMesh[];
+    /**
+     * Deforming meshes given a new pose (`setDeformedPositions`) applied in
+     * this encode. Their `layout.bounds` is the box every pose stays in; it
+     * only grows (a CPU pose that left it).
+     */
+    readonly meshesPosed: readonly PosedMesh[];
     /** Mesh slots freed since the last encode. Handle these before `meshesUploaded`. */
     readonly meshesRemoved: readonly number[];
     /** The traceable instances, one of their transforms, or one of their meshes changed: a top level is stale. */
@@ -367,6 +381,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
     private readonly posesWaiting = new Set<MeshEntry>();
     /** A pose's box, worked out in `applyPoses` (scratch). */
     private readonly poseBounds = new Float32Array(BOX_NUMBERS);
+    /** Copies GPU poses into the vertex buffer (gpu-pose-copy.ts); compiled by {@link prepareGpuPoses}. */
+    private readonly poseCopier: GpuPoseCopier;
+    /** See {@link PlatformSceneOptions.posesTraced}. */
+    private readonly posesTraced: boolean;
+    private warnedRestPose = false;
     private readonly warn: (message: string) => void;
     /** Packs meshes on the GPU once {@link prepareGpuPacking} was called (T2.13). */
     private readonly packer: GpuMeshPacker;
@@ -426,6 +445,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.uploadedLayoutVersion = -1;
         this.packer = new GpuMeshPacker(device, { label: this.label });
         this.textureStore = options.textureStore ?? new PlatformTextureStore(device, { label: this.label, warn: options.warn });
+        this.poseCopier = new GpuPoseCopier(device, this.label);
+        this.posesTraced = options.posesTraced ?? true;
 
         const currentVersion = () => this.bufferVersion;
         this.module = {
@@ -604,6 +625,25 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return this.packer.prepare();
     }
 
+    /**
+     * Compiles the kernel that copies deformed positions given on the GPU
+     * into the vertex buffer (gpu-pose-copy.ts). The platform calls it in
+     * `prepare`; until it resolves, GPU poses wait in the scene.
+     */
+    /**
+     * The vertex buffer now. It is replaced when it grows (`module.version`
+     * changes then), so read it each frame. For the tracer: it refits and
+     * rebuilds deforming meshes' trees from the positions in it.
+     */
+    get vertexStorage(): GPUBuffer {
+        return this.vertexBuffer;
+    }
+
+    prepareGpuPoses(): Promise<void> {
+        this.checkLive();
+        return this.poseCopier.prepare();
+    }
+
     createMesh(descriptor: MeshDescriptor): MeshHandle {
         this.checkLive();
         // Checked before the mesh is staged, so a bad box leaves nothing behind.
@@ -672,15 +712,28 @@ export class PlatformScene implements SceneApi, SceneCopy {
         const what = this.name('mesh', entry.handle, entry.label);
         const deform = entry.deform;
         if (!deform) throw new Error(`@pmndrs/ddgi: setDeformedPositions: ${what} was not created with deforming: true.`);
-        if (!(positions instanceof Float32Array)) {
-            throw new Error(
-                `@pmndrs/ddgi: setDeformedPositions: positions in a GPU buffer are not supported yet (they arrive with the GPU refit, M3); pass a Float32Array for ${what}.`,
-            );
+        if (positions instanceof Float32Array) {
+            if (positions.length !== deform.current.length) {
+                throw new RangeError(`@pmndrs/ddgi: setDeformedPositions: ${what} has ${deform.vertexCount} vertices, but ${positions.length} numbers were given (3 per vertex).`);
+            }
+            copyCheckedPositions(positions, deform.waiting, `setDeformedPositions for ${what}`);
+            deform.waitingOnGpu = null;
+        } else {
+            // The platform can't read GPU positions, so it can't grow the box to hold them: the host must give one.
+            if (!deform.declaredBounds) {
+                throw new Error(`@pmndrs/ddgi: setDeformedPositions: ${what} needs deformBounds (given at createMesh) for positions on the GPU, which the platform can't read to find their box.`);
+            }
+            deform.waitingOnGpu = checkedGpuPose(positions, deform.vertexCount, `setDeformedPositions for ${what}`);
         }
-        if (positions.length !== deform.current.length) {
-            throw new RangeError(`@pmndrs/ddgi: setDeformedPositions: ${what} has ${deform.current.length / 3} vertices, but ${positions.length} numbers were given (3 per vertex).`);
+        if (!this.posesTraced) {
+            // Checked like any other call, then left out: the tree can't follow it (no subgroups for the refit),
+            // and hit points from moved positions on an unmoved tree would be wrong.
+            deform.waitingOnGpu = null;
+            if (this.warnedRestPose) return;
+            this.warnedRestPose = true;
+            this.warn('@pmndrs/ddgi: this device has no subgroups, so deforming meshes stay in their rest pose for GI (the mesh-tree refit needs subgroups).');
+            return;
         }
-        copyCheckedPositions(positions, deform.waiting, `setDeformedPositions for ${what}`);
         deform.hasWaiting = true;
         this.posesWaiting.add(entry);
     }
@@ -1128,7 +1181,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * per frame, and submit the encoder before the next call: buffers replaced
      * here are destroyed at the next call.
      */
-    encode(encoder: GPUCommandEncoder, timer?: GpuTimerScope, options: SceneEncodeOptions = {}): SceneUpload {
+    encode(encoder: GPUCommandEncoder, timer?: GpuTimerScope): SceneUpload {
         this.checkLive();
         if (!this.packer.ready) {
             // Checked before anything changes, so staged meshes stay queued for the encode after prepare.
@@ -1141,9 +1194,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
         // Staged meshes' bytes were written when they were staged.
         let bytesWritten = this.stagedBytes;
         this.stagedBytes = 0;
-        // Poses first: they write into meshes already in the vertex buffer, which a growth
-        // below copies into the new buffer (its copies run after these writes).
-        const poses = options.holdDeformedPositions ? { uploaded: [], bytesWritten: 0 } : this.applyPoses();
+        // Poses first: they write into meshes already in the vertex buffer (CPU poses with writeBuffer,
+        // GPU poses with commands recorded here), which a growth below copies into the new buffer (its
+        // copies are recorded after both).
+        const poses = this.applyPoses(encoder);
         bytesWritten += poses.bytesWritten;
         const meshes = this.uploadMeshes(encoder, timer);
         bytesWritten += meshes.bytesWritten;
@@ -1153,7 +1207,8 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
         const upload: SceneUpload = {
             changes: this.changeLog.take(this.lightLookup),
-            meshesUploaded: poses.uploaded.length > 0 ? [...poses.uploaded, ...meshes.uploaded] : meshes.uploaded,
+            meshesUploaded: meshes.uploaded,
+            meshesPosed: poses.posed,
             meshesRemoved: this.removedMeshSlots,
             instancesChanged: this.topLevelDirty,
             instanceSetChanged: this.instanceSetDirty,
@@ -1175,6 +1230,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         this.vertexBuffer.destroy();
         this.tableBuffer.destroy();
         this.packer.dispose();
+        this.poseCopier.dispose();
         this.textureStore.dispose();
     }
 
@@ -1248,20 +1304,29 @@ export class PlatformScene implements SceneApi, SceneCopy {
 
     /**
      * Applies the waiting poses of deforming meshes (`setDeformedPositions`):
-     * writes each into its mesh's positions in the vertex buffer, reports the
-     * mesh as uploaded so the tracer builds a tree of the new pose
-     * (deformed-positions.ts says why a rebuild, for now), and logs it: per
-     * instance, the mesh's deform box in world space, with how far the
-     * vertices travelled (`DirtyRegion.moved`), or a receiver box. When the
-     * pose leaves the box, the box grows: the instances' boxes change, so the
-     * box before is logged too.
+     * writes each into its mesh's positions in the vertex buffer (a CPU pose
+     * with `writeBuffer`, a GPU pose with the pose copy recorded into
+     * `encoder`), reports the mesh in `meshesPosed` so the tracer refits its
+     * tree from those positions in the same frame, and logs it: per instance,
+     * the mesh's deform box in world space, with how far the vertices
+     * travelled (`DirtyRegion.moved`), or a receiver box. When a CPU pose
+     * leaves the box, the box grows: the instances' boxes change, so the box
+     * before is logged too. A GPU pose can't be read here, so its box stays
+     * the declared one and its `moved` is that box's diagonal (the most any
+     * vertex inside the box can travel).
      *
      * A mesh whose words haven't reached the GPU yet (created or replaced
      * this frame) keeps its pose waiting for the next encode: its data is
-     * written by this encode's upload, after these writes.
+     * written by this encode's upload, after these writes. A GPU pose that
+     * can't be copied in this encode (its mesh isn't on the GPU yet, or the
+     * copy kernel is still compiling) is dropped instead: the host only
+     * promises its buffer or texture until it submits this frame, and may
+     * destroy it after (the contract), so keeping a reference for later
+     * could read a destroyed buffer. The host's next pose takes its place.
      */
-    private applyPoses(): { readonly uploaded: UploadedMesh[]; readonly bytesWritten: number } {
-        const uploaded: UploadedMesh[] = [];
+    private applyPoses(encoder: GPUCommandEncoder): { readonly posed: PosedMesh[]; readonly bytesWritten: number } {
+        const posed: PosedMesh[] = [];
+        const copies: PoseCopy[] = [];
         let bytesWritten = 0;
         for (const mesh of this.posesWaiting) {
             const deform = mesh.deform;
@@ -1269,25 +1334,43 @@ export class PlatformScene implements SceneApi, SceneCopy {
                 this.posesWaiting.delete(mesh);
                 continue;
             }
-            if (mesh.pending !== null || mesh.vertexOffset < 0) continue;
+            const onGpu = mesh.pending === null && mesh.vertexOffset >= 0;
+            if (deform.waitingOnGpu && !(onGpu && this.poseCopier.ready)) {
+                deform.waitingOnGpu = null;
+                deform.hasWaiting = false;
+                this.posesWaiting.delete(mesh);
+                continue;
+            }
+            if (!onGpu) continue;
             this.posesWaiting.delete(mesh);
 
-            const travelled = scanPose(deform.waiting, deform.current, this.poseBounds);
-            deform.swap();
             const positionsWord = mesh.vertexOffset + mesh.layout.offsets.positions;
-            this.device.queue.writeBuffer(this.vertexBuffer, positionsWord * 4, deform.current);
-            bytesWritten += deform.current.byteLength;
+            let travelled: number;
+            let grew = false;
+            const gpuPose = deform.waitingOnGpu ? deform.takeGpuPose() : null;
+            if (gpuPose) {
+                copies.push({ pose: gpuPose, vertexCount: deform.vertexCount, destinationWord: positionsWord });
+                travelled = boxDiagonal(mesh.layout.bounds);
+            } else {
+                const known = deform.currentKnown;
+                travelled = scanPose(deform.waiting, deform.current, this.poseBounds);
+                deform.swap();
+                // After a GPU pose the CPU's copy of the positions is out of date: the box's diagonal bounds the travel.
+                if (!known) travelled = Math.max(travelled, boxDiagonal(mesh.layout.bounds));
+                this.device.queue.writeBuffer(this.vertexBuffer, positionsWord * 4, deform.current);
+                bytesWritten += deform.current.byteLength;
 
-            if (deform.declaredBounds && !deform.warnedOutside && !boxInside(this.poseBounds, deform.declaredBounds)) {
-                deform.warnedOutside = true;
-                this.warn(`@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)}: deformed positions left its deformBounds; the box grows to hold them (this warning is shown once).`);
-            }
-            const grownBounds = Float32Array.from(mesh.layout.bounds);
-            const grew = growBox(grownBounds, this.poseBounds);
-            if (grew) {
-                mesh.layout = { ...mesh.layout, bounds: grownBounds };
-                this.writeMeshRecord(mesh);
-                this.cachedBounds = null;
+                if (deform.declaredBounds && !deform.warnedOutside && !boxInside(this.poseBounds, deform.declaredBounds)) {
+                    deform.warnedOutside = true;
+                    this.warn(`@pmndrs/ddgi: ${this.name('mesh', mesh.handle, mesh.label)}: deformed positions left its deformBounds; the box grows to hold them (this warning is shown once).`);
+                }
+                const grownBounds = Float32Array.from(mesh.layout.bounds);
+                grew = growBox(grownBounds, this.poseBounds);
+                if (grew) {
+                    mesh.layout = { ...mesh.layout, bounds: grownBounds };
+                    this.writeMeshRecord(mesh);
+                    this.cachedBounds = null;
+                }
             }
             for (const instance of mesh.instances) {
                 const traceable = this.isTraceable(instance);
@@ -1305,16 +1388,10 @@ export class PlatformScene implements SceneApi, SceneCopy {
                     this.changeLog.addReceiver(this.transforms.bounds, slot * BOX_NUMBERS);
                 }
             }
-            uploaded.push({
-                slot: mesh.slot,
-                handle: mesh.handle,
-                layout: mesh.layout,
-                vertexOffset: mesh.vertexOffset,
-                // The tree builder's worker takes the arrays it is given: copies.
-                geometry: { positions: deform.current.slice(), indices: deform.indices.slice() },
-            });
+            posed.push({ slot: mesh.slot, layout: mesh.layout, vertexOffset: mesh.vertexOffset });
         }
-        return { uploaded, bytesWritten };
+        this.poseCopier.encode(encoder, this.vertexBuffer, copies);
+        return { posed, bytesWritten };
     }
 
     /** A deforming descriptor's `deformBounds`, checked; null when it gives none or isn't deforming. */
@@ -1332,7 +1409,7 @@ export class PlatformScene implements SceneApi, SceneCopy {
         if (descriptor.deforming !== true) return { layout, deform: null };
         const bounds = Float32Array.from(layout.bounds);
         if (declared) growBox(bounds, declared);
-        return { layout: { ...layout, bounds }, deform: new DeformState(descriptor.positions, descriptor.indices, declared) };
+        return { layout: { ...layout, bounds }, deform: new DeformState(descriptor.positions, declared) };
     }
 
     /**
@@ -1486,7 +1563,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
      * Checks and lays out a mesh, copies what the scene keeps of the host's
      * arrays, and stages them for the GPU or packs them on the CPU.
      */
-    private prepareMeshData(descriptor: MeshDescriptor): { layout: MeshLayout; pending: PendingMeshData } {
+    private prepareMeshData(given: MeshDescriptor): { layout: MeshLayout; pending: PendingMeshData } {
+        // A deforming mesh is stored without normals: they would be the rest pose's. Hit shading then
+        // uses each triangle's geometric normal (giInstanceNormalAt's fallback), worked out from the
+        // positions the scene copy holds now, so it follows every pose (docs/design/m3-moving.md §3).
+        const descriptor = given.deforming === true && given.normals ? { ...given, normals: undefined } : given;
         const plan = planMesh(descriptor);
         // Tree builders read positions and indices after this call has returned, when
         // the host may have changed its arrays: they get copies, made now.

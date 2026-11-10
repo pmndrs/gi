@@ -501,12 +501,13 @@ fn ddgiRayResult(slot: u32, rayIndex: u32, layer: u32) -> u32 {
 // ---- Phase B: classification and relocation ----
 
 // Whether a probe may sit at this offset (in spacings): inside its own cell
-// (so the grid lookup stays valid) and inside the volume's box of probes.
+// (so the grid lookup stays valid) and inside the volume's box of probes
+// (its window, for a camera-following volume: measured in window probes).
 // Why the box: a probe in an outer wall would otherwise often leave through
 // the wall's outer face, the nearest one, and end up outside the room,
 // where the room's own outside keeps it "near a surface" and active.
 fn ddgiOffsetAllowed(probe: vec3i, offset: vec3f) -> bool {
-    let position = vec3f(probe) + offset;
+    let position = vec3f(ddgiWindowProbe(ddgiUniformVolume(), probe)) + offset;
     let lastProbe = vec3f(ddgiProbeCount() - 1u);
     return all(abs(offset) <= vec3f(DDGI_MAX_OFFSET)) && all(position >= vec3f(0.0)) && all(position <= lastProbe);
 }
@@ -1001,21 +1002,25 @@ fn ddgiFeedbackFires(relativeDeviation: f32, noise: f32, blendedBefore: u32) -> 
 // neighbours at half of it. In a buffer of its own: the blend never writes
 // another probe's history (each workgroup owns only its own probe).
 // Non-negative floats order like their bits, so atomicMax keeps the largest.
+// Neighbours are found in window probes (a camera-following volume's wrap
+// around its slots) and must be inside the window.
 fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
     atomicMax(&ddgiFeedbackRequests[probeIndex], bitcast<u32>(urgency));
     let counts = vec3i(ddgiProbeCount());
+    let windowProbe = ddgiWindowProbe(ddgiUniformVolume(), probe);
     let neighbourUrgency = bitcast<u32>(urgency * DDGI_FEEDBACK_NEIGHBOUR_SHARE);
     for (var face = 0u; face < 6u; face++) {
-        var neighbour = probe;
-        neighbour[face % 3u] += select(1, -1, face >= 3u);
-        if (any(neighbour < vec3i(0)) || any(neighbour >= counts)) {
+        var step = vec3i(0);
+        step[face % 3u] = select(1, -1, face >= 3u);
+        let windowNeighbour = windowProbe + step;
+        if (any(windowNeighbour < vec3i(0)) || any(windowNeighbour >= counts)) {
             continue;
         }
+        let neighbour = ddgiNeighbourSlot(probe, step);
         if (ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), neighbour).state != DDGI_STATE_ACTIVE) {
             continue;
         }
-        let neighbourIndex = u32(neighbour.x) + u32(counts.x) * (u32(neighbour.z) + u32(counts.z) * u32(neighbour.y));
-        atomicMax(&ddgiFeedbackRequests[neighbourIndex], neighbourUrgency);
+        atomicMax(&ddgiFeedbackRequests[ddgiProbeIndex(neighbour)], neighbourUrgency);
     }
 }
 

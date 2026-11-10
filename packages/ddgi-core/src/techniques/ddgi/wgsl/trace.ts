@@ -274,8 +274,8 @@ fn ddgiLayeredVolume(volume: DdgiVolume, position: vec3f, normal: vec3f, viewDir
         if (!weighted.counts) {
             continue;
         }
-        let uv = ddgiTileUv(normalInTile, weighted.probe, irradianceScale);
-        let atlasLayer = ddgiAtlasLayer(volume, weighted.probe);
+        let uv = ddgiTileUv(normalInTile, weighted.slot, irradianceScale);
+        let atlasLayer = ddgiAtlasLayer(volume, weighted.slot);
 ${perLayer(plan, (layer) => `        sums.layer${layer} += weighted.weight * textureSampleLevel(ddgiIrradianceAtlas, ddgiAtlasSampler, uv + vec2f(${layer}.0 / DDGI_IRRADIANCE_LAYERS, 0.0), atlasLayer, 0.0).rgb;`)}
         weightSum += weighted.weight;
     }
@@ -307,10 +307,12 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
     var firstContributing = DdgiLayerRadiance();
     var volumesRead = 0u;
     var contributingVolumes = 0u;
+    var nearest = DdgiNearestVolume(0u, DDGI_FARTHEST_DISTANCE);
     for (var index = 0u; index < count; index++) {
         let volume = ddgiTableVolume(ddgiVolumeTable, index);
         let edgeCoverage = ddgiVolumeEdgeCoverage(volume, position);
-        if (!ddgiBlendReads(edgeCoverage, index, count, volumesRead)) {
+        if (!ddgiBlendReads(edgeCoverage)) {
+            nearest = ddgiNearerVolume(nearest, index, volume, position);
             continue;
         }
         let field = ddgiLayeredVolume(volume, position, normal, viewDirection);
@@ -331,6 +333,11 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
         if (ddgiBlendDone(gatheredWeight, contributingVolumes)) {
             break;
         }
+    }
+    if (volumesRead == 0u && count > 0u) {
+        // Outside every volume: the nearest one's nearest cell, with no weight (ddgiNearerVolume, wgsl/sample.ts).
+        let field = ddgiLayeredVolume(ddgiTableVolume(ddgiVolumeTable, nearest.index), position, normal, viewDirection);
+        firstRead = ddgiDivideLayers(field.sums, max(field.weight, DDGI_MIN_WEIGHT_SUM));
     }
     // As ddgiBlendIrradiance: the first volume read when none added weight, the one volume's own value when one did.
     if (contributingVolumes == 0u) {

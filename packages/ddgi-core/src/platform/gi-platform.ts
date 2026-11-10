@@ -53,6 +53,7 @@ import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { PlatformTextureStore } from './textures/texture-store.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
+import { DeformingTrees } from './trace/deforming-trees.ts';
 import { PlatformRayQueries, type MeshTreeOptions } from './trace/ray-queries.ts';
 import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type CalibrationMemory, type UnitCostModel } from './work-budget.ts';
 
@@ -144,16 +145,6 @@ export class GIPlatformImpl implements GIPlatform {
      * its probes would keep their full history.
      */
     private unseenChanges: SceneChanges | null = null;
-    /**
-     * Whether a mesh still waited for its tree at the end of the last frame's
-     * tracer update. New poses of deforming meshes wait while it's true (see
-     * `encode`). Why the last frame's and not `rays.building` now: a tree
-     * finished between two frames counts as built at once, but it is only
-     * placed in the next update, after the scene's encode; a pose applied in
-     * that encode would replace its mesh's build first, and the finished tree
-     * would be dropped as out of date.
-     */
-    private treesWaitingAfterUpdate = false;
     private readonly warnedMessages = new Set<string>();
     /** The `uncapturederror` listener, kept so `dispose` can remove it. */
     private readonly onUncapturedError: (event: Event) => void;
@@ -166,7 +157,13 @@ export class GIPlatformImpl implements GIPlatform {
         // The platform's own GPU work goes through the counting view; the host keeps its device as it is.
         const ownDevice = this.compiles.device;
         this.textures = new PlatformTextureStore(ownDevice, { label: this.label, warn: (message) => this.warnOnce(message) });
-        this.sceneCopy = new PlatformScene(ownDevice, { label: this.label, textureStore: this.textures, warn: (message) => this.warnOnce(message) });
+        this.sceneCopy = new PlatformScene(ownDevice, {
+            label: this.label,
+            textureStore: this.textures,
+            warn: (message) => this.warnOnce(message),
+            // Deforming meshes' trees are refit on the GPU, which needs subgroups; without them they stay in their rest pose.
+            posesTraced: DeformingTrees.isSupported(device),
+        });
         this.scene = new GuardedScene(this.sceneCopy, () => this.checkUsable());
         this.rays = new PlatformRayQueries(ownDevice, this.sceneCopy, {
             label: this.label,
@@ -294,7 +291,7 @@ export class GIPlatformImpl implements GIPlatform {
         // The mesh packing kernel is asked for first (T2.13): it is small, so it is ready
         // early, and from this call on the scene stages meshes' raw arrays for it, so a host
         // copying its scene in now uploads it while the rest compiles.
-        const packingReady = this.sceneCopy.prepareGpuPacking();
+        const packingReady = Promise.all([this.sceneCopy.prepareGpuPacking(), this.sceneCopy.prepareGpuPoses()]);
         const rayBatches = this.rayBatchesForTools || this.attached.some(({ technique }) => technique.requirements.rayBatches === true);
         const platformReady = Promise.all([packingReady, this.textures.prepare(), this.shade.prepare(), this.rays.prepare(this.kernels, { batches: rayBatches })]);
         const techniquesReady = (async () => {
@@ -321,12 +318,11 @@ export class GIPlatformImpl implements GIPlatform {
             this.timer.beginFrame(this.frame);
         }
 
-        // Until the trees being built are placed, new poses of deforming meshes wait: each would restart
-        // its mesh's build, and a mesh deformed every frame would never get a tree (SceneEncodeOptions).
-        const holdDeformedPositions = this.treesWaitingAfterUpdate || this.rays.building;
-        const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined, { holdDeformedPositions });
+        // A deforming mesh's pose goes into the scene copy here, and the tracer refits its tree from it in
+        // the same encoder (trace/deforming-trees.ts): rays see each pose in the frame it is applied, and a
+        // pose never waits for a tree build.
+        const upload = this.sceneCopy.encode(encoder, this.timer ?? undefined);
         this.rays.update(encoder, upload, this.timer ?? undefined);
-        this.treesWaitingAfterUpdate = this.rays.building;
         // Settings, the sky's bake when the environment changed, and the light grid when there are many
         // point and spot lights. No technique traces in a paused frame, so the grid is not built then.
         const lights = frame.budget.paused ? undefined : { frame: this.frame, localLights: this.sceneCopy.localLightCount, bounds: this.sceneCopy.bounds };
@@ -417,6 +413,8 @@ export class GIPlatformImpl implements GIPlatform {
         const topLevel = this.rays.topLevelCounters;
         if (topLevel) counters['platform top level'] = topLevel;
         counters['platform mesh trees'] = this.rays.meshTreeCounters;
+        const deforming = this.rays.deformingTreeCounters;
+        if (deforming) counters['platform deforming meshes'] = deforming;
         for (const [technique, budget] of this.budgets) counters[`${technique.id} budget`] = budgetCounters(budget.report);
         // The sky the rays see (radiance map, procedural source texture) and the hit-shading
         // uniforms are part of the scene as the platform holds it, so they count as scene copy;
