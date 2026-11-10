@@ -41,7 +41,11 @@
  *    reached cell, Capsaicin's backup in every empty one) goes through the
  *    filter's CPU twin (probe-filter.ts), and each cell must read the twin's
  *    value within 1% (cells where a filter test sits at its threshold are
- *    counted, not compared); how many still read the sky within 1% is
+ *    counted, not compared). A probe with a ray on a cell edge was skipped
+ *    and counted before; since the filter carries its cells to other probes
+ *    (as far as the mask's mips reach), a probe is skipped and counted when
+ *    any of its cells moves in a second run of the twin with the edge
+ *    probes' values doubled. How many cells still read the sky within 1% is
  *    reported.
  *
  * The page draws the probe atlas and the probe mask of each scene (the
@@ -316,9 +320,9 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
         const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
         // The blend's expected atlas: the sky in reached cells, the backup in empty ones, far hits.
         const blended = new Float32Array(atlasWidth * atlasHeight * 4);
-        // A probe with a ray on a cell edge may have its empty cells elsewhere on the GPU (see below):
-        // its cells are not known, so the twin calls anything that reads them undecided.
-        const blendUndecided = new Uint8Array(atlasWidth * atlasHeight);
+        // A probe with a ray on a cell edge may have its empty cells elsewhere on the GPU (see below), and
+        // the filter carries that to the probes within its reach: their tiles, to tell such probes apart.
+        const edgeTiles = new Set<number>();
         spawned.forEach((tile, probe) => {
             const samples = new Array<number>(PROBE_CELLS).fill(0);
             for (let cell = 0; cell < PROBE_CELLS; cell++) samples[blendCell[probe * PROBE_CELLS + cell]]++;
@@ -330,8 +334,8 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
                 const value = samples[cell] > 0 ? SKY_RADIANCE : backup;
                 const texel = (tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE);
                 blended.set([value, value, value, FAR_HIT_DISTANCE], texel * 4);
-                if (nearestEdge[probe] < 1e-3) blendUndecided[texel] = 1;
             }
+            if (nearestEdge[probe] < 1e-3) edgeTiles.add((tileY / PROBE_SIZE) * layout.probeCount[0] + tileX / PROBE_SIZE);
         });
         // Through the filter's twin, on the mask's mips and the screen the GPU read.
         const maskLevels: { width: number; height: number; texels: Uint32Array }[] = [];
@@ -341,22 +345,33 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             maskLevels.push({ width, height, texels: new Uint32Array((await readTexture(device, probes.probeMask, 4, width, height, level)).buffer) });
         }
         const camera = frameCamera(run.camera, WIDTH, HEIGHT);
-        const filtered = filterScreenProbes(
-            {
-                width: WIDTH,
-                height: HEIGHT,
-                depth,
-                normal: normals,
-                maskLevels,
-                seeds: spawned.map((tile) => packSeed(tile.seed[0], tile.seed[1])),
-                inverseViewProjection: cameraRelativeInverseViewProjection(camera),
-                eye: camera.position,
-                viewForward: viewForward(camera),
-                cellSize: screenProbeCellSize(camera, WIDTH, HEIGHT),
-            },
-            { width: atlasWidth, height: atlasHeight, texels: blended },
-            blendUndecided,
-        );
+        const filterInputs = {
+            width: WIDTH,
+            height: HEIGHT,
+            depth,
+            normal: normals,
+            maskLevels,
+            seeds: spawned.map((tile) => packSeed(tile.seed[0], tile.seed[1])),
+            inverseViewProjection: cameraRelativeInverseViewProjection(camera),
+            eye: camera.position,
+            viewForward: viewForward(camera),
+            cellSize: screenProbeCellSize(camera, WIDTH, HEIGHT),
+        };
+        const filtered = filterScreenProbes(filterInputs, { width: atlasWidth, height: atlasHeight, texels: blended });
+        // Which cells an edge probe's cells reach through the filter: the twin again with those probes'
+        // blended values doubled; a cell whose result moves read one (the mask's mips let the filter
+        // reach probes several tiles away).
+        const perturbed = Float32Array.from(blended);
+        for (const tile of edgeTiles) {
+            const tileX = (tile % layout.probeCount[0]) * PROBE_SIZE;
+            const tileY = Math.floor(tile / layout.probeCount[0]) * PROBE_SIZE;
+            for (let cell = 0; cell < PROBE_CELLS; cell++) {
+                const texel = (tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE);
+                for (let channel = 0; channel < 3; channel++) perturbed[texel * 4 + channel] *= 2;
+            }
+        }
+        const reach = filterScreenProbes(filterInputs, { width: atlasWidth, height: atlasHeight, texels: perturbed });
+        const reachesEdgeProbe = (texel: number): boolean => reach.atlas.texels[texel] !== filtered.atlas.texels[texel];
         let filterUndecidedCells = 0;
         let reachedCells = 0;
         let emptyCells = 0;
@@ -374,6 +389,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             const tileY = Math.floor(tile.seed[1] / PROBE_SIZE) * PROBE_SIZE;
             const reachedErrors: number[] = [];
             const backupErrors: number[] = [];
+            let reachedEdge = false;
             for (let cell = 0; cell < PROBE_CELLS; cell++) {
                 const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
                 if (filtered.undecided[texel / 4] === 1) {
@@ -383,6 +399,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
                 // The blend's value (the backup sums each reached cell's summed, not averaged, radiance, so a
                 // cell with two rays counts twice), through the filter's twin.
                 const expectedValue = filtered.atlas.texels[texel];
+                if (reachesEdgeProbe(texel)) reachedEdge = true;
                 let cellError = 0;
                 let readsTheSky = true;
                 for (let channel = 0; channel < 3; channel++) {
@@ -392,8 +409,9 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
                 if (readsTheSky) cellsReadingTheSky++;
                 (samples[cell] > 0 ? reachedErrors : backupErrors).push(cellError);
             }
-            // The GPU's f32 and the CPU's f64 can put a ray lying on an edge in different cells: such a probe is reported, not failed.
-            if (Math.max(...reachedErrors, ...backupErrors) > SKY_TOLERANCE && nearestEdge[probe] < 1e-3) {
+            // The GPU's f32 and the CPU's f64 can put a ray lying on an edge in different cells: such a probe, and since
+            // RC4.2 a probe the filter reaches it from, is reported, not failed.
+            if (Math.max(...reachedErrors, ...backupErrors) > SKY_TOLERANCE && reachedEdge) {
                 undecidedProbes++;
                 return;
             }
@@ -418,6 +436,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             worstBackupCellError: worstBackup,
             undecidedProbes,
             filterUndecidedCells,
+            edgeProbes: edgeTiles.size,
             filterAccepted: filtered.accepted,
             cellsReadingTheSkyWithin1Percent: cellsReadingTheSky,
             cells: spawned.length * PROBE_CELLS,
