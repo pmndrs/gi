@@ -68,8 +68,8 @@ Then M5 (tiers and release prep) is outlined in `PLAN.md` and `SPEC.md`.
 
 - `assets/downloads/` (69.6 GB, 2,387 files, measured 2026-11-08): the Mac can re-fetch these with the repo's asset tools (sources and checksums are recorded), or copy them from the NAS.
 - `bench/references/` (Cycles references):
-  - the main checkout has 9.7 GB (1,743 files, measured 2026-11-08), mostly M1's HD references and T2.16's re-renders;
-  - the M4 textured references (1.2 GB) are in `webgpu-ddgi-m4-t45/bench/references`. Copy them: re-rendering on a CPU takes hours.
+  - everything is in the main checkout's `bench/references/` (`C:\Users\denni\Documents\dev\webgpu-ddgi\bench\references\`, about 17 GB, checked 2026-11-10). That covers M1's HD references, T2.16's re-renders and all 24 M4 textured references (`cycles-textured.json` plus six `cycles-textured-*.exr` per folder; skip the `-part*` halves; `docs/handoff/M4.md` lists the folders);
+  - copy the whole folder: re-rendering on a CPU takes hours.
 - `bench/recordings/` and `native/build/recordings` (the compare page's recordings): ours are in `webgpu-ddgi-m2-t210/bench/recordings/viewer`, native's in `webgpu-ddgi-m2-t27/native/build/recordings`. They're Windows-only. The native harness (D3D12/Vulkan) can't run on the Mac, so native comparisons pause until back on Windows.
 - `bench/results` CSVs are in git.
 
