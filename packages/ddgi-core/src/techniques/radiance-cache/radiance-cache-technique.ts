@@ -639,6 +639,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             this.denoisedIrradiance = null;
             return;
         }
+        // Turned back on: its history is from frames ago, under another camera.
+        if (this.denoisedIrradiance === null) denoiser.resetHistory();
         this.denoisedIrradiance = encodeGIDenoiser(denoiser, encoder, frame.screen, frame.camera, this.previousCamera ?? frame.camera, interpolated);
     }
 
