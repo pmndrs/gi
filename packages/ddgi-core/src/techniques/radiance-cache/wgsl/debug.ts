@@ -19,6 +19,10 @@
  *   probe, else one up the chain) along the pixel's normal, divided by π
  *   (what a white diffuse surface would reflect), tone-mapped like the atlas.
  *   No interpolation: each probe's SH shows as it is, so a wrong SH stands out.
+ * - **SSGI occlusion** and **SSGI bent normal** (RC4.2): Capsaicin's own two
+ *   views of its SSGI output (`DebugOcclusion`, `DebugBentNormal`,
+ *   ssgi_debug.comp:26-38): the occlusion as grey, the bent normal as stored
+ *   (0.5 n + 0.5), neither tone-mapped.
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
@@ -31,6 +35,10 @@ export const RADIANCE_CACHE_DEBUG_VIEW = {
     probeMask: 1,
     /** The irradiance from each probe's SH along the pixel's normal (RC2.2). */
     sphericalHarmonics: 2,
+    /** SSGI's ambient occlusion (RC4.2). */
+    occlusion: 3,
+    /** SSGI's bent normal (RC4.2). */
+    bentNormal: 4,
 } as const;
 
 export type RadianceCacheDebugViewId = (typeof RADIANCE_CACHE_DEBUG_VIEW)[keyof typeof RADIANCE_CACHE_DEBUG_VIEW];
@@ -55,6 +63,7 @@ export const DEBUG_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 4, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
         { binding: 5, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
         { binding: 6, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 7, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
     ],
 };
 
@@ -77,9 +86,13 @@ struct RcDebug {
 @group(1) @binding(4) var rcProbeSH: texture_2d<u32>;
 @group(1) @binding(5) var rcNormal: texture_2d<f32>;
 @group(1) @binding(6) var rcDepth: texture_2d<f32>;
+// SSGI's occlusion and bent normal (wgsl/ssgi.ts): rgb 0.5 n + 0.5, a the occlusion.
+@group(1) @binding(7) var rcOcclusionAndBentNormal: texture_2d<f32>;
 
 const RC_DEBUG_PROBE_ATLAS: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.probeAtlas}u;
 const RC_DEBUG_SH: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics}u;
+const RC_DEBUG_OCCLUSION: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.occlusion}u;
+const RC_DEBUG_BENT_NORMAL: u32 = ${RADIANCE_CACHE_DEBUG_VIEW.bentNormal}u;
 const RC_DEBUG_INV_PI: f32 = 0.318309886183791;
 
 ${shIrradianceWgsl('rcDebugSHIrradiance', 'probeSH')}
@@ -100,6 +113,16 @@ fn rcDebugSeedColour(packedSeed: u32) -> vec3f {
 @compute @workgroup_size(8, 8)
 fn ${DEBUG_ENTRY_POINT}(@builtin(global_invocation_id) id: vec3u) {
     if (any(id.xy >= rcDebug.size)) {
+        return;
+    }
+    // Capsaicin's SSGI views (ssgi_debug.comp:26-38): the texel as it is, as a display value.
+    let ssgi = textureLoad(rcOcclusionAndBentNormal, id.xy, 0);
+    if (rcDebug.view == RC_DEBUG_OCCLUSION) {
+        textureStore(rcDebugImage, id.xy, vec4f(vec3f(ssgi.a), 1.0));
+        return;
+    }
+    if (rcDebug.view == RC_DEBUG_BENT_NORMAL) {
+        textureStore(rcDebugImage, id.xy, vec4f(ssgi.rgb, 1.0));
         return;
     }
     let tile = id.xy / RC_PROBE_SIZE;

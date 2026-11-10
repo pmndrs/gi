@@ -1,0 +1,4 @@
+{
+    "description": "RC4.2: Capsaicin's SSGI technique (occlusion, bent normal, near-field light) at 1280x720 on a floor beside a lit wall: every pixel against a CPU twin of ssgi.comp (pixels whose decisions sit at a threshold, or whose twin moves when its positions are rounded to f32, counted, not compared); near the wall the bent normal leans away, the occlusion drops and the wall's light arrives; far from it no near-field light; the near-field light's scale and an open floor's occlusion reported. Correctness only.",
+    "timeoutMs": 300000
+}

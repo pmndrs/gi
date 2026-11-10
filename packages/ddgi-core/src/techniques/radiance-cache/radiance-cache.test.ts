@@ -37,8 +37,9 @@ describe('settings (gi1.h)', () => {
         const technique = new RadianceCacheTechnique({ useDirectLighting: false });
         expect(technique.settings.useDirectLighting).toBe(false);
         expect(technique.settings.useMultibounce).toBe(true);
-        // Reprojection reads the host's velocity, as Capsaicin's does (gi1.comp:326).
-        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true } });
+        // Reprojection reads the host's velocity, as Capsaicin's does (gi1.comp:326), and SSGI last
+        // frame's lit colour, as Capsaicin's reads PrevCombinedIllumination (ssgi.cpp:149).
+        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true, previousLighting: true } });
     });
 
     it('size the probes as Capsaicin does (gi1.cpp:113-129)', () => {
@@ -193,13 +194,24 @@ describe("the technique's binding budget (register D6): the platform's 8 storage
         'radiance-cache/ReorderScreenProbes': 3,
         'radiance-cache/CopyPreviousScreen': 0,
     };
+    /**
+     * RC2.2's and RC4.2's: the probes into irradiance, and Capsaicin's SSGI. Made after the
+     * kernels above, so a refusal among those leaves these unbuilt.
+     */
+    const IRRADIANCE_KERNELS: Record<string, number> = {
+        'radiance-cache/FilterProbeMask': 0,
+        'radiance-cache/FilterScreenProbes': 1,
+        'radiance-cache/ProjectScreenProbes': 1,
+        'radiance-cache/InterpolateScreenProbes': 0,
+        'radiance-cache/SSGI': 0,
+    };
 
-    it('holds for every kernel of the technique at 8, the history kernels (RC4.1) included', async () => {
+    it('holds for every kernel of the technique at 8, the history kernels (RC4.1), the filter and SSGI (RC4.2) included', async () => {
         const { context, storageBuffers } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
         const technique = new RadianceCacheTechnique();
         technique.attach(context);
         await technique.prepare();
-        for (const [label, count] of Object.entries(SCREEN_KERNELS)) expect(storageBuffers.get(label), label).toBe(count);
+        for (const [label, count] of Object.entries({ ...SCREEN_KERNELS, ...IRRADIANCE_KERNELS })) expect(storageBuffers.get(label), label).toBe(count);
         for (const [label, count] of storageBuffers) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
     });
 
@@ -212,6 +224,10 @@ describe("the technique's binding budget (register D6): the platform's 8 storage
         expect(storageTextures.get('radiance-cache/BlendScreenProbes')).toBe(4);
         expect(storageTextures.get('radiance-cache/ReprojectScreenProbes')).toBe(3);
         expect(storageTextures.get('radiance-cache/SampleScreenProbes')).toBe(2);
+        // RC4.2: the filter writes one atlas, SSGI its two outputs; neither uses subgroups (nothing is reduced).
+        expect(storageTextures.get('radiance-cache/FilterScreenProbes')).toBe(1);
+        expect(storageTextures.get('radiance-cache/SSGI')).toBe(2);
+        expect(storageTextures.get('radiance-cache/InterpolateScreenProbes')).toBe(1);
         for (const [label, count] of storageTextures) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_TEXTURES_PER_STAGE);
     });
 

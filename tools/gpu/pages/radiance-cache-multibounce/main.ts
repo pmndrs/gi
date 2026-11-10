@@ -532,7 +532,13 @@ const ROOM_WIDTH = 1280;
 const ROOM_HEIGHT = 720;
 /** Inside room B (x 4.2-8.2 m, z 0-4 m), near the partition, looking at the east wall: everything in view is room B. */
 const DARK_ROOM_CAMERA: PageCamera = { position: [4.6, 1.5, 3.4], target: [8.2, 0.9, 1.2], fovYDeg: 70, near: 0.05, far: 100 };
-const ROOM_FRAMES = 30;
+/**
+ * Frames per setting. 30 until RC4.2; since then the screen probes' history is the filtered atlas
+ * (Capsaicin's, FilterScreenProbes), which holds the multibounce's light longer after the cache is
+ * emptied: at 30 frames the single bounce read 0.0628 again against 0.0534 the first time (M5), at
+ * 120 frames 0.0539 against 0.0540.
+ */
+const ROOM_FRAMES = 120;
 
 /** Mean luminance (Rec. 709) of the interpolated irradiance, and the picture as halves. */
 async function readIrradiance(device: GPUDevice, technique: RadianceCacheTechnique): Promise<{ mean: number; pixels: Float32Array }> {

@@ -162,6 +162,10 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 
 ## Revisions
 
+### Radiance-cache phase 4, 2026-11-10 (RC4.2)
+
+- **Host- and technique-facing: `FrameScreen.previousLighting`** (optional): last frame's lit colour, linear HDR radiance per pixel before tone mapping (direct light, GI and emission), as the host drew it, not reprojected; read by screen uv, so its size may differ from the screen's; any float colour format (`rgba16float` as three and Capsaicin use); a texture of zeros before the first frame. Capsaicin's SSGI reads it as `PrevCombinedIllumination`. **`OptionalScreenChannel`** gains `'previousLighting'`, **`ScreenNeeds`** a `previousLighting` field, and `TechniqueRequirements.screen` can ask for it like the other channels; `encodeScreen` refuses a screen without it when a technique asked. The radiance cache asks for it (with `velocity`). The three adapter fills it from the picture `encodeBefore` is given (docs/api/three.md).
+
 ### Radiance-cache phase 2, 2026-11-10 (RC2.2)
 
 - **Host- and technique-facing: `giDebugColor(position, normal, view, screenUV, ...)`.** The debug colour takes the pixel's screen position (0..1, top left 0), as `giIrradiance` has it, so a screen-space technique can draw its views by the pixel's place (the radiance cache's probe atlas, probe mask and SH). `globalsCode` writes `giDebugColorAt(position, normal, view, screenUV)`. DDGI's module takes the argument and ignores it; the viewer's debug material passes three's `screenUV`.
@@ -177,7 +181,7 @@ The answers go in PROGRESS. Any change to the contract is made in both the TypeS
 - **Technique-facing: `TechniqueRequirements.screen` is `boolean | ScreenChannelRequest`**: `true` is depth and normals; `{ velocity, albedo, instance }` asks for those channels too. `encodeScreen` throws, naming the technique and channel, if a screen stage would run without a channel its technique asked for.
 - **Host-facing: `requiredLimits(adapter)` also asks for the adapter's `maxColorAttachmentBytesPerSample`**: a host scene pass that writes the screen inputs beside its own outputs needs 48-56 bytes per pixel, past WebGPU's default 32 (RC1.1 review).
 - **Stated in the contract: every `FrameScreen` channel describes the opaque surface under the depth sample**; a blended surface that writes no depth leaves the channels as the surface behind it (RC1.1 review).
-- **Host-facing: `GIPlatform.screenNeeds`** (read-only): the union of the attached techniques' screen requirements (`{ screen, velocity, albedo, instance }`), so a host renders only what is read. DDGI asks for none, so nothing changes for it.
+- **Host-facing: `GIPlatform.screenNeeds`** (read-only): the union of the attached techniques' screen requirements (`{ screen, velocity, albedo, instance }`; RC4.2 adds `previousLighting`), so a host renders only what is read. DDGI asks for none, so nothing changes for it.
 - **Host-facing: `SceneApi.instanceIndex(instance)`**: an instance's index on the GPU, what rays report as `GiHit.instance` and `FrameScreen.instance` holds plus 1. Fixed for the instance's life.
 - **Engine-free debug view: `ScreenInputsView`** (`platform/screen/`): one channel of a `FrameScreen` drawn into an `rgba8unorm` texture of display values, for a host to show.
 

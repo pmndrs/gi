@@ -1,5 +1,6 @@
 /**
- * The radiance cache (AMD GI-1.0/1.2: two bounces through the world cache (GI-1.2's multibounce cells), no screen-probe history yet),
+ * The radiance cache (AMD GI-1.0/1.2: two bounces through the world cache (GI-1.2's multibounce cells), screen probes kept
+ * over frames and filtered, Capsaicin's SSGI for near-field light and occlusion; no GI denoiser yet, so it is noisy),
  * through the three.js adapter, the way a three user builds a screen-space
  * technique (docs/api/three.md):
  *
@@ -55,6 +56,8 @@ export const RADIANCE_CACHE_SCREEN_VIEWS = {
     'probe-atlas': RADIANCE_CACHE_DEBUG_VIEW.probeAtlas,
     'probe-mask': RADIANCE_CACHE_DEBUG_VIEW.probeMask,
     'probe-sh': RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics,
+    'ssgi-occlusion': RADIANCE_CACHE_DEBUG_VIEW.occlusion,
+    'ssgi-bent-normal': RADIANCE_CACHE_DEBUG_VIEW.bentNormal,
 } as const;
 
 export type RadianceCacheScreenView = keyof typeof RADIANCE_CACHE_SCREEN_VIEWS;
@@ -220,7 +223,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
                 return `Could not start: ${this.failure}`;
             case 'ready': {
                 const tiles = this.technique?.counters['spawn tiles'] ?? 0;
-                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each; two bounces through the world cache, no screen-probe history yet`;
+                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each; two bounces through the world cache; probes kept over frames and filtered; SSGI near-field light and occlusion; no denoiser yet, so expect noise`;
             }
         }
     }

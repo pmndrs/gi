@@ -27,6 +27,34 @@
  *    2 × 2 children when any has one (`FilterProbeMask`); the irradiance has
  *    no negative, infinite or NaN value.
  *
+ * **With SSGI (RC4.2)** the interpolation evaluates the SH about SSGI's bent
+ * normal, through a cone its occlusion narrows, and adds its near-field light
+ * (Capsaicin's `HAS_OCCLUSION`, gi1.comp:1621-1626). The page screen's last
+ * frame lighting is black here, so the near-field light is 0, but the
+ * occlusion and bent normal are not the open hemisphere's on this open
+ * floor: mostly because Capsaicin's SSGI takes one slice per pixel
+ * (ssgi.h:47), whose occlusion and bent normal the cone SH doesn't average
+ * back to open; a little because it rebuilds each sample at its own uv with
+ * its texel's depth (ssgi.comp:194-196). The f64 twin gives the same.
+ * So both checks' expected E
+ * take each pixel's SSGI output from the GPU: the CPU's E from the reference
+ * SH (the constant sky's, or the varying sky's, projected as the kernel
+ * does) about the bent normal through the same cone (`shIrradiance`), plus
+ * the near-field light. Along the normal with no occlusion that is RC2.2's
+ * Lambert value, 1.021 πL for the constant sky. Not πL × ao: a probe sees
+ * only its hemisphere, so even a constant sky's SH has a large band 1 along
+ * the normal, which a cone about a tilted bent normal weighs differently.
+ * So the units RC2.2's Lambert check guarded still are: E matches the CPU's
+ * from the constant sky's SH, which along the normal with no occlusion is
+ * 1.021 πL (reported). RC2.2's plain E = πL can't be checked at the
+ * interpolated output any more: SSGI leaves almost no floor pixel open
+ * (occlusion at least 0.999 with the bent normal within 1° of the normal:
+ * 14 of 608,000 on the M5; one slice's bent normal and occlusion depend on
+ * the view, and Capsaicin's open-slice integral is cos n + n sin n, not 1,
+ * for a normal tilted from the view). Those pixels' E / (πL) and the plain
+ * E / (πL) over every floor pixel are reported (information): SSGI's own
+ * darkening of an open floor (DECISIONS 2026-11-10, RC4.2).
+ *
  * The page draws the probe atlas, the mask and the SH view of the varying
  * sky (the technique's engine-free debug views) for the runner's screenshot.
  *
@@ -58,6 +86,9 @@ const HEIGHT = 720;
  * the done-when's 1% assumed a cell-mean basis).
  */
 const LAMBERT_TOLERANCE = 0.025;
+/** Pixels SSGI leaves open, where RC2.2's plain Lambert value is reported (the file comment). */
+const OPEN_OCCLUSION = 0.999;
+const OPEN_BENT_COSINE = Math.cos(Math.PI / 180);
 /** The constant sky's radiance: not 1, so a lost or doubled factor can't hide. */
 const CONSTANT_SKY = 1.5;
 /** The varying sky: L(d) = 1 + 0.6 d.x − 0.3 d.z, at least 0.33 everywhere. */
@@ -172,6 +203,9 @@ interface Readback {
     readonly isSky: (pixel: number) => boolean;
     /** rgba per pixel: E in rgb, the denoiser hint in alpha. */
     readonly irradiance: Float32Array;
+    /** SSGI's outputs per pixel (RC4.2): rgb the bent normal as 0.5 n + 0.5, a the occlusion; rgb the near-field light. */
+    readonly occlusion: Float32Array;
+    readonly nearField: Float32Array;
     readonly seeds: number[];
     readonly probeSH: Uint32Array;
     readonly shWidth: number;
@@ -186,7 +220,18 @@ async function readRun(device: GPUDevice, run: ImageRun): Promise<Readback> {
     const seeds = Array.from(spawnWords.subarray(1, 1 + spawnWords[0]));
     const shWidth = probes.layout.probeCount[0] * SH_BLOCK_SIZE;
     const probeSH = new Uint32Array((await readTexture(device, probes.probeSH, 8, shWidth, probes.layout.probeCount[1] * SH_BLOCK_SIZE)).buffer);
-    return { isSky: (pixel) => depth[pixel] === 1, irradiance, seeds, probeSH, shWidth };
+    const occlusion = halves(await readTexture(device, probes.occlusionAndBentNormal, 8, WIDTH, HEIGHT));
+    const nearField = halves(await readTexture(device, probes.nearField, 8, WIDTH, HEIGHT));
+    return { isSky: (pixel) => depth[pixel] === 1, irradiance, occlusion, nearField, seeds, probeSH, shWidth };
+}
+
+/** SSGI's bent normal (decoded and normalised, as the interpolation does) and occlusion at a pixel. */
+function ssgiAt(readback: Readback, pixel: number): { bentNormal: Direction; ao: number; nearField: number } {
+    const stored = readback.occlusion.subarray(pixel * 4, pixel * 4 + 4);
+    const raw = [2 * stored[0] - 1, 2 * stored[1] - 1, 2 * stored[2] - 1];
+    const length = Math.hypot(raw[0], raw[1], raw[2]);
+    const near = readback.nearField.subarray(pixel * 4, pixel * 4 + 3);
+    return { bentNormal: [raw[0] / length, raw[1] / length, raw[2] / length], ao: stored[3], nearField: (near[0] + near[1] + near[2]) / 3 };
 }
 
 /** A probe tile's nine coefficients (rgb averaged) from the SH texture's 3 × 3 block (register D26). */
@@ -203,8 +248,8 @@ function probeCoefficients(readback: Readback, seed: number): number[] {
     return coefficients;
 }
 
-/** Floor pixels' E as a ratio to `expected` (rgb averaged), with counts of bad values. */
-function irradianceRatios(readback: Readback, expected: number): { ratios: number[]; nonFinite: number; negative: number; backupHints: number } {
+/** Floor pixels' E as a ratio to `expected` at the pixel (rgb averaged), with counts of bad values. */
+function irradianceRatios(readback: Readback, expected: (pixel: number) => number): { ratios: number[]; nonFinite: number; negative: number; backupHints: number } {
     const ratios: number[] = [];
     let nonFinite = 0;
     let negative = 0;
@@ -218,7 +263,7 @@ function irradianceRatios(readback: Readback, expected: number): { ratios: numbe
         if (rgba[0] < 0 || rgba[1] < 0 || rgba[2] < 0) negative++;
         if (readback.isSky(pixel)) continue;
         if (rgba[3] === 0) backupHints++;
-        ratios.push((rgba[0] + rgba[1] + rgba[2]) / 3 / expected);
+        ratios.push((rgba[0] + rgba[1] + rgba[2]) / 3 / expected(pixel));
     }
     return { ratios, nonFinite, negative, backupHints };
 }
@@ -306,13 +351,32 @@ try {
     const lambert = await runFloor(device, 'lambert', { type: 'color', color: [CONSTANT_SKY, CONSTANT_SKY, CONSTANT_SKY], intensity: 1 });
     try {
         const readback = await readRun(device, lambert);
-        const { ratios, nonFinite, negative, backupHints } = irradianceRatios(readback, Math.PI * CONSTANT_SKY);
+        // The constant sky's SH as the kernel projects it, about SSGI's bent normal through its cone (the file comment).
+        const constantReference = projectProbe(() => CONSTANT_SKY, UP);
+        const { ratios, nonFinite, negative, backupHints } = irradianceRatios(readback, (pixel) => {
+            const ssgi = ssgiAt(readback, pixel);
+            return shIrradiance(constantReference, ssgi.bentNormal, ssgi.ao) + ssgi.nearField;
+        });
+        const plain = irradianceRatios(readback, () => Math.PI * CONSTANT_SKY).ratios;
+        // RC2.2's plain check on the few pixels SSGI leaves open, for information (the file comment).
+        const openErrors: number[] = [];
+        for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel++) {
+            if (readback.isSky(pixel)) continue;
+            const ssgi = ssgiAt(readback, pixel);
+            if (ssgi.ao < OPEN_OCCLUSION || ssgi.bentNormal[1] < OPEN_BENT_COSINE) continue;
+            const e = (readback.irradiance[pixel * 4] + readback.irradiance[pixel * 4 + 1] + readback.irradiance[pixel * 4 + 2]) / 3;
+            openErrors.push(Math.abs(e / (Math.PI * CONSTANT_SKY) - 1));
+        }
+        const openMean = openErrors.reduce((sum, value) => sum + value, 0) / Math.max(openErrors.length, 1);
+        const openP95 = percentile(openErrors, 0.95);
+
+        const occlusions = plain.length > 0 ? Array.from({ length: WIDTH * HEIGHT }, (_, pixel) => pixel).filter((pixel) => !readback.isSky(pixel)).map((pixel) => ssgiAt(readback, pixel).ao) : [];
         const errors = ratios.map((ratio) => Math.abs(ratio - 1));
         const meanError = errors.reduce((sum, value) => sum + value, 0) / Math.max(errors.length, 1);
         const p95Error = percentile(errors, 0.95);
         if (ratios.length < (WIDTH * HEIGHT) / 4) fail(`lambert: only ${ratios.length} floor pixels`);
-        if (!(meanError <= LAMBERT_TOLERANCE)) fail(`lambert: mean |E / (pi L) - 1| is ${(meanError * 100).toFixed(3)}%`);
-        if (!(p95Error <= LAMBERT_TOLERANCE)) fail(`lambert: 95th percentile |E / (pi L) - 1| is ${(p95Error * 100).toFixed(3)}%`);
+        if (!(meanError <= LAMBERT_TOLERANCE)) fail(`lambert: mean |E / E_cpu - 1| is ${(meanError * 100).toFixed(3)}%`);
+        if (!(p95Error <= LAMBERT_TOLERANCE)) fail(`lambert: 95th percentile |E / E_cpu - 1| is ${(p95Error * 100).toFixed(3)}%`);
         if (nonFinite > 0 || negative > 0) fail(`lambert: ${nonFinite} pixels not finite, ${negative} negative`);
         const mask = await checkMaskMips(device, lambert, fail);
         data.lambert = {
@@ -320,6 +384,12 @@ try {
             floorPixels: ratios.length,
             probes: readback.seeds.length,
             meanRatio: ratios.reduce((sum, value) => sum + value, 0) / Math.max(ratios.length, 1),
+            plainMeanOverPiL: plain.reduce((sum, value) => sum + value, 0) / Math.max(plain.length, 1),
+            referenceAlongNormalOverPiL: shIrradiance(constantReference, UP) / (Math.PI * CONSTANT_SKY),
+            openPixels: openErrors.length,
+            openMeanError: openMean,
+            openP95Error: openP95,
+            meanSSGIOcclusion: occlusions.reduce((sum, value) => sum + value, 0) / Math.max(occlusions.length, 1),
             meanError,
             p95Error,
             maxError: largest(errors),
@@ -365,7 +435,11 @@ try {
         const transposedError = Math.max(...transposed.map((value, index) => Math.abs(value - reference[index]) / scale));
 
         const expectedE = shIrradiance(reference, UP);
-        const { ratios, nonFinite, negative, backupHints } = irradianceRatios(readback, expectedE);
+        // The reference SH about SSGI's bent normal through its cone, plus its near-field light (0 here).
+        const { ratios, nonFinite, negative, backupHints } = irradianceRatios(readback, (pixel) => {
+            const ssgi = ssgiAt(readback, pixel);
+            return shIrradiance(reference, ssgi.bentNormal, ssgi.ao) + ssgi.nearField;
+        });
         const errors = ratios.map((ratio) => Math.abs(ratio - 1));
         const meanError = errors.reduce((sum, value) => sum + value, 0) / Math.max(errors.length, 1);
         const p95Error = percentile(errors, 0.95);

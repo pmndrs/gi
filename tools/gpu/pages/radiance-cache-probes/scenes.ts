@@ -1,6 +1,6 @@
 /**
  * Scenes the radiance-cache pages share (radiance-cache-probes,
- * radiance-cache-temporal). Not a page itself.
+ * radiance-cache-temporal, radiance-cache-filter). Not a page itself.
  */
 
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
@@ -26,6 +26,36 @@ export async function describeSkyPlane(platform: GIPlatformImpl): Promise<void> 
     const material = scene.createMaterial({ albedo: [0.5, 0.5, 0.5], label: 'floor' });
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'floor' });
     scene.setEnvironment({ type: 'color', color: [SKY_RADIANCE, SKY_RADIANCE, SKY_RADIANCE], intensity: 1 });
+}
+
+type Vector = [number, number, number];
+
+/** The sky plane and a 0.6 × 2.5 × 0.6 m box (albedo 0.7, 0.3, 0.2) standing on it 5 m ahead of the origin, at (0, 0, -5). */
+export async function describePillar(platform: GIPlatformImpl): Promise<void> {
+    await describeSkyPlane(platform);
+    const scene = platform.scene;
+    // A 0.6 x 2.5 x 0.6 m box standing on the floor 5 m ahead (each face its own four vertices, normals out).
+    const [cx, cz, half, height] = [0, -5, 0.3, 2.5];
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    const face = (normal: Vector, corners: Vector[]): void => {
+        const base = positions.length / 3;
+        for (const corner of corners) {
+            positions.push(...corner);
+            normals.push(...normal);
+        }
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    };
+    const [x0, x1, z0, z1] = [cx - half, cx + half, cz - half, cz + half];
+    face([0, 0, 1], [[x0, 0, z1], [x1, 0, z1], [x1, height, z1], [x0, height, z1]]);
+    face([0, 0, -1], [[x1, 0, z0], [x0, 0, z0], [x0, height, z0], [x1, height, z0]]);
+    face([1, 0, 0], [[x1, 0, z1], [x1, 0, z0], [x1, height, z0], [x1, height, z1]]);
+    face([-1, 0, 0], [[x0, 0, z0], [x0, 0, z1], [x0, height, z1], [x0, height, z0]]);
+    face([0, 1, 0], [[x0, height, z1], [x1, height, z1], [x1, height, z0], [x0, height, z0]]);
+    const mesh = scene.createMesh({ positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices), label: 'pillar' });
+    const material = scene.createMaterial({ albedo: [0.7, 0.3, 0.2], label: 'pillar' });
+    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'pillar' });
 }
 
 /** The manifest's first bookmark as a page camera. */

@@ -6,8 +6,11 @@
  * (`rgba16float`, signed floats), as Capsaicin's visibility buffer gives its
  * geometry normals, and the velocity (`rgba16float`, rg: the hit's NDC now
  * minus its NDC through the previous `encode`'s camera, as three's MRT
- * velocity; 0 on sky pixels and at the first encode). A test tool only, never a shading path; the three
- * adapter's screen inputs (RC1.1) take its place in RC2.2.
+ * velocity; 0 on sky pixels and at the first encode), and a stand-in for last frame's lit colour
+ * (`previousLighting`, RC4.2: `rgba16float`, the hit's albedo × `lightingScale` plus its emission,
+ * what a surface under a uniform sky of radiance `lightingScale` with nothing in the way sends
+ * back; black by default, so SSGI's near-field light is 0 and only its occlusion acts). A test
+ * tool only, never a shading path; the three adapter's screen inputs (RC1.1) take its place in RC2.2.
  *
  * The camera is built here in f64: a look-at view and WebGPU's 0..1-depth
  * perspective, column-major, the same matrices the page hands to
@@ -75,11 +78,13 @@ struct PageCamera {
     right: vec4f,     // xyz: unit right; w: width / height
     up: vec4f,        // xyz: unit up
     size: vec4u,
+    lighting: vec4f,  // x: the previousLighting scale (albedo x scale + emission; 0 for black)
 }
 @group(1) @binding(0) var<uniform> pageCamera: PageCamera;
 @group(1) @binding(1) var pageDepth: texture_storage_2d<r32float, write>;
 @group(1) @binding(2) var pageNormal: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(3) var pageVelocity: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(4) var pageLighting: texture_storage_2d<rgba16float, write>;
 
 // The largest f32 below 1: a hit never reads as the far plane (the sky).
 const PAGE_DEPTH_BELOW_FAR: f32 = 0.99999994;
@@ -99,6 +104,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var depth = 1.0;
     var normal = vec3f(0.0);
     var velocity = vec2f(0.0);
+    var lighting = vec3f(0.0);
     if (hit.t >= 0.0) {
         let surface = giSurfaceAt(ray, hit);
         let world = vec4f(pageCamera.position.xyz + direction * hit.t, 1.0);
@@ -107,16 +113,20 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         normal = select(-surface.geometricNormal, surface.geometricNormal, dot(surface.geometricNormal, direction) < 0.0);
         let previousClip = pageCamera.previousViewProjection * world;
         velocity = clip.xy / clip.w - previousClip.xy / previousClip.w;
+        if (pageCamera.lighting.x > 0.0) {
+            lighting = surface.albedo * pageCamera.lighting.x + surface.emission;
+        }
     }
     textureStore(pageDepth, id.xy, vec4f(depth, 0.0, 0.0, 0.0));
     textureStore(pageNormal, id.xy, vec4f(normal, 0.0));
     textureStore(pageVelocity, id.xy, vec4f(velocity, 0.0, 0.0));
+    textureStore(pageLighting, id.xy, vec4f(lighting, 1.0));
 }
 `;
 
 const STAGE_COMPUTE = 0x4;
-/** Bytes of `PageCamera`: two matrices, four vectors, the size. */
-const UNIFORM_BYTES = 208;
+/** Bytes of `PageCamera`: two matrices, four vectors, the size, the lighting. */
+const UNIFORM_BYTES = 224;
 
 const SCREEN_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'radiance-cache-probes screen group 1',
@@ -125,6 +135,7 @@ const SCREEN_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 1, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'r32float' } },
         { binding: 2, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
         { binding: 3, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+        { binding: 4, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
     ],
 };
 
@@ -135,6 +146,8 @@ export class PageScreen {
     private readonly group: GPUBindGroup;
     /** The view-projection of the latest encode: the next one's previous (velocity). */
     private previousViewProjection: number[] | null = null;
+    /** `previousLighting` is the hit's albedo × this plus its emission; 0 (the default) draws it black. */
+    lightingScale = 0;
 
     private constructor(
         private readonly device: GPUDevice,
@@ -146,7 +159,8 @@ export class PageScreen {
         const depth = device.createTexture({ label: 'page depth', size: [width, height], format: 'r32float', usage });
         const normal = device.createTexture({ label: 'page normal', size: [width, height], format: 'rgba16float', usage });
         const velocity = device.createTexture({ label: 'page velocity', size: [width, height], format: 'rgba16float', usage });
-        this.screen = { width, height, depth, normal, velocity, normalEncoding: 'snorm-float' };
+        const previousLighting = device.createTexture({ label: 'page previous lighting', size: [width, height], format: 'rgba16float', usage });
+        this.screen = { width, height, depth, normal, velocity, previousLighting, normalEncoding: 'snorm-float' };
         this.uniforms = device.createBuffer({ label: 'page camera', size: UNIFORM_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.group = device.createBindGroup({
             layout: kernel.ownLayouts[0],
@@ -155,6 +169,7 @@ export class PageScreen {
                 { binding: 1, resource: depth.createView() },
                 { binding: 2, resource: normal.createView() },
                 { binding: 3, resource: velocity.createView() },
+                { binding: 4, resource: previousLighting.createView() },
             ],
         });
     }
@@ -183,6 +198,7 @@ export class PageScreen {
         this.previousViewProjection = viewProjection;
         floats.set([...camera.position, 0, ...forward, Math.tan((camera.fovYDeg * Math.PI) / 360), ...right, width / height, ...up, 0], 32);
         new Uint32Array(words, 192, 4).set([width, height, 0, 0]);
+        floats[208 / 4] = this.lightingScale;
         this.device.queue.writeBuffer(this.uniforms, 0, words);
         const pass = encoder.beginComputePass({ label: 'radiance-cache-probes screen' });
         this.kernel.bind(pass);
@@ -195,6 +211,7 @@ export class PageScreen {
         this.screen.depth.destroy();
         this.screen.normal.destroy();
         this.screen.velocity?.destroy();
+        this.screen.previousLighting?.destroy();
         this.uniforms.destroy();
     }
 }

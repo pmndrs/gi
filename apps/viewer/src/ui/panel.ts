@@ -125,6 +125,8 @@ const RADIANCE_CACHE_VIEW_LABELS: Record<RadianceCacheScreenViewName | 'none', s
     'probe-atlas': 'Probe atlas (each probe, 8 × 8 directions)',
     'probe-mask': 'Probe mask (where the probes are)',
     'probe-sh': 'Probe SH (each probe as nine numbers)',
+    'ssgi-occlusion': 'SSGI occlusion (how open each point is)',
+    'ssgi-bent-normal': 'SSGI bent normal (the most open direction)',
 };
 
 const PROBE_COLOR_LABELS: Record<ProbeColorName, string> = {

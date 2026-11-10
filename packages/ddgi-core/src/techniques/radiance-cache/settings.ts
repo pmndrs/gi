@@ -12,7 +12,8 @@
  * `gi1_disable_albedo_textures` are left out because the platform has neither
  * specular materials (D8, D16) nor textures at hits (D2); the debug and DXR 1.0
  * options are left out for good (docs/design/radiance-cache.md, "The baseline is Capsaicin's default
- * configuration").
+ * configuration"). Capsaicin's SSGI technique's options are here too (RC4.2, `ssgi*`), but for
+ * `ssgi_unroll_kernel_` (default off), a variant with the counts fixed at 1 and 2 (register D57).
  */
 
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
@@ -68,6 +69,22 @@ export interface RadianceCacheSettings {
     /** `gi1_reservoir_cache_cell_size` (gi1.h:71, default 16): world-space ReSTIR's cell, with `useResampling`. */
     reservoirCacheCellSize: number;
     /**
+     * Capsaicin's SSGI technique (`SSGI::RenderOptions`, ssgi.h:46-53), which
+     * the GI-1.2 renderer runs before GI-1 (gi1_renderer.cpp:60-61) and whose
+     * occlusion, bent normal and near-field light `InterpolateScreenProbes`
+     * reads (`HAS_OCCLUSION`, gi1.comp:1621-1626). RC4.2.
+     *
+     * `ssgi_slice_count_` (default 1): directions around the pixel, each a
+     * slice with a horizon on both sides.
+     */
+    ssgiSliceCount: number;
+    /** `ssgi_step_count_` (default 2): depth samples per side of a slice. */
+    ssgiStepCount: number;
+    /** `ssgi_view_radius_` (default 0.2): how far the samples reach, in scene units. */
+    ssgiViewRadius: number;
+    /** `ssgi_falloff_range_` (default 0.05): the outer share of the radius over which a sample's weight falls to 0. */
+    ssgiFalloffRange: number;
+    /**
      * Ours, not Capsaicin's (default true): run GI-1's image-space denoiser
      * (`ReprojectGI`, `FilterGI` ×2; RC4.3, gi-denoiser.ts), which Capsaicin
      * always runs. Off, the shading module reads `InterpolateScreenProbes`'
@@ -76,7 +93,7 @@ export interface RadianceCacheSettings {
     useGIDenoiser: boolean;
 }
 
-/** Capsaicin's defaults (gi1.h:48-71). */
+/** Capsaicin's defaults (gi1.h:48-71; SSGI's, ssgi.h:48-51). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
     useTemporalFeedback: false,
@@ -92,6 +109,10 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
+    ssgiSliceCount: 1,
+    ssgiStepCount: 2,
+    ssgiViewRadius: 0.2,
+    ssgiFalloffRange: 0.05,
     useGIDenoiser: true,
 });
 
