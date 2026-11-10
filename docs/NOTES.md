@@ -243,6 +243,9 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **GLTFLoader can't load a textured GLB in Node:** its image path needs `self` (`ReferenceError: self is not defined`). Unit tests parse an untextured copy and check the textures from the file's JSON and PNG bytes (`scenes/src/glb.test.ts`). Source: T4.4.
 - **Mixed procedural and model scenes (`courtyard-tree`) get a GLB of their procedural parts** from `pnpm scenes:export` since T4.4, so Cycles can render them. Before that `courtyard-tree` had no exported walls and `render.py` stopped. The native harness still refuses mixed scenes (`native-lib.ps1`; its comment that no file exists is now out of date). Source: T4.4.
 
+- **On the Mac, `pnpm assets:fetch` reports every Blender-converted asset and the wind tree as failed, though the files load.** The recorded hashes are from Windows. Each `.gltf` comes out smaller by exactly its line count (Windows wrote CRLF), the same with Blender 4.5.0 and 5.1.1. Bistro's `.glb`, the courtyard tree's NORMAL view and the generated wind tree differ by small binary amounts, not yet looked at. The downloads and the candle subset verify. Asset folders can share one download cache through a symlinked `assets/downloads/.cache`, since the tool hard-links from it. Source: the Mac move, 2026-11-10 (TASKS Later).
+- **Blender for the asset tool on the Mac:** 4.5.0 lives at `/Users/dex/Developer/tools/Blender-4.5.0.app` (set `BLENDER` to `.../Contents/MacOS/Blender`), next to the installed 5.1.1, which the tool refuses. Source: 2026-11-10.
+
 ## Ground-truth renderers (T0.7)
 
 - **Cycles units** (`tools/reference/cycles/units.py`):

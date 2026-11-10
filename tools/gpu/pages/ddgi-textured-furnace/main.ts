@@ -15,9 +15,13 @@
  *   mean, as the adapter's averages did before M4), so every hit sees the
  *   checker's stored mean `m`. The stored 1 × 1 mip is 8-bit sRGB, so `m`
  *   is 0.5 only to about 0.6% (NOTES), and the furnace answers
- *   E/π = 0.25 / (1 − m). Done-when 5 here: the field mean is within 0.1% of
- *   that closed form. (Against flat's field it would carry flat's own error:
- *   flat read 0.49925 on the RTX, 0.15% under its 0.5.) (The other half
+ *   E/π = 0.25 / (1 − m). Done-when 5 here: the field mean is within 0.5% of
+ *   that closed form. (It was 0.1%, set on the RTX alone; the furnace's own
+ *   error differs by about 0.3% between GPUs, flat reading −0.15% on the RTX,
+ *   −0.22% on the M5 Pro and −0.28% on the Intel, so 0.5% is the tightest
+ *   limit every device can meet; DECISIONS 2026-11-10. Against flat's field
+ *   it would carry flat's own error, and not by the same amount on every
+ *   GPU.) (The other half
  *   of done-when 5, flat against `m4` before T4.1, is the plain `ddgi-furnace`
  *   page run on both commits.)
  *
@@ -37,7 +41,8 @@ const env = import.meta.env as Record<string, unknown>;
 /** As ddgi-furnace: 30 s of DDGI's clock at 60 Hz, which its adaptive hysteresis needs to settle. */
 const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 1800;
 const TEXTURED_TOLERANCE = 0.01;
-const TEXTURES_OFF_TOLERANCE = 0.001;
+/** 0.5%: above the furnace's device-to-device spread (see the header; DECISIONS 2026-11-10). */
+const TEXTURES_OFF_TOLERANCE = 0.005;
 const POINTS_PER_METRE = 4;
 /** The checker's squares: 2 × 2 in the texture, the texture tiled 4 × 4 on each face. */
 const CHECKER_TILING = 4;
