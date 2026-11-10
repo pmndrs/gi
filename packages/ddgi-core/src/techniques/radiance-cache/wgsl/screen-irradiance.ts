@@ -41,9 +41,8 @@
  *    three's composite does.
  *
  * Capsaicin runs `FilterScreenProbes` between the mask and the projection;
- * it arrives with phase 4 (RC4.2), as does the GI denoiser that reads the
- * interpolated image (RC4.3). Until then the shading module reads this
- * kernel's output directly (the design doc's phase 2 notes).
+ * it arrives with phase 4 (RC4.2). The interpolated image goes on to GI-1's
+ * denoiser (RC4.3, gi-denoiser.ts), whose output the shading module reads.
  *
  * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
  * the projection weight is a cell's solid angle (D25), the SH live in a
