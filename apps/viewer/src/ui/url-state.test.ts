@@ -103,4 +103,15 @@ describe('url state', () => {
         expect(link).toContain('cam=1%2C2%2C3%2C4%2C5%2C6%2C60');
         expect(link).not.toContain('camera=');
     });
+
+    it('reads and writes the moving-geometry scenario, the camera-following volume and the wind (T3.8)', () => {
+        const state = parseUrlState('?scenario=fly-through&follow=camera&wind=80&motion=fly-through');
+        expect(state).toMatchObject({ scenario: 'fly-through', followCamera: true, windStrength: 0.8, motion: 'fly-through' });
+        // Scenario names aren't scene settings.
+        expect(state.sceneSettings).toEqual({});
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // Defaults stay out of the link; nonsense falls back.
+        expect(serializeUrlState(DEFAULT_URL_STATE)).toBe('');
+        expect(parseUrlState('?follow=yes&wind=500&scenario=Not%20One')).toMatchObject({ followCamera: false, windStrength: 1, scenario: null });
+    });
 });

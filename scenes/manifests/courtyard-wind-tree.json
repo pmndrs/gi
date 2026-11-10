@@ -94,6 +94,41 @@
             ]
         }
     ],
+    "motions": [
+        {
+            "id": "wind-gusts",
+            "label": "Gusts of wind sway the tree (20 s, then again)",
+            "target": "object:wind-tree",
+            "interpolation": "smooth",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "sway": 0 },
+                { "t": 1, "sway": 0.45 },
+                { "t": 3, "sway": -0.25 },
+                { "t": 5, "sway": 0.6 },
+                { "t": 7, "sway": -0.15 },
+                { "t": 9, "sway": 0.9 },
+                { "t": 11, "sway": 0.1 },
+                { "t": 13, "sway": 0.75 },
+                { "t": 15, "sway": -0.3 },
+                { "t": 17, "sway": 0.4 },
+                { "t": 19, "sway": -0.1 },
+                { "t": 20, "sway": 0 }
+            ]
+        },
+        {
+            "id": "wind-lean",
+            "label": "The tree jumps to a full lean, then back upright, every 5 s",
+            "target": "object:wind-tree",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "sway": 0 },
+                { "t": 5, "sway": 1 },
+                { "t": 10, "sway": 0 }
+            ]
+        }
+    ],
     "environment": {
         "type": "procedural",
         "sunDirection": [

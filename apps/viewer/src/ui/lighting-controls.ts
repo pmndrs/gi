@@ -1,14 +1,14 @@
 /**
  * The panel's controls for changing light while DDGI runs (T2.8,
  * docs/design/m2-lights.md §7): the scene's lights (with a gizmo in the
- * picture), its scripted motions, time of day, light groups and the
- * response meter. Like `panel.ts`, it only builds controls and reports what
+ * picture), its scripted motions (lights, and since T3.8 objects and the
+ * camera), time of day, light groups and the response meter. Like `panel.ts`, it only builds controls and reports what
  * the user did; `ViewerApp` decides what that means. Every control has
  * hover help (`help-text.ts`).
  */
 
 import { Color } from 'three';
-import type { ManifestMotion } from '../../../../scenes/src/manifest';
+import { motionTarget, type ManifestMotion } from '../../../../scenes/src/manifest';
 import type { LightKind, LightSettings } from '../lighting/light-editor';
 import type { MeterResult } from '../lighting/response-meter';
 import { CHANGE_SHARE, TOLERANCE } from '../stats/response-curve';
@@ -218,7 +218,7 @@ export class LightingControls {
         withHelp(this.motionSelect, 'motionSelect');
         withHelp(this.motionPlay, 'motionPlay');
         this.motionPlay.addEventListener('click', () => this.handlers.onPlayMotion(this.motionPlay.dataset.playing === '1' ? null : this.motionSelect.value));
-        this.motionsSection.append(h('h2', { text: 'Light motions' }), this.motionSelect, this.motionPlay, this.motionStatus);
+        this.motionsSection.append(h('h2', { text: 'Motions' }), this.motionSelect, this.motionPlay, this.motionStatus);
         return this.motionsSection;
     }
 
@@ -333,7 +333,8 @@ export class LightingControls {
         this.motionsSection.hidden = motions.length === 0;
         this.setMotionPlaying(null, '');
         // Each jump of a motion is a step to measure, from one keyframe to the next; step motions first.
-        const steps = [...motions].sort((a, b) => Number(b.interpolation === 'step') - Number(a.interpolation === 'step'));
+        // A camera motion can't be measured: the meter needs a still camera.
+        const steps = motions.filter((motion) => motionTarget(motion)?.kind !== 'camera').sort((a, b) => Number(b.interpolation === 'step') - Number(a.interpolation === 'step'));
         this.meterMotion.replaceChildren(
             ...steps.flatMap((motion) =>
                 motion.keyframes.slice(1).map((keyframe, jump) =>
@@ -342,7 +343,12 @@ export class LightingControls {
             ),
         );
         this.meterMeasure.disabled = steps.length === 0;
-        this.meterStatus.textContent = steps.length === 0 ? 'This scene has no light motion to make a step with.' : '';
+        this.meterStatus.textContent =
+            steps.length === 0
+                ? motions.length > 0
+                    ? "This scene's only motion moves the camera, and the meter needs a still camera, so there is no step to measure here."
+                    : 'This scene has no light or object motion to make a step with.'
+                : '';
 
         this.timeSection.hidden = !timeOfDay.available;
         this.timeToggle.checked = false;
@@ -433,6 +439,11 @@ export class LightingControls {
             control.weight.value = String(weight.intensity);
             control.value.textContent = `x${weight.intensity.toFixed(2)}`;
         }
+    }
+
+    /** Shows a step in the meter's list (a scenario's "Measure a step" chose it). */
+    setMeterStep(motionId: string, jump: number): void {
+        this.meterMotion.value = `${motionId}#${jump}`;
     }
 
     /** The meter's region in words. */

@@ -11,10 +11,12 @@
  * (`userData.giDeforming`). A sway of `s` (−1 to 1) moves a vertex of weight
  * `w` by `s × w × reach` along `direction`, in the mesh's own space.
  *
- * Kept small and standalone so the viewer's wind scenario (T3.8) can take it.
+ * Written for T3.3's `three-wind-tree-gi` page, which still uses it; the
+ * viewer's wind scenario (T3.8, `lighting/motion-player.ts`) plays a
+ * manifest motion's `sway` through it, scaled by the wind-strength slider.
  */
 
-import type { BufferAttribute, Mesh } from 'three/webgpu';
+import type { BufferAttribute, Mesh } from 'three';
 
 export interface SwayOptions {
     /** Metres a vertex of weight 1 moves at full sway. */

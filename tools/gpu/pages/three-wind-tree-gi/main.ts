@@ -5,7 +5,7 @@
  * The scene is `courtyard-wind-tree` as the viewer loads it, through the
  * three adapter. The tree's three meshes (trunk, branches, leaves) are
  * marked `userData.giDeforming` with a `giDeformBounds` from the sway, and a
- * CPU sway driver (sway.ts) moves their vertices by the wind weight in
+ * CPU sway driver (the viewer's scene/wind-sway.ts) moves their vertices by the wind weight in
  * COLOR_0's alpha: the crown swings up to REACH metres along x, the foot not
  * at all. The adapter sends each pose to the platform, which refits the
  * trees on the GPU (T3.3).
@@ -42,7 +42,7 @@ import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts'
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { TestView, type TestViewImages } from '../ddgi-shared/harness.ts';
 import { runThreePage } from '../three-shared/harness.ts';
-import { WindSway } from './sway.ts';
+import { WindSway } from '../../../../apps/viewer/src/scene/wind-sway.ts';
 
 const WIDTH = 320;
 const HEIGHT = 240;

@@ -40,6 +40,7 @@
 
 import { Color, type Object3D } from 'three';
 import type { Node } from 'three/webgpu';
+import type { SceneManifest } from '../../../../scenes/src/manifest';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image';
 import { AtlasOverlay, type AtlasChoice } from '../ddgi/atlas-overlay';
 import { DdgiDebugMaterial } from '../ddgi/debug-material';
@@ -49,6 +50,7 @@ import {
     GIVolume,
     PROBE_STATE_LABELS,
     type DDGITechnique,
+    type DDGIVolumeSettings,
     type DebugView,
     type EnvironmentDescriptor,
     type FrameBudget,
@@ -105,6 +107,13 @@ export interface DdgiViewerSettings {
      * 2026-11-08). Changing it starts DDGI over, as `lightGroups` does.
      */
     sunLayer: boolean;
+    /**
+     * A second, finer volume of probes that follows the camera (T3.6,
+     * `CAMERA_VOLUME`), in front of the manifest's fixed one, which fills in
+     * beyond it. For big scenes, where the fixed volume's probes are metres
+     * apart (Bistro exterior: 4 m). Changing it starts DDGI over.
+     */
+    cameraVolume: boolean;
     /** Each group's weight (index = group), live; missing ones are white at 1. */
     groupWeights: GroupWeight[];
     /** The environment layer's weight (the sky and glowing surfaces), live. */
@@ -139,6 +148,7 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     budgetMs: 2,
     lightGroups: 0,
     sunLayer: false,
+    cameraVolume: false,
     groupWeights: [],
     environmentWeight: WHITE_WEIGHT,
     showProbes: false,
@@ -151,9 +161,34 @@ export const DEFAULT_DDGI_VIEWER_SETTINGS: DdgiViewerSettings = {
     giTextures: true,
 };
 
-/** The settings that shape DDGI's layers, which only a new start can change (`ViewerCore.configureDdgi`). */
-export function layerKey(settings: Pick<DdgiViewerSettings, 'lightGroups' | 'sunLayer'>): string {
-    return `groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}`;
+/** The settings that shape DDGI's layers and volumes, which only a new start can change (`ViewerCore.configureDdgi`). */
+export function layerKey(settings: Pick<DdgiViewerSettings, 'lightGroups' | 'sunLayer' | 'cameraVolume'>): string {
+    return `groups ${settings.lightGroups}, sun layer ${settings.sunLayer ? 'on' : 'off'}, camera volume ${settings.cameraVolume ? 'on' : 'off'}`;
+}
+
+/**
+ * The camera-following volume (T3.6, m3-moving.md §4.2): 32 × 12 × 32 probes
+ * 1.5 m apart (a window 46.5 m wide and 16.5 m high), Dennis's pick of
+ * 2026-11-05, as `ddgi-camera-volume` checks it on Bistro's fly-through.
+ * Priority 1, so it answers before the manifest's volume wherever it covers
+ * the point, and fades into it over its last 10 spacings (DECISIONS
+ * 2026-11-10).
+ */
+export const CAMERA_VOLUME = { probes: [32, 12, 32] as const, spacing: 1.5, priority: 1 };
+
+/**
+ * The volumes DDGI starts with: the manifest's, and with `cameraVolume` the
+ * camera-following one first, its window starting around `start` (the
+ * scene's first camera view; it moves to wherever the camera is from the
+ * first frame on).
+ */
+export function ddgiVolumes(manifest: Pick<SceneManifest, 'volume'>, cameraVolume: boolean, start: readonly [number, number, number]): DDGIVolumeSettings[] {
+    const fixed: DDGIVolumeSettings = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
+    if (!cameraVolume) return [fixed];
+    const { probes, spacing, priority } = CAMERA_VOLUME;
+    // n probes span n - 1 spacings.
+    const size: [number, number, number] = [(probes[0] - 1) * spacing, (probes[1] - 1) * spacing, (probes[2] - 1) * spacing];
+    return [{ center: [start[0], start[1], start[2]], size, spacing, follow: 'camera', priority }, fixed];
 }
 
 /** Set-up steps the viewer records per batch (`pumpPrepare`); `start` runs the real frames itself, so a step only looks at its progress. */
@@ -281,6 +316,8 @@ export class DdgiTechnique extends ScenePassTechnique {
                 // The weights are set once the technique exists (`applyGroupWeights`); they are live.
                 lightGroups: this.settings.lightGroups > 0 ? { count: this.settings.lightGroups, weights: [], environmentWeight: [1, 1, 1] } : null,
                 sunLayer: this.settings.sunLayer,
+                // Several volumes only with the camera's; one volume stays exactly M2's path (the GIVolume's own).
+                ...(this.settings.cameraVolume ? { volumes: ddgiVolumes(loaded.manifest, true, loaded.manifest.cameras[0].position) } : {}),
             },
             environment: this.environmentOverride ?? environmentFor(loaded.manifest),
             warn: (message) => this.warn(message),

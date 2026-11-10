@@ -28,6 +28,8 @@ import {
 
 export interface DdgiPanelSettings {
     budgetMs: number;
+    /** The camera-following volume (starts DDGI over when changed). */
+    followCamera: boolean;
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
@@ -190,6 +192,7 @@ export class Panel {
     private readonly budget = h('input', { type: 'range', min: MIN_BUDGET_MS, max: MAX_BUDGET_MS, step: BUDGET_STEP_MS });
     private readonly budgetValue = h('span', { className: 'value' });
     private readonly showProbes = h('input', { type: 'checkbox' });
+    private readonly followCamera = h('input', { type: 'checkbox' });
     private readonly probeColor = h('select');
     private readonly probeColorRow = h('div', { className: 'indented' });
     private readonly probeLegend = h('div', { className: 'legend' });
@@ -223,12 +226,14 @@ export class Panel {
 
     /**
      * @param extraSections more sections (the lighting controls), placed after global illumination
+     * @param leadingSections sections placed first, above the scene (the moving-geometry scenarios)
      */
     constructor(
         parent: HTMLElement,
         manifests: readonly SceneManifest[],
         private readonly handlers: PanelHandlers,
         extraSections: readonly HTMLElement[] = [],
+        leadingSections: readonly HTMLElement[] = [],
     ) {
         this.element = h('aside', { className: 'panel' });
         parent.append(this.element);
@@ -252,6 +257,7 @@ export class Panel {
 
         this.element.append(
             h('h1', { text: 'DDGI viewer' }),
+            ...leadingSections,
             this.sceneSection(),
             this.moveSection(),
             this.lightSection(),
@@ -355,6 +361,7 @@ export class Panel {
         this.ddgiSettings.append(
             withHelp(h('div', { className: 'label' }, 'Update budget per frame ', this.budgetValue), 'ddgiBudget'),
             this.budget,
+            withHelp(h('label', { className: 'inline' }, this.followCamera, ' Add probes that follow the camera (big scenes)'), 'ddgiFollowCamera'),
             withHelp(h('label', { className: 'inline' }, this.showProbes, ' Show the probes'), 'ddgiProbes'),
             this.probeColorRow,
             this.probeLegend,
@@ -457,6 +464,7 @@ export class Panel {
         const change = this.change.value;
         return {
             budgetMs: Number(this.budget.value),
+            followCamera: this.followCamera.checked,
             probes: this.showProbes.checked,
             probeColor: this.probeColor.value as ProbeColorName,
             debug: view === 'none' ? null : (view as DdgiScreenViewName),
@@ -488,6 +496,7 @@ export class Panel {
             handlers.onDdgiSettings(this.ddgiPanelSettings());
         });
         this.showProbes.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
+        this.followCamera.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         this.screenView.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
         for (const control of [this.probeColor, this.atlas, this.atlasFill, this.change, this.giTextures]) {
             control.addEventListener('change', () => handlers.onDdgiSettings(this.ddgiPanelSettings()));
@@ -602,6 +611,7 @@ export class Panel {
         this.budget.value = String(state.ddgi.budgetMs);
         this.showBudget(state.ddgi.budgetMs);
         this.showProbes.checked = state.ddgi.probes;
+        this.followCamera.checked = state.ddgi.followCamera;
         this.screenView.value = state.ddgi.debug ?? 'none';
         this.probeColor.value = state.ddgi.probeColor;
         this.atlas.value = state.ddgi.atlas ?? 'none';

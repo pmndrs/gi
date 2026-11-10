@@ -24,7 +24,11 @@
  * - `groups`     DDGI light groups with a layer each: `2` or `4` (absent: off)
  * - `tod`        time of day on, at `hour,day` (sun time 0 to 24, day of the year 1 to 365); it also
  *                turns DDGI's sun layer on
- * - `motion`     a light motion of the scene (`light-sweep`, `light-step`) playing
+ * - `motion`     a motion of the scene playing (`light-sweep`, `light-step`, `door-swing`, `fly-through`...)
+ * - `scenario`   one of the viewer's moving-geometry scenarios (`scenarios.ts`); a link with only
+ *                `scenario` opens its scene, camera view and motion
+ * - `follow`     `camera`: DDGI adds a finer volume of probes that follows the camera (T3.6)
+ * - `wind`       the wind strength for a swaying tree, in percent of the strongest (default 60)
  * - `textures`   how model textures are kept on the GPU: `uncompressed`, or `compressed`; absent is
  *                `all-compressed` (BC7/BC5 for every texture; GI reads the compressed mips since M4's
  *                T4.3; scene/compress-textures.ts). Read when the scene loads
@@ -40,6 +44,14 @@
 import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
+
+/**
+ * The wind slider's start, a share of the strongest wind (`MAX_WIND_REACH_M`,
+ * lighting/motion-drivers.ts): 0.6, a tree crown that moves about 0.9 m at a
+ * full sway. Here, not in the motion player, so this file stays free of engine
+ * imports; the player reads it from here.
+ */
+export const DEFAULT_WIND_STRENGTH = 0.6;
 
 /** Exposure range in stops, for links and the slider: the same range a manifest's default may use. */
 export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
@@ -100,8 +112,14 @@ export interface ViewerUrlState {
     lightGroups: 0 | 2 | 4;
     /** Time of day, when on: the hour (sun time) and the day of the year. */
     timeOfDay: { hour: number; dayOfYear: number } | null;
-    /** The light motion playing (a manifest motion id), or null. */
+    /** The motion playing (a manifest motion id), or null. */
     motion: string | null;
+    /** The moving-geometry scenario chosen in the panel (an id from `scenarios.ts`), or null. */
+    scenario: string | null;
+    /** DDGI's camera-following volume (`follow=camera`). */
+    followCamera: boolean;
+    /** The wind strength, 0 to 1 (the link writes percent). */
+    windStrength: number;
     /** Reach in metres for many unranged shadowless lights (render/scene-lighting.ts); null is the viewer's default. */
     lightReach: number | null;
     /** How model textures are kept on the GPU (scene/compress-textures.ts). */
@@ -134,13 +152,45 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     lightGroups: 0,
     timeOfDay: null,
     motion: null,
+    scenario: null,
+    followCamera: false,
+    windStrength: DEFAULT_WIND_STRENGTH,
     lightReach: null,
     textures: 'all-compressed',
     sceneSettings: {},
 };
 
 /** The link's own names; any other name is a scene setting. */
-const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'gitextures', 'groups', 'tod', 'motion', 'reach', 'textures']);
+const URL_KEYS = new Set([
+    'scene',
+    'camera',
+    'cam',
+    'technique',
+    'gi',
+    'wipe',
+    'split',
+    'ev',
+    'tone',
+    'nav',
+    'upscale',
+    'budget',
+    'probes',
+    'debug',
+    'probecolor',
+    'atlas',
+    'atlasfill',
+    'atlasev',
+    'change',
+    'gitextures',
+    'groups',
+    'tod',
+    'motion',
+    'scenario',
+    'follow',
+    'wind',
+    'reach',
+    'textures',
+]);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
 const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -212,6 +262,11 @@ export function parseUrlState(search: string): ViewerUrlState {
     }
     const motion = params.get('motion');
     if (motion && /^[a-z0-9-]+$/.test(motion)) state.motion = motion;
+    const scenario = params.get('scenario');
+    if (scenario && /^[a-z0-9-]+$/.test(scenario)) state.scenario = scenario;
+    state.followCamera = params.get('follow') === 'camera';
+    const wind = finiteNumber(params.get('wind'));
+    if (wind !== null) state.windStrength = Math.min(1, Math.max(0, wind / 100));
     const reach = finiteNumber(params.get('reach'));
     if (reach !== null && reach >= 0) state.lightReach = reach;
     state.textures = TEXTURE_COMPRESSIONS.find((mode) => mode === params.get('textures')) ?? state.textures;
@@ -246,6 +301,9 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.lightGroups !== 0) params.set('groups', String(state.lightGroups));
     if (state.timeOfDay) params.set('tod', `${state.timeOfDay.hour.toFixed(2)},${state.timeOfDay.dayOfYear}`);
     if (state.motion) params.set('motion', state.motion);
+    if (state.scenario) params.set('scenario', state.scenario);
+    if (state.followCamera) params.set('follow', 'camera');
+    if (state.windStrength !== DEFAULT_URL_STATE.windStrength) params.set('wind', String(Math.round(state.windStrength * 100)));
     if (state.lightReach !== null) params.set('reach', String(state.lightReach));
     if (state.textures !== DEFAULT_URL_STATE.textures) params.set('textures', state.textures);
     for (const [name, value] of Object.entries(state.sceneSettings)) if (!URL_KEYS.has(name)) params.set(name, value);

@@ -8,7 +8,8 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "contact-sheet": "node scripts/contact-sheet.ts"
+        "contact-sheet": "node scripts/contact-sheet.ts",
+        "scenario-shots": "node scripts/scenario-shots.ts"
     },
     "dependencies": {
         "@pmndrs/ddgi": "workspace:*",

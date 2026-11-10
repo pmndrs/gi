@@ -83,7 +83,7 @@ export const HELP = {
         "CPU time the three.js adapter spends per frame looking for changes in the scene and sending them to the GI library (target: 0.2 ms for a still scene), and then recording the GI work.",
     statsStates: 'How many probes are in each state, counted on the GPU a few frames ago.',
     statsRecompiles:
-        'GPU programs the GI library had to compile while you used the viewer. It should stay at 0: moving, dimming, recolouring, switching lights and changing the time of day only change data. Starting DDGI over with light groups or the sun layer builds a new DDGI, which counts from 0 again. One exception: the "GI albedo at hits" debug view builds its own GPU program the first time it is shown, through the GI library, so the count reads 1 from then on; that one is expected.',
+        'GPU programs the GI library had to compile while you used the viewer. It should stay at 0: moving, dimming, recolouring, switching lights, changing the time of day, moving, adding and swaying objects and flying the camera only change data. Starting DDGI over with light groups, the sun layer or the probes that follow the camera builds a new DDGI, which counts from 0 again. One exception: the "GI albedo at hits" debug view builds its own GPU program the first time it is shown, through the GI library, so the count reads 1 from then on; that one is expected.',
 
     // Lights, motions, time of day, light groups and the response meter (T2.8).
     lightSelect:
@@ -104,8 +104,8 @@ export const HELP = {
     lightGizmoTurn: 'Drag the rings on the chosen spotlight to turn it and aim it somewhere else.',
     lightPutBack: 'Puts the chosen light back exactly as the scene has it: place, aim, brightness, colour, reach and group.',
     motionSelect:
-        "Scripted light movements from the scene file. Light sweep: a lamp gliding at walking pace (1 metre a second) and back. Light step: the same lamp jumping between two places every 3 seconds, to see how fast GI catches up. Choose one, then press Play.",
-    motionPlay: 'Plays the chosen movement, over and over. Stop puts the lamp back where it was.',
+        "Scripted movements from the scene file. Lamps: light sweep, a lamp gliding at walking pace (1 metre a second) and back; light step, the same lamp jumping between two places every 3 seconds. Objects: a door, a cabinet or a cabinet door, a tree in the wind. In Bistro: the camera's flight down the street. The ones that jump instead of gliding are for seeing how fast GI catches up (the response meter below uses them). Choose one, then press Play.",
+    motionPlay: 'Plays the chosen movement, over and over. Stop puts what moved back where it was.',
     timeOfDayToggle:
         "Moves the sun with the hour and the day of the year below; the sky and GI follow. Turning it on also turns on DDGI's sun layer, which makes changes of the sun's brightness and colour show in GI at once; DDGI starts over for that, when you turn it on and again when you turn it off (a few seconds; Sponza about 10). Moving a slider turns it on. The time it opens at puts the sun exactly where the scene has it.",
     timeOfDayHour:
@@ -122,12 +122,28 @@ export const HELP = {
         'Drag a rectangle over the picture to choose what the meter watches: it averages that part of the picture each frame. Without one it watches the whole picture.',
     meterWholePicture: 'Watch the whole picture instead of a picked rectangle.',
     meterMeasure:
-        "Measures how fast GI follows a step: one jump of a motion's lamp (choose which above; in two-room, jump 1 takes the lamp out of the lit room and jump 2 brings it back), and the meter plots the picked region frame by frame, in GI only. It first raises DDGI's budget to 16 ms for 4 seconds so the light has settled (a test mode, not what a game would do), waits 4 seconds at your budget, makes the jump, records 2 seconds, then raises the budget again until the picture stops changing (at least 4 seconds, at most 30) to find the settled picture. Keep the camera still: moving it stops the measurement. About 15 to 40 seconds in all.",
+        "Measures how fast GI follows a step: one jump of a motion's lamp or object (choose which above; in two-room, jump 1 takes the lamp out of the lit room and jump 2 brings it back; for the door, jump 1 shuts it), and the meter plots the picked region frame by frame, in GI only. It first raises DDGI's budget to 16 ms for 4 seconds so the light has settled (a test mode, not what a game would do), waits 4 seconds at your budget, makes the jump, records 2 seconds, then raises the budget again until the picture stops changing (at least 4 seconds, at most 30) to find the settled picture. Keep the camera still: moving it stops the measurement. About 15 to 40 seconds in all.",
     meterCancel: 'Stops the measurement and gives DDGI its normal budget back.',
     meterPlot:
         "The picked region's brightness frame by frame after the step (frame 1 is the jump's own frame). Grey dashed: before the step; white: settled; the shaded band is within 5% of settled. Orange line: the first frame that changed by more than 1%; green line: the first frame within 5% of settled.",
     meterSaveCsv:
         "Saves the measurement as a CSV file: one row per frame (frame, milliseconds since the step, the region's brightness, its change from before and its distance from settled, probes updated), with the marks and how it was measured at the top.",
+
+    // Moving things: the M3 scenarios (T3.8).
+    scenarioSelect:
+        'Pick a scenario to watch GI follow something that moves: a cabinet sliding along a wall, a door shutting between two rooms, a cabinet door opening (and cabinets you add), a tree in the wind, or a flight down a street. It opens the scene at the right camera view and starts the movement; the text below says what to watch for. The stats box (top left) shows the recompile counter, which should stay 0.',
+    scenarioPlay: "Plays the scenario's movement again from the start, or stops it (whatever moved goes back where it was).",
+    scenarioMeasure:
+        "Measures how fast GI follows this scenario's step version (the door jumping shut, the cabinet jumping 1 m, the tree jumping to a full lean) with the response meter below: it switches to GI only, settles the light, makes the jump, and plots the picture's brightness frame by frame. Keep the camera still. About 15 to 40 seconds. When the step turns the picture black (the door shutting, seen from the dark room), \"within 5% of settled\" never comes, since 5% of nothing is nothing: read the curve, which should drop to the floor within the first second.",
+    windStrength:
+        "How strong the wind is: at 100% the strongest gusts move the top of the tree about 1.5 m, at 0% it stands still. Only the tree's shape changes: GI refits its ray-tracing tree each frame on the GPU, nothing is rebuilt and nothing recompiles.",
+    cabinetAdd:
+        'Adds a small cabinet on the floor to the right of the run, as a new shape: GI copies it and builds it a ray-tracing tree of its own on the GPU, so it casts shadows and bounces light within a frame or two.',
+    cabinetCopy:
+        'Adds one more cabinet of the same shape as the last one added: GI only places that shape again, which is cheaper than a new one. Up to 100 cabinets in all.',
+    cabinetClear: 'Takes every added cabinet away again.',
+    ddgiFollowCamera:
+        "Adds a second, finer set of DDGI probes, 1.5 m apart (32 by 12 by 32 of them, about 46 m across), that moves with the camera in front of the scene's own probes, which fill in beyond it. Meant for big outdoor scenes like Bistro, whose own probes are 4 m apart. Probes that come in ahead of the camera fade in over a few seconds. Turning it on or off starts DDGI over (a few seconds).",
 } as const;
 
 export type HelpKey = keyof typeof HELP;

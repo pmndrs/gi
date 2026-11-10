@@ -71,6 +71,41 @@
                 { "t": 3, "position": [-0.01, 1.5, 0.8] },
                 { "t": 6, "position": [-0.01, 1.5, -1.58] }
             ]
+        },
+        {
+            "id": "cabinet-slide",
+            "label": "A red cabinet slides 1 m along the wall and back",
+            "target": "object:cabinet",
+            "interpolation": "smooth",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [0, 0, 0] },
+                { "t": 4, "position": [0, 0, 0] },
+                { "t": 5, "position": [0, 0, 1] },
+                { "t": 9, "position": [0, 0, 1] },
+                { "t": 10, "position": [0, 0, 0] }
+            ]
+        },
+        {
+            "id": "cabinet-step",
+            "label": "The red cabinet jumps 1 m along the wall, then back, every 4 s",
+            "target": "object:cabinet",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [0, 0, 0] },
+                { "t": 4, "position": [0, 0, 1] },
+                { "t": 8, "position": [0, 0, 0] }
+            ]
+        }
+    ],
+    "props": [
+        {
+            "name": "cabinet",
+            "shape": "box",
+            "size": [0.45, 0.85, 0.9],
+            "position": [-1.705, 0.427, -0.4],
+            "color": [0.45, 0.16, 0.06]
         }
     ],
     "environment": {
