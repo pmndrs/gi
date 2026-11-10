@@ -110,6 +110,7 @@ Other members:
 - `volume.recalibrate()` measures again how much probe work fits the budget, over the next frames. Use it after a big scene change.
 - `volume.threeGI` (budget, `markChanged`, timings) and `volume.platform` (stats, debug views) are there after `start`.
 - `volume.light` is the GI light (`ddgi()` reads it).
+- `await volume.exportLightProbeGrid()` gives a snapshot of the GI as three's `LightProbeGrid` ("Exporting a `LightProbeGrid`" below).
 - `volume.dispose()` removes the GI light and frees the platform.
 
 `volume.ddgiVolume()` gives the matching DDGI settings, for building a platform by hand:
@@ -246,6 +247,43 @@ sun.intensity = 1.5;
 - Turning the sun still re-traces, nearest the camera first, as before.
 - Dim or hide it (`intensity` 0 or `visible` false is fine: GI sees a sun at 0), but don't remove it: a removed sun makes another directional light the sun, and every probe is traced again.
 - Off by default. It costs a layer of the field (Sponza: 58 MB of GI becomes 93 MB) and its share of every probe update (PROGRESS, T2.6b). It works with light groups: the sun's layer is then also weighed by its group's weight. 4 groups, the environment and the sun are the most a volume holds.
+
+### Exporting a `LightProbeGrid`
+
+A snapshot of the GI as three's own `LightProbeGrid` (r187), for a static fallback where DDGI can't run (T5.3; docs/design/m5-coverage.md §3). It needs no `bake`: the grid is filled straight from our probes.
+
+```ts
+import { lightProbeGridFromJSON, lightProbeGridToJSON } from '@pmndrs/ddgi/three';
+
+const grid = await volume.exportLightProbeGrid();   // one GPU projection, one readback
+const text = JSON.stringify(lightProbeGridToJSON(grid));
+
+// Later, or on another page, without DDGI:
+const probes = lightProbeGridFromJSON(text);
+scene.add(probes);
+```
+
+- The probes sit exactly where ours do. `LightProbeGrid` puts its probes at cell centres, so the grid is `counts × spacing` wide and centred on our grid's centre.
+- Each probe holds 9 L2 spherical-harmonic coefficients per colour in three's own convention (the radiance SH `LightProbe` stores), so three's `getShIrradianceAt` gives back our irradiance. The core does the projection: `exportIrradianceSH(technique, { volume })` in `@pmndrs/ddgi/core` returns engine-free data (counts, origin, spacing, coefficients, probe states), and `toLightProbeGrid(data, { intensity, priority })` builds the grid from it. `volume.exportLightProbeGrid()` does both.
+- **Light groups:** the export is the field you see, so with light groups or the sun layer on it is every layer times its weight as of the last rendered frame. A weight set since then shows after the next frame.
+- Probes that live GI doesn't read (inside walls, in empty air, not updated yet) get the mean of their nearest active neighbours, because a grid with no visibility blends every probe. `exportIrradianceSH(..., { fillInactiveProbes: false })` keeps their raw values.
+- To light with the grid instead of live GI, add it and set the GI's `intensity` to 0 (GI's priority, 1, beats the grid's 0 otherwise). Don't call `bake` on an exported grid: it would bake into a different texture than the one the grid shows.
+- **What the fallback loses**, compared with live GI: detail above L2 (DDGI's 8 × 8 tiles hold more), visibility (no distances, so light leaks through walls between probes), and relocation (probes are placed on the lattice). That difference is the fallback's known cost and is recorded, not tuned: in the GI-only view, the point-light Cornell box's mean is within 1% of live GI's at every bookmark (per pixel 2-4%), and Sponza's is 8% darker at the colonnade and 4% at the upper gallery (per pixel 11% and 7%), on the M5 Pro (`three-lightprobegrid-export`, `three-lightprobegrid-export-sponza`).
+- **WebGL:** `LightProbeGridWebGL` reads the same packing, but only the WebGPU `LightProbeGrid` is built and checked so far.
+
+**The JSON format is ours, version 1.** three's own `LightProbeGrid` JSON (PR #33658, `toJSON` / `fromJSON`) was still open when this was written, so we don't match it yet. Ours is shaped like it, but stores the coefficients as plain numbers instead of the PR's fixed point, so a round trip gives every float back exactly:
+
+```json
+{
+  "formatVersion": 1, "type": "LightProbeGrid", "generator": "@pmndrs/ddgi",
+  "width": 6, "height": 6, "depth": 6, "resolution": [12, 12, 12], "position": [2.78, 2.74, 2.8],
+  "intensity": 1, "priority": 0,
+  "coefficients": [ 27 numbers per probe ]
+}
+```
+
+- `coefficients`: 27 numbers per probe. Probes go x fastest, then y, then z. Within a probe come the 9 coefficients in three's order (constant, y, z, x, xy, yz, 3z² − 1, xz, x² − y²), each as r, g, b.
+- `lightProbeGridFromJSON` refuses another `type` or `formatVersion`, and says which. When three settles its format, we'll read and write that too.
 
 ### `GILight`
 
