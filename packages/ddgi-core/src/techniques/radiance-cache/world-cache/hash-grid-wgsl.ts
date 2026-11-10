@@ -31,10 +31,13 @@ THE SOFTWARE.
  * to its source line.
  *
  * What differs, and why:
- * - Capsaicin's ~30 buffers are three packed storage buffers (register D6,
+ * - Capsaicin's ~30 buffers are two packed storage buffers (register D6,
  *   `capacity.ts`); a buffer is reached at a fixed word offset
  *   (`HASHGRIDCACHE_HASHBUFFER + tile_index`) where Capsaicin indexes its
  *   buffer array (`g_HashGridCache_BuffersUint[HASHGRIDCACHE_HASHBUFFER][tile_index]`).
+ *   A pass that doesn't read the cell values leaves them out of its layout
+ *   and its WGSL ({@link HashGridCacheBindingSet}), so the passes that bind
+ *   the platform's hit shading stay within its 8 storage buffers per stage.
  * - HLSL `out` parameters become returned structs; HLSL overloads get
  *   distinct names (`HashGridCache_CellIndexLinear` for the `uint1` forms).
  * - `InterlockedCompareExchange` is strong; WGSL has only
@@ -58,21 +61,40 @@ const SHADER_STAGE_COMPUTE = 0x4;
 export const HASH_GRID_CACHE_BINDING = {
     /** `HashGridCacheConstants`, uniform. */
     constants: 0,
-    /** The tile words (counters, hash, decay, packed tile lists), `array<atomic<u32>>`. */
-    tileWords: 1,
+    /** The cache words (counters, per-tile hash, decay and packed tile lists, per-cell update scratch), `array<atomic<u32>>`. */
+    words: 1,
     /** The cell values (direct, then indirect), `array<vec2u>`. */
     cellValues: 2,
-    /** The update scratch (direct, then indirect), `array<atomic<u32>>`. */
-    updateScratch: 3,
 } as const;
 
-/** Layout entries of the hash grid's group: a uniform and three storage buffers. */
-export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
-    { binding: HASH_GRID_CACHE_BINDING.constants, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-    { binding: HASH_GRID_CACHE_BINDING.tileWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    { binding: HASH_GRID_CACHE_BINDING.cellValues, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    { binding: HASH_GRID_CACHE_BINDING.updateScratch, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-];
+/**
+ * Which of the hash grid's buffers a pass binds beside the constants and the
+ * cache words, which every pass binds. The layout entries
+ * ({@link hashGridCacheGroupEntries}) and the WGSL ({@link hashGridCacheWgsl})
+ * follow it, so a pass's layout lists only buffers its code declares.
+ */
+export interface HashGridCacheBindingSet {
+    /** The cell values, and the functions that read or write them (`HashGridCache_AddNewTile`, the filtered readbacks, `worldCacheLookup`). */
+    readonly cellValues: boolean;
+}
+
+/** Every buffer: the lookup's set, and that of the passes that insert, update or resolve cells. */
+export const HASH_GRID_CACHE_ALL_BUFFERS: HashGridCacheBindingSet = Object.freeze({ cellValues: true });
+/** The constants and the cache words alone: the maintenance passes and the two that light hits (`GenerateReservoirs`, `PopulateCells`). */
+export const HASH_GRID_CACHE_WORDS_ONLY: HashGridCacheBindingSet = Object.freeze({ cellValues: false });
+
+/** Layout entries of the hash grid's group for `set`: a uniform and one or two storage buffers. */
+export function hashGridCacheGroupEntries(set: HashGridCacheBindingSet): GPUBindGroupLayoutEntry[] {
+    const entries: GPUBindGroupLayoutEntry[] = [
+        { binding: HASH_GRID_CACHE_BINDING.constants, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+        { binding: HASH_GRID_CACHE_BINDING.words, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+    ];
+    if (set.cellValues) entries.push({ binding: HASH_GRID_CACHE_BINDING.cellValues, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } });
+    return entries;
+}
+
+/** Layout entries of the hash grid's whole group (every buffer): the lookup's. */
+export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = hashGridCacheGroupEntries(HASH_GRID_CACHE_ALL_BUFFERS);
 
 /**
  * Word offsets of `HashGridCacheConstants`' fields (`gi1_shared.h:59-92`,
@@ -182,12 +204,137 @@ fn unpackHalf4(packed_value: vec2u) -> vec4f {
 `;
 
 /**
- * The shared module, with the hash grid's bindings in `group` (entries
- * {@link HASH_GRID_CACHE_GROUP_ENTRIES}). Every hash-grid pass includes it;
- * it declares no entry point.
+ * The cell values' binding and the functions that read or write them, for a
+ * pass whose set includes them ({@link HashGridCacheBindingSet}). Placed after
+ * the rest of the shared module, whose functions they call.
  */
-export function hashGridCacheWgsl(group: number, layout: HashGridCacheBufferLayout): string {
-    const words = layout.tileWords;
+function cellValuesWgsl(group: number, layout: HashGridCacheBufferLayout): string {
+    return /* wgsl */ `
+// ---- The cell values (register D6: ValueBuffer, then ValueIndirectBuffer) ----
+
+// In the cell values (vec2u elements).
+const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
+const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
+
+@group(${group}) @binding(${HASH_GRID_CACHE_BINDING.cellValues}) var<storage, read_write> g_HashGridCache_CellValues: array<vec2u>;
+
+// "If this cell is inside a new tile, we need to add the tile to the packed storage and clear its
+// cells" (gi1.comp:1020-1036 and 1798-1812, the same block in both population passes): the tile
+// joins this frame's packed list, and its finest-level values start at zero (the coarser levels
+// are rewritten by UpdateTiles). With GI-1.2's multibounce on (Capsaicin's default) the indirect
+// values are cleared too.
+fn HashGridCache_AddNewTile(tile_index: u32) {
+    let packed_tile_index = atomicAdd(&g_HashGridCache_Words[HashGridCache_PackedTileCountWord()], 1u);
+    atomicStore(&g_HashGridCache_Words[HashGridCache_PackedTileIndexWord(packed_tile_index)], tile_index);
+
+    // Clear mip0 cells (others will be reset anyways by UpdateTiles)
+    for (var cell_offset = 0u; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; cell_offset++) {
+        let cell_index = HashGridCache_CellIndexLinear(cell_offset, tile_index, 0u);
+        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u, 0u);
+        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);
+    }
+}
+
+// The cell indices of a finest-level cell's three coarser levels, kGI1_InvalidId where a level
+// has no cells (hash_grid_cache.hlsl:437-440).
+struct HashGridCache_MipCells {
+    mip1: u32,
+    mip2: u32,
+    mip3: u32,
+}
+
+fn HashGridCache_MipCellsOf(cell_index_mip0: u32) -> HashGridCache_MipCells {
+    let tile_cell = HashGridCache_CellOffsetMip0(cell_index_mip0);
+    let cell_offset_mip0 = tile_cell.cell_offset_mip0;
+    let tile_index = tile_cell.tile_index;
+    let cell_index_mip1 = select(kGI1_InvalidId, HashGridCache_CellIndex(cell_offset_mip0, tile_index, 1u), g_HashGridCacheConstants.size_tile_mip1 > 0u);
+    let cell_index_mip2 = select(kGI1_InvalidId, HashGridCache_CellIndex(cell_offset_mip0, tile_index, 2u), g_HashGridCacheConstants.size_tile_mip2 > 0u);
+    let cell_index_mip3 = select(kGI1_InvalidId, HashGridCache_CellIndex(cell_offset_mip0, tile_index, 3u), g_HashGridCacheConstants.size_tile_mip3 > 0u);
+    return HashGridCache_MipCells(cell_index_mip1, cell_index_mip2, cell_index_mip3);
+}
+
+// HashGridCache_FilteredRadianceIndirect (:434-463), without its debug view: start at the cell,
+// and while the value has fewer samples than the cap and a coarser level exists, take the
+// coarser level's value instead.
+fn HashGridCache_FilteredRadianceIndirect(cell_index_mip0: u32) -> vec4f {
+    let mips = HashGridCache_MipCellsOf(cell_index_mip0);
+    let max_count = g_HashGridCacheConstants.max_multibounce_sample_count;
+
+    // Mip 0
+    var indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index_mip0]);
+    // Mip 1
+    if (indirect_radiance.w < max_count && mips.mip1 != kGI1_InvalidId) {
+        indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip1]);
+    }
+    // Mip 2
+    if (indirect_radiance.w < max_count && mips.mip2 != kGI1_InvalidId) {
+        indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip2]);
+    }
+    // Mip 3
+    if (indirect_radiance.w < max_count && mips.mip3 != kGI1_InvalidId) {
+        indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip3]);
+    }
+    return indirect_radiance;
+}
+
+// HashGridCache_FilteredRadianceDirect (:465-494), without its debug view: as above, on the
+// direct values and their cap.
+fn HashGridCache_FilteredRadianceDirect(cell_index_mip0: u32) -> vec4f {
+    let mips = HashGridCache_MipCellsOf(cell_index_mip0);
+    let max_count = g_HashGridCacheConstants.max_sample_count;
+
+    // Mip 0
+    var direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index_mip0]);
+    // Mip 1
+    if (direct_radiance.w < max_count && mips.mip1 != kGI1_InvalidId) {
+        direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + mips.mip1]);
+    }
+    // Mip 2
+    if (direct_radiance.w < max_count && mips.mip2 != kGI1_InvalidId) {
+        direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + mips.mip2]);
+    }
+    // Mip 3
+    if (direct_radiance.w < max_count && mips.mip3 != kGI1_InvalidId) {
+        direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + mips.mip3]);
+    }
+    return direct_radiance;
+}
+
+// ---- The world-cache lookup (world-cache.ts, WorldCacheLookup) ----
+
+// A ray length no tile reaches: the key's short-ray flag is 0 for it (register D24).
+const HASHGRIDCACHE_LOOKUP_HIT_DISTANCE: f32 = 3.0e38;
+
+// As Capsaicin's reflections read the cache (gi1.comp:2866-2899): find the cell, touch its tile,
+// and take the filtered direct value plus, with multibounce, the filtered indirect value, each
+// divided by its sample count. Unlike there, the position is not jittered across the cell (the
+// caller has the random numbers for that), and the ray is taken as longer than a tile, since the
+// lookup isn't given its length (register D24). The normal is for a cache that needs it; the hash
+// grid's key has none. Weight 1 where the cell is in the cache (even with no samples yet, as
+// Capsaicin uses it), 0 where it isn't.
+fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
+    let data = HashGridCache_Data(g_HashGridCacheConstants.eye_position, position, direction, HASHGRIDCACHE_LOOKUP_HIT_DISTANCE);
+    let found = HashGridCache_FindCell(data);
+    if (found.cell_index == kGI1_InvalidId) {
+        return vec4f(0.0);
+    }
+    HashGridCache_TouchTile(found.tile_index);
+    let direct_radiance = HashGridCache_FilteredRadianceDirect(found.cell_index);
+    let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
+    let radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0) + indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
+    return vec4f(radiance, 1.0);
+}
+`;
+}
+
+/**
+ * The shared module, with the hash grid's bindings in `group`: the buffers
+ * of `set` (layout entries `hashGridCacheGroupEntries(set)`; every buffer,
+ * {@link HASH_GRID_CACHE_GROUP_ENTRIES}, by default). Every hash-grid pass
+ * includes it; it declares no entry point.
+ */
+export function hashGridCacheWgsl(group: number, layout: HashGridCacheBufferLayout, set: HashGridCacheBindingSet = HASH_GRID_CACHE_ALL_BUFFERS): string {
+    const words = layout.words;
     return /* wgsl */ `
 // ---- The hash-grid radiance cache (Capsaicin v1.3, hash_grid_cache.hlsl; AMD, MIT) ----
 
@@ -199,7 +346,7 @@ const kHashGridCache_FloatQuantize: f32 = ${floatLiteral(FLOAT_QUANTIZE)};
 const HASHGRIDCACHE_STEP_FACTOR: f32 = ${floatLiteral(STEP_FACTOR)};                // :92
 const HASHGRIDCACHE_SIZE_FACTOR: f32 = 1e-3;                                         // :93 (f32 ${SIZE_FACTOR})
 
-// Where Capsaicin's buffers are in the packed tile words (register D6; capacity.ts): word offsets.
+// Where Capsaicin's buffers are in the packed cache words (register D6; capacity.ts): word offsets.
 const HASHGRIDCACHE_PACKEDTILECOUNTBUFFER0: u32 = ${HASH_GRID_COUNTER.packedTileCount0}u;
 const HASHGRIDCACHE_PACKEDTILECOUNTBUFFER1: u32 = ${HASH_GRID_COUNTER.packedTileCount1}u;
 const HASHGRIDCACHE_UPDATETILECOUNTBUFFER: u32 = ${HASH_GRID_COUNTER.updateTileCount}u;
@@ -213,17 +360,12 @@ const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${words.decayTileBuffer}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1}u;
 const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
-// In the cell values (vec2u elements) and the update scratch (words).
-const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
-const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
-const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${layout.updateScratch.updateCellValueBuffer}u;
-const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${layout.updateScratch.updateCellValueIndirectBuffer}u;
+const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${words.updateCellValueBuffer}u;
+const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${words.updateCellValueIndirectBuffer}u;
 
 ${HASH_GRID_CONSTANTS_STRUCT_WGSL}
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.constants}) var<uniform> g_HashGridCacheConstants: HashGridCacheConstants;
-@group(${group}) @binding(${HASH_GRID_CACHE_BINDING.tileWords}) var<storage, read_write> g_HashGridCache_TileWords: array<atomic<u32>>;
-@group(${group}) @binding(${HASH_GRID_CACHE_BINDING.cellValues}) var<storage, read_write> g_HashGridCache_CellValues: array<vec2u>;
-@group(${group}) @binding(${HASH_GRID_CACHE_BINDING.updateScratch}) var<storage, read_write> g_HashGridCache_UpdateScratch: array<atomic<u32>>;
+@group(${group}) @binding(${HASH_GRID_CACHE_BINDING.words}) var<storage, read_write> g_HashGridCache_Words: array<atomic<u32>>;
 ${MATH_WGSL}
 // ---- The ping-pong packed tile lists (hash_grid_cache.hlsl:75-78) ----
 // buffer_ping_pong picks this frame's list (written) and last frame's (read by PurgeTiles);
@@ -391,7 +533,7 @@ struct HashGridCache_InsertResult {
 // 0), so a failure that still saw 0 tries again (register D22).
 fn HashGridCache_CompareExchangeEmptySlot(tile_index: u32, tile_hash: u32) -> u32 {
     loop {
-        let exchange = atomicCompareExchangeWeak(&g_HashGridCache_TileWords[HASHGRIDCACHE_HASHBUFFER + tile_index], 0u, tile_hash);
+        let exchange = atomicCompareExchangeWeak(&g_HashGridCache_Words[HASHGRIDCACHE_HASHBUFFER + tile_index], 0u, tile_hash);
         if (exchange.exchanged || exchange.old_value != 0u) {
             return exchange.old_value;
         }
@@ -418,7 +560,7 @@ fn HashGridCache_InsertCell(data: HashGridCache_Data) -> HashGridCache_InsertRes
         }
     }
     if (bucket_offset >= g_HashGridCacheConstants.num_tiles_per_bucket) {
-        atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_BUCKETOVERFLOWCOUNT], 1u);
+        atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_BUCKETOVERFLOWCOUNT], 1u);
         return HashGridCache_InsertResult(kGI1_InvalidId, tile_index, false);  // too much collisions, out of tiles :(
     }
 
@@ -439,7 +581,7 @@ fn HashGridCache_FindCell(data: HashGridCache_Data) -> HashGridCache_FindResult 
     let desc = HashGridCache_GetDesc(data);
     for (bucket_offset = 0u; bucket_offset < g_HashGridCacheConstants.num_tiles_per_bucket; bucket_offset++) {
         tile_index = bucket_offset + desc.bucket_index * g_HashGridCacheConstants.num_tiles_per_bucket;
-        let previous_hash = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_HASHBUFFER + tile_index]);
+        let previous_hash = atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_HASHBUFFER + tile_index]);
         if (previous_hash == 0u) {
             return HashGridCache_FindResult(kGI1_InvalidId, tile_index);  // no other tile in bucket
         }
@@ -457,24 +599,7 @@ fn HashGridCache_FindCell(data: HashGridCache_Data) -> HashGridCache_FindResult 
 // frame index into its decay stamp (gi1.comp:1000-1002, 1775-1777, 2886-2888). Returns the
 // previous stamp; equal to the frame index means the tile was touched already this frame.
 fn HashGridCache_TouchTile(tile_index: u32) -> u32 {
-    return atomicExchange(&g_HashGridCache_TileWords[HASHGRIDCACHE_DECAYTILEBUFFER + tile_index], g_HashGridCacheConstants.frame_index);
-}
-
-// "If this cell is inside a new tile, we need to add the tile to the packed storage and clear its
-// cells" (gi1.comp:1020-1036 and 1798-1812, the same block in both population passes): the tile
-// joins this frame's packed list, and its finest-level values start at zero (the coarser levels
-// are rewritten by UpdateTiles). With GI-1.2's multibounce on (Capsaicin's default) the indirect
-// values are cleared too.
-fn HashGridCache_AddNewTile(tile_index: u32) {
-    let packed_tile_index = atomicAdd(&g_HashGridCache_TileWords[HashGridCache_PackedTileCountWord()], 1u);
-    atomicStore(&g_HashGridCache_TileWords[HashGridCache_PackedTileIndexWord(packed_tile_index)], tile_index);
-
-    // Clear mip0 cells (others will be reset anyways by UpdateTiles)
-    for (var cell_offset = 0u; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; cell_offset++) {
-        let cell_index = HashGridCache_CellIndexLinear(cell_offset, tile_index, 0u);
-        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u, 0u);
-        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);
-    }
+    return atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_DECAYTILEBUFFER + tile_index], g_HashGridCacheConstants.frame_index);
 }
 
 // Whether this call puts the tile on this frame's update list (g_HashGridCache_UpdateTileBuffer),
@@ -486,7 +611,7 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
 // it: plus one, so the zeroed words of a new or reset cache never read as frame 0.
 fn HashGridCache_ListTileForUpdate(tile_index: u32) -> bool {
     let listed = g_HashGridCacheConstants.frame_index + 1u;
-    return atomicExchange(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATELISTEDTILEBUFFER + tile_index], listed) != listed;
+    return atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_UPDATELISTEDTILEBUFFER + tile_index], listed) != listed;
 }
 
 // Quantizes the radiance value so it can be blended atomically (:300-306). WGSL's round, like
@@ -543,96 +668,7 @@ fn HashGridCache_UnpackRadiance(packed_radiance: vec2u) -> vec4f {
     return unpackHalf4(packed_radiance);
 }
 
-// The cell indices of a finest-level cell's three coarser levels, kGI1_InvalidId where a level
-// has no cells (hash_grid_cache.hlsl:437-440).
-struct HashGridCache_MipCells {
-    mip1: u32,
-    mip2: u32,
-    mip3: u32,
-}
-
-fn HashGridCache_MipCellsOf(cell_index_mip0: u32) -> HashGridCache_MipCells {
-    let tile_cell = HashGridCache_CellOffsetMip0(cell_index_mip0);
-    let cell_offset_mip0 = tile_cell.cell_offset_mip0;
-    let tile_index = tile_cell.tile_index;
-    let cell_index_mip1 = select(kGI1_InvalidId, HashGridCache_CellIndex(cell_offset_mip0, tile_index, 1u), g_HashGridCacheConstants.size_tile_mip1 > 0u);
-    let cell_index_mip2 = select(kGI1_InvalidId, HashGridCache_CellIndex(cell_offset_mip0, tile_index, 2u), g_HashGridCacheConstants.size_tile_mip2 > 0u);
-    let cell_index_mip3 = select(kGI1_InvalidId, HashGridCache_CellIndex(cell_offset_mip0, tile_index, 3u), g_HashGridCacheConstants.size_tile_mip3 > 0u);
-    return HashGridCache_MipCells(cell_index_mip1, cell_index_mip2, cell_index_mip3);
-}
-
-// HashGridCache_FilteredRadianceIndirect (:434-463), without its debug view: start at the cell,
-// and while the value has fewer samples than the cap and a coarser level exists, take the
-// coarser level's value instead.
-fn HashGridCache_FilteredRadianceIndirect(cell_index_mip0: u32) -> vec4f {
-    let mips = HashGridCache_MipCellsOf(cell_index_mip0);
-    let max_count = g_HashGridCacheConstants.max_multibounce_sample_count;
-
-    // Mip 0
-    var indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index_mip0]);
-    // Mip 1
-    if (indirect_radiance.w < max_count && mips.mip1 != kGI1_InvalidId) {
-        indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip1]);
-    }
-    // Mip 2
-    if (indirect_radiance.w < max_count && mips.mip2 != kGI1_InvalidId) {
-        indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip2]);
-    }
-    // Mip 3
-    if (indirect_radiance.w < max_count && mips.mip3 != kGI1_InvalidId) {
-        indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip3]);
-    }
-    return indirect_radiance;
-}
-
-// HashGridCache_FilteredRadianceDirect (:465-494), without its debug view: as above, on the
-// direct values and their cap.
-fn HashGridCache_FilteredRadianceDirect(cell_index_mip0: u32) -> vec4f {
-    let mips = HashGridCache_MipCellsOf(cell_index_mip0);
-    let max_count = g_HashGridCacheConstants.max_sample_count;
-
-    // Mip 0
-    var direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index_mip0]);
-    // Mip 1
-    if (direct_radiance.w < max_count && mips.mip1 != kGI1_InvalidId) {
-        direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + mips.mip1]);
-    }
-    // Mip 2
-    if (direct_radiance.w < max_count && mips.mip2 != kGI1_InvalidId) {
-        direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + mips.mip2]);
-    }
-    // Mip 3
-    if (direct_radiance.w < max_count && mips.mip3 != kGI1_InvalidId) {
-        direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + mips.mip3]);
-    }
-    return direct_radiance;
-}
-
-// ---- The world-cache lookup (world-cache.ts, WorldCacheLookup) ----
-
-// A ray length no tile reaches: the key's short-ray flag is 0 for it (register D24).
-const HASHGRIDCACHE_LOOKUP_HIT_DISTANCE: f32 = 3.0e38;
-
-// As Capsaicin's reflections read the cache (gi1.comp:2866-2899): find the cell, touch its tile,
-// and take the filtered direct value plus, with multibounce, the filtered indirect value, each
-// divided by its sample count. Unlike there, the position is not jittered across the cell (the
-// caller has the random numbers for that), and the ray is taken as longer than a tile, since the
-// lookup isn't given its length (register D24). The normal is for a cache that needs it; the hash
-// grid's key has none. Weight 1 where the cell is in the cache (even with no samples yet, as
-// Capsaicin uses it), 0 where it isn't.
-fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
-    let data = HashGridCache_Data(g_HashGridCacheConstants.eye_position, position, direction, HASHGRIDCACHE_LOOKUP_HIT_DISTANCE);
-    let found = HashGridCache_FindCell(data);
-    if (found.cell_index == kGI1_InvalidId) {
-        return vec4f(0.0);
-    }
-    HashGridCache_TouchTile(found.tile_index);
-    let direct_radiance = HashGridCache_FilteredRadianceDirect(found.cell_index);
-    let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
-    let radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0) + indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
-    return vec4f(radiance, 1.0);
-}
-`;
+${set.cellValues ? cellValuesWgsl(group, layout) : ''}`;
 }
 
 // ---- Kernels ------------------------------------------------------------------------------------
@@ -657,17 +693,17 @@ export const HASH_GRID_KERNEL_GROUP = 1;
  */
 export function clearCountersWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
-${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout)}
+${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout, HASH_GRID_CACHE_WORDS_ONLY)}
 @compute @workgroup_size(1)
 fn ${HASH_GRID_ENTRY_POINT.clearCounters}() {
-    atomicStore(&g_HashGridCache_TileWords[HashGridCache_PackedTileCountWord()], 0u);
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATETILECOUNTBUFFER], 0u);
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0], 0u);
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYRAYCOUNTBUFFER], 0u);
+    atomicStore(&g_HashGridCache_Words[HashGridCache_PackedTileCountWord()], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_UPDATETILECOUNTBUFFER], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYRAYCOUNTBUFFER], 0u);
     // USE_MULTI_BOUNCE, on by default (gi1.h:55)
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1], 0u);
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 0u);
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_BUCKETOVERFLOWCOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_BUCKETOVERFLOWCOUNT], 0u);
 }
 `;
 }
@@ -681,7 +717,7 @@ fn ${HASH_GRID_ENTRY_POINT.clearCounters}() {
  */
 export function purgeTilesWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
-${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout)}
+${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout, HASH_GRID_CACHE_WORDS_ONLY)}
 @compute @workgroup_size(${PURGE_TILES_WORKGROUP_SIZE})
 fn ${HASH_GRID_ENTRY_POINT.purgeTiles}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -689,7 +725,7 @@ fn ${HASH_GRID_ENTRY_POINT.purgeTiles}(
     @builtin(local_invocation_index) local_index: u32,
 ) {
     let did = giIndirectItemIndex(workgroup, workgroups, local_index, ${PURGE_TILES_WORKGROUP_SIZE}u);
-    if (did >= atomicLoad(&g_HashGridCache_TileWords[HashGridCache_PreviousPackedTileCountWord()])) {
+    if (did >= atomicLoad(&g_HashGridCache_Words[HashGridCache_PreviousPackedTileCountWord()])) {
         return; // out of bounds
     }
 
@@ -697,8 +733,8 @@ fn ${HASH_GRID_ENTRY_POINT.purgeTiles}(
     // current frame index, as it saves many writes per frame
     // and is quite a bit faster than having to decrement all
     // cell's decay values.
-    let tile_index = atomicLoad(&g_HashGridCache_TileWords[HashGridCache_PreviousPackedTileIndexWord(did)]);
-    var tile_decay = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_DECAYTILEBUFFER + tile_index]);
+    let tile_index = atomicLoad(&g_HashGridCache_Words[HashGridCache_PreviousPackedTileIndexWord(did)]);
+    var tile_decay = atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_DECAYTILEBUFFER + tile_index]);
 
     if (g_HashGridCacheConstants.frame_index < tile_decay) {   // account for integer wraparound case
         tile_decay = ((0xFFFFFFFFu - tile_decay) + g_HashGridCacheConstants.frame_index + 1u);
@@ -707,12 +743,12 @@ fn ${HASH_GRID_ENTRY_POINT.purgeTiles}(
     }
 
     if (tile_decay >= kHashGridCache_TileDecay) {
-        atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_HASHBUFFER + tile_index], 0u);
+        atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_HASHBUFFER + tile_index], 0u);
         return; // kill the tile
     }
 
-    let packed_tile_index = atomicAdd(&g_HashGridCache_TileWords[HashGridCache_PackedTileCountWord()], 1u);
-    atomicStore(&g_HashGridCache_TileWords[HashGridCache_PackedTileIndexWord(packed_tile_index)], tile_index);
+    let packed_tile_index = atomicAdd(&g_HashGridCache_Words[HashGridCache_PackedTileCountWord()], 1u);
+    atomicStore(&g_HashGridCache_Words[HashGridCache_PackedTileIndexWord(packed_tile_index)], tile_index);
 }
 `;
 }

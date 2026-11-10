@@ -40,7 +40,7 @@
  */
 
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { requestBudgetDevice } from './budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import {
     halfBitsToFloat,
@@ -476,8 +476,9 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    // As a host would ask (requestGIDevice): the adapter's storage limits, and subgroups and timestamps when it has them.
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // As a host would ask (requestGIDevice): the adapter's storage limits, and subgroups and timestamps when it has them;
+    // but the platform's 8 storage buffers per stage, whatever the adapter allows (budget-device.ts).
+    const { device, adapterStorageBuffersPerStage } = await requestBudgetDevice(adapter);
     window.addEventListener('pagehide', () => device.destroy(), { once: true });
     deviceErrors = watchDevice(device);
     const gallery = document.createElement('div');
@@ -528,7 +529,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, scenes: results },
+        data: { width: WIDTH, height: HEIGHT, adapterStorageBuffersPerStage, scenes: results },
         adapter: summary,
         deviceErrors,
         startTime,

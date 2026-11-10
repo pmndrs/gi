@@ -45,7 +45,7 @@
 import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
@@ -257,7 +257,7 @@ async function readFrameState(device: GPUDevice, scenario: Scenario): Promise<Fr
     }
     const results = probes.rayScratch.rayResults;
     const radiance = unpackHalves(new Uint32Array(await readRange(device, results.buffer, results.offset ?? 0, rayCount * 8)));
-    const counters = new Uint32Array(await readRange(device, scenario.cache.buffers.tileWords, 0, 64 * 4));
+    const counters = new Uint32Array(await readRange(device, scenario.cache.buffers.words, 0, 64 * 4));
     const words = new Uint32Array(await readRange(device, lists.buffer, 0, lists.buffer.size));
     const layout = lists.layout;
     const count0 = counters[HASH_GRID_COUNTER.visibilityCount0];
@@ -265,7 +265,7 @@ async function readFrameState(device: GPUDevice, scenario: Scenario): Promise<Fr
     const resolveCount = counters[HASH_GRID_COUNTER.resolveCount];
     const packed = scenario.cache.packedTiles;
     const packedCount = new Uint32Array(await readRange(device, packed.count.buffer, packed.count.offset, 4))[0];
-    const packedTiles = new Uint32Array(await readRange(device, scenario.cache.buffers.tileWords, packed.firstWord * 4, packedCount * 4));
+    const packedTiles = new Uint32Array(await readRange(device, scenario.cache.buffers.words, packed.firstWord * 4, packedCount * 4));
     return {
         rays,
         radiance,
@@ -590,13 +590,14 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    // As a host would ask (requestGIDevice): the adapter's storage limits, and its optional features.
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // As a host would ask (requestGIDevice): the adapter's storage limits, and its optional features;
+    // but the platform's 8 storage buffers per stage, whatever the adapter allows (budget-device.ts).
+    const { device, adapterStorageBuffersPerStage } = await requestBudgetDevice(adapter);
     releaseDeviceOnPageHide(device);
     deviceErrors = watchDevice(device);
 
     const failures: string[] = [];
-    const data: Record<string, unknown> = {};
+    const data: Record<string, unknown> = { adapterStorageBuffersPerStage };
     const run = async (name: string, lights: readonly LightDescriptor[], withPatch: boolean, frames: number, check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>): Promise<void> => {
         const scenario = await startScenario(device, name, lights, withPatch);
         try {

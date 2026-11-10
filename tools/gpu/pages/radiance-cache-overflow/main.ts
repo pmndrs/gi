@@ -20,7 +20,7 @@
  */
 
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
@@ -86,7 +86,7 @@ async function countScene(device: GPUDevice, manifest: SceneManifest): Promise<S
             const cache = technique.worldCache;
             if (record !== null && cache) {
                 const base = record * WORDS_PER_FRAME * 4;
-                const tileWords = cache.buffers.tileWords;
+                const tileWords = cache.buffers.words;
                 encoder.copyBufferToBuffer(tileWords, HASH_GRID_COUNTER.bucketOverflowCount * 4, counts, base, 4);
                 encoder.copyBufferToBuffer(cache.packedTiles.count.buffer, cache.packedTiles.count.offset, counts, base + 4, 4);
                 encoder.copyBufferToBuffer(tileWords, HASH_GRID_COUNTER.visibilityCount0 * 4, counts, base + 8, 4);
@@ -145,7 +145,8 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // The platform's 8 storage buffers per stage, whatever the adapter allows (budget-device.ts).
+    const { device, adapterStorageBuffersPerStage } = await requestBudgetDevice(adapter);
     releaseDeviceOnPageHide(device);
     deviceErrors = watchDevice(device);
     const scenes: Record<string, SceneCounts> = {};
@@ -153,7 +154,7 @@ try {
     await drainDevice(device);
     reportGpuTest({
         status: 'pass',
-        data: { width: WIDTH, height: HEIGHT, maxTextureSize: MAX_TEXTURE_SIZE ?? null, scenes },
+        data: { width: WIDTH, height: HEIGHT, maxTextureSize: MAX_TEXTURE_SIZE ?? null, adapterStorageBuffersPerStage, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

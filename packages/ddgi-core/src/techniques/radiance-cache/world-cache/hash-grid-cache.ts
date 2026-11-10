@@ -39,30 +39,36 @@ import { hashGridCacheCellSizeConstant, verticalFieldOfView } from './hash-grid-
 import {
     generateReservoirsWgsl,
     hashGridCacheRayListLayout,
+    POPULATION_BINDINGS,
     POPULATION_ENTRY_POINT,
     POPULATION_WORKGROUP_SIZE,
     populateCellsWgsl,
     populateScreenProbesWgsl,
     RAY_DATA_BINDING,
     RAY_DATA_GROUP,
-    RAY_DATA_GROUP_ENTRIES,
+    rayDataGroupEntries,
     RAY_LISTS_UNIFORM_BYTES,
     resolveCellsWgsl,
     updateTilesPerWorkgroup,
     updateTilesWgsl,
     type HashGridCacheRayListLayout,
+    type RayDataBindingSet,
 } from './hash-grid-population-wgsl.ts';
 import {
     clearCountersWgsl,
+    HASH_GRID_CACHE_ALL_BUFFERS,
     HASH_GRID_CACHE_BINDING,
     HASH_GRID_CACHE_GROUP_ENTRIES,
+    HASH_GRID_CACHE_WORDS_ONLY,
     HASH_GRID_CONSTANTS_BYTES,
     HASH_GRID_CONSTANTS_WORD,
     HASH_GRID_ENTRY_POINT,
     HASH_GRID_KERNEL_GROUP,
+    hashGridCacheGroupEntries,
     hashGridCacheWgsl,
     PURGE_TILES_WORKGROUP_SIZE,
     purgeTilesWgsl,
+    type HashGridCacheBindingSet,
 } from './hash-grid-wgsl.ts';
 import type { WorldCache, WorldCacheContext, WorldCacheFrame, WorldCacheLookup, WorldCacheProbeRays } from './world-cache.ts';
 
@@ -74,14 +80,12 @@ const WORD_BYTES = 4;
 /** Timed as `radiance-cache/<section>`, Capsaicin's `TimedSection` names. */
 const TIMER_PREFIX = 'radiance-cache';
 
-/** The three packed buffers and the constant block. */
+/** The two packed buffers and the constant block. */
 export interface HashGridCacheBuffers {
-    /** Counters, then per tile: hash slot, decay stamp, packed tile lists 0 and 1 (`capacity.ts`). */
-    readonly tileWords: GPUBuffer;
+    /** Counters; per tile the hash slot, decay stamp, packed tile lists 0 and 1, update-listed frame; per cell the direct and indirect update scratch (`capacity.ts`). */
+    readonly words: GPUBuffer;
     /** Direct, then indirect values: `vec2u` per cell. */
     readonly cellValues: GPUBuffer;
-    /** Direct, then indirect update scratch: four words per cell. */
-    readonly updateScratch: GPUBuffer;
     /** `HashGridCacheConstants`, written every frame. */
     readonly constants: GPUBuffer;
 }
@@ -172,15 +176,15 @@ export class HashGridCache implements WorldCache {
         return rayData ? { buffer: rayData.listWords, layout: rayData.layout } : null;
     }
 
-    /** Inserts refused this frame because their bucket was full (register D23): a word of the tile words, cleared by `ClearCounters`. */
+    /** Inserts refused this frame because their bucket was full (register D23): a word of the cache words, cleared by `ClearCounters`. */
     get bucketOverflowCount(): GpuWord {
-        return { buffer: this.require().buffers.tileWords, offset: HASH_GRID_COUNTER.bucketOverflowCount * WORD_BYTES };
+        return { buffer: this.require().buffers.words, offset: HASH_GRID_COUNTER.bucketOverflowCount * WORD_BYTES };
     }
 
     /**
      * The packed tile list of the frame `encodeFrame` last recorded (the
      * tiles alive after its purge, plus those its passes add): its count, and
-     * the word of the tile words where its tile indices start.
+     * the word of the cache words where its tile indices start.
      */
     get packedTiles(): { readonly count: GpuWord; readonly firstWord: number } {
         const { buffers, layout } = this.require();
@@ -188,8 +192,8 @@ export class HashGridCache implements WorldCache {
         const first = this.lastFramePingPong === 0;
         const countWord = first ? HASH_GRID_COUNTER.packedTileCount0 : HASH_GRID_COUNTER.packedTileCount1;
         return {
-            count: { buffer: buffers.tileWords, offset: countWord * WORD_BYTES },
-            firstWord: first ? layout.tileWords.packedTileIndexBuffer0 : layout.tileWords.packedTileIndexBuffer1,
+            count: { buffer: buffers.words, offset: countWord * WORD_BYTES },
+            firstWord: first ? layout.words.packedTileIndexBuffer0 : layout.words.packedTileIndexBuffer1,
         };
     }
 
@@ -225,7 +229,7 @@ export class HashGridCache implements WorldCache {
     /** A bind group of the hash grid's buffers for a layout made from {@link HASH_GRID_CACHE_GROUP_ENTRIES}. */
     createBindGroup(layout: GPUBindGroupLayout, label = 'radiance-cache/hash-grid'): GPUBindGroup {
         const { device, buffers } = this.require();
-        return device.createBindGroup({ label, layout, entries: groupEntries(buffers) });
+        return device.createBindGroup({ label, layout, entries: groupEntries(buffers, HASH_GRID_CACHE_ALL_BUFFERS) });
     }
 
     readonly lookup: WorldCacheLookup = {
@@ -248,9 +252,8 @@ export class HashGridCache implements WorldCache {
         const storageUsage = BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst;
         device.pushErrorScope('out-of-memory');
         const buffers: HashGridCacheBuffers = {
-            tileWords: device.createBuffer({ label: 'radiance-cache/hash-grid tile words', size: layout.tileWords.bytes, usage: storageUsage }),
+            words: device.createBuffer({ label: 'radiance-cache/hash-grid cache words', size: layout.words.bytes, usage: storageUsage }),
             cellValues: device.createBuffer({ label: 'radiance-cache/hash-grid cell values', size: layout.cellValues.bytes, usage: storageUsage }),
-            updateScratch: device.createBuffer({ label: 'radiance-cache/hash-grid update scratch', size: layout.updateScratch.bytes, usage: storageUsage }),
             constants: device.createBuffer({ label: 'radiance-cache/hash-grid constants', size: HASH_GRID_CONSTANTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst }),
         };
         const outOfMemory = await device.popErrorScope();
@@ -259,12 +262,22 @@ export class HashGridCache implements WorldCache {
             throw new Error(`@pmndrs/ddgi: the GPU ran out of memory making the world cache's ${layout.totalBytes} bytes: ${outOfMemory.message}`);
         }
 
-        const cacheGroup = { label: 'radiance-cache/hash-grid group', entries: HASH_GRID_CACHE_GROUP_ENTRIES };
-        const rayDataGroup = { label: 'radiance-cache/hash-grid ray data', entries: RAY_DATA_GROUP_ENTRIES };
-        const word = (counter: number): GpuWord => ({ buffer: buffers.tileWords, offset: counter * WORD_BYTES });
-        /** A population kernel: the hash grid in group 1, the ray data in group 2, the platform's hit shading in group 0 when it shades. */
-        const populationKernel = (label: string, code: string, entryPoint: string, shades: boolean): Promise<ComputeKernel> =>
-            kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup] });
+        const cacheGroup = (set: HashGridCacheBindingSet): GPUBindGroupLayoutDescriptor => ({ label: 'radiance-cache/hash-grid group', entries: hashGridCacheGroupEntries(set) });
+        const rayDataGroup = (set: RayDataBindingSet): GPUBindGroupLayoutDescriptor => ({ label: 'radiance-cache/hash-grid ray data', entries: rayDataGroupEntries(set) });
+        const word = (counter: number): GpuWord => ({ buffer: buffers.words, offset: counter * WORD_BYTES });
+        /**
+         * A population kernel: the hash grid in group 1 and the ray data in group 2, each with the
+         * buffers the pass binds (POPULATION_BINDINGS), and the platform's hit shading in group 0
+         * when it shades. The kernel builder counts them against maxStorageBuffersPerShaderStage.
+         */
+        const populationKernel = (label: string, name: PopulationPassName, code: string, shades: boolean): Promise<ComputeKernel> =>
+            kernels.computeKernel({
+                label: `radiance-cache/${label}`,
+                modules: shades ? [shade.module] : [],
+                code,
+                entryPoint: POPULATION_ENTRY_POINT[name],
+                ownGroups: [cacheGroup(POPULATION_BINDINGS[name].cache), rayDataGroup(POPULATION_BINDINGS[name].rayData)],
+            });
         const indirectArgs = (label: string, counter: number, itemsPerWorkgroup: number): Promise<GpuIndirectArgs> =>
             compute.createIndirectArgs({ label: `radiance-cache/${label}`, count: word(counter), itemsPerWorkgroup });
 
@@ -274,24 +287,24 @@ export class HashGridCache implements WorldCache {
                 modules: [],
                 code: clearCountersWgsl(layout),
                 entryPoint: HASH_GRID_ENTRY_POINT.clearCounters,
-                ownGroups: [cacheGroup],
+                ownGroups: [cacheGroup(HASH_GRID_CACHE_WORDS_ONLY)],
             }),
             kernels.computeKernel({
                 label: 'radiance-cache/PurgeTiles',
                 modules: [compute.indirectModule],
                 code: purgeTilesWgsl(layout),
                 entryPoint: HASH_GRID_ENTRY_POINT.purgeTiles,
-                ownGroups: [cacheGroup],
+                ownGroups: [cacheGroup(HASH_GRID_CACHE_WORDS_ONLY)],
             }),
             // With buffer_ping_pong 0, last frame's count is PackedTileCountBuffer1, and the other
             // way round (hash_grid_cache.hlsl:75-76; gi1.cpp:2241-2244).
             indirectArgs('PurgeTiles (ping-pong 0)', HASH_GRID_COUNTER.packedTileCount1, PURGE_TILES_WORKGROUP_SIZE),
             indirectArgs('PurgeTiles (ping-pong 1)', HASH_GRID_COUNTER.packedTileCount0, PURGE_TILES_WORKGROUP_SIZE),
-            populationKernel('PopulateScreenProbes (cache half)', populateScreenProbesWgsl(layout), POPULATION_ENTRY_POINT.populateScreenProbes, false),
-            populationKernel('GenerateReservoirs', generateReservoirsWgsl(layout), POPULATION_ENTRY_POINT.generateReservoirs, true),
-            populationKernel('PopulateCells', populateCellsWgsl(layout), POPULATION_ENTRY_POINT.populateCells, true),
-            populationKernel('UpdateTiles', updateTilesWgsl(layout), POPULATION_ENTRY_POINT.updateTiles, false),
-            populationKernel('ResolveCells', resolveCellsWgsl(layout), POPULATION_ENTRY_POINT.resolveCells, false),
+            populationKernel('PopulateScreenProbes (cache half)', 'populateScreenProbes', populateScreenProbesWgsl(layout), false),
+            populationKernel('GenerateReservoirs', 'generateReservoirs', generateReservoirsWgsl(layout), true),
+            populationKernel('PopulateCells', 'populateCells', populateCellsWgsl(layout), true),
+            populationKernel('UpdateTiles', 'updateTiles', updateTilesWgsl(layout), false),
+            populationKernel('ResolveCells', 'resolveCells', resolveCellsWgsl(layout), false),
             // Capsaicin dispatches PopulateScreenProbes over every possible ray; here it is its own
             // pass after the screen cache's trace, so it runs on the probe-ray count.
             indirectArgs('PopulateScreenProbes (cache half) args', HASH_GRID_COUNTER.probeRayCount, POPULATION_WORKGROUP_SIZE.populateScreenProbes),
@@ -306,17 +319,21 @@ export class HashGridCache implements WorldCache {
         ]);
         const [populateScreenProbes, generateReservoirs, populateCells, updateTiles, resolveCells] = population.slice(0, 5) as ComputeKernel[];
         const [populateArgs, reservoirArgs, cellArgs, updateArgs, resolveArgs] = population.slice(5) as GpuIndirectArgs[];
-        const pass = (kernel: ComputeKernel, args: GpuIndirectArgs): PopulationPass => ({
+        const pass = (name: PopulationPassName, kernel: ComputeKernel, args: GpuIndirectArgs): PopulationPass => ({
             kernel,
             args,
-            cacheGroup: device.createBindGroup({ label: `${kernel.pipeline.label} hash grid`, layout: kernel.ownLayouts[0], entries: groupEntries(buffers) }),
+            cacheGroup: device.createBindGroup({
+                label: `${kernel.pipeline.label} hash grid`,
+                layout: kernel.ownLayouts[0],
+                entries: groupEntries(buffers, POPULATION_BINDINGS[name].cache),
+            }),
         });
         const populationPasses: PopulationPasses = {
-            populateScreenProbes: pass(populateScreenProbes, populateArgs),
-            generateReservoirs: pass(generateReservoirs, reservoirArgs),
-            populateCells: pass(populateCells, cellArgs),
-            updateTiles: pass(updateTiles, updateArgs),
-            resolveCells: pass(resolveCells, resolveArgs),
+            populateScreenProbes: pass('populateScreenProbes', populateScreenProbes, populateArgs),
+            generateReservoirs: pass('generateReservoirs', generateReservoirs, reservoirArgs),
+            populateCells: pass('populateCells', populateCells, cellArgs),
+            updateTiles: pass('updateTiles', updateTiles, updateArgs),
+            resolveCells: pass('resolveCells', resolveCells, resolveArgs),
         };
         const rayListsUniform = device.createBuffer({ label: 'radiance-cache/hash-grid ray lists', size: RAY_LISTS_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
 
@@ -330,8 +347,8 @@ export class HashGridCache implements WorldCache {
             buffers,
             clearCounters,
             purgeTiles,
-            clearCountersGroup: device.createBindGroup({ label: 'radiance-cache/ClearCounters (hash grid)', layout: clearCounters.ownLayouts[0], entries: groupEntries(buffers) }),
-            purgeTilesGroup: device.createBindGroup({ label: 'radiance-cache/PurgeTiles', layout: purgeTiles.ownLayouts[0], entries: groupEntries(buffers) }),
+            clearCountersGroup: device.createBindGroup({ label: 'radiance-cache/ClearCounters (hash grid)', layout: clearCounters.ownLayouts[0], entries: groupEntries(buffers, HASH_GRID_CACHE_WORDS_ONLY) }),
+            purgeTilesGroup: device.createBindGroup({ label: 'radiance-cache/PurgeTiles', layout: purgeTiles.ownLayouts[0], entries: groupEntries(buffers, HASH_GRID_CACHE_WORDS_ONLY) }),
             purgeArgs,
             population: populationPasses,
             rayListsUniform,
@@ -343,16 +360,18 @@ export class HashGridCache implements WorldCache {
     }
 
     /**
-     * Empties the cache: the tile words (every hash slot, decay stamp, both
-     * packed lists and the counters) back to zero, as `prepare` leaves them
-     * (Capsaicin clears the hash buffer when it makes it, gi1.cpp:478). The
-     * cell values and scratch stay: a tile's finest cells are cleared when it
-     * is inserted again (`HashGridCache_AddNewTile`), its coarser levels are
-     * rewritten in the same frame (`UpdateTiles`), and the scratch is zero
-     * between frames (`UpdateTiles` clears what it reads, gi1.comp:2213-2224).
+     * Empties the cache: the counters and the per-tile words (every hash
+     * slot, decay stamp, both packed lists) back to zero, as `prepare` leaves
+     * them (Capsaicin clears the hash buffer when it makes it, gi1.cpp:478).
+     * The cell values and the update scratch after them stay: a tile's finest
+     * cells are cleared when it is inserted again (`HashGridCache_AddNewTile`),
+     * its coarser levels are rewritten in the same frame (`UpdateTiles`), and
+     * the scratch is zero between frames (`UpdateTiles` clears what it reads,
+     * gi1.comp:2213-2224).
      */
     reset(encoder: GPUCommandEncoder): void {
-        encoder.clearBuffer(this.require().buffers.tileWords);
+        const { buffers, layout } = this.require();
+        encoder.clearBuffer(buffers.words, 0, layout.words.updateCellValueBuffer * WORD_BYTES);
     }
 
     /**
@@ -367,7 +386,7 @@ export class HashGridCache implements WorldCache {
         this.writeConstants(prepared, frame);
 
         // The probe-ray count where the insert pass's indirect arguments read it.
-        encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.tileWords, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
+        encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.words, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
 
         const purge = this.beginPass(encoder, prepared, 'PurgeRadianceCache');
         prepared.purgeArgs[this.bufferPingPong].encode(purge);
@@ -439,6 +458,7 @@ export class HashGridCache implements WorldCache {
                 layout.maxRayCount,
                 layout.maxCombinedRayCount,
                 layout.updateTileBuffer,
+                layout.visibilityBuffer,
                 layout.visibilityCellBuffer,
                 layout.visibilityQueryBuffer,
                 layout.visibilityRayBuffer,
@@ -446,14 +466,20 @@ export class HashGridCache implements WorldCache {
                 layout.reservoirBuffer,
             ]),
         );
-        const entries: GPUBindGroupEntry[] = [
-            { binding: RAY_DATA_BINDING.rayLists, resource: { buffer: prepared.rayListsUniform } },
-            { binding: RAY_DATA_BINDING.probeRays, resource: { buffer: rays.buffer } },
-            { binding: RAY_DATA_BINDING.radiance, resource: rays.radiance },
-            { binding: RAY_DATA_BINDING.listWords, resource: { buffer: listWords } },
-        ];
+        /** The ray-data group's entries for the buffers a pass binds (POPULATION_BINDINGS). */
+        const entries = (set: RayDataBindingSet): GPUBindGroupEntry[] => {
+            const bound: GPUBindGroupEntry[] = [{ binding: RAY_DATA_BINDING.rayLists, resource: { buffer: prepared.rayListsUniform } }];
+            if (set.probeRays) bound.push({ binding: RAY_DATA_BINDING.probeRays, resource: { buffer: rays.buffer } });
+            if (set.radiance) bound.push({ binding: RAY_DATA_BINDING.radiance, resource: rays.radiance });
+            bound.push({ binding: RAY_DATA_BINDING.listWords, resource: { buffer: listWords } });
+            return bound;
+        };
         const group = (name: PopulationPassName): GPUBindGroup =>
-            device.createBindGroup({ label: `${prepared.population[name].kernel.pipeline.label} ray data`, layout: prepared.population[name].kernel.ownLayouts[1], entries });
+            device.createBindGroup({
+                label: `${prepared.population[name].kernel.pipeline.label} ray data`,
+                layout: prepared.population[name].kernel.ownLayouts[1],
+                entries: entries(POPULATION_BINDINGS[name].rayData),
+            });
         const rayData: RayData = {
             rays,
             layout,
@@ -514,13 +540,14 @@ export class HashGridCache implements WorldCache {
     }
 }
 
-function groupEntries(buffers: HashGridCacheBuffers): GPUBindGroupEntry[] {
-    return [
+/** The hash grid's group entries for the buffers of `set` (layout: `hashGridCacheGroupEntries(set)`). */
+function groupEntries(buffers: HashGridCacheBuffers, set: HashGridCacheBindingSet): GPUBindGroupEntry[] {
+    const entries: GPUBindGroupEntry[] = [
         { binding: HASH_GRID_CACHE_BINDING.constants, resource: { buffer: buffers.constants } },
-        { binding: HASH_GRID_CACHE_BINDING.tileWords, resource: { buffer: buffers.tileWords } },
-        { binding: HASH_GRID_CACHE_BINDING.cellValues, resource: { buffer: buffers.cellValues } },
-        { binding: HASH_GRID_CACHE_BINDING.updateScratch, resource: { buffer: buffers.updateScratch } },
+        { binding: HASH_GRID_CACHE_BINDING.words, resource: { buffer: buffers.words } },
     ];
+    if (set.cellValues) entries.push({ binding: HASH_GRID_CACHE_BINDING.cellValues, resource: { buffer: buffers.cellValues } });
+    return entries;
 }
 
 /** The same probe-ray buffers as before (a new screen size or new buffers need new lists and groups). */

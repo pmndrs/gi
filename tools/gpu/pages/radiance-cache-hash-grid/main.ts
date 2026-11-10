@@ -42,7 +42,7 @@
 import { GILimitError } from '../../../../packages/ddgi-core/src/platform/contract/errors.ts';
 import type { FrameCamera } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
@@ -245,7 +245,9 @@ try {
     // ---- The main device, with the adapter's limits ----
     const adapter = await navigator.gpu.requestAdapter();
     assert(adapter, 'requestAdapter() returned null');
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // The platform's 8 storage buffers per stage, whatever the adapter allows (budget-device.ts).
+    const { device, adapterStorageBuffersPerStage } = await requestBudgetDevice(adapter);
+    data.adapterStorageBuffersPerStage = adapterStorageBuffersPerStage;
     deviceErrors = watchDevice(device);
     releaseDeviceOnPageHide(device);
     adapterSummary = summarizeAdapterInfo(device.adapterInfo, device.features);
@@ -272,7 +274,7 @@ try {
     const layout = cache.layout;
     assert(cache.memoryBytes >= layout.totalBytes && cache.memoryBytes < layout.totalBytes + 4096, `memoryBytes ${cache.memoryBytes} against the buffers' ${layout.totalBytes}`);
     data.capacity = cache.stats;
-    data.memory = { tileWords: layout.tileWords.bytes, cellValues: layout.cellValues.bytes, updateScratch: layout.updateScratch.bytes, total: cache.memoryBytes, totalMiB: cache.memoryBytes / 2 ** 20 };
+    data.memory = { cacheWords: layout.words.bytes, cellValues: layout.cellValues.bytes, total: cache.memoryBytes, totalMiB: cache.memoryBytes / 2 ** 20 };
     log(`capacity: ${capacity.numBuckets} buckets x ${capacity.numTilesPerBucket} tiles x ${capacity.numCellsPerTile} cells = ${capacity.numCells} cells; memory ${(cache.memoryBytes / 2 ** 20).toFixed(1)} MiB`);
 
     const io: TestIo = createTestIo(device, MAX_INPUT_WORDS, MAX_RESULT_WORDS);
@@ -370,7 +372,7 @@ try {
     /** Empties the cache: every slot, stamp, list and counter to zero. */
     const clearCache = (): void => {
         const encoder = device.createCommandEncoder({ label: 'hash-grid clear' });
-        encoder.clearBuffer(cache.buffers.tileWords);
+        cache.reset(encoder);
         device.queue.submit([encoder.finish()]);
     };
     const runKernel = (name: TestKernelName, input: Uint32Array<ArrayBuffer>, itemCount: number, threadCount = itemCount): void => {
@@ -390,12 +392,12 @@ try {
     };
     const results = (words: number): Promise<Uint32Array> => readWords(device, io.results, 0, words);
     const hashSlots = (bucket: number): Promise<Uint32Array> =>
-        readWords(device, cache.buffers.tileWords, (layout.tileWords.hashBuffer + bucket * capacity.numTilesPerBucket) * 4, capacity.numTilesPerBucket);
-    const hashSlot = async (tileIndex: number): Promise<number> => (await readWords(device, cache.buffers.tileWords, (layout.tileWords.hashBuffer + tileIndex) * 4, 1))[0];
+        readWords(device, cache.buffers.words, (layout.words.hashBuffer + bucket * capacity.numTilesPerBucket) * 4, capacity.numTilesPerBucket);
+    const hashSlot = async (tileIndex: number): Promise<number> => (await readWords(device, cache.buffers.words, (layout.words.hashBuffer + tileIndex) * 4, 1))[0];
     const packedTiles = async (): Promise<number[]> => {
         const list = cache.packedTiles;
         const count = (await readWords(device, list.count.buffer, list.count.offset, 1))[0];
-        return [...(await readWords(device, cache.buffers.tileWords, list.firstWord * 4, count))];
+        return [...(await readWords(device, cache.buffers.words, list.firstWord * 4, count))];
     };
     const descConstants = (): HashGridCacheDescConstants => ({
         // From the projection, as the cache works it out, so the f32 constant is the same bits.
@@ -498,7 +500,7 @@ try {
         const packed = await packedTiles();
         const tiles = [...tileOfKey.values()].sort((a, b) => a - b);
         assert(JSON.stringify([...packed].sort((a, b) => a - b)) === JSON.stringify(tiles), `the packed list holds ${packed.length} tiles, not the ${tiles.length} inserted`);
-        const stamps = await Promise.all(tiles.slice(0, 16).map((tile) => readWords(device, cache.buffers.tileWords, (layout.tileWords.decayTileBuffer + tile) * 4, 1)));
+        const stamps = await Promise.all(tiles.slice(0, 16).map((tile) => readWords(device, cache.buffers.words, (layout.words.decayTileBuffer + tile) * 4, 1)));
         assert(stamps.every((stamp) => stamp[0] === frame), 'a decay stamp is not the frame that touched it');
 
         // A hit never inserted isn't found.

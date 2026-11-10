@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import type { Vec3 } from '../../../platform/contract/math.ts';
+import type { KernelBuilder, ModuleBindingEntry, WgslModule } from '../../../platform/contract/wgsl.ts';
+import { INDIRECT_ARGS_MODULE } from '../../../platform/compute/wgsl.ts';
+import { MIN_STORAGE_BUFFERS_PER_STAGE } from '../../../platform/device-requirements.ts';
+import { countGroupStorageBuffers, countStorageBuffers, orderModules, PlatformKernelBuilder } from '../../../platform/kernel-builder.ts';
+import { SCENE_MODULE_ENTRIES } from '../../../platform/scene/wgsl.ts';
+import { SHADE_MODULE_ENTRIES } from '../../../platform/shade/wgsl.ts';
+import { TRACE_MODULE_ENTRIES } from '../../../platform/trace/wgsl.ts';
 import { checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
 import { HashGridCache } from './hash-grid-cache.ts';
 import {
@@ -17,8 +24,15 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
-import { hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup } from './hash-grid-population-wgsl.ts';
-import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
+import { hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
+import {
+    HASH_GRID_CACHE_GROUP_ENTRIES,
+    HASH_GRID_CACHE_WORDS_ONLY,
+    HASH_GRID_CONSTANTS_BYTES,
+    HASH_GRID_CONSTANTS_WORD,
+    hashGridCacheGroupEntries,
+    hashGridCacheWgsl,
+} from './hash-grid-wgsl.ts';
 import type { WorldCacheContext } from './world-cache.ts';
 
 // ---- Independent references: the HLSL hashes in BigInt arithmetic, mod 2^32 at every step ----
@@ -200,12 +214,23 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
     it('packs the value, indirect value and both update scratch arrays at Capsaicin\'s sizes', () => {
         // gi1.cpp:487-547: uint2 per cell twice, num_cells << 2 uints twice.
         expect(layout.cellValues.bytes).toBe(2 * 22282240 * 8);
-        expect(layout.updateScratch.bytes).toBe(2 * 22282240 * 4 * 4);
-        // Counters (64 words), then hash, decay, the two packed lists and the update-listed word (D32), one word per tile each.
-        expect(layout.tileWords.bytes).toBe((64 + 5 * 262144) * 4);
+        // Counters (64 words), then hash, decay, the two packed lists and the update-listed word (D32),
+        // one word per tile each, then the two update scratch arrays, four words per cell each.
+        const scratchBytes = 2 * 22282240 * 4 * 4;
+        expect(layout.words.bytes).toBe((64 + 5 * 262144) * 4 + scratchBytes);
+        expect(layout.words.updateCellValueIndirectBuffer - layout.words.updateCellValueBuffer).toBe(4 * 22282240);
+        expect(layout.words.updateCellValueBuffer).toBeGreaterThanOrEqual(layout.words.updateListedTileBuffer + 262144);
         expect(layout.totalBytes).toBe(356515840 + 713031680 + 5243136);
         // Offsets on the 256-byte storage-binding alignment.
-        for (const offsetWords of [layout.tileWords.hashBuffer, layout.tileWords.decayTileBuffer, layout.tileWords.packedTileIndexBuffer0, layout.tileWords.packedTileIndexBuffer1, layout.tileWords.updateListedTileBuffer]) {
+        for (const offsetWords of [
+            layout.words.hashBuffer,
+            layout.words.decayTileBuffer,
+            layout.words.packedTileIndexBuffer0,
+            layout.words.packedTileIndexBuffer1,
+            layout.words.updateListedTileBuffer,
+            layout.words.updateCellValueBuffer,
+            layout.words.updateCellValueIndirectBuffer,
+        ]) {
             expect((offsetWords * 4) % 256).toBe(0);
         }
         expect((layout.cellValues.valueIndirectBuffer * 8) % 256).toBe(0);
@@ -218,7 +243,7 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
             checkHashGridCacheLimits(layout, defaults);
         } catch (error) {
             expect((error as GILimitError).limit).toBe('maxStorageBufferBindingSize');
-            expect((error as GILimitError).needed).toBe(layout.updateScratch.bytes);
+            expect((error as GILimitError).needed).toBe(layout.words.bytes);
         }
     });
 
@@ -291,8 +316,21 @@ describe('the constants and the shared WGSL', () => {
         ]) {
             expect(code.match(new RegExp(`\\bfn ${name}\\(`, 'g'))?.length, name).toBe(1);
         }
-        expect(code).toContain(`const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${layout.tileWords.decayTileBuffer}u;`);
-        expect(code).toContain('@group(1) @binding(1) var<storage, read_write> g_HashGridCache_TileWords: array<atomic<u32>>;');
+        expect(code).toContain(`const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${layout.words.decayTileBuffer}u;`);
+        expect(code).toContain('@group(1) @binding(1) var<storage, read_write> g_HashGridCache_Words: array<atomic<u32>>;');
+        expect(code).toContain('@group(1) @binding(2) var<storage, read_write> g_HashGridCache_CellValues: array<vec2u>;');
+    });
+
+    it('leaves the cell values and the functions that use them out of a words-only pass', () => {
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const code = hashGridCacheWgsl(1, layout, HASH_GRID_CACHE_WORDS_ONLY);
+        expect(code).not.toContain('g_HashGridCache_CellValues');
+        for (const name of ['HashGridCache_AddNewTile', 'HashGridCache_FilteredRadianceDirect', 'HashGridCache_FilteredRadianceIndirect', 'worldCacheLookup']) {
+            expect(code).not.toContain(`fn ${name}(`);
+        }
+        for (const name of ['HashGridCache_InsertCell', 'HashGridCache_TouchTile', 'HashGridCache_QuantizeRadiance']) expect(code).toContain(`fn ${name}(`);
+        expect(hashGridCacheGroupEntries(HASH_GRID_CACHE_WORDS_ONLY).map((entry) => entry.binding)).toEqual([0, 1]);
+        expect(HASH_GRID_CACHE_GROUP_ENTRIES.map((entry) => entry.binding)).toEqual([0, 1, 2]);
     });
 });
 
@@ -348,17 +386,40 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         const maxRayCount = 80 * 45 * 64;
         const layout = hashGridCacheRayListLayout(maxRayCount, 22282240);
         expect(layout.maxCombinedRayCount).toBe(2 * maxRayCount);
+        // The visibility entries (hit and ray, register D30) after the update tiles, then the other lists.
+        const entries = VISIBILITY_WORDS * 2 * maxRayCount;
+        expect(VISIBILITY_WORDS).toBe(10);
         expect(layout.updateTileBuffer).toBe(0);
-        expect(layout.visibilityCellBuffer).toBe(2 * maxRayCount);
-        expect(layout.visibilityQueryBuffer).toBe(4 * maxRayCount);
-        expect(layout.visibilityRayBuffer).toBe(6 * maxRayCount);
-        expect(layout.resolveBuffer).toBe(8 * maxRayCount);
-        expect(layout.reservoirBuffer).toBe(9 * maxRayCount);
-        expect(layout.bytes).toBe((9 * maxRayCount + RESERVOIR_WORDS * 2 * maxRayCount) * 4);
+        expect(layout.visibilityBuffer).toBe(2 * maxRayCount);
+        expect(layout.visibilityCellBuffer).toBe(2 * maxRayCount + entries);
+        expect(layout.visibilityQueryBuffer).toBe(4 * maxRayCount + entries);
+        expect(layout.visibilityRayBuffer).toBe(6 * maxRayCount + entries);
+        expect(layout.resolveBuffer).toBe(8 * maxRayCount + entries);
+        expect(layout.reservoirBuffer).toBe(9 * maxRayCount + entries);
+        expect(layout.bytes).toBe((9 * maxRayCount + entries + RESERVOIR_WORDS * 2 * maxRayCount) * 4);
     });
 
     it('holds at most one update entry per cell', () => {
-        expect(hashGridCacheRayListLayout(1000, 100).visibilityCellBuffer).toBe(100);
+        expect(hashGridCacheRayListLayout(1000, 100).visibilityBuffer).toBe(100);
+    });
+
+    it('packs a visibility entry in ten words, nothing overlapping', () => {
+        const spans = [
+            [VISIBILITY_WORD.origin, 3],
+            [VISIBILITY_WORD.direction, 2],
+            [VISIBILITY_WORD.hitDistance, 1],
+            [VISIBILITY_WORD.instance, 1],
+            [VISIBILITY_WORD.triangle, 1],
+            [VISIBILITY_WORD.barycentrics, 2],
+        ] as const;
+        const used = new Set<number>();
+        for (const [first, count] of spans) {
+            for (let word = first; word < first + count; word++) {
+                expect(used.has(word)).toBe(false);
+                used.add(word);
+            }
+        }
+        expect([...used].sort((a, b) => a - b)).toEqual([...Array(VISIBILITY_WORDS).keys()]);
     });
 });
 
@@ -368,5 +429,80 @@ describe('UpdateTiles workgroups (gi1.comp:2116-2140)', () => {
         expect(updateTilesPerWorkgroup(4)).toBe(4);
         expect(updateTilesPerWorkgroup(1)).toBe(64);
         expect(() => updateTilesPerWorkgroup(3)).toThrow(RangeError);
+    });
+});
+
+// ---- The binding budget: every kernel through the platform's kernel builder at 8 storage buffers per stage ----
+
+/** A platform module standing in for a real one: its name, entries and storage count, no code. */
+function stubModule(name: string, entries: readonly ModuleBindingEntry[], dependencies: readonly WgslModule[] = []): WgslModule {
+    const storageBufferCount = entries.filter((entry) => entry.buffer?.type === 'storage' || entry.buffer?.type === 'read-only-storage').length;
+    return { name, dependencies, code: () => '', entries, resources: () => [], version: 0, storageBufferCount };
+}
+
+/**
+ * Just enough of a GPUDevice for `HashGridCache.prepare` through the real
+ * kernel builder: buffers without bytes (the cache is 1 GiB), layouts and
+ * pipelines as plain objects.
+ */
+function budgetDevice(maxStorageBuffersPerShaderStage: number): GPUDevice {
+    return {
+        limits: { maxStorageBuffersPerShaderStage, maxBindGroups: 4, maxStorageBufferBindingSize: 2 ** 31, maxBufferSize: 2 ** 31 },
+        createBuffer: (descriptor: GPUBufferDescriptor) => ({ size: descriptor.size, label: descriptor.label, destroy() {} }),
+        pushErrorScope() {},
+        popErrorScope: () => Promise.resolve(null),
+        createBindGroupLayout: (descriptor: GPUBindGroupLayoutDescriptor) => descriptor,
+        createPipelineLayout: (descriptor: GPUPipelineLayoutDescriptor) => descriptor,
+        createShaderModule: (descriptor: GPUShaderModuleDescriptor) => descriptor,
+        createComputePipelineAsync: (descriptor: GPUComputePipelineDescriptor) => Promise.resolve({ label: descriptor.label }),
+        createBindGroup: (descriptor: GPUBindGroupDescriptor) => descriptor,
+        queue: { writeBuffer() {} },
+    } as unknown as GPUDevice;
+}
+
+/** The world cache's context with the platform's real kernel builder, and every kernel's storage-buffer count as it builds them. */
+function budgetContext(device: GPUDevice): { context: WorldCacheContext; storageBuffers: Map<string, number> } {
+    // The hit-shading module and what it depends on: the scene copy (2 storage buffers) and the tracer (3).
+    const scene = stubModule('gi-scene', SCENE_MODULE_ENTRIES);
+    const rays = stubModule('gi-rays', TRACE_MODULE_ENTRIES);
+    const shade = stubModule('gi-shade', SHADE_MODULE_ENTRIES, [scene, rays]);
+    const builder = new PlatformKernelBuilder(device, 'test');
+    const storageBuffers = new Map<string, number>();
+    const kernels: KernelBuilder = {
+        computeKernel: (options) => {
+            storageBuffers.set(options.label, countStorageBuffers(orderModules(options.modules)) + countGroupStorageBuffers(options.ownGroups ?? []));
+            return builder.computeKernel(options);
+        },
+    };
+    const indirectArgs = { buffer: {}, memoryBytes: 16, encode() {}, dispose() {} };
+    const compute = { indirectModule: INDIRECT_ARGS_MODULE, createIndirectArgs: () => Promise.resolve(indirectArgs) };
+    const context = { device, kernels, compute, shade: { module: shade }, timer: { computePass: () => undefined } } as unknown as WorldCacheContext;
+    return { context, storageBuffers };
+}
+
+describe("the binding budget (register D6): the platform's 8 storage buffers per stage", () => {
+    it('holds for every hash-grid kernel; the two that light hits use exactly 8', async () => {
+        expect(MIN_STORAGE_BUFFERS_PER_STAGE).toBe(8);
+        const { context, storageBuffers } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
+        await new HashGridCache().prepare(context);
+        expect([...storageBuffers.keys()].sort()).toEqual(
+            [
+                'radiance-cache/ClearCounters (hash grid)',
+                'radiance-cache/PurgeTiles',
+                'radiance-cache/PopulateScreenProbes (cache half)',
+                'radiance-cache/GenerateReservoirs',
+                'radiance-cache/PopulateCells',
+                'radiance-cache/UpdateTiles',
+                'radiance-cache/ResolveCells',
+            ].sort(),
+        );
+        for (const [label, count] of storageBuffers) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
+        expect(storageBuffers.get('radiance-cache/GenerateReservoirs')).toBe(8);
+        expect(storageBuffers.get('radiance-cache/PopulateCells')).toBe(8);
+    });
+
+    it('is what the kernel builder checks: one storage buffer fewer and prepare throws GILimitError', async () => {
+        const { context } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE - 1));
+        await expect(new HashGridCache().prepare(context)).rejects.toThrow(/maxStorageBuffersPerShaderStage = 8, but the device allows 7/);
     });
 });
