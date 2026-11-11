@@ -26,10 +26,7 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
-import { cellShadingChooseWgsl } from './hash-grid-cell-shading-wgsl.ts';
 import {
-    CELL_SHADING_MARK,
-    generateMultibounceReservoirsWgsl,
     populateCellsWgsl,
     populateMultibounceCellsWgsl,
     updateMultibounceCellsWgsl,
@@ -715,29 +712,18 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(chooseCells(classes, 4, 0).litCount).toBe(0);
     });
 
-    it("keeps a cell in use with no new sample as it is in UpdateTiles, only on a budget; an unused cell fades as Capsaicin's but stops at a count of 1", () => {
+    it("keeps a cell in use with no new sample as it is in UpdateTiles, only on a budget; an unused cell fades as Capsaicin's", () => {
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, true)).toEqual([32, 32, 32, 16]);
-        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, false, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16));
-        // An unused cell the budget has lit fades to a count of 1 and stops there, keeping its mean; per hit, or never
-        // lit by the budget (second-bounce cells), it empties.
-        expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16, false, true)).toEqual([2, 2, 2, 1]);
-        expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16)).toEqual([0, 0, 0, 0]);
-        expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16, false, false)).toEqual([0, 0, 0, 0]);
-        // Its next sample takes half the weight (1 / (1 + 1)): a mean of 2 and a sample of 0 give 1.
-        const relit = updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 1], 16, false, true);
-        expect(relit[3]).toBe(2);
-        expect(relit[0] / relit[3]).toBeCloseTo(1, 6);
+        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, false)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16));
         expect(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16));
         // A lit cell whose light went out: its samples of 0 take it down by 1 / 16 of the way each frame.
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 1], 16, true)[0]).toBeCloseTo(30, 5);
         const perHit = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true));
         const budget = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true, true));
         expect(perHit).not.toContain('new_samples.w <= 0.0');
-        expect(budget).toContain('new_samples.w <= 0.0 && (keep_without_samples || (budget_lit && previous_radiance.w <= 1.0))');
+        expect(budget).toContain('keep_without_samples && new_samples.w <= 0.0');
         // The kept-hit word says "in use this frame", and UpdateTiles resets it for the next frame's offers.
         expect(budget).toContain('atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u)');
-        // Choose turns the kept hit's key into the "in use" mark once Rank has used it.
-        expect(cellShadingChooseWgsl(hashGridCacheBufferLayout(capacity, true, true))).toContain(`${CELL_SHADING_MARK.inUse}u);`);
     });
 
     it('on a budget, keeps bypassing first-bounce hits out of their cell, and puts only a pick\'s second bounce in it', () => {
@@ -747,10 +733,6 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(populateCellsWgsl(perHit)).not.toContain('is_bypassing_first_bounce');
         expect(updateMultibounceCellsWgsl(budget)).toContain(`(base_flags & ${VISIBILITY_FLAG.litPick}u) != 0u`);
         expect(updateMultibounceCellsWgsl(perHit)).not.toContain('base_flags');
-        // A second-bounce draw with no light adds no sample in both modes (Capsaicin's); on a budget it marks its cell read and unlit.
-        expect(generateMultibounceReservoirsWgsl(budget)).toContain(`${CELL_SHADING_MARK.readUnlit}u);   // lever 1: read, unlit`);
-        expect(generateMultibounceReservoirsWgsl(perHit)).not.toContain('read, unlit');
-        expect(updateTilesWgsl(budget)).toContain(`mark == ${CELL_SHADING_MARK.inUse}u`);
         // The second bounce leaves from the lit picks and the bypassing hits, by their flags.
         expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('visibility_bypass_buffer, did) == 0u');
     });

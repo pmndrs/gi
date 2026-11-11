@@ -262,11 +262,10 @@ export type CellValue = readonly [number, number, number, number];
  * 1 / count, the count capped at `maxCount`, and stored times the count. In
  * f32 steps, as the GPU computes it (before the value is packed as halves).
  */
-export function updateTilesAccumulate(stored: CellValue, newSamples: CellValue, maxCount: number, keepWithoutSamples = false, budgetLit = keepWithoutSamples): [number, number, number, number] {
+export function updateTilesAccumulate(stored: CellValue, newSamples: CellValue, maxCount: number, keepWithoutSamples = false): [number, number, number, number] {
     // Lever 1's budget build (hash-grid-population-wgsl.ts, updateTilesWgsl): a cell in use this frame
-    // (keepWithoutSamples) with no new sample keeps its value; a cell nobody used fades as Capsaicin's,
-    // but one the budget has lit (budgetLit) stops at a count of 1 instead of emptying.
-    if (newSamples[3] <= 0 && (keepWithoutSamples || (budgetLit && stored[3] <= 1))) return [stored[0], stored[1], stored[2], stored[3]];
+    // (keepWithoutSamples) with no new sample keeps its value; a cell nobody used fades as Capsaicin's.
+    if (keepWithoutSamples && newSamples[3] <= 0) return [stored[0], stored[1], stored[2], stored[3]];
     const sampleCount = f32(Math.min(f32(stored[3] + newSamples[3]), f32(maxCount)));
     const storedScale = f32(Math.max(stored[3], 1));
     const newScale = f32(Math.max(newSamples[3], 1));
