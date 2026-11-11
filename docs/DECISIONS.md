@@ -4,6 +4,14 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-11
 
+- **radiance-cache: the hash grid stays the primary world cache; cards only if needed** (Dennis, 2026-11-11: "We CAN build cards, question is should we. Idtech8 doesnt, and lumen switched away from it (although only for hardware RT) Im open to cards if we need them. I think the hashGrid or whatever with cells though is still primary in my mind").
+  - RC-X3's study stands, but cards aren't built now.
+  - Cards come back only for a need the hash grid can't meet, such as a material at Brixelizer far-field hits (use 3 in the design doc's Brixelizer section) if the field can't carry an id.
+- **Brixelizer: use it however helps the cells** (Dennis, 2026-11-11: "We can always expand things in the brixelizer project if it helps us build the cells... For brixelizer I havent even thought about what to do with it so anything we want is fine").
+  - Requests went to its session: an includable WGSL query, per-ray tMin and start distance, three r187, an optional id at the hit, and Mrays/s numbers.
+- **The BVH lane's merged static tree comes before its release** (Dennis, 2026-11-11: "Priority wise its doing a lot and this comes before release"). Passed to `bvh-6d`.
+- **three: assume the latest release** (Dennis, 2026-11-11: "I dont know why stuff keeps getting stuck on older versions of three, assume latest"). Today the latest is r187 (0.187.0), which this repo uses. Sibling projects pinned below it are asked to move up.
+
 - **radiance-cache: the three hard-to-walk-back items, as the lead recommended** (Dennis, 2026-11-11: "I agree with the format deferrment for later, and to skip the scratch memory. and to not do d30. so all three as recomended").
   - **Lever 5, compact formats: later, one buffer at a time.** It waits for RC5.3's RTX table to show which passes are limited by memory traffic. Then each buffer gets pack and unpack helpers behind a format setting, so it's never one-way. The 16-byte hit record comes with lever 1.
   - **Lever 8, scratch per tile: not done.** Lever 23 (right-sizing the cache through its existing settings) gets the memory instead. Revisit only if mobile memory is still tight after that.
