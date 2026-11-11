@@ -35,6 +35,46 @@ Not verified: RTX 3060 and Intel UHD (all three fixes; D59 matters there most, t
 Numbers (M5): D59: stores through rcNearestHalf 4,096 of 4,096 nearest-even (plain stores 2,017 toward zero); 40 m after 1/10/100/300 filters: 40 exactly (was 29.7 m at 300); frame loop sky hit distance −16.8 m from frame 10 to 300, −2.0 m from 100 to 300 (was −27.3 m by 100, −3.0 m more). D42: technique memory 694,873,908 B prepared off, 1,247,158,164 B on (552,284,256 apart: 534,773,760 of arrays, the rest list halves and dispatch args); dark room rise 3.0×. D39 (rays that change hit / kept bounce rays): corner 2 / 63,794, Cornell 3 / 31,751, Sponza 413 / 60,119 (409 another triangle); back-face hits Sponza 3,678 vs 3,668, Cornell 11 vs 10; hits under 1 mm Sponza 264 vs 188; push median 0.059 vs 0.143 mm. Three page GI with multibounce over one-bounce DDGI, Sponza 0.891/0.886/0.883 before, 0.884/0.881/0.880 after.
 Next: (1) Windows runs of `-filter`, `-multibounce`, `-three` (RC5.2). (2) Lead: D31's premise looks wrong: Tint compiles `pack2x16float` to `f32tof16`, which truncates on the RTX and Intel, and D3D's rule is round toward zero, so Capsaicin's own `f32tof16` most likely truncates; D31's correction is then a fix, not a restoration (Disputed causes). (3) `rcNearestHalf` duplicates `ddgiNearestHalf` and `giDirectStochasticHalf`'s step code: a shared platform helper would do (not done: outside RC6.2). (4) The denoiser's `rgba16float` history (AMD question in the register) could take the same rounding; not done (the package is self-contained). (5) Tell AMD the D59 item.
 
+## 2026-11-11 · radiance-cache: organising, phase 5 start, divergence fixes, lever plans · lead (opus, Mac)
+Did:
+- Docs:
+  - Split the register and challenge list into `docs/design/radiance-cache-divergences.md`, with cause, effort, recommendation and "can it be a switch?" per row.
+  - New speed plan: `docs/design/radiance-cache-speed.md` (27 levers, Lumen and id Tech 8 mapped onto our pipeline).
+  - Published the explainer page from both (claude.ai artifact 5orsTPKKQu2pX8rArFaWNP).
+- Reviewed and merged RC5.1 (screen-stage timing), RC6.1 (D33 sky light at cache hits), RC6.2 (D59, D42, D39) and RC5.4 (the slow-surface-ray cause). Every review passed with notes; all notes fixed before merge.
+- Decided, with Dennis:
+  - Timing resumes.
+  - Every lever and fix is a setting beside the faithful path; hard-to-undo items are flagged first.
+  - Keep 64 rays per probe.
+  - Lever 5 later, per buffer. Lever 8 and D30 not done.
+  - Bindless hit textures as lever 27 (RC6.3, RC6.4).
+  - Lever 1 the id Tech 8 way (RC-L1, design in the design doc).
+  - Card-cache study written (RC-X3), with a recommendation; Dennis decides whether to build.
+- Corrected the design doc on Brixelizer: Dennis's port is a distance-field library with no GI and no triangle at a hit, so it fits as a long-ray backend (lever 9), not a world cache.
+- Sent RC5.4's finding to the BVH lane (`bvh-6d`). It agrees with fix (a), a merged static tree with exact hit mapping, and is checking priority against its 0.1 alpha with Dennis.
+
+Verified: on the merged `radiance-cache` (after RC6.2), Apple M5 Pro (apple/metal-3), headless Chrome 157, through the lock:
+- All 14 `radiance-cache-*` pages pass, plus `hit-shading-lights` and `ddgi-furnace`.
+- lint, typecheck and test (1,340 after RC5.4) pass.
+
+Not verified:
+- Anything on the RTX 3060 or the Intel UHD (RC5.2 and RC5.3, tomorrow).
+- Native Capsaicin.
+- Chrome's bindless feature name (from a GitHub issue; check in Canary on Windows).
+- The Lumen hardware-RT default (UE docs say rays read the surface cache by default).
+
+Numbers (M5, hints):
+- Sponza, all radiance-cache passes: 16.6 ms with multibounce, 10.5 without. Probe trace plus insert 5.7, multibounce cells 3.4, cache population 3.3.
+- One merged tree: surface rays 1.86x on Sponza, 1.24x on Bistro interior (paired).
+- Details are in the rows' entries and `bench/results`.
+
+Next:
+1. RC-L1 (running) review and merge.
+2. Windows, 2026-11-12: RC5.2, RC5.3, and the Canary check for RC6.3.
+3. BVH lane: run both surface pages before and after on its merged-tree branch.
+4. Main line, not this track: the RC branch still traces with ddgi's frozen copy of the walk. pmndrs/bvh renamed gi* to bvh* (`docs/MIGRATING-FROM-DDGI.md` in ~/Developer/bvh, `GPU_LAYOUT_VERSION` 2).
+5. Dennis: D31 and D19 (disputed by D3D11.3 §3.2.2); whether to build cards.
+
 ## 2026-11-11 · RC5.4 review fixes · implementer (opus, Mac)
 Did: on `rc5-4` (ccf38b1). (1) A **paired section** in `surface-rays-bench.ts`: the surface set (closest and any-hit) through the instanced and merged trees, plus the tie-break walks, each timed once per round for 5 rounds, order reversed every other round; ratios taken within a round. `surface-again` is repeated at the end of the merged batch. (2) **Tie-break walks** (bench-only): children both entered at tMin ordered by exit distance (near or far) or by direction, timed and counted. (3) `counted-walk-wgsl.ts` is now one generator, `benchWalkWgsl`; with counters off and no tie-break, a unit test checks its text equals production `walkWgsl`'s, comments and whitespace aside, so traversal order can't drift (plus two tests). (4) The CSV gets `counted_agreement`, `agreement_with_instanced` and the paired rows. (5) NOTES: the grid's median hit is 2.7 m; drift reworded (Sponza up to 29%, Bistro about 1%). (6) The `surface` set is RC1.5's cosine approximation, not the cache's importance-sampled hemi-octahedral rays with origins rebuilt from depth; the uniform-hemisphere and offset variants span that difference within 12% of the steps.
 Verified: Apple M5 Pro, headless Chrome 157, through the lock: both pages PASS three times each at ccf38b1 (the counted copies, the tie-break walks and the merged and split trees give the production hits on ≥ 99.99% of rays). lint, typecheck, test pass.
