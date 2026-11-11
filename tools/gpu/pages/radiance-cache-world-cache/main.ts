@@ -49,12 +49,17 @@
  *    sky its hits see (`sky-view.ts`: the wall hides part of the floor's sky,
  *    the floor part of the wall's). The sum over cells of the cells' rgb /
  *    count against the sum of albedo × L × V (V the mean over the cell's hits
- *    this frame) is within the Lambert check's 2.5% (DECISIONS 2026-11-10)
- *    for the open floor (V ≥ 0.99, the done-when's E = πL), the whole floor
- *    and the wall, in every channel.
- * 7. **A closed box with no lights** (the same sky outside, 20 frames): no
- *    probe ray misses, every hit draws the sky as above, and its shadow ray
- *    is blocked, so every cell with samples and every hit ray reads 0.
+ *    that frame), over four readings 16 frames apart (one history each; the
+ *    GPU's append order reseeds the random numbers, so one reading's open
+ *    floor moved by 1.3% between runs), is within the Lambert check's 2.5%
+ *    (DECISIONS 2026-11-10) for the open floor (V ≥ 0.99, the done-when's
+ *    E = πL), the whole floor and the wall, in every channel.
+ * 7. **A closed box with no lights** (the same sky outside, 20 frames; one
+ *    mesh, large enough that the camera sees one wall and no edge, so every
+ *    probe starts inside: on an edge pixel an origin rebuilt from depth can
+ *    land a hair outside, register D17): no probe ray starts outside or
+ *    misses, every hit draws the sky as above, and its shadow ray is
+ *    blocked, so every cell with samples and every hit ray reads 0.
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
@@ -81,6 +86,7 @@ import {
     BLUE_SUN_TRAVEL,
     CAMERA,
     cellValue,
+    CLOSED_BOX,
     CONVERGENCE_FRAMES,
     EMISSION,
     FRAME_CAMERA,
@@ -433,11 +439,50 @@ function percentile(values: readonly number[], share: number): number {
     return sorted[Math.min(sorted.length - 1, Math.floor(share * sorted.length))];
 }
 
+/** Section 6 reads the cells this many times, a history's length (16 frames) apart, and sums the readings. */
+const SKY_READINGS = 4;
+
 async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Checks> {
     const failures: string[] = [];
     const fail = (message: string): void => {
         if (failures.length < 12) failures.push(`sky corner: ${message}`);
     };
+    const groups = { openFloor: newSkyGroup(), floor: newSkyGroup(), wall: newSkyGroup() };
+    let mixedCells = 0;
+    let cellsWithoutSamples = 0;
+    let draws = { hits: 0, skyDraws: 0, otherDraws: 0, withoutLight: 0 };
+    for (let reading = 0; reading < SKY_READINGS; reading++) {
+        if (reading > 0) await runFrames(device, scenario, MAX_SAMPLE_COUNT);
+        const counts = await readSkyCorner(device, scenario, groups, fail);
+        mixedCells += counts.mixedCells;
+        cellsWithoutSamples += counts.cellsWithoutSamples;
+        draws = { hits: draws.hits + counts.draws.hits, skyDraws: draws.skyDraws + counts.draws.skyDraws, otherDraws: draws.otherDraws + counts.draws.otherDraws, withoutLight: draws.withoutLight + counts.draws.withoutLight };
+    }
+
+    const summary: Record<string, unknown> = {};
+    for (const [name, group] of Object.entries(groups)) {
+        const ratio = [0, 1, 2].map((channel) => group.measured[channel] / group.expected[channel]);
+        if (group.cells === 0) fail(`no ${name} cells with samples`);
+        else if (ratio.some((value) => !(Math.abs(value - 1) <= LAMBERT_TOLERANCE))) fail(`${name}: the cells read ${ratio.map((value) => value.toFixed(4)).join(', ')} x albedo x L x V (rgb), over ${group.cells} cell readings`);
+        summary[name] = {
+            cellReadings: group.cells,
+            meanVisibility: group.visibilitySum / Math.max(group.cells, 1),
+            overExpected: ratio,
+            perCellRedRatioP5: percentile(group.ratios, 0.05),
+            perCellRedRatioP50: percentile(group.ratios, 0.5),
+            perCellRedRatioP95: percentile(group.ratios, 0.95),
+        };
+    }
+    return { failures, data: { skyRadiance: SKY_RADIANCE, readings: SKY_READINGS, ...draws, mixedCells, cellsWithoutSamples, ...summary } };
+}
+
+/** One reading of section 6: this frame's hits by cell, and each cell's value against albedo × L × V, added into `groups`. */
+async function readSkyCorner(
+    device: GPUDevice,
+    scenario: Scenario,
+    groups: Record<'openFloor' | 'floor' | 'wall', SkyGroup>,
+    fail: (message: string) => void,
+): Promise<{ draws: ReturnType<typeof skyDraws>; mixedCells: number; cellsWithoutSamples: number }> {
     const state = await readFrameState(device, scenario);
     const draws = skyDraws(state);
     checkSkyDraws(draws, fail);
@@ -459,7 +504,6 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
     const slotOfTile = new Map(tiles.map((tile, slot) => [tile, slot]));
     const values = await readTiles(device, scenario.cache, tiles);
 
-    const groups = { openFloor: newSkyGroup(), floor: newSkyGroup(), wall: newSkyGroup() };
     let mixedCells = 0;
     let cellsWithoutSamples = 0;
     for (const [cell, hits] of hitsByCell) {
@@ -485,22 +529,7 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
             group.ratios.push(value[0] / value[3] / (ALBEDO * SKY_RADIANCE[0] * visibility));
         }
     }
-
-    const summary: Record<string, unknown> = {};
-    for (const [name, group] of Object.entries(groups)) {
-        const ratio = [0, 1, 2].map((channel) => group.measured[channel] / group.expected[channel]);
-        if (group.cells === 0) fail(`no ${name} cells with samples`);
-        else if (ratio.some((value) => !(Math.abs(value - 1) <= LAMBERT_TOLERANCE))) fail(`${name}: the cells read ${ratio.map((value) => value.toFixed(4)).join(', ')} x albedo x L x V (rgb), over ${group.cells} cells`);
-        summary[name] = {
-            cells: group.cells,
-            meanVisibility: group.visibilitySum / Math.max(group.cells, 1),
-            overExpected: ratio,
-            perCellRedRatioP5: percentile(group.ratios, 0.05),
-            perCellRedRatioP50: percentile(group.ratios, 0.5),
-            perCellRedRatioP95: percentile(group.ratios, 0.95),
-        };
-    }
-    return { failures, data: { skyRadiance: SKY_RADIANCE, ...draws, mixedCells, cellsWithoutSamples, ...summary } };
+    return { draws, mixedCells, cellsWithoutSamples };
 }
 
 async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Checks> {
@@ -513,6 +542,10 @@ async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Ch
     checkSkyDraws(draws, fail);
     const misses = state.rays.filter((ray) => ray.hitT < 0).length;
     if (misses > 0) fail(`${misses} probe rays left the box`);
+    // Every probe sits on the back wall, inside the box (the camera sees no edge: CLOSED_BOX).
+    const { minX, maxX, minY, maxY, minZ, maxZ } = CLOSED_BOX;
+    const outsideOrigins = state.rays.filter(({ origin: [x, y, z] }) => !(x > minX && x < maxX && y > minY && y < maxY && z > minZ && z < maxZ)).length;
+    if (outsideOrigins > 0) fail(`${outsideOrigins} probe rays start outside the box`);
 
     // Every hit ray, and every cell with samples, reads 0: the sky can't be seen from inside.
     let litRays = 0;
@@ -543,7 +576,7 @@ async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Ch
     });
     if (cellsWithSamples === 0) fail('no cell has samples');
     if (litCells > 0) fail(`${litCells} of ${cellsWithSamples} cells read light (brightest ${brightestCell})`);
-    return { failures, data: { ...draws, misses, litRays, cellsWithSamples, litCells } };
+    return { failures, data: { ...draws, misses, outsideOrigins, litRays, cellsWithSamples, litCells } };
 }
 
 // ---- The page --------------------------------------------------------------------------------------

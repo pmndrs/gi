@@ -99,8 +99,13 @@ export interface ScenarioWorld {
     readonly closedBox?: boolean;
 }
 
-/** The closed box (RC6.1): 8 x 4 x 10 m around the camera at (0, 2, 6), every side grey and facing in. */
-export const CLOSED_BOX = { minX: -4, maxX: 4, minY: 0, maxY: 4, minZ: -1, maxZ: 9 } as const;
+/**
+ * The closed box (RC6.1): 20 x 14 x 10 m around the camera at (0, 2, 6), every side grey and
+ * facing in, so large that the camera sees its back wall alone (the view meets the wall within
+ * x ±8.1 m, y -3.8 to 4.6 m) and no edge. On an edge pixel a probe's origin, rebuilt from depth,
+ * can land a hair outside the box (register D17; PROGRESS, RC6.1), and its rays then see the sky.
+ */
+export const CLOSED_BOX = { minX: -10, maxX: 10, minY: -6, maxY: 8, minZ: -1, maxZ: 9 } as const;
 
 export function describeCorner(platform: GIPlatformImpl, lights: readonly LightDescriptor[], withPatch: boolean, world: ScenarioWorld = {}): void {
     if (world.closedBox) {
@@ -118,27 +123,42 @@ export function describeCorner(platform: GIPlatformImpl, lights: readonly LightD
     platform.scene.setEnvironment({ type: 'color', color: [...(world.sky ?? [0, 0, 0])], intensity: 1 });
 }
 
-/** Six quads sharing their corners exactly, so the box has no gap a shadow ray could leave through. */
+/**
+ * The box as one mesh: six sides of two triangles each, facing in, their
+ * corners the same eight points exactly (each side has its own four vertices
+ * for its normal), as a closed room would be modelled.
+ */
 function describeClosedBox(platform: GIPlatformImpl): void {
     const { minX, maxX, minY, maxY, minZ, maxZ } = CLOSED_BOX;
     const sides: { label: string; corners: Vec3[]; normal: Vec3 }[] = [
-        { label: 'box floor', corners: [[minX, minY, minZ], [minX, minY, maxZ], [maxX, minY, maxZ], [maxX, minY, minZ]], normal: [0, 1, 0] },
-        { label: 'box ceiling', corners: [[minX, maxY, minZ], [maxX, maxY, minZ], [maxX, maxY, maxZ], [minX, maxY, maxZ]], normal: [0, -1, 0] },
-        { label: 'box back', corners: [[minX, minY, minZ], [maxX, minY, minZ], [maxX, maxY, minZ], [minX, maxY, minZ]], normal: [0, 0, 1] },
-        { label: 'box front', corners: [[minX, minY, maxZ], [minX, maxY, maxZ], [maxX, maxY, maxZ], [maxX, minY, maxZ]], normal: [0, 0, -1] },
-        { label: 'box left', corners: [[minX, minY, minZ], [minX, maxY, minZ], [minX, maxY, maxZ], [minX, minY, maxZ]], normal: [1, 0, 0] },
-        { label: 'box right', corners: [[maxX, minY, minZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [maxX, maxY, minZ]], normal: [-1, 0, 0] },
+        { label: 'floor', corners: [[minX, minY, minZ], [minX, minY, maxZ], [maxX, minY, maxZ], [maxX, minY, minZ]], normal: [0, 1, 0] },
+        { label: 'ceiling', corners: [[minX, maxY, minZ], [maxX, maxY, minZ], [maxX, maxY, maxZ], [minX, maxY, maxZ]], normal: [0, -1, 0] },
+        { label: 'back', corners: [[minX, minY, minZ], [maxX, minY, minZ], [maxX, maxY, minZ], [minX, maxY, minZ]], normal: [0, 0, 1] },
+        { label: 'front', corners: [[minX, minY, maxZ], [minX, maxY, maxZ], [maxX, maxY, maxZ], [maxX, minY, maxZ]], normal: [0, 0, -1] },
+        { label: 'left', corners: [[minX, minY, minZ], [minX, maxY, minZ], [minX, maxY, maxZ], [minX, minY, maxZ]], normal: [1, 0, 0] },
+        { label: 'right', corners: [[maxX, minY, minZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [maxX, maxY, minZ]], normal: [-1, 0, 0] },
     ];
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
     for (const side of sides) {
-        // quad() makes the corners' winding the front face: check it faces into the box.
+        // Counter-clockwise seen from the normal's side is the front face: check it faces into the box.
         const [a, b, c] = side.corners;
         const edge1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         const edge2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
         const cross = [edge1[1] * edge2[2] - edge1[2] * edge2[1], edge1[2] * edge2[0] - edge1[0] * edge2[2], edge1[0] * edge2[1] - edge1[1] * edge2[0]];
-        const facing = cross[0] * side.normal[0] + cross[1] * side.normal[1] + cross[2] * side.normal[2];
-        assert(facing > 0, `${side.label}: its corners wind away from its normal`);
-        quad(platform, side.label, side.corners, side.normal, ALBEDO);
+        assert(cross[0] * side.normal[0] + cross[1] * side.normal[1] + cross[2] * side.normal[2] > 0, `box ${side.label}: its corners wind away from its normal`);
+        const first = positions.length / 3;
+        for (const corner of side.corners) {
+            positions.push(...corner);
+            normals.push(...side.normal);
+        }
+        indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
     }
+    const scene = platform.scene;
+    const mesh = scene.createMesh({ positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices), label: 'closed box' });
+    const material = scene.createMaterial({ albedo: [ALBEDO, ALBEDO, ALBEDO], label: 'closed box' });
+    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'closed box' });
 }
 
 export function sun(travel: Vec3, color: Vec3 = [1, 1, 1]): LightDescriptor {
