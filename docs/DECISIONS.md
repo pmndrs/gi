@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-11
 
+- **radiance-cache: the three hard-to-walk-back items, as the lead recommended** (Dennis, 2026-11-11: "I agree with the format deferrment for later, and to skip the scratch memory. and to not do d30. so all three as recomended").
+  - **Lever 5, compact formats: later, one buffer at a time.** It waits for RC5.3's RTX table to show which passes are limited by memory traffic. Then each buffer gets pack and unpack helpers behind a format setting, so it's never one-way. The 16-byte hit record comes with lever 1.
+  - **Lever 8, scratch per tile: not done.** Lever 23 (right-sizing the cache through its existing settings) gets the memory instead. Revisit only if mobile memory is still tight after that.
+  - **D30, merging the insert into the trace: not done.** The world-cache slot (the card cache, Brixelizer) is worth more than about 0.19 ms (M5, Sponza). If it's ever wanted, it would be a second kernel used only when the hash grid is the cache.
+
 - **radiance-cache: keep 64 rays per probe (lever 24 not pursued)** (Dennis, 2026-11-11: "If fewer rays per probe is hard to change later then we can stay higher... lets stick here"). The 8 × 8 probe is built into every pass, so changing it would be one-way. Ray count is tuned through probe density instead: lever 19, Capsaicin's `SixteenthSpp` spawn rate, a setting read at prepare.
 
 - **radiance-cache: budgeted cell shading the id Tech 8 way (lever 1), and a card-cache experiment (extension 3)** (Dennis, 2026-11-11: "if thats what IDTech is doing then it sounds good to me... We should totally do it the ID tech way... If the cards as an experiment in your extension 3 as well im even more for it").

@@ -1202,7 +1202,7 @@ Added 2026-11-11 at Dennis's request: before a fix starts, say whether it can be
 | [D20](#d20) | Setting, at prepare | The sky bake size, or reading the host's environment map, as a setting. |
 | [D21](#d21) | Platform option | Emissive triangles as platform lights, behind an option. DDGI's lighting would change too, so it can't be in place. |
 | [D27](#d27) | Setting, live | A noise-source setting (white or blue). Blue noise is a platform texture shared with D55. |
-| [D30](#d30) | Hard to walk back | Fusing the insert into the trace ties the trace to the hash grid, which breaks the world-cache slot that Brixelizer plugs into. Only as a second path when the hash grid is the cache, never in place. |
+| [D30](#d30) | Hard to walk back | Decided 2026-11-11: not done; the slot matters more. Fusing the insert into the trace ties the trace to the hash grid, which breaks the world-cache slot that Brixelizer plugs into. Only as a second path when the hash grid is the cache, never in place. |
 | [D33](#d33) | Already a setting | Fixed today (RC6.1) as `environmentLightEnable`, Capsaicin's own option. |
 | [D37](#d37) | Setting, live | Hand the cache the unpushed point as well: an additive field, then a setting. |
 | [D39](#d39) | Replaced, not a switch | Fixed today (RC6.2): Capsaicin's push replaced our shortcut. It could be a switch, but there's no reason to keep the old push. |
