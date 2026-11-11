@@ -4,6 +4,8 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-11
 
+- **radiance-cache: keep 64 rays per probe (lever 24 not pursued)** (Dennis, 2026-11-11: "If fewer rays per probe is hard to change later then we can stay higher... lets stick here"). The 8 × 8 probe is built into every pass, so changing it would be one-way. Ray count is tuned through probe density instead: lever 19, Capsaicin's `SixteenthSpp` spawn rate, a setting read at prepare.
+
 - **radiance-cache: budgeted cell shading the id Tech 8 way (lever 1), and a card-cache experiment (extension 3)** (Dennis, 2026-11-11: "if thats what IDTech is doing then it sounds good to me... We should totally do it the ID tech way... If the cards as an experiment in your extension 3 as well im even more for it").
   - Lever 1 is built as `cellShading: 'perHit' | 'budget'`, with `perHit` (Capsaicin) the default. The design is in docs/design/radiance-cache.md, "Budgeted cell shading". Row RC-L1.
   - The card cache is a second `WorldCache` behind the slot. It starts as a design study. Row RC-X3.
