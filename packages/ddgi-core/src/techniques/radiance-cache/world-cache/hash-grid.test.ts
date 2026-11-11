@@ -24,7 +24,7 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
-import { hashGridCacheRayListLayout, MULTIBOUNCE_INFO_WORDS, RESERVOIR_WORDS, updateTilesPerWorkgroup, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
+import { hashGridCacheRayListLayout, MULTIBOUNCE_INFO_WORDS, RESERVOIR_WORDS, resolveCellsWgsl, updateTilesPerWorkgroup, updateTilesWgsl, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
 import {
     HASH_GRID_CACHE_GROUP_ENTRIES,
     HASH_GRID_CACHE_WORDS_ONLY,
@@ -209,7 +209,7 @@ describe('the tile layout (gi1.cpp:442-461) and cell indices (hash_grid_cache.hl
 
 describe('the packed buffers (register D6) and the device limits (D14)', () => {
     const capacity = hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS);
-    const layout = hashGridCacheBufferLayout(capacity);
+    const layout = hashGridCacheBufferLayout(capacity, true);
 
     it('packs the value, indirect value and both update scratch arrays at Capsaicin\'s sizes', () => {
         // gi1.cpp:487-547: uint2 per cell twice, num_cells << 2 uints twice.
@@ -218,7 +218,7 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
         // one word per tile each, then the two update scratch arrays, four words per cell each.
         const scratchBytes = 2 * 22282240 * 4 * 4;
         expect(layout.words.bytes).toBe((64 + 5 * 262144) * 4 + scratchBytes);
-        expect(layout.words.updateCellValueIndirectBuffer - layout.words.updateCellValueBuffer).toBe(4 * 22282240);
+        expect((layout.words.updateCellValueIndirectBuffer ?? 0) - layout.words.updateCellValueBuffer).toBe(4 * 22282240);
         expect(layout.words.updateCellValueBuffer).toBeGreaterThanOrEqual(layout.words.updateListedTileBuffer + 262144);
         expect(layout.totalBytes).toBe(356515840 + 713031680 + 5243136);
         // Offsets on the 256-byte storage-binding alignment.
@@ -229,11 +229,33 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
             layout.words.packedTileIndexBuffer1,
             layout.words.updateListedTileBuffer,
             layout.words.updateCellValueBuffer,
-            layout.words.updateCellValueIndirectBuffer,
+            layout.words.updateCellValueIndirectBuffer ?? 0,
         ]) {
             expect((offsetWords * 4) % 256).toBe(0);
         }
-        expect((layout.cellValues.valueIndirectBuffer * 8) % 256).toBe(0);
+        expect(((layout.cellValues.valueIndirectBuffer ?? 0) * 8) % 256).toBe(0);
+    });
+
+    it('leaves the indirect values and their scratch out without multibounce, as Capsaicin frees them (register D42)', () => {
+        const single = hashGridCacheBufferLayout(capacity, false);
+        expect(single.multibounce).toBe(false);
+        expect(single.words.updateCellValueIndirectBuffer).toBeNull();
+        expect(single.cellValues.valueIndirectBuffer).toBeNull();
+        // gi1.cpp:497-510 and 535-552: a uint2 per cell and num_cells << 2 uints, 534,773,760 bytes.
+        expect(layout.totalBytes - single.totalBytes).toBe(22282240 * 8 + 22282240 * 4 * 4);
+        expect(layout.totalBytes - single.totalBytes).toBe(534773760);
+        // The direct arrays where they were.
+        expect(single.words.updateCellValueBuffer).toBe(layout.words.updateCellValueBuffer);
+        expect(single.cellValues.valueBuffer).toBe(layout.cellValues.valueBuffer);
+        const code = hashGridCacheWgsl(1, single);
+        expect(code).not.toContain('VALUEINDIRECTBUFFER');
+        expect(code).not.toContain('fn HashGridCache_FilteredRadianceIndirect(');
+        for (const kernel of [updateTilesWgsl(single), resolveCellsWgsl(single)]) {
+            expect(kernel).not.toContain('VALUEINDIRECTBUFFER');
+            expect(kernel).not.toContain('FilteredRadianceIndirect');
+        }
+        expect(updateTilesWgsl(layout)).toContain('HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index');
+        expect(resolveCellsWgsl(layout)).toContain('HashGridCache_FilteredRadianceIndirect(cell_index)');
     });
 
     it('throws GILimitError naming maxStorageBufferBindingSize at WebGPU\'s default limits', () => {
@@ -298,7 +320,7 @@ describe('the constants and the shared WGSL', () => {
     });
 
     it('declares every ported function once, with the packed offsets baked in', () => {
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         const code = hashGridCacheWgsl(1, layout);
         for (const name of [
             'pcgHash',
@@ -331,7 +353,7 @@ describe('the constants and the shared WGSL', () => {
     });
 
     it('leaves the cell values and the functions that use them out of a words-only pass', () => {
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         const code = hashGridCacheWgsl(1, layout, HASH_GRID_CACHE_WORDS_ONLY);
         expect(code).not.toContain('g_HashGridCache_CellValues');
         for (const name of ['HashGridCache_AddNewTile', 'HashGridCache_FilteredRadianceDirect', 'HashGridCache_FilteredRadianceIndirect', 'worldCacheLookup']) {
@@ -393,7 +415,7 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
     it("sizes them as Capsaicin does with multibounce on, one after another", () => {
         // 1280 x 720: 80 x 45 spawn tiles of 64 rays.
         const maxRayCount = 80 * 45 * 64;
-        const layout = hashGridCacheRayListLayout(maxRayCount, 22282240);
+        const layout = hashGridCacheRayListLayout(maxRayCount, 22282240, true);
         expect(layout.maxCombinedRayCount).toBe(2 * maxRayCount);
         // The visibility entries (hit and ray, register D30) after the update tiles, then the other lists.
         const entries = VISIBILITY_WORDS * 2 * maxRayCount;
@@ -411,8 +433,17 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         expect(layout.bytes).toBe((layout.visibilityBypassBuffer + maxRayCount) * 4);
     });
 
+    it('holds the first bounce alone without multibounce (gi1.cpp:637, 670-695)', () => {
+        const maxRayCount = 80 * 45 * 64;
+        const single = hashGridCacheRayListLayout(maxRayCount, 22282240, false);
+        expect(single.maxCombinedRayCount).toBe(maxRayCount);
+        // Each list holds max_ray_count entries; no second-bounce brdf and pdf; the resolve list and our bypass flags stay.
+        expect(single.visibilityBypassBuffer).toBe(single.multibounceInfoBuffer);
+        expect(single.bytes).toBe((maxRayCount + VISIBILITY_WORDS * maxRayCount + 4 * maxRayCount + RESERVOIR_WORDS * maxRayCount + maxRayCount) * 4);
+    });
+
     it('holds at most one update entry per cell', () => {
-        expect(hashGridCacheRayListLayout(1000, 100).visibilityBuffer).toBe(100);
+        expect(hashGridCacheRayListLayout(1000, 100, true).visibilityBuffer).toBe(100);
     });
 
     it('packs a visibility entry in ten words, nothing overlapping', () => {
@@ -529,6 +560,27 @@ describe("the binding budget (register D6): the platform's 8 storage buffers per
         expect(storageBuffers.get('radiance-cache/UpdateMultibounceCells')).toBe(4);
     });
 
+    it('without multibounce at prepare, makes no second-bounce kernels and 535 MB less (register D42)', async () => {
+        const withIt = new HashGridCache();
+        await withIt.prepare(budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE)).context);
+        const { context, storageBuffers } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
+        const without = new HashGridCache({ ...DEFAULT_HASH_GRID_CACHE_OPTIONS, useMultibounce: false });
+        await without.prepare(context);
+        expect([...storageBuffers.keys()].filter((label) => label.includes('Multibounce'))).toEqual([]);
+        expect(without.preparedWithMultibounce).toBe(false);
+        expect(without.multibounceActive).toBe(false);
+        expect(without.stats['multibounce arrays']).toBe(0);
+        expect(withIt.stats['multibounce arrays']).toBe(1);
+        // The indirect values and scratch, plus the three passes' indirect arguments (16 bytes each here).
+        expect(withIt.memoryBytes - without.memoryBytes).toBe(534773760 + 3 * 16);
+        // Turned on after prepare, it stays single bounce until the next prepare, which makes the arrays.
+        without.options.useMultibounce = true;
+        expect(without.multibounceActive).toBe(false);
+        await without.prepare(context);
+        expect(without.multibounceActive).toBe(true);
+        expect(without.memoryBytes).toBe(withIt.memoryBytes);
+    });
+
     it('is what the kernel builder checks: one storage buffer fewer and prepare throws GILimitError, for each kernel at 8', async () => {
         const { context, refused } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE - 1));
         await expect(new HashGridCache().prepare(context)).rejects.toThrow(/maxStorageBuffersPerShaderStage = 8, but the device allows 7/);
@@ -573,7 +625,7 @@ describe('the packed tile lists (hash_grid_cache.hlsl:75-78)', () => {
     ] as const) {
         it(`indexes this frame's and last frame's list from their own starts: ${label}`, () => {
             const capacity = hashGridCacheCapacity(options);
-            const layout = hashGridCacheBufferLayout(capacity);
+            const layout = hashGridCacheBufferLayout(capacity, true);
             const code = hashGridCacheWgsl(1, layout, HASH_GRID_CACHE_WORDS_ONLY);
             const current = wgslIndexFunction(code, 'HashGridCache_PackedTileIndexWord', capacity.numTiles);
             const previous = wgslIndexFunction(code, 'HashGridCache_PreviousPackedTileIndexWord', capacity.numTiles);

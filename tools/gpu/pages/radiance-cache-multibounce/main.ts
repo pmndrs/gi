@@ -60,6 +60,13 @@
  *    to the first value (within 10%: a single frame's probes are noisy). The
  *    three pictures (E, tone-mapped at one exposure) are drawn for the
  *    screenshot.
+ *    The radiance cache is prepared with the multibounce off, so its world
+ *    cache holds no indirect values (register D42): turning it on prepares
+ *    again (`platform.prepare()`), turning it off is live. Checked: the
+ *    platform's memory for the technique drops by at least the indirect
+ *    arrays (534,773,760 bytes at Capsaicin's capacity) without the
+ *    multibounce, and comes back when it is prepared on; off, then prepared
+ *    again, it drops once more; the world cache's stats say which.
  *
  * 4. **The sky at second-bounce hits** (RC6.1: the corner with no lights
  *    under a constant sky, 6 frames): `GenerateMultibounceReservoirs` draws
@@ -612,9 +619,22 @@ async function checkTwoRoom(device: GPUDevice, gallery: HTMLElement): Promise<Ch
         frame();
         await device.queue.onSubmittedWorkDone();
         technique.resetHistory();
+        // The technique's GPU bytes as the platform reports them, and whether its world cache holds the indirect arrays.
+        const memory = (): { bytes: number; multibounceArrays: number } => ({
+            bytes: platform.stats.memory.techniques[technique.id] ?? 0,
+            multibounceArrays: technique.counters['world cache multibounce arrays'] ?? -1,
+        });
+        const memorySteps: Record<string, { bytes: number; multibounceArrays: number }> = { preparedOff: memory() };
         const run = async (useMultibounce: boolean): Promise<{ mean: number; pixels: Float32Array }> => {
-            // The setting is read every frame; a change empties the cache (Capsaicin's needs_hash_grid_clear).
+            // Turning it off is read every frame; on needs the indirect arrays, made at prepare (register
+            // D42). Either change empties the cache (Capsaicin's needs_hash_grid_clear).
             technique.settings.useMultibounce = useMultibounce;
+            if (useMultibounce) {
+                await platform.prepare();
+                frame();
+                await device.queue.onSubmittedWorkDone();
+                memorySteps.preparedOn = memory();
+            }
             for (let index = 0; index < ROOM_FRAMES; index++) frame();
             await device.queue.onSubmittedWorkDone();
             return readIrradiance(device, technique);
@@ -622,6 +642,20 @@ async function checkTwoRoom(device: GPUDevice, gallery: HTMLElement): Promise<Ch
         const single = await run(false);
         const multi = await run(true);
         const singleAgain = await run(false);
+        memorySteps.offLive = memory();
+        await platform.prepare();
+        frame();
+        await device.queue.onSubmittedWorkDone();
+        memorySteps.preparedOffAgain = memory();
+        // gi1.cpp:497-552: a uint2 and four uints per cell, at Capsaicin's 22,282,240 cells.
+        const indirectArrays = 534_773_760;
+        const freed = (memorySteps.preparedOn?.bytes ?? 0) - memorySteps.preparedOff.bytes;
+        const freedAgain = (memorySteps.preparedOn?.bytes ?? 0) - memorySteps.preparedOffAgain.bytes;
+        if (!(freed >= indirectArrays)) fail(`memory: prepared without the multibounce the technique holds ${freed} bytes less than with it, expected at least ${indirectArrays}`);
+        if (freedAgain !== freed) fail(`memory: prepared off again it holds ${freedAgain} bytes less, the first time ${freed}`);
+        if (memorySteps.offLive.bytes !== memorySteps.preparedOn?.bytes) fail('memory: turning the multibounce off changed the memory before the next prepare');
+        const arrays = [memorySteps.preparedOff, memorySteps.preparedOn, memorySteps.offLive, memorySteps.preparedOffAgain].map((step) => step?.multibounceArrays);
+        if (arrays.join() !== '0,1,1,0') fail(`memory: the world cache's 'multibounce arrays' stat read ${arrays.join()}, expected 0,1,1,0`);
         const rise = multi.mean / single.mean;
         if (!(single.mean > 0)) fail(`the dark room reads no light with a single bounce (${single.mean})`);
         if (!(rise > 1.5)) fail(`the multibounce raises the dark room's mean E by ${rise.toFixed(3)}x, expected more than 1.5x`);
@@ -632,7 +666,10 @@ async function checkTwoRoom(device: GPUDevice, gallery: HTMLElement): Promise<Ch
         drawIrradiance(single.pixels, exposure, `two-room, dark room: E, single bounce (mean ${single.mean.toPrecision(3)})`, gallery);
         drawIrradiance(multi.pixels, exposure, `two-room, dark room: E, multibounce (mean ${multi.mean.toPrecision(3)}, ${rise.toFixed(2)}x)`, gallery);
         drawIrradiance(singleAgain.pixels, exposure, `two-room, dark room: E, single bounce again (mean ${singleAgain.mean.toPrecision(3)})`, gallery);
-        return { failures, data: { camera: DARK_ROOM_CAMERA, frames: ROOM_FRAMES, meanSingle: single.mean, meanMulti: multi.mean, meanSingleAgain: singleAgain.mean, rise, nonFinite } };
+        return {
+            failures,
+            data: { camera: DARK_ROOM_CAMERA, frames: ROOM_FRAMES, meanSingle: single.mean, meanMulti: multi.mean, meanSingleAgain: singleAgain.mean, rise, nonFinite, memory: { ...memorySteps, freed, freedAgain } },
+        };
     } finally {
         screen.dispose();
         platform.dispose();

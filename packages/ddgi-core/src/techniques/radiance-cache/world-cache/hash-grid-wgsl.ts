@@ -214,12 +214,16 @@ fn unpackHalf4(packed_value: vec2u) -> vec4f {
  * the rest of the shared module, whose functions they call.
  */
 function cellValuesWgsl(group: number, layout: HashGridCacheBufferLayout): string {
+    const indirectValues = layout.cellValues.valueIndirectBuffer;
+    // USE_MULTI_BOUNCE (register D42): without it the cache has no indirect values, and the code
+    // that reads or clears them is left out, as Capsaicin's #ifdef leaves it out.
+    const multibounce = (code: string): string => (indirectValues === null ? '' : code);
     return /* wgsl */ `
 // ---- The cell values (register D6: ValueBuffer, then ValueIndirectBuffer) ----
 
 // In the cell values (vec2u elements).
 const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
-const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
+${multibounce(`const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${indirectValues}u;`)}
 
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.cellValues}) var<storage, read_write> g_HashGridCache_CellValues: array<vec2u>;
 
@@ -236,7 +240,7 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
     for (var cell_offset = 0u; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; cell_offset++) {
         let cell_index = HashGridCache_CellIndexLinear(cell_offset, tile_index, 0u);
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u, 0u);
-        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);
+        ${multibounce('g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);')}
     }
 }
 
@@ -258,7 +262,7 @@ fn HashGridCache_MipCellsOf(cell_index_mip0: u32) -> HashGridCache_MipCells {
     return HashGridCache_MipCells(cell_index_mip1, cell_index_mip2, cell_index_mip3);
 }
 
-// HashGridCache_FilteredRadianceIndirect (:434-463), without its debug view: start at the cell,
+${multibounce(`// HashGridCache_FilteredRadianceIndirect (:434-463), without its debug view: start at the cell,
 // and while the value has fewer samples than the cap and a coarser level exists, take the
 // coarser level's value instead.
 fn HashGridCache_FilteredRadianceIndirect(cell_index_mip0: u32) -> vec4f {
@@ -280,7 +284,7 @@ fn HashGridCache_FilteredRadianceIndirect(cell_index_mip0: u32) -> vec4f {
         indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + mips.mip3]);
     }
     return indirect_radiance;
-}
+}`)}
 
 // HashGridCache_FilteredRadianceDirect (:465-494), without its debug view: as above, on the
 // direct values and their cap.
@@ -325,8 +329,9 @@ fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
     }
     HashGridCache_TouchTile(found.tile_index);
     let direct_radiance = HashGridCache_FilteredRadianceDirect(found.cell_index);
-    let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
-    let radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0) + indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
+    var radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
+    ${multibounce(`let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
+    radiance += indirect_radiance.rgb / max(indirect_radiance.w, 1.0);`)}
     return vec4f(radiance, 1.0);
 }
 `;
@@ -366,7 +371,7 @@ const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1}u;
 const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
 const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${words.updateCellValueBuffer}u;
-const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${words.updateCellValueIndirectBuffer}u;
+${words.updateCellValueIndirectBuffer === null ? '// No UpdateCellValueIndirectBuffer: multibounce is off (register D42).' : `const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${words.updateCellValueIndirectBuffer}u;`}
 
 ${HASH_GRID_CONSTANTS_STRUCT_WGSL}
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.constants}) var<uniform> g_HashGridCacheConstants: HashGridCacheConstants;
