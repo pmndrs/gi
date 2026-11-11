@@ -643,7 +643,7 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | active (implementer, 2026-11-11) |
+| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | done (2026-11-11, Mac lead; Opus review passed with notes, all fixed except the timing-off A/B, moved to RC5.3; the timer resolves after encode and after encodeScreen and reads back only what it resolved; passes split into Capsaicin's sections; M5 per-pass table in bench/results; Windows not run) |
 | RC5.2 | Windows re-run: the twelve `radiance-cache-*` pages plus `hit-shading-lights` and `ddgi-furnace` on the RTX 3060 and the Intel UHD; nothing has run there since phase 2 | gpu-tester | S | none (Windows laptop, 2026-11-12) | todo |
 | RC5.3 | The phase 5 table: VALID per-pass timing on the RTX 3060 beside native Capsaicin's groups (Sponza, Bistro interior and exterior, two-room); a cause and an attention-list row for each pass over native; accuracy against the path tracer per scene | gpu-tester, native-runner | M | RC5.1, RC5.2 | todo |
 | RC5.4 | Slow surface rays (lever 20): find why probe rays leaving surfaces trace at 17-35 Mrays/s while rays from points in the air reach about 87 (RC1.5); cause and a proposed fix, no tracer change without the lead | implementer | M | none | todo |
@@ -655,7 +655,7 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
   - The M5 table goes in `bench/results/radiance-cache-m5-passes.csv`, labelled M5. The page runs unchanged on Windows (`--gpu nvidia`).
   - No image changes: the RC pages still pass on the M5.
 - **RC5.2 done-when.** Every page's result on both GPUs in PROGRESS. Each failure gets a cause or a follow-up row; nothing is loosened to pass without a DECISIONS entry.
-- **RC5.3 done-when.** Phase 5 as the design doc states it: the table, the attention list and the image comparison are in, and Dennis has seen them.
+- **RC5.3 done-when.** Phase 5 as the design doc states it: the table, the attention list and the image comparison are in, and Dennis has seen them. Also one A/B on the RTX 3060 with timing off (from RC5.1's review): the frame cost of the radiance cache's passes split into Capsaicin's sections (`timed-pass.ts`: 7 more compute passes in the technique, 2 more in the denoiser) against the same work merged as before RC5.1, with the result in PROGRESS.
 - **RC5.4 done-when.** The cause is measured, not guessed: the rate split by what differs between the two ray sets (origin offset, direction spread, first-node depth, ray length). The fix is proposed with its expected gain. The BVH lane is told if the cause is in the tracer.
 
 ### radiance-cache: divergence fixes

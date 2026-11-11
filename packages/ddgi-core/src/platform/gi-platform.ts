@@ -60,6 +60,14 @@ import { UnitCostMeter, WorkBudget, type BudgetReport, type Calibration, type Ca
 // Budget v2 lives in work-budget.ts; these names were exported from here before it.
 export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
+/**
+ * Timed passes per frame, `encode` and the screen stage together. The radiance cache
+ * alone times 25 (Capsaicin's sections, with the multibounce on; RC5.1), beside the
+ * platform's own and DDGI's; past this, passes go untimed with a warning. Each costs
+ * two 8-byte queries in each of the timer's slots.
+ */
+const TIMED_PASSES_PER_FRAME = 64;
+
 /** No scene changes: the screen stage runs after `encode`, which already reported them. */
 const NO_CHANGES: SceneChanges = { regions: [], global: [], movedReceivers: 0, lights: [], lightsOverflowed: false };
 
@@ -174,7 +182,7 @@ export class GIPlatformImpl implements GIPlatform {
         });
         this.kernels = new PlatformKernelBuilder(ownDevice, this.label);
         this.compute = new PlatformGpuCompute(ownDevice, { label: this.label });
-        this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { warn: (message) => this.warnOnce(message) }) : null;
+        this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { maxPassesPerFrame: TIMED_PASSES_PER_FRAME, warn: (message) => this.warnOnce(message) }) : null;
         const rays = this.rays;
         this.queries = {
             rays,
@@ -374,7 +382,8 @@ export class GIPlatformImpl implements GIPlatform {
         }
 
         if (this.timer) {
-            this.timer.resolve(encoder);
+            // Resolved again after the screen stage, if the host runs one (resolveFrameTimestamps).
+            this.resolveFrameTimestamps(encoder);
             this.timerAwaitingReadback = true;
         }
         this.lastEncodeCpuMs = performance.now() - start;
@@ -403,6 +412,11 @@ export class GIPlatformImpl implements GIPlatform {
                 screen,
             });
         }
+        // The screen stage's passes went into this frame's timestamp slot after encode resolved it.
+        // Not in a `finally`: a technique that threw may have left a pass open, and resolving into an
+        // encoder with an open pass is a validation error the host would see. After a throw the frame
+        // keeps encode's resolve, and the timer reads back only the passes a resolve covered.
+        if (this.timerAwaitingReadback) this.resolveFrameTimestamps(encoder);
     }
 
     get shading(): ShadingModule {
@@ -552,6 +566,25 @@ export class GIPlatformImpl implements GIPlatform {
     private forgetBudgets(): void {
         this.unitCosts.reset();
         this.budgets.clear();
+    }
+
+    /**
+     * Copies the frame's timestamps so far to the timer's readable buffer.
+     * A frame is `encode` and then, for techniques with a screen stage,
+     * `encodeScreen`, possibly into another encoder submitted after the first
+     * (the three adapter submits its screen stage at once). Both stages time
+     * their passes in the frame's one timestamp slot, and its readback starts
+     * at the next `encode`, when the host has submitted both. So this runs at
+     * the end of each stage: the screen stage's resolve covers every pass of
+     * the frame and its copy lands after encode's in queue order, replacing
+     * it, while a host that never calls `encodeScreen` (DDGI alone, or a
+     * frame whose screen stage the host skipped) keeps encode's. Resolving at
+     * the end of `encode` only read every screen-stage pass as 0 ms (RC5.1);
+     * resolving after the screen stage only would drop the timings of frames
+     * that have none.
+     */
+    private resolveFrameTimestamps(encoder: GPUCommandEncoder): void {
+        this.timer?.resolve(encoder);
     }
 
     private collectPasses(timer: GpuTimer): void {

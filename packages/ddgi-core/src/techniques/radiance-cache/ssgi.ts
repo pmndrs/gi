@@ -21,6 +21,7 @@ import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { invertMat4 } from './camera.ts';
 import { viewForward } from './screen-irradiance.ts';
 import type { RadianceCacheSettings } from './settings.ts';
+import { beginTimedPass, SSGI_SECTION } from './timed-pass.ts';
 import { SSGI_CONSTANTS_BYTES, SSGI_CONSTANTS_OFFSETS, SSGI_ENTRY_POINT, SSGI_GROUP, SSGI_OUTPUT_FORMAT, SSGI_WGSL, SSGI_WORKGROUP_SIZE } from './wgsl/ssgi.ts';
 
 const BUFFER_USAGE = { uniform: 0x40, copyDst: 0x08 } as const;
@@ -141,7 +142,8 @@ export class ScreenSpaceGI {
         const group = this.groupFor(outputs, inputs);
         this.writeConstants(ssgiConstants(camera, settings));
         const timer = this.context.timer;
-        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/ssgi`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/ssgi`) });
+        // Capsaicin times this as the SSGI technique's "Main" section, beside GI-1's (ssgi.cpp:157).
+        const pass = beginTimedPass(encoder, timer, SSGI_SECTION);
         this.kernel.bind(pass);
         pass.setBindGroup(1, group);
         pass.dispatchWorkgroups(Math.ceil(inputs.width / SSGI_WORKGROUP_SIZE), Math.ceil(inputs.height / SSGI_WORKGROUP_SIZE));

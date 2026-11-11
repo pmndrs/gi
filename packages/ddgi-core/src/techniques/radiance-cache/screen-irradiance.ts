@@ -24,6 +24,7 @@ import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { PROBE_SIZE, type ScreenProbeLayout } from './settings.ts';
 import { ScreenProbeFilter } from './screen-probe-filter.ts';
+import { beginTimedPass } from './timed-pass.ts';
 import {
     FILTER_PROBE_MASK_GROUP,
     FILTER_PROBE_MASK_WGSL,
@@ -200,16 +201,18 @@ export class ScreenIrradiance {
         const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
         const tile = SCREEN_IRRADIANCE_WORKGROUP.tile;
 
-        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/irradiance`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/irradiance`) });
         // FilterProbeMask, level by level (gi1.cpp:2572-2584): each dispatch reads the level the previous one wrote.
-        kernels.filterProbeMask.bind(pass);
+        const maskPass = beginTimedPass(encoder, timer, 'FilterProbeMask');
+        kernels.filterProbeMask.bind(maskPass);
         groups.filterLevels.forEach((group, index) => {
             const level = index + 1;
-            pass.setBindGroup(1, group);
-            pass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
+            maskPass.setBindGroup(1, group);
+            maskPass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
         });
+        maskPass.end();
         // FilterScreenProbes, both passes (gi1.cpp:2588-2614).
-        this.probeFilter.record(pass, {
+        const filterPass = beginTimedPass(encoder, timer, 'FilterScreenProbes');
+        this.probeFilter.record(filterPass, {
             layout,
             frameUniforms: inputs.frameUniforms,
             screenConstants: this.constants,
@@ -220,15 +223,19 @@ export class ScreenIrradiance {
             atlas: inputs.probeAtlas,
             secondAtlas: inputs.previousProbeAtlas,
         });
+        filterPass.end();
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
-        kernels.project.bind(pass);
-        pass.setBindGroup(1, groups.project);
-        dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+        const projectPass = beginTimedPass(encoder, timer, 'ProjectScreenProbes');
+        kernels.project.bind(projectPass);
+        projectPass.setBindGroup(1, groups.project);
+        dispatchSplit(projectPass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+        projectPass.end();
         // InterpolateScreenProbes, a thread per pixel (gi1.cpp:2629-2636).
-        kernels.interpolate.bind(pass);
-        pass.setBindGroup(1, groups.interpolate);
-        pass.dispatchWorkgroups(Math.ceil(layout.width / tile), Math.ceil(layout.height / tile));
-        pass.end();
+        const interpolatePass = beginTimedPass(encoder, timer, 'InterpolateScreenProbes');
+        kernels.interpolate.bind(interpolatePass);
+        interpolatePass.setBindGroup(1, groups.interpolate);
+        interpolatePass.dispatchWorkgroups(Math.ceil(layout.width / tile), Math.ceil(layout.height / tile));
+        interpolatePass.end();
     }
 
     dispose(): void {
