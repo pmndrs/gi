@@ -900,23 +900,28 @@ export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     // dark or coarse until their turn comes (two-room at 1/16 of its cells read 0.867 of per hit,
     // Sponza at a full budget 0.975, RC-L1 review). At a count of 1 the cell keeps its last light at
     // the lowest weight: its next sample takes half the weight, and the ones after it more of the
-    // history as the count grows (1 / count each). A lit cell always has new
+    // history as the count grows (1 / count each). Only cells the budget has lit stop at 1: a cell
+    // only second-bounce hits reach is lit per hit, as Capsaicin lights it (a draw that finds no
+    // light adds no sample), so it keeps Capsaicin's fade to empty and lets go of a light switched
+    // off (with the floor, two-room's second bounce held 25% of its lamp's light). A lit cell always has new
     // samples (a draw with no light is a sample of 0), so a light switched off still fades from it.
     // This rule is ours, not Capsaicin's; the faithful path is perHit.
     // UpdateTiles is the last pass to read the kept-hit word, and resets it for the next frame's
     // offers: every cell in use is in a tile touched this frame, so on this frame's update list.
     const keepUnlitCells = layout.cellShading
         ? `
-    if (new_samples.w <= 0.0 && (keep_without_samples || previous_radiance.w <= 1.0)) {
+    if (new_samples.w <= 0.0 && (keep_without_samples || (budget_lit && previous_radiance.w <= 1.0))) {
         return previous_radiance;   // lever 1: in use and not lit, or out of use at the lowest weight: kept until lit
     }`
         : '';
-    const keepParameter = layout.cellShading ? ', keep_without_samples: bool' : '';
-    const keepArgument = layout.cellShading ? ', in_use' : '';
+    const keepParameter = layout.cellShading ? ', keep_without_samples: bool, budget_lit: bool' : '';
+    const keepArgument = layout.cellShading ? ', in_use, budget_lit' : '';
     const inUse = layout.cellShading
         ? `
         // Lever 1: in use this frame (a hit offered itself), then reset for the next frame's offers.
-        let in_use = atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u) != 0u;`
+        let in_use = atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u) != 0u;
+        // Lit by the budget at some time since its tile was claimed: only such cells stop fading at a count of 1.
+        let budget_lit = atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER + cell_index]) != 0u;`
         : '';
     return /* wgsl */ `
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.updateTiles)}
@@ -1347,16 +1352,6 @@ ${firstBounceEntry}
  */
 export function generateMultibounceReservoirsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs;
-    // Lever 1 (cellShading 'budget'): a second-bounce hit whose draw finds no light gives its cell a
-    // sample of 0, as a lit cell's draw does (CellShadingLight). Per hit, Capsaicin's no-light draw adds
-    // nothing and the cell fades to empty; on a budget unused cells stop fading at a count of 1
-    // (updateTilesWgsl), so without the zero a second-bounce cell would keep a switched-off light
-    // and feed it to the second bounce.
-    const noLightSample = layout.cellShading
-        ? `
-        let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did);
-        atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);   // lever 1: a sample of 0`
-        : '';
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.generateMultibounceReservoirs)}
@@ -1396,7 +1391,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     let reservoir = draw.choice;
     let sample_params = draw.sample_params;
 
-    if (reservoir.light == GI_DIRECT_NO_LIGHT) {${noLightSample}
+    if (reservoir.light == GI_DIRECT_NO_LIGHT) {
         return;
     }
 

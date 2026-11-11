@@ -716,9 +716,11 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
     it("keeps a cell in use with no new sample as it is in UpdateTiles, only on a budget; an unused cell fades as Capsaicin's but stops at a count of 1", () => {
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, true)).toEqual([32, 32, 32, 16]);
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, false, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16));
-        // An unused cell fades to a count of 1 and stops there on a budget, keeping its mean; per hit it empties.
+        // An unused cell the budget has lit fades to a count of 1 and stops there, keeping its mean; per hit, or never
+        // lit by the budget (second-bounce cells), it empties.
         expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16, false, true)).toEqual([2, 2, 2, 1]);
         expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16)).toEqual([0, 0, 0, 0]);
+        expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16, false, false)).toEqual([0, 0, 0, 0]);
         // Its next sample takes half the weight (1 / (1 + 1)): a mean of 2 and a sample of 0 give 1.
         const relit = updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 1], 16, false, true);
         expect(relit[3]).toBe(2);
@@ -729,7 +731,7 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         const perHit = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true));
         const budget = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true, true));
         expect(perHit).not.toContain('new_samples.w <= 0.0');
-        expect(budget).toContain('new_samples.w <= 0.0 && (keep_without_samples || previous_radiance.w <= 1.0)');
+        expect(budget).toContain('new_samples.w <= 0.0 && (keep_without_samples || (budget_lit && previous_radiance.w <= 1.0))');
         // The kept-hit word says "in use this frame", and UpdateTiles resets it for the next frame's offers.
         expect(budget).toContain('atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u)');
     });
@@ -741,9 +743,8 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(populateCellsWgsl(perHit)).not.toContain('is_bypassing_first_bounce');
         expect(updateMultibounceCellsWgsl(budget)).toContain(`(base_flags & ${VISIBILITY_FLAG.litPick}u) != 0u`);
         expect(updateMultibounceCellsWgsl(perHit)).not.toContain('base_flags');
-        // A second-bounce draw with no light gives its cell a sample of 0 on a budget (its unused cells stop fading at 1).
-        expect(generateMultibounceReservoirsWgsl(budget)).toContain('lever 1: a sample of 0');
-        expect(generateMultibounceReservoirsWgsl(perHit)).not.toContain('a sample of 0');
+        // Second-bounce draws are Capsaicin's in both modes: no light, no sample.
+        expect(generateMultibounceReservoirsWgsl(budget)).toBe(generateMultibounceReservoirsWgsl({ ...budget, cellShading: false }));
         // The second bounce leaves from the lit picks and the bypassing hits, by their flags.
         expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('visibility_bypass_buffer, did) == 0u');
     });
