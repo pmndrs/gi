@@ -62,7 +62,7 @@ export { DEFAULT_UNITS_PER_FRAME, type UnitCostModel } from './work-budget.ts';
 
 /**
  * Timed passes per frame, `encode` and the screen stage together. The radiance cache
- * alone times 24 (Capsaicin's sections, with the multibounce on; RC5.1), beside the
+ * alone times 25 (Capsaicin's sections, with the multibounce on; RC5.1), beside the
  * platform's own and DDGI's; past this, passes go untimed with a warning. Each costs
  * two 8-byte queries in each of the timer's slots.
  */
@@ -413,6 +413,9 @@ export class GIPlatformImpl implements GIPlatform {
             });
         }
         // The screen stage's passes went into this frame's timestamp slot after encode resolved it.
+        // Not in a `finally`: a technique that threw may have left a pass open, and resolving into an
+        // encoder with an open pass is a validation error the host would see. After a throw the frame
+        // keeps encode's resolve, and the timer reads back only the passes a resolve covered.
         if (this.timerAwaitingReadback) this.resolveFrameTimestamps(encoder);
     }
 

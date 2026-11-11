@@ -18,8 +18,9 @@
  * `rc/<setting>/group/<native group>/gpu_ms` (the sum of its section
  * medians), `rc/<setting>/diffuse_subtotal_gpu_ms` (native's subtotal),
  * `rc/<setting>/all_passes_gpu_ms_median` (the median frame of every
- * radiance-cache pass), `rc/<setting>/pass/<pass>/gpu_ms_median` (the trace
- * and cache halves of `PopulateScreenProbesCells` apart),
+ * radiance-cache pass), `rc/<setting>/pass/<pass>/gpu_ms_median` (only for
+ * a section that is several passes: the trace and the cells of
+ * `PopulateScreenProbesCells`),
  * `rc/<setting>/platform/<pass>/gpu_ms_median` and `rc/<setting>/frames_timed`.
  * Without --append the rows are printed.
  */
@@ -32,7 +33,7 @@ import type { RunSummary } from '../../contract.ts';
 import { clockNoteRowsFromOption, isNvidiaDeviceName } from '../../clock-note.ts';
 import { gitCommit } from '../../measured-commit.ts';
 import { deviceNameFromAdapter, formatValue, repeatedRunRows, type MetricRow } from '../trace-bench/csv-rows.ts';
-import { CAPSAICIN_GROUPS, type SceneTiming } from './sections.ts';
+import { CAPSAICIN_GROUPS, sectionOf, type SceneTiming } from './sections.ts';
 
 const CSV_HEADER = 'date,commit,device,browser,scene,metric,value,note';
 const RESULTS = resolve(import.meta.dirname, '..', '..', '..', '..', 'bench', 'results');
@@ -58,7 +59,17 @@ export function radianceCacheTimingRows(data: Record<string, SceneTiming>): Metr
                 { scene, metric: `${prefix}/diffuse_subtotal_gpu_ms`, value: setting.diffuseSubtotalMs },
                 { scene, metric: `${prefix}/all_passes_gpu_ms_median`, value: setting.radianceCacheFrameMs },
             );
-            for (const [name, ms] of Object.entries(setting.passes)) rows.push({ scene, metric: `${prefix}/pass/${metricPart(name)}/gpu_ms_median`, value: ms });
+            // Pass rows only where a section is more than one pass (the trace and the cells of
+            // PopulateScreenProbesCells); elsewhere the pass is its section's row.
+            const passesPerSection = new Map<string, number>();
+            for (const name of Object.keys(setting.passes)) {
+                const section = sectionOf(name);
+                if (section !== null) passesPerSection.set(section, (passesPerSection.get(section) ?? 0) + 1);
+            }
+            for (const [name, ms] of Object.entries(setting.passes)) {
+                const section = sectionOf(name);
+                if (section !== null && (passesPerSection.get(section) ?? 0) > 1) rows.push({ scene, metric: `${prefix}/pass/${metricPart(name)}/gpu_ms_median`, value: ms });
+            }
             for (const [name, ms] of Object.entries(setting.platformPasses)) rows.push({ scene, metric: `${prefix}/platform/${metricPart(name)}/gpu_ms_median`, value: ms });
         }
     }

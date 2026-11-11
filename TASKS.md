@@ -655,7 +655,7 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
   - The M5 table goes in `bench/results/radiance-cache-m5-passes.csv`, labelled M5. The page runs unchanged on Windows (`--gpu nvidia`).
   - No image changes: the RC pages still pass on the M5.
 - **RC5.2 done-when.** Every page's result on both GPUs in PROGRESS. Each failure gets a cause or a follow-up row; nothing is loosened to pass without a DECISIONS entry.
-- **RC5.3 done-when.** Phase 5 as the design doc states it: the table, the attention list and the image comparison are in, and Dennis has seen them.
+- **RC5.3 done-when.** Phase 5 as the design doc states it: the table, the attention list and the image comparison are in, and Dennis has seen them. Also one A/B on the RTX 3060 with timing off (from RC5.1's review): the frame cost of the radiance cache's passes split into Capsaicin's sections (`timed-pass.ts`: 7 more compute passes in the technique, 2 more in the denoiser) against the same work merged as before RC5.1, with the result in PROGRESS.
 - **RC5.4 done-when.** The cause is measured, not guessed: the rate split by what differs between the two ray sets (origin offset, direction spread, first-node depth, ray length). The fix is proposed with its expected gain. The BVH lane is told if the cause is in the tracer.
 
 ### radiance-cache: divergence fixes

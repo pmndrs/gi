@@ -69,7 +69,7 @@ export interface GI1DenoiserOptions {
     readonly cellPixels?: number;
     /** Label prefix for its GPU objects and timed pass. Default `'gi1-denoiser'`. */
     readonly label?: string;
-    /** Timestamp writes for its two compute passes (`<label>/ReprojectGI`, `<label>/FilterGI`), from the host's timer (optional). */
+    /** Timestamp writes for its compute passes (`<label>/ReprojectGI`, `<label>/FilterGI`, `<label>/keep-guides`), from the host's timer (optional). */
     readonly timer?: PassTimer;
     /**
      * The blur mask's and colour deltas' formats. `'auto'` (default):
@@ -269,9 +269,9 @@ export class GI1Denoiser {
         const workgroups: [number, number] = [Math.ceil(targets.width / WORKGROUP_SIZE), Math.ceil(targets.height / WORKGROUP_SIZE)];
         const { pipelines } = this;
 
-        // Two timed passes, named as Capsaicin's sections (`<label>/ReprojectGI`, `<label>/FilterGI`), so a
-        // host's per-pass table lines up with Capsaicin's. Splitting them changes nothing: each dispatch is
-        // its own usage scope either way.
+        // Timed passes named as Capsaicin's sections (`<label>/ReprojectGI`, `<label>/FilterGI`), so a host's
+        // per-pass table lines up with Capsaicin's, and `<label>/keep-guides`, ours (Capsaicin's framework copies
+        // the guides untimed). Splitting them changes nothing: each dispatch is its own usage scope either way.
         const reprojectPass = this.beginTimedPass(encoder, 'ReprojectGI');
         // ReprojectGI (gi1.cpp:2882-2897).
         reprojectPass.setPipeline(pipelines.reproject);
@@ -286,11 +286,13 @@ export class GI1Denoiser {
         filterPass.dispatchWorkgroups(...workgroups);
         filterPass.setBindGroup(0, groups.filterVertical);
         filterPass.dispatchWorkgroups(...workgroups);
-        // This frame's depth and normals for the next frame's ReprojectGI (Capsaicin's framework copies them, untimed).
-        filterPass.setPipeline(pipelines.keepGuides);
-        filterPass.setBindGroup(0, groups.keepGuides);
-        filterPass.dispatchWorkgroups(...workgroups);
         filterPass.end();
+        // This frame's depth and normals for the next frame's ReprojectGI (Capsaicin's framework copies them, untimed).
+        const keepGuidesPass = this.beginTimedPass(encoder, 'keep-guides');
+        keepGuidesPass.setPipeline(pipelines.keepGuides);
+        keepGuidesPass.setBindGroup(0, groups.keepGuides);
+        keepGuidesPass.dispatchWorkgroups(...workgroups);
+        keepGuidesPass.end();
 
         this.needsReset = false;
         this.latestHistory = this.historyIndex;

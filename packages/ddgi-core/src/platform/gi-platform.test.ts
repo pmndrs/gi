@@ -679,14 +679,16 @@ describe('GPU timing over the whole frame: encode and the screen stage (RC5.1)',
         return { ...gpu, createEncoder };
     }
 
-    /** A technique with one timed pass in `encode` and, if asked, one in a screen stage. */
-    function timedTechnique(id: string, withScreenStage: boolean): RecordingTechnique {
+    /** A technique with one timed pass in `encode` (unless `worldPass` is false) and, if asked, one in a screen stage. */
+    function timedTechnique(id: string, withScreenStage: boolean, worldPass = true): RecordingTechnique {
         const technique = new RecordingTechnique(id, []);
         const timedPass = (encoder: GPUCommandEncoder, name: string): void => {
             const timer = technique.context?.timer;
             encoder.beginComputePass({ label: name, timestampWrites: timer?.computePass(name) }).end();
         };
-        technique.encode = (encoder) => timedPass(encoder, `${id}/world`);
+        technique.encode = (encoder) => {
+            if (worldPass) timedPass(encoder, `${id}/world`);
+        };
         if (withScreenStage) {
             (technique as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: true };
             (technique as GITechnique).encodeScreen = (encoder) => timedPass(encoder, `${id}/screen`);
@@ -732,6 +734,16 @@ describe('GPU timing over the whole frame: encode and the screen stage (RC5.1)',
         expect(passes.get('screen space/world')).toBeCloseTo(1, 6);
         // Before RC5.1 this read 0 ms: the timestamps were resolved at the end of encode, before the screen stage wrote them.
         expect(passes.get('screen space/screen')).toBeCloseTo(1, 6);
+        platform.dispose();
+    });
+
+    it.each(['own encoder', 'same encoder'] as const)('times a screen stage, in its %s, when encode timed nothing (a still scene)', async (screenStage) => {
+        const gpu = createTimedGpu();
+        const platform = new GIPlatformImpl(gpu.device, { gpuTiming: true });
+        platform.addTechnique(timedTechnique('screen space', true, false));
+        await platform.prepare();
+        // Before RC5.1 no frame was timed at all here: encode resolved nothing, so the slot was dropped.
+        expect([...(await timedFrames(gpu, platform, 6, screenStage))]).toEqual([['screen space/screen', 1]]);
         platform.dispose();
     });
 

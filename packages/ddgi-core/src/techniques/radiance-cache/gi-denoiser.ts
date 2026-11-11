@@ -18,7 +18,7 @@ import { GI1Denoiser, type FrameCamera as DenoiserCamera } from '@pmndrs/denoise
 import type { FrameCamera, FrameScreen } from '../../platform/contract/frame.ts';
 import type { TechniqueContext } from '../../platform/contract/technique.ts';
 
-/** Its passes are timed under this name: `radiance-cache/gi-denoiser/ReprojectGI` and `.../FilterGI`. */
+/** Its passes are timed under this name: `radiance-cache/gi-denoiser/ReprojectGI`, `.../FilterGI` and `.../keep-guides`. */
 export const GI_DENOISER_LABEL = 'radiance-cache/gi-denoiser';
 
 export function createGIDenoiser(context: TechniqueContext): Promise<GI1Denoiser> {

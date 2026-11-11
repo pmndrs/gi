@@ -11,7 +11,8 @@
  *   `PopulateScreenProbesCells`) apart. The section is their sum; both parts
  *   are reported.
  * - The GI denoiser's passes carry its own label first
- *   (`radiance-cache/gi-denoiser/ReprojectGI`).
+ *   (`radiance-cache/gi-denoiser/ReprojectGI`, `.../FilterGI`, and
+ *   `.../keep-guides`, ours only).
  *
  * Native sections the port has no pass for, and why:
  * - `ResolveGI1` (denoise and resolve): the host's composite applies the GI
@@ -66,8 +67,11 @@ export const SECTIONS: readonly { readonly section: string; readonly group: Caps
     { section: 'InterpolateScreenProbes', group: 'screen probes' },
     { section: 'ReprojectGI', group: 'denoise and resolve' },
     { section: 'FilterGI', group: 'denoise and resolve' },
-    // The screen and denoiser history copies (Capsaicin's framework copies depth and normals, untimed).
+    // Ours only, no Capsaicin section: the technique's history copies (the filtered atlas, mask, SH, depth and
+    // normals; Capsaicin swaps buffers and its framework copies depth and normals, untimed) and the denoiser's
+    // own copy of the depth and normals for its next ReprojectGI.
     { section: 'keep-history', group: 'ours only' },
+    { section: 'keep-guides', group: 'ours only' },
 ];
 
 const RADIANCE_CACHE_PREFIX = 'radiance-cache/';
