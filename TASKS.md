@@ -643,7 +643,7 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | todo |
+| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | active (implementer, 2026-11-11) |
 | RC5.2 | Windows re-run: the twelve `radiance-cache-*` pages plus `hit-shading-lights` and `ddgi-furnace` on the RTX 3060 and the Intel UHD; nothing has run there since phase 2 | gpu-tester | S | none (Windows laptop, 2026-11-12) | todo |
 | RC5.3 | The phase 5 table: VALID per-pass timing on the RTX 3060 beside native Capsaicin's groups (Sponza, Bistro interior and exterior, two-room); a cause and an attention-list row for each pass over native; accuracy against the path tracer per scene | gpu-tester, native-runner | M | RC5.1, RC5.2 | todo |
 | RC5.4 | Slow surface rays (lever 20): find why probe rays leaving surfaces trace at 17-35 Mrays/s while rays from points in the air reach about 87 (RC1.5); cause and a proposed fix, no tracer change without the lead | implementer | M | none | todo |
@@ -664,8 +664,8 @@ From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/ra
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | todo |
-| RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | todo |
+| RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | active (implementer, 2026-11-11) |
+| RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | active (implementer, 2026-11-11) |
 
 - **RC6.1 done-when.**
   - The port follows Capsaicin's environment-light sampling at cache hits, cited line by line: how the sky is picked against the other lights, its pdf, and its shadow ray.
