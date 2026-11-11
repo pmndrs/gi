@@ -13,6 +13,7 @@ export type * from './queries';
 export type * from './scene';
 export type * from './scene-copy';
 export type * from './shade';
+export { GI_DIRECT_SKY_LIGHT } from './shade';
 export type * from './shading-module';
 export type * from './stats';
 export type * from './technique';

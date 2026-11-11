@@ -46,6 +46,15 @@ export interface RadianceCacheSettings {
     useTemporalFeedback: boolean;
     /** `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second-bounce cells. Phase 3. */
     useMultibounce: boolean;
+    /**
+     * `environment_light_enable` (Capsaicin's `LightBuilder`, light_builder.h:63,
+     * default true): the sky is one of the lights the world cache's hits
+     * sample, so a cache cell gets the sky light that reaches its surface
+     * (RC6.1, register D33). Off, the cells get the scene's lights alone and
+     * the sky reaches the probes only through rays that miss. Read every
+     * frame.
+     */
+    environmentLightEnable: boolean;
     /** `gi1_use_resampling` (gi1.h:51, default false): world-space ReSTIR of the light samples. Off in the baseline. */
     useResampling: boolean;
     /** `gi1_disable_alpha_testing` (gi1.h:52, default false). The platform's tracer honours cutouts (register D1). */
@@ -93,11 +102,12 @@ export interface RadianceCacheSettings {
     useGIDenoiser: boolean;
 }
 
-/** Capsaicin's defaults (gi1.h:48-71; SSGI's, ssgi.h:48-51). */
+/** Capsaicin's defaults (gi1.h:48-71; SSGI's, ssgi.h:48-51; the light builder's, light_builder.h:61-63). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
     useTemporalFeedback: false,
     useMultibounce: true,
+    environmentLightEnable: true,
     useResampling: false,
     disableAlphaTesting: false,
     hashGridCacheCellSize: 32,

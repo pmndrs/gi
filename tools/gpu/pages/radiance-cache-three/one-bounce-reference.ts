@@ -7,10 +7,12 @@
  *   pixel's position pushed off the surface, as its probe rays start), each
  *   hit shaded with the one bounce the world cache holds before RC3.3's
  *   multi-bounce cells: an emissive front face its emission, any other hit
- *   (back faces too, as Capsaicin) `albedo / π ×` `giDirectIrradiance` (the
+ *   (back faces too, as Capsaicin) `albedo / π ×` (`giDirectIrradiance`, the
  *   platform's direct light with its shadow ray, from the same candidates the
- *   cache's `GenerateReservoirs` draws its one light from), the sky on a
- *   miss. The cache stores that light per cell, averaged over the cell's hits
+ *   cache's `GenerateReservoirs` draws its one light from, plus the sky:
+ *   one `giSkyLightSample` direction and its shadow ray, as the cache's hits
+ *   get the sky since RC6.1, register D33), the sky on a miss. Before RC6.1
+ *   neither the cache nor this reference had the sky at hits. The cache stores that light per cell, averaged over the cell's hits
  *   and up to 16 frames and read back filtered, so the probes' rays measure
  *   the cache's discretisation against this exact per-point value. Over the
  *   platform's own tracer and hit shading, so it shares both techniques'
@@ -102,7 +104,10 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_index) th
         if (surface.frontFace && dot(surface.emission, surface.emission) > 0.0) {
             sum += surface.emission;
         } else {
-            sum += surface.albedo * 0.318309886 * giDirectIrradiance(surface, 0xfu, vec2f(refRandom(), refRandom()));
+            // The sky as a light (RC6.1): one uniform direction over the hemisphere, kept if nothing blocks it.
+            let sky = giSkyLightSample(surface, vec2f(refRandom(), refRandom()));
+            let skyIrradiance = select(sky.irradiance, vec3f(0.0), giTraceAny(sky.shadowRay));
+            sum += surface.albedo * 0.318309886 * (giDirectIrradiance(surface, 0xfu, vec2f(refRandom(), refRandom())) + skyIrradiance);
         }
     }
     refResults[pointIndex * 64u + thread] = vec4f(sum, f32(paths));

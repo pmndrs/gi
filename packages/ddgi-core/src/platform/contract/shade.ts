@@ -76,14 +76,33 @@ import type { WgslModule } from './wgsl';
  * // without bias. `light` is GI_DIRECT_NO_LIGHT when nothing reaches the surface.
  * struct GiDirectLightChoice { light: u32, weight: f32 }
  * fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice
+ * // The same draw with the sky as one more candidate, ahead of the lights
+ * // (RC6.1: the radiance cache's light sampling at its hits, as Capsaicin's
+ * // GI-1 samples its environment light). The sky's candidate is
+ * // giSkyLightSample's direction for `skyRandom`, weighed by the luminance of
+ * // that direction's irradiance estimate. A drawn sky is GI_DIRECT_SKY_LIGHT;
+ * // a black sky is never drawn (the result is then giDirectChooseLight's).
+ * // gi/direct doesn't use it: DDGI gets the sky through rays that miss.
+ * fn giDirectChooseLightWithSky(surface: GiSurface, groupMask: u32, random: f32, skyRandom: vec2f) -> GiDirectLightChoice
  * // The light's unshadowed irradiance at the surface (cosine included) and the
  * // shadow ray towards a random point of it (`random` uniform in [0, 1)^2);
- * // trace it with giTraceAny unless `castsShadows` is false.
+ * // trace it with giTraceAny unless `castsShadows` is false. For
+ * // GI_DIRECT_SKY_LIGHT, `random` is the choice's `skyRandom` and the result
+ * // is giSkyLightSample's.
  * struct GiDirectLightRay { irradiance: vec3f, castsShadows: bool, shadowRay: GiRay }
  * fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLightRay
  *
  * // Radiance seen along a ray that missed everything.
  * fn giSkyRadiance(direction: vec3f) -> vec3f
+ *
+ * // The sky as a light at a surface: one direction, uniform over the
+ * // hemisphere about the shading normal (pdf 1 / 2π, `random` uniform in
+ * // [0, 1)^2); `irradiance` = giSkyRadiance(direction) x cosine / pdf, that
+ * // direction's estimate of the unshadowed irradiance from the whole sky (0
+ * // below the side the ray arrived on); and the unbounded shadow ray that
+ * // decides whether the sky is seen that way.
+ * struct GiSkyLightSample { direction: vec3f, irradiance: vec3f, shadowRay: GiRay }
+ * fn giSkyLightSample(surface: GiSurface, random: vec2f) -> GiSkyLightSample
  *
  * // Irradiance from the sky alone at a surface (for the sky light group),
  * // with nothing in the way (no visibility).
@@ -304,6 +323,14 @@ export interface HitShadingSettings {
      */
     lightGridShadowedLightsPerHit: number;
 }
+
+/**
+ * `GI_DIRECT_SKY_LIGHT` in the hit-shading module: the `light` a
+ * `GiDirectLightChoice` holds when `giDirectChooseLightWithSky` drew the sky
+ * (RC6.1). For readers of a technique's stored choices on the CPU (the
+ * radiance cache's reservoirs); the WGSL takes its value from here.
+ */
+export const GI_DIRECT_SKY_LIGHT = 0xfffffffe;
 
 /**
  * A bounce source: whose shading module answers "how much bounce light

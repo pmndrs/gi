@@ -77,6 +77,13 @@ export interface HashGridCacheOptions {
      */
     useMultibounce: boolean;
     /**
+     * `environment_light_enable` (Capsaicin's `LightBuilder`, light_builder.h:63,
+     * default true): `GenerateReservoirs` and `GenerateMultibounceReservoirs`
+     * draw the sky as one more light (`giDirectChooseLightWithSky`; RC6.1,
+     * register D33). Read every frame.
+     */
+    environmentLightEnable: boolean;
+    /**
      * `gi1_use_direct_lighting` (gi1.h:53, default true), GI-1's own option,
      * which `GenerateReservoirs` reads: with it, a hit on an emissive front
      * face gives the probe ray its emission and bypasses the cache.
@@ -95,6 +102,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     useMultibounce: true,
+    environmentLightEnable: true,
     useDirectLighting: true,
 });
 

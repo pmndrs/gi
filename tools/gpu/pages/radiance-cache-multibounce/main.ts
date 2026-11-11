@@ -61,6 +61,15 @@
  *    three pictures (E, tone-mapped at one exposure) are drawn for the
  *    screenshot.
  *
+ * 4. **The sky at second-bounce hits** (RC6.1: the corner with no lights
+ *    under a constant sky, 6 frames): `GenerateMultibounceReservoirs` draws
+ *    the sky as `GenerateReservoirs` does (Capsaicin's environment light,
+ *    register D33). With the sky the only light, every second-bounce entry
+ *    that gets a shadow ray drew the sky (`GI_DIRECT_SKY_LIGHT`), so do the
+ *    first-bounce ones, and all but the rare one whose sky direction's packed
+ *    numbers land on the horizon (weight 0) get one; some second-bounce
+ *    entries exist, so the check can fail.
+ *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.3 multibounce" -- pnpm test:gpu --filter radiance-cache-multibounce`.
  */
@@ -80,7 +89,8 @@ import {
     updateTilesAccumulate,
     type CellValue,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
-import { BYPASS_CACHE_BIT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { BYPASS_CACHE_BIT, RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { GI_DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/contract/shade.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
@@ -103,6 +113,7 @@ import {
     type FrameState,
     type ProbeRay,
     type Scenario,
+    type ScenarioWorld,
 } from '../radiance-cache-world-cache/corner.ts';
 
 /** `discard_multibounce_ray_probability` (gi1.h:64), as the GPU compares it: in f32. */
@@ -629,6 +640,32 @@ async function checkTwoRoom(device: GPUDevice, gallery: HTMLElement): Promise<Ch
     }
 }
 
+// ---- Section 4: the sky at second-bounce hits (RC6.1) ----------------------------------------------
+
+/** Section 4's constant sky, the only light. */
+const SKY_RADIANCE: Vec3 = [1, 0.8, 0.6];
+/** Entries allowed to draw nothing: the sky direction's two numbers are kept at 16 bits, and one in about 131,000 rounds onto the horizon (weight 0). */
+const MAX_WITHOUT_LIGHT_SHARE = 1e-4;
+
+async function checkSkySecondBounce(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const { failures, fail } = checker('sky at second-bounce hits');
+    const state = await readFrameState(device, scenario);
+    const count0 = state.counters[HASH_GRID_COUNTER.visibilityCount0];
+    const count1 = state.secondBounce.count;
+    const draws = { first: { shadowRays: 0, sky: 0 }, second: { shadowRays: 0, sky: 0 } };
+    state.visibilityRay.forEach((entry, ray) => {
+        const bounce = (entry & ~BYPASS_CACHE_BIT) >= count0 ? draws.second : draws.first;
+        bounce.shadowRays++;
+        if (state.reservoirs[ray * RESERVOIR_WORDS] === GI_DIRECT_SKY_LIGHT) bounce.sky++;
+    });
+    if (count1 === 0) fail('no second-bounce entries');
+    for (const [name, bounce, entries] of [['first-bounce', draws.first, count0], ['second-bounce', draws.second, count1]] as const) {
+        if (bounce.sky !== bounce.shadowRays) fail(`${bounce.shadowRays - bounce.sky} of ${bounce.shadowRays} ${name} shadow rays drew something other than the sky, the only light`);
+        if (entries - bounce.shadowRays > MAX_WITHOUT_LIGHT_SHARE * entries) fail(`${entries - bounce.shadowRays} of ${entries} ${name} entries drew no light; the sky reaches every one`);
+    }
+    return { failures, data: { skyRadiance: SKY_RADIANCE, firstBounceEntries: count0, secondBounceEntries: count1, draws } };
+}
+
 // ---- The page --------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -648,9 +685,15 @@ try {
 
     const failures: string[] = [];
     const data: Record<string, unknown> = { adapterStorageBuffersPerStage };
-    const corner = async (name: string, frames: number, check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>): Promise<void> => {
+    const corner = async (
+        name: string,
+        frames: number,
+        check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>,
+        lights = [sun(SUN_TRAVEL)],
+        world: ScenarioWorld = {},
+    ): Promise<void> => {
         // Capsaicin's default configuration: multibounce on.
-        const scenario = await startScenario(device, name, [sun(SUN_TRAVEL)], false);
+        const scenario = await startScenario(device, name, lights, false, {}, world);
         try {
             await runFrames(device, scenario, frames);
             const checks = await check(device, scenario);
@@ -663,6 +706,7 @@ try {
     };
     await corner('kernels', KERNEL_FRAMES, checkKernels);
     await corner('converged', CONVERGENCE_FRAMES, checkConverged);
+    await corner('skySecondBounce', KERNEL_FRAMES, checkSkySecondBounce, [], { sky: SKY_RADIANCE });
     const room = await checkTwoRoom(device, gallery);
     failures.push(...room.failures);
     data.twoRoom = room.data;
