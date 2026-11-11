@@ -16,7 +16,12 @@
  * it. DDGI there runs with `bounceEnergy: 0`: its probe rays return the
  * hit's emission and `albedo / π ×` direct light and the sky on a miss, never
  * the field's own light, so it holds one bounce as the radiance cache does
- * before RC3.3. A second platform per scene runs DDGI with its default (all
+ * before RC3.3. Since RC6.1 the comparison is no longer like for like: the
+ * radiance cache's hits also get the sky as a light (register D33), and
+ * DDGI's with `bounceEnergy: 0` don't (its `gi/direct` has lights only), so
+ * the radiance cache reads brighter where its hits see the sky, which moves
+ * Sponza's `giLuminanceRatio` up. The one-bounce reference has the sky at hits
+ * (one-bounce-reference.ts), so the comparisons with it stay like for like. A second platform per scene runs DDGI with its default (all
  * bounces) for the contact sheet only. Two pictures, each the way a three
  * user builds it:
  * - **DDGI:** `pass()` with `mrt({ output, giAlbedo, normal })` and the

@@ -32,6 +32,7 @@
  * r187 exactly, so the three adapter matches what three renders.
  */
 
+import { GI_DIRECT_SKY_LIGHT } from '../contract/shade.ts';
 import type { BindingSlot, ModuleBindingEntry } from '../contract/wgsl.ts';
 import { lightGridLookupWgsl } from './light-grid.ts';
 import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../sky/projection-wgsl.ts';
@@ -585,7 +586,7 @@ fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> b
 // What giDirectChooseLight returns when no light of the groups reaches the surface.
 const GI_DIRECT_NO_LIGHT: u32 = 0xffffffffu;
 // What giDirectChooseLightWithSky returns when it draws the sky (see giSkyLightSample).
-const GI_DIRECT_SKY_LIGHT: u32 = 0xfffffffeu;
+const GI_DIRECT_SKY_LIGHT: u32 = ${GI_DIRECT_SKY_LIGHT}u;
 
 struct GiDirectLightChoice {
     light: u32,     // index into the light table, GI_DIRECT_SKY_LIGHT, or GI_DIRECT_NO_LIGHT

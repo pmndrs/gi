@@ -26,6 +26,7 @@ import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { GI_DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/contract/shade.ts';
 import { RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
 import { PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
@@ -41,8 +42,6 @@ const WIDTH = 1280;
 const HEIGHT = 720;
 const FRAMES = 120;
 const SCENES = ['sponza', 'bistro-exterior'] as const;
-/** `GI_DIRECT_SKY_LIGHT` (platform/shade/wgsl.ts): a reservoir's light word when it drew the sky. */
-const SKY_LIGHT = 0xfffffffe;
 const env = import.meta.env as Record<string, unknown>;
 /** T2.17: scale model textures down to this side at load; undefined keeps them. */
 const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
@@ -142,7 +141,7 @@ async function runOnce(device: GPUDevice, manifest: SceneManifest, loaded: Loade
         const reservoirs = new Uint32Array(await readBuffer(device, cache.rayLists.buffer, (layout.reservoirBuffer + RESERVOIR_WORDS * shadowRays) * 4));
         let skyDraws = 0;
         for (let ray = 0; ray < shadowRays; ray++) {
-            if (reservoirs[layout.reservoirBuffer + ray * RESERVOIR_WORDS] === SKY_LIGHT) skyDraws++;
+            if (reservoirs[layout.reservoirBuffer + ray * RESERVOIR_WORDS] === GI_DIRECT_SKY_LIGHT) skyDraws++;
         }
         return {
             meanE: sumE / (WIDTH * HEIGHT),

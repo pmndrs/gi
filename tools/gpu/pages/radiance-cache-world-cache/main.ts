@@ -83,6 +83,7 @@ import {
     verticalFieldOfView,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import { BYPASS_CACHE_BIT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { GI_DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/contract/shade.ts';
 import { RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
@@ -403,8 +404,6 @@ const SKY_RADIANCE: Vec3 = [1, 0.8, 0.6];
 const LAMBERT_TOLERANCE = 0.025;
 /** Floor cells whose hits see at least this share of the sky are the "open floor". */
 const OPEN_FLOOR_VISIBILITY = 0.99;
-/** `GI_DIRECT_SKY_LIGHT` (platform/shade/wgsl.ts): the reservoir's light word when it drew the sky. */
-const SKY_LIGHT = 0xfffffffe;
 /**
  * Hits allowed to draw nothing: the sky's direction is two numbers kept at 16 bits, and one in
  * about 131,000 rounds to 1, a direction on the horizon whose weight is 0.
@@ -416,7 +415,7 @@ function skyDraws(state: Awaited<ReturnType<typeof readFrameState>>): { hits: nu
     const hits = state.counters[HASH_GRID_COUNTER.visibilityCount0];
     let sky = 0;
     for (let ray = 0; ray < state.visibilityRay.length; ray++) {
-        if (state.reservoirs[ray * RESERVOIR_WORDS] === SKY_LIGHT) sky++;
+        if (state.reservoirs[ray * RESERVOIR_WORDS] === GI_DIRECT_SKY_LIGHT) sky++;
     }
     return { hits, skyDraws: sky, otherDraws: state.visibilityRay.length - sky, withoutLight: hits - state.visibilityRay.length };
 }

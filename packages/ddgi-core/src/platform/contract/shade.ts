@@ -325,6 +325,14 @@ export interface HitShadingSettings {
 }
 
 /**
+ * `GI_DIRECT_SKY_LIGHT` in the hit-shading module: the `light` a
+ * `GiDirectLightChoice` holds when `giDirectChooseLightWithSky` drew the sky
+ * (RC6.1). For readers of a technique's stored choices on the CPU (the
+ * radiance cache's reservoirs); the WGSL takes its value from here.
+ */
+export const GI_DIRECT_SKY_LIGHT = 0xfffffffe;
+
+/**
  * A bounce source: whose shading module answers "how much bounce light
  * reaches this hit point?". Usually the technique itself (its previous
  * frame's field), or another technique when stacking.
