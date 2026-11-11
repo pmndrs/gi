@@ -8,10 +8,11 @@
  *   node tools/gpu/pages/trace-bench/surface-to-csv.ts <runner.json> [more.json ...] [--append] [--csv <file>] [--device <text>] [--commit <hash>]
  *
  * Columns: date, commit, device, browser, scene, metric, value, note. Several
- * files of one scene and GPU are repeated runs: `run1/`, `run2/`, ... plus
- * `median/` rows. Metrics, per tree layout and set:
- * `surface/<tree>/<set>/loaded_mrays_per_s` and `single_mrays_per_s` (timed),
- * and the counted walk's means, which don't change between runs:
+ * files of one scene and GPU are repeated runs: the timed rows come out as
+ * `run1/`, `run2/`, ... plus `median/` rows; the counted walk's rows, which
+ * are the same in every run, come out once, unprefixed. Metrics, per tree
+ * layout and set: `surface/<tree>/<set>/loaded_mrays_per_s` and
+ * `single_mrays_per_s` (timed), and the counted walk's means:
  * `steps`, `mesh_nodes`, `top_level_nodes`, `instance_entries`,
  * `instance_entries_without_hit`, `triangle_tests`, `origin_boxes`,
  * `steps_before_first_hit`, `instance_boxes_at_origin`, `simd32_efficiency`,
@@ -54,9 +55,11 @@ const COUNT_METRICS: [string, (set: SurfaceSetResult) => number][] = [
     ['origin_triangle_tested_fraction', (set) => set.originTriangleTestedFraction],
 ];
 
-export function surfaceRaysRows(data: SurfaceRaysData): MetricRow[] {
+/** A run's rows: `timed` changes from run to run, `counted` doesn't (the walk's work depends only on the rays and trees). */
+export function surfaceRaysRows(data: SurfaceRaysData): { timed: MetricRow[]; counted: MetricRow[] } {
     const scene = data.scene;
-    const rows: MetricRow[] = [
+    const timed: MetricRow[] = [];
+    const counted: MetricRow[] = [
         { scene, metric: 'surface/probes_placed', value: data.probesPlaced },
         { scene, metric: 'surface/grid_probes', value: data.gridProbes },
         { scene, metric: 'surface/region_grid_probes', value: data.regionGridProbes },
@@ -64,10 +67,10 @@ export function surfaceRaysRows(data: SurfaceRaysData): MetricRow[] {
     ];
     for (const set of data.sets) {
         const prefix = `surface/${set.tree}/${set.name}`;
-        rows.push({ scene, metric: `${prefix}/loaded_mrays_per_s`, value: set.loadedMrays }, { scene, metric: `${prefix}/single_mrays_per_s`, value: set.singleMrays });
-        for (const [name, read] of COUNT_METRICS) rows.push({ scene, metric: `${prefix}/${name}`, value: read(set) });
+        timed.push({ scene, metric: `${prefix}/loaded_mrays_per_s`, value: set.loadedMrays }, { scene, metric: `${prefix}/single_mrays_per_s`, value: set.singleMrays });
+        for (const [name, read] of COUNT_METRICS) counted.push({ scene, metric: `${prefix}/${name}`, value: read(set) });
     }
-    return rows;
+    return { timed, counted };
 }
 
 async function main(): Promise<void> {
@@ -80,7 +83,7 @@ async function main(): Promise<void> {
         console.error('Usage: node tools/gpu/pages/trace-bench/surface-to-csv.ts <runner.json> [more.json ...] [--append] [--csv <file>] [--device <text>] [--commit <hash>]');
         process.exit(2);
     }
-    const groups = new Map<string, { prefix: string[]; runs: MetricRow[][] }>();
+    const groups = new Map<string, { prefix: string[]; runs: MetricRow[][]; counted: MetricRow[] }>();
     for (const file of positionals) {
         const summary = JSON.parse(await readFile(file, 'utf8')) as RunSummary;
         const device = values.device ?? deviceNameFromAdapter(summary.adapter);
@@ -94,16 +97,17 @@ async function main(): Promise<void> {
             const commit = values.commit ?? summary.commit ?? gitCommit();
             const prefix = [summary.startedAt.slice(0, 10), commit, device, browserFromUserAgent(data.userAgent, data.browserVersion)];
             const key = `${device}|${data.scene}`;
-            const group = groups.get(key) ?? { prefix, runs: [] };
-            group.runs.push(surfaceRaysRows(data));
+            const rows = surfaceRaysRows(data);
+            const group = groups.get(key) ?? { prefix, runs: [], counted: rows.counted };
+            group.runs.push(rows.timed);
             groups.set(key, group);
         }
     }
     const linesByFile = new Map<string, string[]>();
-    for (const { prefix, runs } of groups.values()) {
+    for (const { prefix, runs, counted } of groups.values()) {
         const device = prefix[2];
         const apple = /apple/i.test(device);
-        const rows = runs.length === 1 ? runs[0] : repeatedRunRows(runs);
+        const rows = [...counted, ...(runs.length === 1 ? runs[0] : repeatedRunRows(runs))];
         const file = values.csv ? resolve(values.csv) : apple ? M5_CSV : OTHER_CSV;
         const lines = linesByFile.get(file) ?? [];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value), apple ? APPLE_NOTE : ''].join(',')));
