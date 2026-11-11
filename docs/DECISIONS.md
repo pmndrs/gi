@@ -4,6 +4,10 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-11
 
+- **radiance-cache: budgeted cell shading the id Tech 8 way (lever 1), and a card-cache experiment (extension 3)** (Dennis, 2026-11-11: "if thats what IDTech is doing then it sounds good to me... We should totally do it the ID tech way... If the cards as an experiment in your extension 3 as well im even more for it").
+  - Lever 1 is built as `cellShading: 'perHit' | 'budget'`, with `perHit` (Capsaicin) the default. The design is in docs/design/radiance-cache.md, "Budgeted cell shading". Row RC-L1.
+  - The card cache is a second `WorldCache` behind the slot. It starts as a design study. Row RC-X3.
+
 - **Every lever and fix is a setting beside the faithful path; anything hard to walk back is flagged first** (Dennis, 2026-11-11: "I dont want to make architectural change that is difficult to walkback later... If these things could be configurable so we can test them in isolation then I want to do it, if they will be a step we cant walk back easily I want to know that before we start").
   - Each lever (docs/design/radiance-cache-speed.md) and each open fix (docs/design/radiance-cache-divergences.md, "Can each fix be a switch?") is classed as one of: a live setting; a setting read at prepare; a second path behind a setting; a platform option (DDGI sees it too); hard to walk back.
   - Hard to walk back today: lever 5 (compact formats across the board), lever 8 (scratch per tile), lever 24 (fewer rays per probe: the 8 × 8 probe is in every pass), and D30 (fusing the insert into the trace breaks the world-cache slot). None of these starts without Dennis's go-ahead. Each starts with the refactor that makes it a setting, or says why it can't be one.

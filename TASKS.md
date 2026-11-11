@@ -660,6 +660,36 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
 - **RC5.3 done-when.** Phase 5 as the design doc states it: the table, the attention list and the image comparison are in, and Dennis has seen them. Also one A/B on the RTX 3060 with timing off (from RC5.1's review): the frame cost of the radiance cache's passes split into Capsaicin's sections (`timed-pass.ts`: 7 more compute passes in the technique, 2 more in the denoiser) against the same work merged as before RC5.1, with the result in PROGRESS.
 - **RC5.4 done-when.** The cause is measured, not guessed: the rate split by what differs between the two ray sets (origin offset, direction spread, first-node depth, ray length). The fix is proposed with its expected gain. The BVH lane is told if the cause is in the tracer.
 
+### radiance-cache phase 6: levers
+
+Each lever is a setting beside the faithful path (DECISIONS 2026-11-11). Its row names the setting and the default.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC-L1 | Lever 1, budgeted cell shading (id Tech 8): `cellShading: 'perHit' \| 'budget'` with `cellShadingBudget`, `cellShadingSamples` and `cellShadingMaxAge`, inside the hash grid, as the design doc's "Budgeted cell shading" says | implementer | L | RC5.1 | todo |
+| RC-X3 | Extension 3, card cache (Lumen's surface cache) as a second `WorldCache`: design study | main session, scout (Lumen sources, Brixelizer workstream) | M | none | todo |
+
+- **RC-L1 done-when.**
+  - In `perHit` mode nothing changes: every RC page passes as before, and the timing page's pass list is the same.
+  - In `budget` mode with a budget at least the cells in use, `cellShadingMaxAge` 1 and `cellShadingSamples` 1:
+    - Constant sky, open floor: E = πL within the 2.5% Lambert threshold. Closed box: 0 (the `radiance-cache-world-cache` and `-sky-light` checks, run in both modes).
+    - Converged mean E within 3% of `perHit` on Cornell, two-room and Sponza, with flicker before and after the denoiser reported beside `perHit`'s.
+  - With a smaller budget, a counter shows lit cells = min(budget, cells in use) and shadow rays = lit cells × samples, exactly.
+  - Lag is measured as frames until within 10% of converged, after a light turns on and after a cut to a new view, for three budgets.
+  - M5 per-pass timing (a hint) for both modes on Sponza and Bistro interior, in `bench/results`. The RTX 3060 run joins RC5.3.
+  - Memory in `memoryBytes`, 0 in `perHit`. Every kernel within 8 storage buffers per stage.
+  - New hit-side data keeps the hit record (bindless-ready rule).
+- **RC-X3 done-when.** A design section in the design doc covering:
+  - card layout and capture;
+  - lighting on a budget;
+  - hit to card texel without a search;
+  - fallback to the hash grid;
+  - memory on Sponza and Bistro;
+  - what the Brixelizer slot already gives;
+  - an estimate of effort and gain against lever 1.
+
+  Dennis decides whether to build it.
+
 ### radiance-cache: divergence fixes
 
 From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md). Each row moves the port closer to Capsaicin. A fix replaces our path only when the old one was wrong or our own shortcut; otherwise it's a setting (DECISIONS 2026-11-11, "Every lever and fix is a setting"). Its register row is updated to say it's closed, or what remains.

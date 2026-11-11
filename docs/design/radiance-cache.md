@@ -98,6 +98,41 @@ The seam sits where Capsaicin's screen cache hands its probe rays to the hash gr
 - **Built (RC6.1):** the sky is one of the lights the cache's hits draw, as Capsaicin's environment light is (register D33): `GenerateReservoirs` and `GenerateMultibounceReservoirs` call the platform's `giDirectChooseLightWithSky` (the sky one candidate ahead of the lights, a direction from `giSkyLightSample` over the baked sky), and `PopulateCells` traces the sky's unbounded shadow ray through `giDirectLightRay`. The light builder's `environment_light_enable` is the technique's `environmentLightEnable` (default true), a word of the hash grid's constants. DDGI's `gi/direct` is unchanged.
 - **Why here:** Capsaicin's per-hit population, multi-bounce and resolve stay intact inside the hash grid, so the faithful path is unchanged. A brick or surface cache has its own population (from its own tracing or SDF), and needs only the hits and a place to write radiance.
 
+### Budgeted cell shading, id Tech 8's way (lever 1; lead, 2026-11-11)
+
+Dennis chose this on 2026-11-11 (DECISIONS). It's id Tech 8's design (Sousa, SIGGRAPH 2025, S15-S20) on top of the hash grid we already have. Probe rays only find their cell, and a separate pass lights a fixed number of cells a frame, most urgent first. A cell's light is reused until it's lit again. It lives inside the hash-grid world cache (`encodeFrame`), so the world-cache interface and the screen cache don't change.
+
+**Settings** (all on the hash grid's constants; `perHit` is Capsaicin's and the default):
+- `cellShading: 'perHit' | 'budget'`, read at prepare, because `budget` adds buffers and kernels.
+- `cellShadingBudget`: cells lit per frame (id: about 20,000 for a whole level; ours to tune by measurement).
+- `cellShadingSamples`: light draws (shadow rays) per lit cell per frame, default 1, so a frame's shadow rays are at most budget × samples.
+- `cellShadingMaxAge`: frames after which a cell still in use counts as stale and goes ahead of fresher cells.
+
+**The frame in `budget` mode:**
+1. **Insert, unchanged.** Probe-ray hits find or insert their cell. The bypass cases (emissive front faces, rays shorter than their cell) are still lit per hit, as Capsaicin does; they're few.
+2. **Pick one hit per cell.** Each hit in a cell this frame offers its visibility entry (it already carries the hit record, D30). The cell keeps the hit with the smallest hash of (ray, frame), an `atomicMin` on a per-cell word, so its point is a uniformly random hit each frame. Over frames the cell's light is the average over the area its hits cover, as in `perHit`.
+3. **Choose the cells to light.** Cells used this frame are ranked: new cells (no samples yet) first, then by frames since last lit, stale ones (`cellShadingMaxAge` or more) ahead of the rest. The first `cellShadingBudget` are taken, through a histogram of age classes and the platform's scan, with no sort. Unused cells aren't lit; nothing reads them.
+4. **Light the chosen cells.** For each one, rebuild its point from the kept hit record through `giSurfaceAt`, which also supplies the material (the average today; real textures with lever 27). Then run `GenerateReservoirs`' light choice (the sky included, RC6.1) and `PopulateCells`' shadow ray, `cellShadingSamples` times. The result goes into the cell through `UpdateTiles`' temporal accumulation and sample cap, as now.
+5. **Second bounce.** With `useMultibounce`, the second-bounce ray also leaves from the chosen cells' points (one per lit cell) instead of from every hit, so it's on the same budget. Lever 2, the bounce from DDGI, can replace it later.
+6. **Resolve, unchanged.** Probe rays read their cell's filtered light (`ResolveCells`), so they read cells not lit this frame at their last value. That's the lag.
+
+**Memory:** one 32-bit word per cell for the kept hit, plus one for its last-lit frame, sized from the cache's capacity at prepare. It's stated in `memoryBytes`, and zero in `perHit` mode.
+
+**What it costs the image:** lighting can lag by up to `cellShadingMaxAge` frames, and with a small budget more. A cell sees fewer samples per frame than in `perHit`, so it converges more slowly. Both are measured, not assumed.
+
+**Why it's switchable:** the per-hit kernels stay as they are. `budget` adds four kernels beside them (pick, histogram, choose, light), and Capsaicin's population is skipped in that mode. Every RC page runs in `perHit`, and the new checks run in both modes, so neither path rots.
+
+**Its partners:** lever 22 (a frame budget) turns `cellShadingBudget` as a dial. Lever 27 (bindless) gets cheaper here, because textures are read once per lit cell instead of once per hit.
+
+### Card cache experiment (extension 3; lead, 2026-11-11)
+
+Dennis wants Lumen's surface cache tried too, as an experiment. It's a second `WorldCache` behind the slot, so it's a switch by design.
+- **Cards** are small rasterised captures of each static mesh, holding albedo, normal and emission, in an atlas.
+- **Lighting** is applied to cards on a budget, as in lever 1.
+- **Reading:** a ray that hits a static mesh reads the card texel at its hit, found through instance, triangle and barycentrics. Moving meshes and misses fall back to the hash grid.
+
+It closes D2 without bindless, because the material is captured by rasterising, and it's the software path Lumen still uses. It starts as a design study (RC-X3): Lumen's card layout and capture, card lighting and its budget, how a hit finds its card texel without a card search, memory on Sponza and Bistro, and what the Brixelizer workstream already provides through the same slot.
+
 ## World-cache memory
 
 Capsaicin's defaults allocate about 1 GiB for the hash cache (2^14 buckets × 16 tiles × 85 cells, two value arrays and two per-cell scratch arrays; `source-map.md` §4.2). We allocate the same (since RC3.2's review in two buffers: the cache words, 718,274,816 bytes, and the cell values, 356,515,840), under the adapter-maximum limits the platform already asks for; never a cap from WebGPU's default 128 MiB binding (DECISIONS 2026-11-09). A device that can't fit it throws `GILimitError` naming the limit. Capacity is a setting chosen by measured bucket overflow and quality. Sizing the update scratch per updated tile instead of per cell is a lever (it frees several hundred MB). The technique reports its GPU memory in stats. RC3.3 adds 2,764,800 bytes of per-ray lists at 1280 × 720 (the second-bounce entries' brdf and pdf, `max_ray_count` of them as in Capsaicin, and D40's bypass flags): the lists are 35,020,800 bytes. The second-bounce cells live in the same tiles: on Sponza the live tiles rose from about 18,500 to about 50,600 of 262,144 (Bistro exterior 23,300 to 58,500), still with no refused insert over 300 frames (`radiance-cache-overflow`, M5).
