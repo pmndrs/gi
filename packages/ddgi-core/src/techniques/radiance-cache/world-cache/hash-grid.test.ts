@@ -712,16 +712,23 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(chooseCells(classes, 4, 0).litCount).toBe(0);
     });
 
-    it("keeps a cell in use with no new sample as it is in UpdateTiles, only on a budget; an unused cell fades as Capsaicin's", () => {
+    it("keeps a cell in use with no new sample as it is in UpdateTiles, only on a budget; an unused cell fades as Capsaicin's but stops at a count of 1", () => {
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, true)).toEqual([32, 32, 32, 16]);
-        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, false)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16));
+        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, false, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16));
+        // An unused cell fades to a count of 1 and stops there on a budget, keeping its mean; per hit it empties.
+        expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16, false, true)).toEqual([2, 2, 2, 1]);
+        expect(updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 0], 16)).toEqual([0, 0, 0, 0]);
+        // Its next sample takes half the weight (1 / (1 + 1)): a mean of 2 and a sample of 0 give 1.
+        const relit = updateTilesAccumulate([2, 2, 2, 1], [0, 0, 0, 1], 16, false, true);
+        expect(relit[3]).toBe(2);
+        expect(relit[0] / relit[3]).toBeCloseTo(1, 6);
         expect(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16));
         // A lit cell whose light went out: its samples of 0 take it down by 1 / 16 of the way each frame.
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 1], 16, true)[0]).toBeCloseTo(30, 5);
         const perHit = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true));
         const budget = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true, true));
         expect(perHit).not.toContain('new_samples.w <= 0.0');
-        expect(budget).toContain('keep_without_samples && new_samples.w <= 0.0');
+        expect(budget).toContain('new_samples.w <= 0.0 && (keep_without_samples || previous_radiance.w <= 1.0)');
         // The kept-hit word says "in use this frame", and UpdateTiles resets it for the next frame's offers.
         expect(budget).toContain('atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u)');
     });

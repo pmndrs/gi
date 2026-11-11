@@ -895,14 +895,20 @@ export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     // reaches 0 (gi1.comp:2170-2177): per hit every cell in use gets a sample each frame, so only
     // cells nobody looks at fade. On a budget most cells in use go unlit for frames and would fade
     // too, so a cell in use this frame (its kept-hit word is set) with no new sample is left as it
-    // is; a cell nobody used fades by Capsaicin's rule, as per hit. A lit cell always has new
-    // samples (a draw with no light is a sample of 0), so a light switched off fades from it.
+    // is. A cell nobody used fades by Capsaicin's rule, but only down to a count of 1, not to empty:
+    // the probes are re-placed every frame, so cells drift in and out of use, and emptied they read
+    // dark or coarse until their turn comes (two-room at 1/16 of its cells read 0.867 of per hit,
+    // Sponza at a full budget 0.975, RC-L1 review). At a count of 1 the cell keeps its last light at
+    // the lowest weight: its next sample takes half the weight, and the ones after it more of the
+    // history as the count grows (1 / count each). A lit cell always has new
+    // samples (a draw with no light is a sample of 0), so a light switched off still fades from it.
+    // This rule is ours, not Capsaicin's; the faithful path is perHit.
     // UpdateTiles is the last pass to read the kept-hit word, and resets it for the next frame's
     // offers: every cell in use is in a tile touched this frame, so on this frame's update list.
     const keepUnlitCells = layout.cellShading
         ? `
-    if (keep_without_samples && new_samples.w <= 0.0) {
-        return previous_radiance;   // lever 1: in use, not lit this frame; the light is reused until it is
+    if (new_samples.w <= 0.0 && (keep_without_samples || previous_radiance.w <= 1.0)) {
+        return previous_radiance;   // lever 1: in use and not lit, or out of use at the lowest weight: kept until lit
     }`
         : '';
     const keepParameter = layout.cellShading ? ', keep_without_samples: bool' : '';
