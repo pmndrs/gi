@@ -481,13 +481,13 @@ Status: **draft, from T2.11 (2026-11-09).** Starts when Dennis signs off M2 (PR 
 
 ## radiance-cache track (second technique)
 
-Status: **phase 1 started 2026-11-09** on branch `radiance-cache` (cut from `m2` at 5de856b), alongside M2's close-out. The design, the divergence register and the later phases are in [docs/design/radiance-cache.md](docs/design/radiance-cache.md); Dennis's decisions are in DECISIONS (2026-11-09, "radiance-cache"). The technique is a faithful port of AMD's GI-1.0/1.2 (Capsaicin v1.3) first; performance ideas are levers beside it.
+Status: **phase 1 started 2026-11-09** on branch `radiance-cache` (cut from `m2` at 5de856b), alongside M2's close-out. The design and the later phases are in [docs/design/radiance-cache.md](docs/design/radiance-cache.md), and every difference from Capsaicin is in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md); Dennis's decisions are in DECISIONS (2026-11-09, "radiance-cache"). The technique is a faithful port of AMD's GI-1.0/1.2 (Capsaicin v1.3) first; performance ideas are levers beside it.
 
 Rules for every row:
 - **Separable.** Each row is built on its own branch (`rc1-<n>`, from `radiance-cache`) and merged into `radiance-cache` after review, so each platform change can also merge to the main line alone.
 - **Subgroups first** with one declared fallback and a test of it (DECISIONS 2026-11-04).
 - **Hardware:** the RTX 3060 is the target and GPU timing is taken GPU-loaded under the bench lock (`tools/reference/bench-lock.ts`), VALID runs only; the Intel UHD is correctness only. Never time anything while a native Capsaicin run (`scene_viewer.exe`) is going.
-- **Every divergence from Capsaicin** (a three backend step, a missing feature) gets a register row in the design doc, numbered from D13, with its kind, reason and way back.
+- **Every divergence from Capsaicin** (a three backend step, a missing feature) gets a row in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md), numbered from the next free ID, with its cause, evidence, impact, effort to match, recommendation and way back.
 - An Opus review against the done-when before a row is marked done.
 
 | ID | Task | Agent | Size | Depends on | Status |
@@ -636,6 +636,48 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
   - *Refined (implementer, 2026-11-10, RC4.3), built as `packages/denoiser-gi1` (`@pmndrs/denoiser-gi1`, lint-held to its own folder) and the GPU page `radiance-cache-denoiser`, modelled on RC4.1's gates:* the module's kernels fit WebGPU's default limits (no storage buffers, at most 3 storage textures; unit tests in the package and in `radiance-cache.test.ts`) and need no optional feature. On a CPU-ray-cast scene at 480 × 270 against the package's CPU reference (`src/reference.ts`), the GPU's previous state read back each time: (1) a still constant input stays constant: sky 0, the reference within 2 half steps at frames 1, 2, 8, 40, 100, 160, settled over the last 10 of 160 frames (*amended* from one half step to two after the first run, with no drift of the mean: DECISIONS 2026-11-10), the f64 reference alone gives the constant back within 1e-6, with round-to-nearest halves within 1%, and (after the review) the GPU's settled mean within 0.5% of the reference run free with the GPU's rounding, each worst under 2%; (2) the blur mask, colour delta, reprojected history, both filter passes and the irradiance on captured noisy frames (1, 3, 12) within the snorm step or 2 half steps, pixels at a threshold counted; (3) the same for a known camera move, plus: the history lands on the right pixels (a 2 m checker read back within 1% with the input's hint 0), disoccluded pixels get the full blur mask and their noise falls by more than half, converged pixels get mask 0; (4) a NaN and an infinity in the input are gone from the output, the history and the colour delta within 3 frames (D71, D75). After the review, checks 1-4 run on Capsaicin's `r8snorm` / `r16float` (with `texture-formats-tier1`) and on the declared fallback. In the radiance cache: no NaN, infinity or negative value in the interpolated or denoised irradiance on Cornell and Sponza over 64 still frames, and flicker reported beside RC4.1's (stated before the run: below the interpolated E's on both), in RC4.1's window and, after the review, on converged history (from frame 300). The nine existing RC pages re-run.
   - **Phase 4's by-eye check is Dennis's** (the plan's done-when: steady by eye on Cornell and Sponza, no popping on a fly-through). The viewer is made ready for it and the check is listed in PROGRESS "Next"; it doesn't block the track.
   - Moving the module into `pmndrs/denoiser` (a PR there) needs Dennis's go-ahead: listed in PROGRESS "Next".
+
+### radiance-cache phase 5: timing and the comparison with native
+
+Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the order are in [docs/design/radiance-cache-speed.md](docs/design/radiance-cache-speed.md). M5 numbers are hints and say so; the RTX 3060 under the bench lock is the record.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | todo |
+| RC5.2 | Windows re-run: the twelve `radiance-cache-*` pages plus `hit-shading-lights` and `ddgi-furnace` on the RTX 3060 and the Intel UHD; nothing has run there since phase 2 | gpu-tester | S | none (Windows laptop, 2026-11-12) | todo |
+| RC5.3 | The phase 5 table: VALID per-pass timing on the RTX 3060 beside native Capsaicin's groups (Sponza, Bistro interior and exterior, two-room); a cause and an attention-list row for each pass over native; accuracy against the path tracer per scene | gpu-tester, native-runner | M | RC5.1, RC5.2 | todo |
+| RC5.4 | Slow surface rays (lever 20): find why probe rays leaving surfaces trace at 17-35 Mrays/s while rays from points in the air reach about 87 (RC1.5); cause and a proposed fix, no tracer change without the lead | implementer | M | none | todo |
+
+- **RC5.1 done-when.**
+  - A test that fails before the change: a pass recorded in `encodeScreen` reads more than 0 ms through the platform's timing.
+  - DDGI's timings are unchanged: `ddgi-timing` still passes and its pass list is the same.
+  - `radiance-cache-timing` reports per-pass medians over warmed frames on Cornell, Sponza and Bistro interior and exterior at 1280×720, with Capsaicin's section names, grouped as native Capsaicin's CSV groups (`ddgi-research/research/gi-1.0/native-capsaicin.md`), and a switch for `useMultibounce`.
+  - The M5 table goes in `bench/results/radiance-cache-m5-passes.csv`, labelled M5. The page runs unchanged on Windows (`--gpu nvidia`).
+  - No image changes: the RC pages still pass on the M5.
+- **RC5.2 done-when.** Every page's result on both GPUs in PROGRESS. Each failure gets a cause or a follow-up row; nothing is loosened to pass without a DECISIONS entry.
+- **RC5.3 done-when.** Phase 5 as the design doc states it: the table, the attention list and the image comparison are in, and Dennis has seen them.
+- **RC5.4 done-when.** The cause is measured, not guessed: the rate split by what differs between the two ray sets (origin offset, direction spread, first-node depth, ray length). The fix is proposed with its expected gain. The BVH lane is told if the cause is in the tracer.
+
+### radiance-cache: divergence fixes
+
+From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md). Each row moves the port closer to Capsaicin, so the fix replaces our path; its register row is updated to say it's closed, or what remains.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | todo |
+| RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | todo |
+
+- **RC6.1 done-when.**
+  - The port follows Capsaicin's environment-light sampling at cache hits, cited line by line: how the sky is picked against the other lights, its pdf, and its shadow ray.
+  - A GPU check: under a constant sky with no other lights, a cache cell on an open floor reads E = πL within the 2.5% Lambert threshold (DECISIONS 2026-11-10). In a closed box with no lights, it reads 0.
+  - Sponza and Bistro exterior before and after are recorded in PROGRESS.
+  - Every RC page still passes on the M5, or the change in its numbers is explained.
+  - D33's register and challenge entries are updated.
+- **RC6.2 done-when.**
+  - **D59:** `radiance-cache-filter` check 6's drift is gone on the M5, with 40 m staying within 1 m over 300 frames. The fix is checked to be harmless on a GPU that rounds to nearest, through the CPU twin.
+  - **D42:** with `useMultibounce: false`, `stats` memory drops by the multi-bounce arrays, and turning it on prepares again. `radiance-cache-multibounce` passes.
+  - **D39:** Capsaicin's `offsetPosition` is ported for the second-bounce ray. The count of second-bounce rays that change hit on Sponza and Cornell is recorded. `radiance-cache-multibounce` passes.
+  - Each register entry is updated.
 
 ## Carried to M2 (collected during M1)
 

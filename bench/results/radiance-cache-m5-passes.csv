@@ -1,0 +1,3 @@
+date,commit,device,browser,scene,metric,value,note
+2026-11-11,39d43e2,Apple M5 Pro (apple/metal-3),Chrome 157 headless,sponza,rc_frame_wall_ms_median,33.2,"viewer path (ViewerCore rc, GI on, 1280x720), 120 frames after 300 warm-up; wall time per frame incl. onSubmittedWorkDone, not GPU time; per-pass GPU times all read 0 (the platform resolves timestamps before encodeScreen runs), so no pass table"
+2026-11-11,39d43e2,Apple M5 Pro (apple/metal-3),Chrome 157 headless,cornell-box,rc_frame_wall_ms_median,16.55,"same as above; likely capped by the display rate, not by GI"

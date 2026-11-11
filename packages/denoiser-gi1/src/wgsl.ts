@@ -46,7 +46,7 @@
  *
  * The constants are Capsaicin's (constants.ts, with their lines). Where this
  * differs from Capsaicin, the reason is in the radiance cache's divergence
- * register (webgpu-ddgi `docs/design/radiance-cache.md`, D65 onwards):
+ * register (webgpu-ddgi `docs/design/radiance-cache-divergences.md`, D65 onwards):
  * texture formats (Capsaicin's with `texture-formats-tier1`, else a fallback: D65), the input in its own texture (D66), sky by depth
  * (D67), the guides kept here (D68), points relative to the eye (D69),
  * linear depth from the rebuilt point (D70), NaN removal by the bits (D71),

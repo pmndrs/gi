@@ -13,7 +13,7 @@ Per frame, each a compute dispatch over 8 × 8 pixel groups:
 3. The second pass's result is the next frame's history (the filtered image is fed back, as in Capsaicin), and its mean is the output.
 4. **`KeepGuides`** keeps this frame's depth and normals for the next frame's reprojection (Capsaicin's framework does this for it).
 
-Constants are Capsaicin's, with their lines, in `src/constants.ts`. Every difference from Capsaicin, and why, is in webgpu-ddgi's `docs/design/radiance-cache.md` (register rows D65 to D74).
+Constants are Capsaicin's, with their lines, in `src/constants.ts`. Every difference from Capsaicin, and why, is in webgpu-ddgi's `docs/design/radiance-cache-divergences.md` (rows D65 to D75).
 
 ## Use
 

@@ -27,7 +27,7 @@ How to work:
 - **Respect the boundary:** `ddgi-core` never imports three.js or any engine. Engine code goes in adapter packages.
 - **Follow the WebGPU conventions** in NOTES: fragment-readable data in textures; `addEventListener('uncapturederror')`; the host owns the device.
 - **Verify on a real GPU.** If your work touches the GPU, run `pnpm test:gpu` (on `--gpu nvidia` and `--gpu intel` when relevant) and say which adapter you verified on. "It builds" is not "it works".
-- **Ports (radiance-cache `RC*` rows):** every difference from Capsaicin gets a register row and a challenge-list line (cause and evidence) in `docs/design/radiance-cache.md`. Be honest about the cause. If you did something the easy way, mark it "Shortcut". Don't call it "Forced" unless you can cite a spec section or a measurement.
+- **Ports (radiance-cache `RC*` rows):** every difference from Capsaicin gets a summary row and a full entry in `docs/design/radiance-cache-divergences.md` (cause, evidence, image and speed impact, effort to match, recommendation). Be honest about the cause. If you did something the easy way, mark it "Quick setup". Don't call it "Platform can't" unless you can cite a spec section or a measurement; otherwise it is "Platform can't? (unchecked)".
 - **Run the basics before handing back:** `pnpm lint && pnpm typecheck && pnpm test`.
 
 When you finish:

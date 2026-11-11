@@ -47,7 +47,7 @@
  * pixel, run before GI-1's passes as Capsaicin's renderer runs the SSGI
  * technique before GI-1 (gi1_renderer.cpp:60-61).
  *
- * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
+ * Differences from Capsaicin (docs/design/radiance-cache-divergences.md):
  * white noise for the blue noise (D55), last frame's lighting from
  * `FrameScreen.previousLighting` (D56), the technique a module of the
  * radiance cache (D57), two guards where D3D's NaN rules give the answer

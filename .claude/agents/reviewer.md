@@ -25,7 +25,7 @@ Check, in order:
    - the host owns the device.
 4. **Honesty.** Does PROGRESS say what was and wasn't verified, and on which GPU? Are the numbers in PROGRESS or a CSV, with no new report files? Were any thresholds changed without a DECISIONS entry?
 5. **Spec fit.** Does anything contradict SPEC.md or DECISIONS.md?
-6. **Ports (radiance-cache `RC*` rows).** Compare the diff with the Capsaicin source it cites. Every difference needs a register row and a challenge-list line in `docs/design/radiance-cache.md`. Report any difference that has no row. Check each line's cause: a "Forced" claim needs a spec section, a source line or a measurement on a named GPU. Otherwise it is "assumed", and if nothing actually requires the change it is a "Rule" or a "Shortcut".
+6. **Ports (radiance-cache `RC*` rows).** Compare the diff with the Capsaicin source it cites. Every difference needs a summary row and a full entry in `docs/design/radiance-cache-divergences.md`. Report any difference that has no row. Check each row's cause: a "Platform can't" claim needs a spec section, a source line or a measurement on a named GPU. Otherwise it is "assumed" ("Platform can't? (unchecked)"), and if nothing actually requires the change it is "Our rule" or "Quick setup". Check that the impact, effort and recommendation are honest.
 
 Report:
 - A verdict: `pass`, `pass with notes`, or `fail`.

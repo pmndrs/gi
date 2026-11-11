@@ -1,6 +1,6 @@
 /**
  * The one place the adapter reaches into three's WebGPU backend (RC1.1,
- * register row D13 in docs/design/radiance-cache.md, DECISIONS 2026-11-09).
+ * divergence D13 in docs/design/radiance-cache-divergences.md, DECISIONS 2026-11-09).
  *
  * The screen inputs hand three's own render targets to the platform as
  * `GPUTexture`s, with no copy. three r187 has no public way to get the

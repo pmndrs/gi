@@ -50,7 +50,7 @@
  * The interpolated image goes on to GI-1's denoiser (RC4.3, gi-denoiser.ts),
  * whose output the shading module reads.
  *
- * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
+ * Differences from Capsaicin (docs/design/radiance-cache-divergences.md):
  * the projection weight is a cell's solid angle (D25), the SH live in a
  * texture (D26), the interpolation's jitter is white noise (D27), SH
  * coefficients are clamped to the half range (D28), linear depth comes from

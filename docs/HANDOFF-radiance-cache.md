@@ -36,8 +36,8 @@ Updated 2026-11-10 on the Mac (M5 Pro). Nothing from the Mac has been pushed yet
 These were held in the old machine's local agent memory, so they're written out here.
 
 - **Faithful port first.** Build Capsaicin's default configuration as AMD built it: algorithms, ray counts, rates and cache sizes. Performance ideas are measured levers next to the faithful path, never up-front rewrites.
-- **Divergence register.** Record every difference from Capsaicin in `docs/design/radiance-cache.md` with its kind, its reason and a way back. Include workarounds other people or vendors use.
-- **Why each difference exists** (added 2026-11-10). Every register row also gets a line in the design doc's challenge list. The line gives its cause (forced by WebGPU or three, our own rule, a shortcut, same result, a fix, license) and its evidence (measured, cited or assumed). Dennis wants to tell real platform limits apart from easier choices and from "WebGPU can't" said from memory, so that the unforced ones can be challenged once the port reaches parity. Reviewers check the cause and look for differences that have no row at all.
+- **Divergence register.** Record every difference from Capsaicin in `docs/design/radiance-cache-divergences.md` with its kind, its reason and a way back. Include workarounds other people or vendors use.
+- **Why each difference exists** (added 2026-11-10). Every row also gives its cause and evidence (the old challenge list, merged into the same file on 2026-11-11), plus its image and speed impact, effort to match and a recommendation. The line gives its cause (forced by WebGPU or three, our own rule, a shortcut, same result, a fix, license) and its evidence (measured, cited or assumed). Dennis wants to tell real platform limits apart from easier choices and from "WebGPU can't" said from memory, so that the unforced ones can be challenged once the port reaches parity. Reviewers check the cause and look for differences that have no row at all.
 - **No timing for now** (2026-11-09). Correctness gates only; mark every timed check as deferred. Build as far as possible, and stop only for a decision that blocks the whole project. Note everything else in PROGRESS under "Next" and keep going.
 - **No WebGPU default caps.** Ask for the adapter's maximum limits and size buffers by need. The hash cache runs at Capsaicin's 1 GiB. "128 MB caps are far too low."
 - **Model tiers.** Code and review on Opus (medium effort or higher). Sonnet only for small jobs, test runs and measuring. Haiku for lookups.
@@ -56,7 +56,7 @@ These were held in the old machine's local agent memory, so they're written out 
 - **The adapter:** apple/metal-3. It has shader-f16, subgroups, timestamp-query and texture-formats-tier1/2; 4 GiB storage bindings; **10 storage buffers per stage**, so the platform's 8 matters here.
 - **Apple facts:** `pack2x16float` rounds to nearest, while storage-texture half stores round toward zero (NOTES).
 - **The working pattern:**
-  - Opus implementers on `rcX-Y` worktrees, and Opus reviewers checking against Capsaicin line by line, plus each row's cause in the challenge list.
+  - Opus implementers on `rcX-Y` worktrees, and Opus reviewers checking against Capsaicin line by line, plus each row's cause in the divergences file.
   - The lead fixes the review notes or sends them back, then merges.
   - Sonnet does setup and test sweeps.
   - A reviewer's second hand-back can be refused, so ask reviewers to also write the report to the scratchpad.
