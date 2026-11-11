@@ -66,6 +66,13 @@
  *    land a hair outside, register D17): no probe ray starts outside or
  *    misses, every hit draws the sky as above, and its shadow ray is
  *    blocked, so every cell with samples and every hit ray reads 0.
+ * 6c, 7b. **Sections 6 and 7 with lever 1's budgeted cell shading** (RC-L1:
+ *    `cellShading: 'budget'`, a budget above the cells in use, max age 1, one
+ *    sample): the same cell sums within 2.5% for the three groups, and the
+ *    closed box reads 0. Instead of the hits' draws (on a budget a hit draws
+ *    no light), the budget's counters: every cell in use is lit
+ *    (lit = in use > 0), and each lit cell traced one shadow ray, all but the
+ *    rare horizon draw (shadow rays within 1e-4 of lit cells × samples).
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
@@ -73,6 +80,7 @@
 
 import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
+import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import {
     hashGridCacheCellIndex,
@@ -410,6 +418,21 @@ const OPEN_FLOOR_VISIBILITY = 0.99;
  */
 const MAX_HITS_WITHOUT_LIGHT_SHARE = 1e-4;
 
+/**
+ * Lever 1 (cellShading 'budget'): the frame's cells in use, lit, and the shadow rays lit cells
+ * traced, against what a budget above the cells in use with one sample asks: all lit, one ray each
+ * (but for the rare horizon draw, as with the hits' draws).
+ */
+function checkBudgetCounters(state: Awaited<ReturnType<typeof readFrameState>>, fail: (message: string) => void): { usedCells: number; litCells: number; shadowRays: number } {
+    const usedCells = state.counters[HASH_GRID_COUNTER.usedCellCount];
+    const litCells = state.counters[HASH_GRID_COUNTER.litCellCount];
+    const shadowRays = state.counters[HASH_GRID_COUNTER.cellShadowRayCount];
+    if (usedCells === 0) fail('no cell in use on a budget');
+    if (litCells !== usedCells) fail(`the budget lit ${litCells} of ${usedCells} cells in use; it is above them`);
+    if (shadowRays > litCells || litCells - shadowRays > MAX_HITS_WITHOUT_LIGHT_SHARE * litCells) fail(`${shadowRays} shadow rays for ${litCells} lit cells at one sample each`);
+    return { usedCells, litCells, shadowRays };
+}
+
 /** How the frame's hits drew their lights: how many drew the sky, and how many drew nothing. */
 function skyDraws(state: Awaited<ReturnType<typeof readFrameState>>): { hits: number; skyDraws: number; otherDraws: number; withoutLight: number } {
     const hits = state.counters[HASH_GRID_COUNTER.visibilityCount0];
@@ -500,8 +523,11 @@ async function readSkyCorner(
     fail: (message: string) => void,
 ): Promise<{ draws: ReturnType<typeof skyDraws>; mixedCells: number; cellsWithoutSamples: number }> {
     const state = await readFrameState(device, scenario);
+    const budget = scenario.cache.preparedCellShading === 'budget';
+    // On a budget a hit draws no light of its own; the budget's counters say what was lit.
     const draws = skyDraws(state);
-    checkSkyDraws(draws, sunRadiance > 0, fail);
+    if (budget) checkBudgetCounters(state, fail);
+    else checkSkyDraws(draws, sunRadiance > 0, fail);
 
     // This frame's hits by cell: which surface, and the share of the sky each sees.
     const hitsByCell = new Map<number, { surface: 'floor' | 'wall' | 'mixed'; visibility: number[] }>();
@@ -555,7 +581,8 @@ async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Ch
     };
     const state = await readFrameState(device, scenario);
     const draws = skyDraws(state);
-    checkSkyDraws(draws, false, fail);
+    const budget = scenario.cache.preparedCellShading === 'budget' ? checkBudgetCounters(state, fail) : null;
+    if (!budget) checkSkyDraws(draws, false, fail);
     const misses = state.rays.filter((ray) => ray.hitT < 0).length;
     if (misses > 0) fail(`${misses} probe rays left the box`);
     // Every probe sits on the back wall, inside the box (the camera sees no edge: CLOSED_BOX).
@@ -592,7 +619,7 @@ async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Ch
     });
     if (cellsWithSamples === 0) fail('no cell has samples');
     if (litCells > 0) fail(`${litCells} of ${cellsWithSamples} cells read light (brightest ${brightestCell})`);
-    return { failures, data: { ...draws, misses, outsideOrigins, litRays, cellsWithSamples, litCells } };
+    return { failures, data: { ...draws, ...(budget ? { budget } : {}), misses, outsideOrigins, litRays, cellsWithSamples, litCells } };
 }
 
 // ---- The page --------------------------------------------------------------------------------------
@@ -619,8 +646,9 @@ try {
         frames: number,
         check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>,
         world: ScenarioWorld = {},
+        settings: Partial<RadianceCacheSettings> = {},
     ): Promise<void> => {
-        const scenario = await startScenario(device, name, lights, withPatch, { useMultibounce: false }, world);
+        const scenario = await startScenario(device, name, lights, withPatch, { useMultibounce: false, ...settings }, world);
         try {
             await runFrames(device, scenario, frames);
             const checks = await check(device, scenario);
@@ -639,6 +667,10 @@ try {
     await run('skyCorner', [], false, 60, checkSkyCorner(0), { sky: SKY_RADIANCE });
     await run('skyAndSun', [sun(SUN_TRAVEL)], false, 60, checkSkyCorner(LIT_RADIANCE), { sky: SKY_RADIANCE });
     await run('closedBox', [], false, 20, checkClosedBox, { sky: SKY_RADIANCE, closedBox: true });
+    // Lever 1 (RC-L1): sections 6 and 7 on a budget above the cells in use, max age 1, one sample.
+    const budget: Partial<RadianceCacheSettings> = { cellShading: 'budget', cellShadingBudget: 1_000_000, cellShadingMaxAge: 1, cellShadingSamples: 1 };
+    await run('skyCornerBudget', [], false, 60, checkSkyCorner(0), { sky: SKY_RADIANCE }, budget);
+    await run('closedBoxBudget', [], false, 20, checkClosedBox, { sky: SKY_RADIANCE, closedBox: true }, budget);
 
     await drainDevice(device);
     reportGpuTest({

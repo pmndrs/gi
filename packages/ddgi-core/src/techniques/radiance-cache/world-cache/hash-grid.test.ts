@@ -8,7 +8,8 @@ import { countGroupStorageBuffers, countStorageBuffers, orderModules, PlatformKe
 import { SCENE_MODULE_ENTRIES } from '../../../platform/scene/wgsl.ts';
 import { SHADE_MODULE_ENTRIES } from '../../../platform/shade/wgsl.ts';
 import { TRACE_MODULE_ENTRIES } from '../../../platform/trace/wgsl.ts';
-import { checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
+import { checkCellShadingOptions, checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity, MAX_CELL_SHADING_AGE } from './capacity.ts';
+import { cellShadingClass, cellShadingKey, chooseCells } from './cell-shading-cpu.ts';
 import { HashGridCache } from './hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
@@ -24,7 +25,7 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
-import { hashGridCacheRayListLayout, MULTIBOUNCE_INFO_WORDS, RESERVOIR_WORDS, resolveCellsWgsl, updateTilesPerWorkgroup, updateTilesWgsl, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
+import { CELL_SHADING_CLASS_WORDS, CELL_SHADING_CLASSES, hashGridCacheRayListLayout, MULTIBOUNCE_INFO_WORDS, RESERVOIR_WORDS, resolveCellsWgsl, updateTilesPerWorkgroup, updateTilesWgsl, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
 import {
     HASH_GRID_CACHE_GROUP_ENTRIES,
     HASH_GRID_CACHE_WORDS_ONLY,
@@ -297,18 +298,19 @@ describe('PurgeTiles\' decay age (gi1.comp:1726-1738)', () => {
 });
 
 describe('the constants and the shared WGSL', () => {
-    it('lays HashGridCacheConstants out in 32 words, the eye first', () => {
-        expect(HASH_GRID_CONSTANTS_BYTES).toBe(128);
+    it('lays HashGridCacheConstants out in 36 words, the eye first', () => {
+        expect(HASH_GRID_CONSTANTS_BYTES).toBe(144);
         expect(HASH_GRID_CONSTANTS_WORD.frameIndex).toBe(3);
         expect(HASH_GRID_CONSTANTS_WORD.maxMultibounceSampleCount).toBeLessThan(32);
     });
 
-    it('puts the light builder\'s environment_light_enable in the last word (RC6.1)', () => {
+    it("puts environment_light_enable in Capsaicin's last padding word (RC6.1), and lever 1's three settings after it (RC-L1)", () => {
         expect(HASH_GRID_CONSTANTS_WORD.useMultibounce).toBe(30);
         expect(HASH_GRID_CONSTANTS_WORD.environmentLightEnable).toBe(31);
-        // The struct's last two fields, in the order of the word offsets.
+        expect([HASH_GRID_CONSTANTS_WORD.cellShadingBudget, HASH_GRID_CONSTANTS_WORD.cellShadingSamples, HASH_GRID_CONSTANTS_WORD.cellShadingMaxAge]).toEqual([32, 33, 34]);
+        // The struct's fields, in the order of the word offsets.
         const code = hashGridCacheWgsl(1, hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true));
-        expect(code).toMatch(/use_multibounce: u32,[^\n]*\n\s*use_environment_light: u32,[^\n]*\n\s*\}/);
+        expect(code).toMatch(/use_multibounce: u32,[^\n]*\n\s*use_environment_light: u32,[^\n]*\n\s*cell_shading_budget: u32,[^\n]*\n\s*cell_shading_samples: u32,[^\n]*\n\s*cell_shading_max_age: u32,[^\n]*\n\s*reserved: u32,\n\s*\}/);
         expect(DEFAULT_HASH_GRID_CACHE_OPTIONS.environmentLightEnable).toBe(true);
     });
 
@@ -528,7 +530,8 @@ function budgetContext(device: GPUDevice): { context: WorldCacheContext; storage
         },
     };
     const indirectArgs = { buffer: {}, memoryBytes: 16, encode() {}, dispose() {} };
-    const compute = { indirectModule: INDIRECT_ARGS_MODULE, createIndirectArgs: () => Promise.resolve(indirectArgs) };
+    const scan = { capacity: 0, total: { buffer: {}, offset: 0 }, memoryBytes: 64, encode() {}, dispose() {} };
+    const compute = { indirectModule: INDIRECT_ARGS_MODULE, createIndirectArgs: () => Promise.resolve(indirectArgs), createPrefixScan: () => Promise.resolve(scan) };
     const context = { device, kernels, compute, shade: { module: shade }, timer: { computePass: () => undefined } } as unknown as WorldCacheContext;
     return { context, storageBuffers, refused };
 }
@@ -589,6 +592,169 @@ describe("the binding budget (register D6): the platform's 8 storage buffers per
         expect(refusedLabels.sort()).toEqual(
             ['radiance-cache/GenerateReservoirs', 'radiance-cache/PopulateCells', 'radiance-cache/PopulateMultibounceCells'].sort(),
         );
+    });
+});
+
+// ---- Lever 1: budgeted cell shading (RC-L1) ----
+
+describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
+    const capacity = hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS);
+    const budgetOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS, cellShading: 'budget' as const };
+
+    it("is off by default: Capsaicin's per-hit shading", () => {
+        expect(DEFAULT_HASH_GRID_CACHE_OPTIONS.cellShading).toBe('perHit');
+    });
+
+    it('adds two words per cell to the cache words on a budget, none per hit', () => {
+        const perHit = hashGridCacheBufferLayout(capacity, true);
+        const budget = hashGridCacheBufferLayout(capacity, true, true);
+        expect(perHit.words.cellShadingKeptHitBuffer).toBeNull();
+        expect(perHit.words.cellShadingLastLitBuffer).toBeNull();
+        expect(budget.words.cellShadingKeptHitBuffer).toBeGreaterThanOrEqual((perHit.words.updateCellValueIndirectBuffer ?? 0) + 4 * capacity.numCells);
+        expect(budget.words.cellShadingLastLitBuffer).toBeGreaterThanOrEqual((budget.words.cellShadingKeptHitBuffer ?? 0) + capacity.numCells);
+        expect(budget.words.bytes - perHit.words.bytes).toBe(2 * capacity.numCells * 4);
+        expect(budget.cellValues.bytes).toBe(perHit.cellValues.bytes);
+        // 897 MB of cache words: still one binding on the adapters' 2 GiB.
+        expect(() => checkHashGridCacheLimits(budget, { maxStorageBufferBindingSize: 2 ** 31, maxBufferSize: 2 ** 31 })).not.toThrow();
+    });
+
+    it('adds the cells-in-use and to-light lists to the per-ray lists on a budget, nothing per hit', () => {
+        const maxRayCount = 80 * 45 * 64;
+        const perHit = hashGridCacheRayListLayout(maxRayCount, capacity.numCells, true);
+        const budget = hashGridCacheRayListLayout(maxRayCount, capacity.numCells, true, true);
+        expect(perHit.usedCellBuffer).toBe(perHit.visibilityBypassBuffer + maxRayCount);
+        expect(perHit.chosenCellBuffer).toBe(perHit.usedCellBuffer);
+        expect(perHit.bytes).toBe(perHit.usedCellBuffer * 4);
+        expect(budget.chosenCellBuffer).toBe(budget.usedCellBuffer + maxRayCount);
+        expect(budget.bytes - perHit.bytes).toBe(2 * maxRayCount * 4);
+    });
+
+    it('checks its settings', () => {
+        expect(() => checkCellShadingOptions(budgetOptions)).not.toThrow();
+        expect(() => checkCellShadingOptions({ ...budgetOptions, cellShading: 'cells' as 'budget' })).toThrow(RangeError);
+        expect(() => checkCellShadingOptions({ ...budgetOptions, cellShadingSamples: 0 })).toThrow(RangeError);
+        expect(() => checkCellShadingOptions({ ...budgetOptions, cellShadingMaxAge: MAX_CELL_SHADING_AGE + 1 })).toThrow(RangeError);
+        expect(() => checkCellShadingOptions({ ...budgetOptions, cellShadingBudget: 1.5 })).toThrow(RangeError);
+        // The classes fit the histogram: new, then one per age up to the largest.
+        expect(MAX_CELL_SHADING_AGE + 1).toBe(CELL_SHADING_CLASSES);
+    });
+
+    it('gives every hit of a frame its own key, and another order the next frame', () => {
+        for (const frame of [0, 1, 7, 0xffffffff]) {
+            const keys = new Set<number>();
+            for (let index = 0; index < 1 << 16; index++) keys.add(cellShadingKey(index, frame));
+            expect(keys.size).toBe(1 << 16);
+        }
+        // Which of a cell's hits has the largest key moves from frame to frame (a fresh pick each frame).
+        const hits = [3, 17, 101, 4000];
+        const winners = new Set<number>();
+        for (let frame = 0; frame < 64; frame++) winners.add(hits.reduce((best, hit) => (cellShadingKey(hit, frame) > cellShadingKey(best, frame) ? hit : best)));
+        expect(winners.size).toBe(hits.length);
+    });
+
+    it('picks each of a cell\'s hits about equally often over frames', () => {
+        const hits = [0, 1, 2, 3, 4, 5, 6, 7];
+        const wins = new Array<number>(hits.length).fill(0);
+        const frames = 8000;
+        for (let frame = 0; frame < frames; frame++) {
+            let best = 0;
+            for (const hit of hits) if (cellShadingKey(hit, frame) > cellShadingKey(best, frame)) best = hit;
+            wins[best]++;
+        }
+        for (const count of wins) expect(Math.abs(count / frames - 1 / hits.length)).toBeLessThan(0.02);
+    });
+
+    it('ranks never-lit cells first, then stale ones, then by age, oldest first', () => {
+        const frame = 100;
+        const maxAge = 4;
+        // lastLit holds the frame plus one: lit at frame 99 (last frame) is 100.
+        expect(cellShadingClass(0, frame, maxAge)).toBe(0);
+        expect(cellShadingClass(100, frame, maxAge)).toBe(maxAge);
+        expect(cellShadingClass(99, frame, maxAge)).toBe(maxAge - 1);
+        expect(cellShadingClass(100 - 3, frame, maxAge)).toBe(1);
+        expect(cellShadingClass(1, frame, maxAge)).toBe(1);
+        // With maxAge 1 every lit cell is stale.
+        expect(cellShadingClass(100, frame, 1)).toBe(1);
+        // Across the frame counter's wrap: lit at frame 2^32 - 2 (stored 2^32 - 1), three frames before frame 1.
+        expect(cellShadingClass(0xffffffff, 1, maxAge)).toBe(1 + (maxAge - 3));
+    });
+
+    it('lights min(budget, cells in use), whole classes in order and part of the last', () => {
+        const classes = [0, 3, 1, 1, 2, 3, 3, 0, 2, 1];
+        expect(chooseCells(classes, 4, 100)).toEqual({ litCount: 10, cutoffClass: 3, histogram: [2, 3, 2, 3], litInCutoffClass: 3 });
+        expect(chooseCells(classes, 4, 6)).toEqual({ litCount: 6, cutoffClass: 2, histogram: [2, 3, 2, 3], litInCutoffClass: 1 });
+        expect(chooseCells(classes, 4, 0).litCount).toBe(0);
+    });
+
+    it("keeps a cell with no new sample as it is in UpdateTiles, only on a budget", () => {
+        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, true)).toEqual([32, 32, 32, 16]);
+        expect(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16));
+        const perHit = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true));
+        const budget = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true, true));
+        expect(perHit).not.toContain('new_samples.w <= 0.0');
+        expect(budget).toContain('new_samples.w <= 0.0');
+    });
+
+    it("builds the per-hit kernels as before: the budget's words appear in no per-hit kernel", () => {
+        const layout = hashGridCacheBufferLayout(capacity, true);
+        for (const code of [hashGridCacheWgsl(1, layout), updateTilesWgsl(layout), resolveCellsWgsl(layout)]) {
+            expect(code).not.toContain('CELLSHADINGKEPTHIT');
+            expect(code).not.toContain('CELLSHADINGLASTLIT');
+        }
+    });
+
+    it("binds at most the platform's 8 storage buffers in every kernel, and makes the four kernels in place of GenerateReservoirs", async () => {
+        const { context, storageBuffers } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE));
+        await new HashGridCache({ ...budgetOptions }).prepare(context);
+        expect([...storageBuffers.keys()].sort()).toEqual(
+            [
+                'radiance-cache/ClearCounters (hash grid)',
+                'radiance-cache/PurgeTiles',
+                'radiance-cache/PopulateScreenProbes (cache half)',
+                'radiance-cache/CellShadingPick',
+                'radiance-cache/CellShadingRank',
+                'radiance-cache/CellShadingChoose',
+                'radiance-cache/CellShadingLight',
+                'radiance-cache/PopulateCells',
+                'radiance-cache/UpdateTiles',
+                'radiance-cache/ResolveCells',
+                'radiance-cache/PopulateMultibounceCells',
+                'radiance-cache/GenerateMultibounceReservoirs',
+                'radiance-cache/UpdateMultibounceCells',
+            ].sort(),
+        );
+        for (const [label, count] of storageBuffers) expect(count, label).toBeLessThanOrEqual(MIN_STORAGE_BUFFERS_PER_STAGE);
+        expect(storageBuffers.get('radiance-cache/CellShadingPick')).toBe(8);
+        expect(storageBuffers.get('radiance-cache/CellShadingRank')).toBe(3);
+        expect(storageBuffers.get('radiance-cache/CellShadingChoose')).toBe(3);
+        expect(storageBuffers.get('radiance-cache/CellShadingLight')).toBe(7);
+        expect(storageBuffers.get('radiance-cache/PopulateMultibounceCells')).toBe(8);
+    });
+
+    it('is what the kernel builder checks on a budget too: at 7, the kernels at 8 are refused', async () => {
+        const { context, refused } = budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE - 1));
+        await expect(new HashGridCache({ ...budgetOptions }).prepare(context)).rejects.toThrow(/maxStorageBuffersPerShaderStage = 8, but the device allows 7/);
+        const answers = await Promise.all([...refused].map(async ([label, answer]) => [label, await answer] as const));
+        expect(answers.filter(([, wasRefused]) => wasRefused).map(([label]) => label).sort()).toEqual(
+            ['radiance-cache/CellShadingPick', 'radiance-cache/PopulateCells', 'radiance-cache/PopulateMultibounceCells'].sort(),
+        );
+    });
+
+    it('states its memory, and none per hit', async () => {
+        const perHit = new HashGridCache();
+        await perHit.prepare(budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE)).context);
+        const budget = new HashGridCache({ ...budgetOptions });
+        await budget.prepare(budgetContext(budgetDevice(MIN_STORAGE_BUFFERS_PER_STAGE)).context);
+        expect(perHit.stats['cell shading (bytes)']).toBe(0);
+        expect(perHit.stats['cell shading budget']).toBe(0);
+        expect(perHit.preparedCellShading).toBe('perHit');
+        expect(budget.preparedCellShading).toBe('budget');
+        expect(budget.stats['cell shading budget']).toBe(1);
+        // The per-cell words, the classes buffer and the scan's scratch (fake: 64 bytes), and four
+        // indirect arguments (16 bytes each), against GenerateReservoirs' one that it no longer makes.
+        const cellWords = 2 * capacity.numCells * 4;
+        expect(budget.stats['cell shading (bytes)']).toBe(cellWords + CELL_SHADING_CLASS_WORDS * 4 + 64 + 4 * 16);
+        expect(budget.memoryBytes - perHit.memoryBytes).toBe(cellWords + CELL_SHADING_CLASS_WORDS * 4 + 64 + 4 * 16 - 16);
     });
 });
 

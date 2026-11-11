@@ -101,7 +101,8 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
  * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front and
  * `g_UseDirectLighting`, `gi1_use_multibounce` and the light builder's
  * `environment_light_enable` in the three padding words), for the TypeScript
- * that writes the block. 32 words, 128 bytes.
+ * that writes the block; then lever 1's three settings (RC-L1) and a pad.
+ * 36 words, 144 bytes.
  * Capsaicin compiles multibounce in or out (`USE_MULTI_BOUNCE`); here it is
  * a word the passes read, so the option needs no recompile.
  */
@@ -127,10 +128,13 @@ export const HASH_GRID_CONSTANTS_WORD = {
     useDirectLighting: 29,
     useMultibounce: 30,
     environmentLightEnable: 31,
+    cellShadingBudget: 32,
+    cellShadingSamples: 33,
+    cellShadingMaxAge: 34,
 } as const;
 
 /** Bytes of `HashGridCacheConstants`. */
-export const HASH_GRID_CONSTANTS_BYTES = 128;
+export const HASH_GRID_CONSTANTS_BYTES = 144;
 
 /** A float literal WGSL accepts for any finite number (`1e-3` stays `1e-3`, `50` becomes `50.0`). */
 function floatLiteral(value: number): string {
@@ -172,6 +176,10 @@ struct HashGridCacheConstants {
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
     use_multibounce: u32,           // gi1_use_multibounce, which Capsaicin compiles in as USE_MULTI_BOUNCE (gi1.cpp:1428-1431)
     use_environment_light: u32,     // LightBuilder's environment_light_enable (light_builder.h:63), compiled in by Capsaicin (DISABLE_ENVIRONMENT_LIGHTS otherwise, light_builder.cpp:507-510)
+    cell_shading_budget: u32,       // ours, lever 1 (cellShading 'budget'): the most cells lit a frame
+    cell_shading_samples: u32,      // ours, lever 1: light draws per lit cell
+    cell_shading_max_age: u32,      // ours, lever 1: frames after which a cell in use is stale
+    reserved: u32,
 }
 `;
 
@@ -218,6 +226,9 @@ function cellValuesWgsl(group: number, layout: HashGridCacheBufferLayout): strin
     // USE_MULTI_BOUNCE (register D42): without it the cache has no indirect values, and the code
     // that reads or clears them is left out, as Capsaicin's #ifdef leaves it out.
     const multibounce = (code: string): string => (indirectValues === null ? '' : code);
+    // Lever 1 (cellShading 'budget'): a tile slot freed by PurgeTiles and claimed again holds
+    // another place, so its cells must count as never lit, not as lit when the old tile was.
+    const cellShading = (code: string): string => (layout.words.cellShadingLastLitBuffer === null ? '' : code);
     return /* wgsl */ `
 // ---- The cell values (register D6: ValueBuffer, then ValueIndirectBuffer) ----
 
@@ -241,6 +252,7 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
         let cell_index = HashGridCache_CellIndexLinear(cell_offset, tile_index, 0u);
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u, 0u);
         ${multibounce('g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);')}
+        ${cellShading('atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER + cell_index], 0u);  // lever 1: never lit')}
     }
 }
 
@@ -338,6 +350,21 @@ fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
 }
 
 /**
+ * Lever 1's per-cell words and counters (cellShading 'budget'), or a comment
+ * in `perHit`, where they don't exist.
+ */
+function cellShadingWordsWgsl(layout: HashGridCacheBufferLayout): string {
+    const { cellShadingKeptHitBuffer, cellShadingLastLitBuffer } = layout.words;
+    if (cellShadingKeptHitBuffer === null || cellShadingLastLitBuffer === null) return '// No cell-shading words: cellShading is perHit (lever 1 off).';
+    return /* wgsl */ `// Lever 1 (cellShading 'budget', RC-L1): per cell, the kept hit's key and the frame + 1 it was last lit.
+const HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER: u32 = ${cellShadingKeptHitBuffer}u;
+const HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER: u32 = ${cellShadingLastLitBuffer}u;
+const HASHGRIDCACHE_USEDCELLCOUNT: u32 = ${HASH_GRID_COUNTER.usedCellCount}u;
+const HASHGRIDCACHE_LITCELLCOUNT: u32 = ${HASH_GRID_COUNTER.litCellCount}u;
+const HASHGRIDCACHE_CELLSHADOWRAYCOUNT: u32 = ${HASH_GRID_COUNTER.cellShadowRayCount}u;`;
+}
+
+/**
  * The shared module, with the hash grid's bindings in `group`: the buffers
  * of `set` (layout entries `hashGridCacheGroupEntries(set)`; every buffer,
  * {@link HASH_GRID_CACHE_GROUP_ENTRIES}, by default). Every hash-grid pass
@@ -372,6 +399,7 @@ const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1
 const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
 const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${words.updateCellValueBuffer}u;
 ${words.updateCellValueIndirectBuffer === null ? '// No UpdateCellValueIndirectBuffer: multibounce is off (register D42).' : `const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${words.updateCellValueIndirectBuffer}u;`}
+${cellShadingWordsWgsl(layout)}
 
 ${HASH_GRID_CONSTANTS_STRUCT_WGSL}
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.constants}) var<uniform> g_HashGridCacheConstants: HashGridCacheConstants;
@@ -717,7 +745,15 @@ fn ${HASH_GRID_ENTRY_POINT.clearCounters}() {
     // USE_MULTI_BOUNCE, on by default (gi1.h:55)
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1], 0u);
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 0u);
-    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_BUCKETOVERFLOWCOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_BUCKETOVERFLOWCOUNT], 0u);${
+        layout.cellShading
+            ? `
+    // Lever 1's counters (cellShading 'budget').
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_USEDCELLCOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_LITCELLCOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADOWRAYCOUNT], 0u);`
+            : ''
+    }
 }
 `;
 }

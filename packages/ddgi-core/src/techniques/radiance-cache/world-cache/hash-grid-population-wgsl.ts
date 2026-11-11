@@ -114,6 +114,8 @@ export const RAY_DATA_BINDING = {
     radiance: 2,
     /** The per-ray lists, packed (`g_HashGridCache_RayListWords`). Storage. */
     listWords: 3,
+    /** Lever 1 (`cellShading: 'budget'`): the age-class histogram and its cursors (`CELL_SHADING_CLASS_WORD`). Storage. */
+    cellShadingClasses: 4,
 } as const;
 
 /**
@@ -126,6 +128,8 @@ export interface RayDataBindingSet {
     readonly probeRays: boolean;
     /** The probe rays' radiance slots: the passes that add light to a probe ray. */
     readonly radiance: boolean;
+    /** Lever 1's age-class histogram and cursors: the passes that rank and choose the cells to light. */
+    readonly cellShadingClasses?: boolean;
 }
 
 /** Layout entries of the ray-data group for `set`: a uniform and one to three storage buffers. */
@@ -134,6 +138,7 @@ export function rayDataGroupEntries(set: RayDataBindingSet): GPUBindGroupLayoutE
     if (set.probeRays) entries.push({ binding: RAY_DATA_BINDING.probeRays, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } });
     if (set.radiance) entries.push({ binding: RAY_DATA_BINDING.radiance, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } });
     entries.push({ binding: RAY_DATA_BINDING.listWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } });
+    if (set.cellShadingClasses) entries.push({ binding: RAY_DATA_BINDING.cellShadingClasses, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } });
     return entries;
 }
 
@@ -171,10 +176,10 @@ export const POPULATION_BINDINGS = {
 } as const satisfies Record<string, PopulationBindings>;
 
 /**
- * Bytes of `HashGridCacheRayLists`: eleven words, the uniform buffer rounded
- * up to 16 bytes.
+ * Bytes of `HashGridCacheRayLists`: thirteen words (lever 1 added two), the
+ * uniform buffer rounded up to 16 bytes.
  */
-export const RAY_LISTS_UNIFORM_BYTES = 48;
+export const RAY_LISTS_UNIFORM_BYTES = 64;
 
 /** Words of a second-bounce entry's brdf and pdf (`HashGridCache_PackBRDF`: four halves). */
 export const MULTIBOUNCE_INFO_WORDS = 2;
@@ -267,6 +272,10 @@ export interface HashGridCacheRayListLayout {
     readonly multibounceInfoBuffer: number;
     /** Ours (register D40): per first-bounce entry, 1 when its probe ray bypasses the cache's filtered values. */
     readonly visibilityBypassBuffer: number;
+    /** Lever 1 (`budget`; empty in `perHit`): the visibility entry each cell in use kept this frame, one per cell. */
+    readonly usedCellBuffer: number;
+    /** Lever 1: the kept entries of the cells to light, most urgent first (`max_ray_count`; empty in `perHit`). */
+    readonly chosenCellBuffer: number;
     readonly bytes: number;
 }
 
@@ -281,7 +290,7 @@ export interface HashGridCacheRayListLayout {
  * Without multibounce the resolve list stays: ours lists the lit hits there
  * where Capsaicin's `ResolveCells` reads the shadow-ray list (register D42).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, multibounce: boolean): HashGridCacheRayListLayout {
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, multibounce: boolean, cellShading = false): HashGridCacheRayListLayout {
     // With USE_MULTI_BOUNCE (Capsaicin's default, gi1.h:55) bounce 0 and bounce 1 share the
     // visibility lists; without it they hold the first bounce alone (gi1.cpp:637).
     const maxCombinedRayCount = multibounce ? 2 * maxRayCount : maxRayCount;
@@ -294,7 +303,10 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const reservoirBuffer = resolveBuffer + maxRayCount;
     const multibounceInfoBuffer = reservoirBuffer + RESERVOIR_WORDS * maxCombinedRayCount;
     const visibilityBypassBuffer = multibounceInfoBuffer + (multibounce ? MULTIBOUNCE_INFO_WORDS * maxRayCount : 0);
-    const words = visibilityBypassBuffer + maxRayCount;
+    // Lever 1's two lists: at most one entry per first-bounce hit each (a cell in use has a hit).
+    const usedCellBuffer = visibilityBypassBuffer + maxRayCount;
+    const chosenCellBuffer = usedCellBuffer + (cellShading ? maxRayCount : 0);
+    const words = chosenCellBuffer + (cellShading ? maxRayCount : 0);
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -307,6 +319,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         reservoirBuffer,
         multibounceInfoBuffer,
         visibilityBypassBuffer,
+        usedCellBuffer,
+        chosenCellBuffer,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -360,6 +374,8 @@ struct HashGridCacheRayLists {
     reservoir_buffer: u32,          // g_Reservoir_IndirectSampleReservoirBuffer: 3 words per visibility ray
     multibounce_info_buffer: u32,   // g_HashGridCache_MultibounceInfoBuffer: brdf and pdf as four halves per second-bounce entry
     visibility_bypass_buffer: u32,  // ours (register D40): per first-bounce entry, 1 when its probe ray bypasses the cache
+    used_cell_buffer: u32,          // ours, lever 1: the visibility entry each cell in use kept this frame
+    chosen_cell_buffer: u32,        // ours, lever 1: the kept entries of the cells to light, most urgent first
 }
 
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.rayLists}) var<uniform> g_HashGridCache_RayLists: HashGridCacheRayLists;
@@ -426,8 +442,31 @@ fn HashGridCache_LoadVisibility(visibility_index: u32) -> HashGridCache_Visibili
         HashGridCache_RayListWord(entry, ${VISIBILITY_WORD.triangle}u),
         barycentrics);
 }
-${set.probeRays ? probeRays : ''}${set.radiance ? radiance : ''}`;
+${set.probeRays ? probeRays : ''}${set.radiance ? radiance : ''}${set.cellShadingClasses ? CELL_SHADING_CLASSES_WGSL : ''}`;
 }
+
+/**
+ * Lever 1's age-class histogram (`cellShading: 'budget'`), in its own small
+ * buffer so the platform's scan can run over it from its start: per class
+ * (`CELL_SHADING_CLASSES` of them) the cells in use of that class, scanned in
+ * place into each class's first rank; then per class a cursor the choice
+ * counts up as it hands out ranks.
+ */
+export const CELL_SHADING_CLASSES = 256;
+export const CELL_SHADING_CLASS_WORD = {
+    /** The histogram, then (after the scan) each class's first rank. */
+    histogram: 0,
+    /** Ranks handed out in each class so far. */
+    cursor: CELL_SHADING_CLASSES,
+} as const;
+export const CELL_SHADING_CLASS_WORDS = 2 * CELL_SHADING_CLASSES;
+
+const CELL_SHADING_CLASSES_WGSL = /* wgsl */ `
+// Lever 1: the age-class histogram (scanned into first ranks), then the per-class cursors.
+@group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.cellShadingClasses}) var<storage, read_write> g_HashGridCache_CellShadingClasses: array<atomic<u32>>;
+const HASHGRIDCACHE_CELLSHADING_HISTOGRAM: u32 = ${CELL_SHADING_CLASS_WORD.histogram}u;
+const HASHGRIDCACHE_CELLSHADING_CURSOR: u32 = ${CELL_SHADING_CLASS_WORD.cursor}u;
+`;
 
 /**
  * The surface a visibility entry's hit is on, rebuilt with the platform's
@@ -435,7 +474,7 @@ ${set.probeRays ? probeRays : ''}${set.radiance ? radiance : ''}`;
  * rebuilds it from its packed visibility the same way (`fetchVerticesNormUV`,
  * `interpolate`; gi1.comp:2412-2427, 2050-2062).
  */
-const VISIBILITY_SURFACE_WGSL = /* wgsl */ `
+export const VISIBILITY_SURFACE_WGSL = /* wgsl */ `
 fn HashGridCache_VisibilitySurface(visibility: HashGridCache_Visibility) -> GiSurface {
     let ray = GiRay(visibility.origin, 0.0, visibility.direction, max(visibility.hit_distance, 0.0));
     let hit = GiHit(visibility.hit_distance, visibility.instance_index, visibility.primitive_index, visibility.barycentrics, visibility.is_front_face);
@@ -464,7 +503,7 @@ fn HashGridCache_VisibilitySurface(visibility: HashGridCache_Visibility) -> GiSu
  * (Capsaicin packs them as halves, `packReservoir`, reservoir.hlsl:545-551,
  * and rebuilds the direction from those, a hair off the one it weighed).
  */
-const LIGHT_DRAW_WGSL = /* wgsl */ `
+export const LIGHT_DRAW_WGSL = /* wgsl */ `
 struct HashGridCache_LightDraw {
     choice: GiDirectLightChoice,
     sample_params: vec2f,   // what the reservoir keeps: the point on the light, or the sky's direction
@@ -488,7 +527,7 @@ const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
 `;
 
 /** For the two passes that patch a bypassing probe ray directly (`PopulateCells`, `UpdateMultibounceCells`). */
-const REMOVE_NANS_WGSL = /* wgsl */ `
+export const REMOVE_NANS_WGSL = /* wgsl */ `
 // GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:74-81): maps the colour to [0, 1), clamps it and maps
 // it back, so a NaN becomes 0 and anything past about 1e4 is held there. HLSL's saturate turns a
 // NaN into 0; WGSL's clamp leaves that to the implementation, so the NaN test is on the bits.
@@ -509,7 +548,7 @@ fn HashGridCache_WorkgroupIndex(workgroup: vec3u, workgroups: vec3u) -> u32 {
 `;
 
 /** The shared head of a population kernel: the hash grid (group 1) and the ray data (group 2), each with the buffers the pass binds. */
-function populationHeadWgsl(layout: HashGridCacheBufferLayout, bindings: PopulationBindings): string {
+export function populationHeadWgsl(layout: HashGridCacheBufferLayout, bindings: PopulationBindings): string {
     return `${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout, bindings.cache)}\n${rayDataWgsl(bindings.rayData)}\n${LINEAR_WORKGROUP_WGSL}`;
 }
 
@@ -832,6 +871,18 @@ export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     const side = POPULATION_WORKGROUP_SIZE.updateTilesSide;
     // USE_MULTI_BOUNCE (register D42): the indirect values' share, only in a cache that has them.
     const multibounce = (code: string): string => (layout.multibounce ? code : '');
+    // Lever 1 (cellShading 'budget'): a cell keeps its light until it is lit again. Capsaicin's
+    // blend below takes a cell of an updated tile that got no sample this frame one sample closer
+    // to empty (the mean kept, the count down by one) and clears it when the count reaches 0
+    // (gi1.comp:2170-2177): in per-hit shading every cell in use gets a sample each frame, so only
+    // cells nobody looks at fade. On a budget most cells in use go unlit for frames, and would fade
+    // too; so in that mode a cell with no new sample is left as it is.
+    const keepUnlitCells = layout.cellShading
+        ? `
+    if (new_samples.w <= 0.0) {
+        return previous_radiance;   // lever 1: no new sample, the light is reused until the cell is lit again
+    }`
+        : '';
     return /* wgsl */ `
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.updateTiles)}
 
@@ -845,7 +896,7 @@ ${multibounce(`var<workgroup> lds_UpdateTiles_ValueIndirectBuffer: array<array<v
 // the indirect ones): the history and this frame's samples, each as a mean, blended with weight
 // 1 / sample_count, the count capped at max_count; stored times the count, which later passes
 // read as a hint for how much to prefilter.
-fn UpdateTiles_Accumulate(previous_radiance: vec4f, new_samples: vec4f, max_count: f32) -> vec4f {
+fn UpdateTiles_Accumulate(previous_radiance: vec4f, new_samples: vec4f, max_count: f32) -> vec4f {${keepUnlitCells}
     var radiance = previous_radiance;
     var new_radiance = new_samples;
     let sample_count = min(radiance.w + new_radiance.w, max_count);
@@ -1036,7 +1087,7 @@ fn ${POPULATION_ENTRY_POINT.resolveCells}(
  * `HashGridCache_PackBRDF` / `HashGridCache_UnpackBRDF`, hash_grid_cache.hlsl:409-419):
  * four halves, rounded as `f32tof16` would (register D31).
  */
-const MULTIBOUNCE_INFO_WGSL = /* wgsl */ `
+export const MULTIBOUNCE_INFO_WGSL = /* wgsl */ `
 fn HashGridCache_StoreMultibounceInfo(multibounce_index: u32, brdf: vec3f, pdf: f32) {
     let entry = g_HashGridCache_RayLists.multibounce_info_buffer + ${MULTIBOUNCE_INFO_WORDS}u * multibounce_index;
     let packed = HashGridCache_PackRadiance(vec4f(brdf, pdf));    // packHalf4(float4(brdf, pdf))
@@ -1109,6 +1160,9 @@ fn HashGridCache_SampleBRDFAndEvaluateDiffuse(albedo: vec3f, normal: vec3f, samp
 }
 `;
 
+/** Which first-bounce entries `PopulateMultibounceCells` traces from: every hit (Capsaicin's), or lever 1's lit cells. */
+export type MultibounceSource = 'everyHit' | 'litCells';
+
 /**
  * `PopulateMultibounceCells` (gi1.comp:1869-1939) with its hit handler
  * (`PopulateMultibounceCellsHandleHit`, gi1.comp:1761-1852): for each
@@ -1123,8 +1177,24 @@ fn HashGridCache_SampleBRDFAndEvaluateDiffuse(albedo: vec3f, normal: vec3f, samp
  * Built with the platform's hit-shading module (group 0): `giSurfaceAt`
  * rebuilds the first-bounce hit, `giTraceClosest` traces the new ray.
  */
-export function populateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout): string {
+export function populateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout, source: MultibounceSource = 'everyHit'): string {
     const size = POPULATION_WORKGROUP_SIZE.populateMultibounceCells;
+    // Which first-bounce entries trace: every hit (Capsaicin's), or, with lever 1's budget, the
+    // hit each lit cell kept (one per lit cell, docs/design/radiance-cache.md, "Budgeted cell
+    // shading", step 5), so the second bounce is on the same budget.
+    const firstBounceEntry =
+        source === 'everyHit'
+            ? `    let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    if (did >= atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0])) {
+        return; // out of bounds
+    }`
+            : `    let lit_index = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    if (lit_index >= atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_LITCELLCOUNT])) {
+        return; // out of bounds
+    }
+    // Lever 1: the first-bounce entry the lit cell kept. Its random numbers are the ones Capsaicin's
+    // pass would draw for that entry, so the discard keeps the same share of lit cells as of hits.
+    let did = HashGridCache_RayListWord(g_HashGridCache_RayLists.chosen_cell_buffer, lit_index);`;
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.populateMultibounceCells)}
@@ -1189,10 +1259,7 @@ fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(
     @builtin(num_workgroups) workgroups: vec3u,
     @builtin(local_invocation_index) local_index: u32,
 ) {
-    let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
-    if (did >= atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0])) {
-        return; // out of bounds
-    }
+${firstBounceEntry}
 
     // Random sample
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);

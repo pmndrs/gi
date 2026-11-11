@@ -320,6 +320,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private cache: HashGridCache | null = null;
     /** Whether the host was told that turning `useMultibounce` on needs a new `prepare` (once per prepare). */
     private warnedMultibounceNeedsPrepare = false;
+    /** Whether the host was told that a new `cellShading` needs a new `prepare` (once per prepare). */
+    private warnedCellShadingNeedsPrepare = false;
     /** `resetHistory` empties the cache at the next `encodeScreen` (it has no encoder of its own). */
     private worldCacheResetPending = false;
     /** The screen probes' history starts afresh at the next `encodeScreen` (new resources, or `resetHistory`). */
@@ -885,6 +887,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         await cache.prepare(context);
         this.worldCacheResetPending = false;
         this.warnedMultibounceNeedsPrepare = false;
+        this.warnedCellShadingNeedsPrepare = false;
         return cache;
     }
 
@@ -902,6 +905,12 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (this.settings.useMultibounce && this.cache?.preparedWithMultibounce === false && !this.warnedMultibounceNeedsPrepare) {
             this.warnedMultibounceNeedsPrepare = true;
             this.context?.warn('@pmndrs/ddgi: useMultibounce was turned on after prepare; it takes effect at the next GIPlatform.prepare() (until then the radiance cache runs one bounce)');
+        }
+        // Lever 1's mode is made at prepare too (its words, buffers and kernels).
+        const preparedCellShading = this.cache?.preparedCellShading;
+        if (preparedCellShading && preparedCellShading !== this.settings.cellShading && !this.warnedCellShadingNeedsPrepare) {
+            this.warnedCellShadingNeedsPrepare = true;
+            this.context?.warn(`@pmndrs/ddgi: cellShading was changed to '${this.settings.cellShading}' after prepare; it takes effect at the next GIPlatform.prepare() (until then the radiance cache shades cells '${preparedCellShading}')`);
         }
         if (this.worldCacheResetPending) {
             cache.reset(encoder);

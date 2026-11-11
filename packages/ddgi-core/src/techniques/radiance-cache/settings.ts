@@ -16,6 +16,8 @@
  * `ssgi_unroll_kernel_` (default off), a variant with the counts fixed at 1 and 2 (register D57).
  */
 
+import type { CellShading } from './world-cache/capacity.ts';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -107,6 +109,22 @@ export interface RadianceCacheSettings {
      * output directly, for comparisons. Read every frame.
      */
     useGIDenoiser: boolean;
+    /**
+     * Ours, lever 1 (RC-L1, default `perHit`, Capsaicin's): how the world
+     * cache's cells get their light. `perHit` lights every probe-ray hit with
+     * one light draw and its shadow ray. `budget` is id Tech 8's way: hits
+     * only find their cell, and a pass lights at most `cellShadingBudget`
+     * cells a frame, new and stale ones first; a cell keeps its light until
+     * it is lit again, so lighting lags. Read at `prepare` (call
+     * `GIPlatform.prepare()` again after changing it).
+     */
+    cellShading: CellShading;
+    /** With `budget`: cells lit a frame at most (default 20,000, id Tech 8's figure). Read every frame. */
+    cellShadingBudget: number;
+    /** With `budget`: light draws (shadow rays) per lit cell a frame, 1 to 64 (default 1). Read every frame. */
+    cellShadingSamples: number;
+    /** With `budget`: frames after which a cell still in use is stale and goes ahead of fresher ones, 1 to 255 (default 8). Read every frame. */
+    cellShadingMaxAge: number;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71; SSGI's, ssgi.h:48-51; the light builder's, light_builder.h:61-63). */
@@ -131,6 +149,10 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     ssgiViewRadius: 0.2,
     ssgiFalloffRange: 0.05,
     useGIDenoiser: true,
+    cellShading: 'perHit',
+    cellShadingBudget: 20000,
+    cellShadingSamples: 1,
+    cellShadingMaxAge: 8,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */
