@@ -29,12 +29,15 @@
  *    finest cell with samples counts exactly 3, and there are as many as lit
  *    cells.
  * 2b. **No cell starves** (the corner, budget 5,000, one sample, multibounce
- *    on, max age 8; after 40 frames, 16 frames read back): with N cells in use
- *    over budget B, ranking by age goes round them all. After each frame
- *    every cell in use was lit within ceil(N / B) + 1 frames, and before the
- *    lighting the oldest cell that was in use the frame before too is at most
- *    ceil(N / B) + 2 frames old. (A cell that comes back into use after
- *    frames away is old and is lit at once.)
+ *    on, max age 8; after 40 frames, 16 frames read back): ranking by age goes
+ *    round all the cells in use. The cells in use move: on the corner about
+ *    11,000 of 47,000 each frame weren't in use the frame before (the probes
+ *    are re-placed every frame), so the cells sharing the budget are those in
+ *    use over the last frames, N' of them over the last ceil(N / B) frames (N
+ *    the most in use in one frame). After each frame every cell in use was lit
+ *    within ceil(N' / B) + 1 frames, and before the lighting the oldest cell
+ *    in use the frame before too is at most ceil(N' / B) + 2 frames old. The
+ *    first run, which bounded it by ceil(N / B), measured 14 against 10.
  * 3. **Lag** (two-room, Capsaicin's defaults otherwise, max age 8, one
  *    sample; multibounce on, then off): `perHit`, and the budget at 1, 1/4
  *    and 1/16 of the cells in use (counted on the lit room). Its lamp off for
@@ -42,9 +45,18 @@
  *    720 frames. For each event, frames until the mean interpolated and
  *    denoised E are within 10% of the step from the value before the event to
  *    the converged value, first, and for good (read every frame for the first
- *    128, then every 8th, so a lag past 128 frames is known to 8). Gate: with
- *    the lamp off again, the mean E falls to under 1% of what it was with the
- *    lamp on, in every run (a light switched off must leave the cells). The converged value is
+ *    128, then every 8th, so a lag past 128 frames is known to 8). The lamp-off
+ *    event runs until both means are under 1% of their lamp-on value, or 4,096
+ *    frames (read every 32nd past 720), and reports the frames to 1% too.
+ *    Gates (a light switched off must leave the cells): per hit and with the
+ *    budget above the cells in use, under 1% within 720 frames; with the
+ *    smaller budgets, the mean keeps falling (at the end at most half of
+ *    what it was at frame 720, or under 1%). A small budget fades slowly by
+ *    design: a lit cell takes 1/16 of the way to 0 each time it is lit, and
+ *    at 1/16 of the cells it is lit only every 30-40 frames (its second
+ *    bounce a third as often), so 1% takes thousands of frames. The first
+ *    run, which asked for 1% within 720 frames of every budget, read 4% at
+ *    1/4 and 37% at 1/16 with the multibounce on. The converged value is
  *    `perHit`'s (the mean of its last 32 frames): every mode converges to the
  *    same image (section 1), but a small budget isn't there yet by the end,
  *    so its own end value would understate its lag (a first run measured
@@ -97,8 +109,10 @@ const COUNTER_WARM_FRAMES = 12;
 /** Section 2b. */
 const STARVATION_WARM_FRAMES = 40;
 const STARVATION_FRAMES = 16;
-/** Section 3's gate: with the lamp off again, the mean E under this share of its lamp-on value. */
+/** Section 3's lamp-off event: "gone" is under this share of the lamp-on value; it runs until then, or this many frames, read every LAMP_OFF_COARSE_STEP-th past EVENT_FRAMES. */
 const LAMP_OFF_REMAINDER = 0.01;
+const LAMP_OFF_MAX_FRAMES = 4096;
+const LAMP_OFF_COARSE_STEP = 32;
 
 /** Section 3: frames before the lamp comes on, frames after each event, the converged window at their end, the lag's tolerance. */
 const LAMP_OFF_FRAMES = 30;
@@ -450,6 +464,7 @@ async function checkStarvation(device: GPUDevice, failures: string[]): Promise<R
         assert(lastLitWord !== null, 'a budget cache without its last-lit words');
         let previousUsed = new Set<number>();
         let previousLastLit: Uint32Array | null = null;
+        const usedByFrame: number[][] = [];
         const frames: { usedCells: number; oldestAfter: number; oldestBefore: number; returning: number; staleCells: number }[] = [];
         let maxUsed = 0;
         for (let frame = 0; frame < STARVATION_FRAMES; frame++) {
@@ -478,15 +493,33 @@ async function checkStarvation(device: GPUDevice, failures: string[]): Promise<R
                 if (previousLastLit) oldestBefore = Math.max(oldestBefore, previousLastLit[cell] === 0 ? frameIndex + 1 : frameIndex + 1 - previousLastLit[cell]);
             }
             frames.push({ usedCells, oldestAfter, oldestBefore, returning, staleCells: counters[HASH_GRID_COUNTER.staleCellCount] });
+            usedByFrame.push(usedCellList);
             previousUsed = new Set(usedCellList);
             previousLastLit = lastLit;
         }
         const rounds = Math.ceil(maxUsed / SMALL_BUDGET);
+        // The cells sharing the budget: those in use over the last `rounds` frames (the most over any such window).
+        let sharing = 0;
+        for (let end = rounds; end <= usedByFrame.length; end++) sharing = Math.max(sharing, new Set(usedByFrame.slice(end - rounds, end).flat()).size);
+        const sharedRounds = Math.ceil(sharing / SMALL_BUDGET);
         const worstAfter = Math.max(...frames.map((entry) => entry.oldestAfter));
         const worstBefore = Math.max(...frames.slice(1).map((entry) => entry.oldestBefore));
-        if (worstAfter > rounds + 1) fail(`a cell in use was last lit ${worstAfter} frames ago; with ${maxUsed} cells over a budget of ${SMALL_BUDGET} every one is lit within ${rounds} (+1)`);
-        if (worstBefore > rounds + 2) fail(`before the lighting, a cell in use since the frame before was ${worstBefore} frames old (ceil(N / B) = ${rounds}, + 2)`);
-        return { budget: SMALL_BUDGET, maxUsedCells: maxUsed, ceilUsedOverBudget: rounds, worstFramesSinceLitAfter: worstAfter, worstAgeBefore: worstBefore, frames };
+        if (worstAfter > sharedRounds + 1) fail(`a cell in use was last lit ${worstAfter} frames ago; with ${sharing} cells in use over ${rounds} frames and a budget of ${SMALL_BUDGET} every one is lit within ${sharedRounds} (+1)`);
+        if (worstBefore > sharedRounds + 2) fail(`before the lighting, a cell in use since the frame before was ${worstBefore} frames old (ceil(N' / B) = ${sharedRounds}, + 2)`);
+        // No starvation: the ages don't grow over the frames read.
+        const firstHalf = Math.max(...frames.slice(0, frames.length / 2).map((entry) => entry.oldestAfter));
+        const secondHalf = Math.max(...frames.slice(frames.length / 2).map((entry) => entry.oldestAfter));
+        if (secondHalf > firstHalf + 1) fail(`the oldest age grows: ${firstHalf} in the first ${frames.length / 2} frames read, ${secondHalf} in the last`);
+        return {
+            budget: SMALL_BUDGET,
+            maxUsedCells: maxUsed,
+            ceilUsedOverBudget: rounds,
+            cellsInUseOverThoseFrames: sharing,
+            ceilSharingOverBudget: sharedRounds,
+            worstFramesSinceLitAfter: worstAfter,
+            worstAgeBefore: worstBefore,
+            frames,
+        };
     } finally {
         scenario.dispose();
         await device.queue.onSubmittedWorkDone();
@@ -555,19 +588,43 @@ interface LagReference {
 
 const ends = (means: EventMeans): EventValues => ({ interpolated: endValue(means.interpolated), denoised: endValue(means.denoised) });
 
-async function eventMeans(device: GPUDevice, run: Run, surface: Uint32Array): Promise<EventMeans> {
+/**
+ * The means after an event, EVENT_FRAMES of them; with `goneBelow`, on past
+ * that until both are under it (or LAMP_OFF_MAX_FRAMES), every
+ * LAMP_OFF_COARSE_STEP-th frame read.
+ */
+async function eventMeans(device: GPUDevice, run: Run, surface: Uint32Array, goneBelow?: EventValues): Promise<EventMeans> {
     const means: EventMeans = { frames: [], interpolated: [], denoised: [] };
     const probes = run.technique.probes;
     const denoised = run.technique.denoiser?.output;
     assert(probes && denoised, 'no interpolated or denoised irradiance');
-    for (let frame = 1; frame <= EVENT_FRAMES; frame++) {
+    const lastFrame = goneBelow ? LAMP_OFF_MAX_FRAMES : EVENT_FRAMES;
+    for (let frame = 1; frame <= lastFrame; frame++) {
         await run.frame();
-        if (frame > LAG_FINE_FRAMES && frame % LAG_COARSE_STEP !== 0) continue;
+        const step = frame <= LAG_FINE_FRAMES ? 1 : frame <= EVENT_FRAMES ? LAG_COARSE_STEP : LAMP_OFF_COARSE_STEP;
+        if (frame % step !== 0) continue;
         means.frames.push(frame);
-        means.interpolated.push(halfImageMean(await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT), surface));
-        means.denoised.push(halfImageMean(await readTexture(device, denoised, 8, WIDTH, HEIGHT), surface));
+        const interpolated = halfImageMean(await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT), surface);
+        const denoisedMean = halfImageMean(await readTexture(device, denoised, 8, WIDTH, HEIGHT), surface);
+        means.interpolated.push(interpolated);
+        means.denoised.push(denoisedMean);
+        if (goneBelow && frame >= EVENT_FRAMES && interpolated <= goneBelow.interpolated && denoisedMean <= goneBelow.denoised) break;
     }
     return means;
+}
+
+/** The first frame (counted from 1) whose mean is at most `level`, and the mean at a given frame (the last reading at or before it). */
+function firstFrameAtMost(means: EventMeans, image: 'interpolated' | 'denoised', level: number): number {
+    const index = means[image].findIndex((mean) => mean <= level);
+    return index < 0 ? -1 : means.frames[index];
+}
+
+function meanAt(means: EventMeans, image: 'interpolated' | 'denoised', frame: number): number {
+    let value = means[image][0];
+    means.frames.forEach((at, index) => {
+        if (at <= frame) value = means[image][index];
+    });
+    return value;
 }
 
 async function measureLag(
@@ -595,14 +652,22 @@ async function measureLag(
         const cut = await eventMeans(device, run, surfaceB);
 
         // The lamp off again, at the second bookmark: its light must leave the cells.
-        for (const light of run.lights) run.platform.scene.updateLight(light, { intensity: 0 });
-        const lampOff = await eventMeans(device, run, surfaceB);
-        const reference = given ?? { lampOn: ends(lampOn), cut: ends(cut), lampOff: ends(lampOff) };
-        const lampOffEnd = ends(lampOff);
         const cutEnd = ends(cut);
+        const gone: EventValues = { interpolated: LAMP_OFF_REMAINDER * cutEnd.interpolated, denoised: LAMP_OFF_REMAINDER * cutEnd.denoised };
+        for (const light of run.lights) run.platform.scene.updateLight(light, { intensity: 0 });
+        const lampOff = await eventMeans(device, run, surfaceB, gone);
+        const reference = given ?? { lampOn: ends(lampOn), cut: cutEnd, lampOff: ends(lampOff) };
+        const lampOffEnd: EventValues = { interpolated: lampOff.interpolated[lampOff.interpolated.length - 1], denoised: lampOff.denoised[lampOff.denoised.length - 1] };
+        const ample = settings.cellShading !== 'budget' || (settings.cellShadingBudget ?? 0) >= 1_000_000;
+        const framesToGone = { interpolated: firstFrameAtMost(lampOff, 'interpolated', gone.interpolated), denoised: firstFrameAtMost(lampOff, 'denoised', gone.denoised) };
         for (const image of ['interpolated', 'denoised'] as const) {
-            if (!(lampOffEnd[image] <= LAMP_OFF_REMAINDER * cutEnd[image])) {
-                failures.push(`lag ${label}: with the lamp off again the mean ${image} E is ${lampOffEnd[image].toExponential(3)}, ${((100 * lampOffEnd[image]) / cutEnd[image]).toFixed(2)}% of its lamp-on ${cutEnd[image].toFixed(4)}`);
+            const atEventEnd = meanAt(lampOff, image, EVENT_FRAMES);
+            const percent = (value: number): string => `${((100 * value) / cutEnd[image]).toFixed(2)}%`;
+            if (ample && !(framesToGone[image] > 0 && framesToGone[image] <= EVENT_FRAMES)) {
+                failures.push(`lag ${label}: with the lamp off again the mean ${image} E is ${percent(atEventEnd)} of its lamp-on value at frame ${EVENT_FRAMES} (under 1% by then asked)`);
+            }
+            if (!ample && !(lampOffEnd[image] <= gone[image] || lampOffEnd[image] <= 0.5 * atEventEnd)) {
+                failures.push(`lag ${label}: with the lamp off again the mean ${image} E went from ${percent(atEventEnd)} at frame ${EVENT_FRAMES} to ${percent(lampOffEnd[image])} at ${lampOff.frames[lampOff.frames.length - 1]}: it doesn't keep fading`);
             }
         }
         const lags = (means: EventMeans, converged: EventValues, before: EventValues): Record<string, Lag> => ({
@@ -620,7 +685,9 @@ async function measureLag(
                 lampOn: lags(lampOn, reference.lampOn, none),
                 cut: lags(cut, reference.cut, none),
                 lampOff: lags(lampOff, reference.lampOff, reference.cut),
-                lampOffRemainder: { interpolated: lampOffEnd.interpolated / cutEnd.interpolated, denoised: lampOffEnd.denoised / cutEnd.denoised },
+                lampOffFramesToOnePercent: framesToGone,
+                lampOffRemainderAt720: { interpolated: meanAt(lampOff, 'interpolated', EVENT_FRAMES) / cutEnd.interpolated, denoised: meanAt(lampOff, 'denoised', EVENT_FRAMES) / cutEnd.denoised },
+                lampOffRemainderAtEnd: { frame: lampOff.frames[lampOff.frames.length - 1], interpolated: lampOffEnd.interpolated / cutEnd.interpolated, denoised: lampOffEnd.denoised / cutEnd.denoised },
                 // Every 8th frame's mean, for plotting.
                 lampOnInterpolatedMeans: lampOn.interpolated.filter((_, index) => lampOn.frames[index] % 8 === 0),
                 lampOffInterpolatedMeans: lampOff.interpolated.filter((_, index) => lampOff.frames[index] % 8 === 0),
