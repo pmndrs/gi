@@ -66,22 +66,28 @@ const RC_LARGEST_HALF: f32 = 65504.0;
 // The smallest normal half, 2^-14: below it halves are evenly spaced, 2^-24 apart.
 const RC_SMALLEST_NORMAL_HALF: f32 = 6.103515625e-5;
 
-// Ours (register D59): each component rounded to its nearest half (ties to even), for the probe
-// atlas's rgba16float stores. WGSL lets such a store take either neighbouring half: the 16float
-// write is quantizeToF16 (WGSL 6.6.1, Channel Formats), which converts as 15.7.6 says, "WGSL does
-// not specify whether the higher or lower representable value is chosen". The M5 takes the one
-// toward zero, and the filter's min then keeps every lost step of the hit distance. A value that
-// already is a half is stored exactly on every GPU (15.7.6), so this makes the store's rounding
-// the same everywhere. Halves have 10 fraction bits: neighbours are 2^(e - 10) apart for a
-// magnitude in [2^e, 2^(e+1)), and frexp gives e + 1 exactly. Scaling by a power of two with
-// ldexp and a multiply is exact (both are correctly rounded in WGSL, where exp2 and division
-// aren't), and round() takes ties to even. Values past the half range are left to the store.
-fn rcNearestHalf(value: vec4f) -> vec4f {
-    let stepExponent = frexp(max(abs(value), vec4f(RC_SMALLEST_NORMAL_HALF))).exp - vec4i(11);
-    return round(value * ldexp(vec4f(1.0), -stepExponent)) * ldexp(vec4f(1.0), stepExponent);
-}
 const RC_QUARTER_PI: f32 = 0.785398163397448;
 const RC_TWO_INV_PI: f32 = 0.636619772367581;
+
+// ---- Ours: the probe atlas's half stores (register D59) -------------------------------------
+
+// Each component clamped to the half range and rounded to its nearest half (ties to even), for
+// the probe atlas's rgba16float stores. WGSL lets such a store take either neighbouring half: the
+// 16float write is quantizeToF16 (WGSL 6.6.1, Channel Formats), which converts as 15.7.6 says,
+// "WGSL does not specify whether the higher or lower representable value is chosen". The M5 takes
+// the one toward zero (as D3D's rule says, D3D11.3 3.2.2), and the filter's min then keeps every
+// lost step of the hit distance. A value that already is a normal half is stored exactly on every
+// GPU (15.7.6; a subnormal half may be flushed to zero, 17.5.47), so this makes the store's
+// rounding the same everywhere. The clamp first: from 65,520 up the nearest is 65,536, outside the
+// half range, where the store's result is indeterminate (D3D gives 65,504 there, 3.2.2). Halves
+// have 10 fraction bits: neighbours are 2^(e - 10) apart for a magnitude in [2^e, 2^(e+1)), and
+// frexp gives e + 1 exactly. Scaling by a power of two with ldexp and a multiply is exact (both
+// are correctly rounded in WGSL, where exp2 and division aren't), and round() takes ties to even.
+fn rcNearestHalf(value: vec4f) -> vec4f {
+    let clamped = clamp(value, vec4f(-RC_LARGEST_HALF), vec4f(RC_LARGEST_HALF));
+    let stepExponent = frexp(max(abs(clamped), vec4f(RC_SMALLEST_NORMAL_HALF))).exp - vec4i(11);
+    return round(clamped * ldexp(vec4f(1.0), -stepExponent)) * ldexp(vec4f(1.0), stepExponent);
+}
 
 // ---- gi1.hlsl -------------------------------------------------------------------------------
 

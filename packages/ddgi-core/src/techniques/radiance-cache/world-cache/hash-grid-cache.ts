@@ -457,7 +457,7 @@ export class HashGridCache implements WorldCache {
         // Capsaicin empties the cache when gi1_use_multibounce changes, and makes the indirect
         // buffers (scratch cleared) when it comes on (gi1.cpp:1740-1745, 535-547): here, when
         // the option goes off and on again between two prepares, the scratch is cleared.
-        const useMultibounce = prepared.layout.multibounce && this.options.useMultibounce;
+        const useMultibounce = this.multibounceActive === true;
         if (this.lastUseMultibounce !== null && this.lastUseMultibounce !== useMultibounce) {
             this.reset(encoder);
             const indirectScratch = prepared.layout.words.updateCellValueIndirectBuffer;
@@ -614,7 +614,7 @@ export class HashGridCache implements WorldCache {
         floats[word.discardMultibounceRayProbability] = options.hashGridCacheDiscardMultibounceRayProbability;
         floats[word.maxMultibounceSampleCount] = options.hashGridCacheMaxMultibounceSampleCount;
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
-        words[word.useMultibounce] = prepared.layout.multibounce && options.useMultibounce ? 1 : 0;
+        words[word.useMultibounce] = this.multibounceActive ? 1 : 0;
         words[word.environmentLightEnable] = options.environmentLightEnable ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }

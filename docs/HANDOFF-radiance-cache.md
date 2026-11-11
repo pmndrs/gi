@@ -18,7 +18,7 @@ Updated 2026-11-10 on the Mac (M5 Pro). Nothing from the Mac has been pushed yet
 **Where it stands.** The faithful port is built. Phase 5 (the per-pass comparison with native Capsaicin) needs two things the Mac can't give: timing, which Dennis deferred on 2026-11-09, and native Capsaicin, which is D3D12 on Windows only. Phase 5 has no TASKS rows yet; the lead writes them. **Nothing has been re-run on the RTX 3060 or the Intel UHD since the handoff.** The binding packing, the 718 MB cache binding and every phase 3-4 kernel are checked on the M5 only.
 
 **Open items** (details in PROGRESS "Next" and NOTES):
-- The M5's `rgba16float` stores round toward zero (D59): probe hit distances settled about 30 m low at 40 m. Fixed in RC6.2 (`rcNearestHalf` before the atlas stores); D3D's own rule is round toward zero, so Capsaicin drifts the same way.
+- The M5's `rgba16float` stores round toward zero (D59): probe hit distances settled about 30 m low at 40 m. Fixed in RC6.2 (`rcNearestHalf` before the atlas stores); D3D's own rule is round toward zero (D3D11.3 §3.2.2, which D3D12 inherits: "Baseline information about rendering pipeline behaviors that are common between D3D11 and D3D12 was inherited from the D3D11 spec", DirectX-Specs index), so Capsaicin probably drifts the same way (by D3D's rule; not run).
 - "One-bounce DDGI reads high" (NOTES) needs three fairer checks before it goes to the DDGI track.
 - Flicker after the denoiser, converged: Cornell 0.74% / 3.16%, Sponza 0.90% / 2.91%. That's mostly SSGI's single slice (lever 16). DDGI is about 0.1% / 0.5%.
 - Asset checksums differ between Mac and Windows. The Intel Sponza `.gltf` files differ only in line endings; Bistro and the courtyard tree differ in vertex data. Dennis decides the check's policy.

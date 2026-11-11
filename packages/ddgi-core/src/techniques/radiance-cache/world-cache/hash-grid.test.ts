@@ -307,7 +307,7 @@ describe('the constants and the shared WGSL', () => {
         expect(HASH_GRID_CONSTANTS_WORD.useMultibounce).toBe(30);
         expect(HASH_GRID_CONSTANTS_WORD.environmentLightEnable).toBe(31);
         // The struct's last two fields, in the order of the word offsets.
-        const code = hashGridCacheWgsl(1, hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS)));
+        const code = hashGridCacheWgsl(1, hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true));
         expect(code).toMatch(/use_multibounce: u32,[^\n]*\n\s*use_environment_light: u32,[^\n]*\n\s*\}/);
         expect(DEFAULT_HASH_GRID_CACHE_OPTIONS.environmentLightEnable).toBe(true);
     });

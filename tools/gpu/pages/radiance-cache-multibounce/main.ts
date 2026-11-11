@@ -24,7 +24,14 @@
  *      (rays within 1 mm of an edge, and hits on the corner's line, are
  *      counted, not checked); the GPU's
  *      direction is the CPU's within half precision, and brdf and pdf are
- *      albedo / π × cos and cos / π.
+ *      albedo / π × cos and cos / π. The ray's origin is Capsaicin's
+ *      `offsetPosition` (register D39) of the hit on its plane: along the
+ *      normal exactly (the corner's planes are at 0, so 1/65,536 m off),
+ *      along the plane within 64 rounding steps of the largest coordinate
+ *      (`giSurfaceAt` moves the point up to that far into its triangle) plus
+ *      32 f32 steps of the probe ray's length (the CPU's hit is origin +
+ *      t × direction) plus 8 f32 steps of the quad's largest corner
+ *      coordinate (the point is rebuilt from the corners).
  *    - `UpdateMultibounceCells`: each first-bounce cell's indirect scratch
  *      after the frame holds the sum of its second-bounce samples, computed
  *      on the CPU from the read-back cells (the filtered direct value), brdf
@@ -67,7 +74,15 @@
  *    arrays (534,773,760 bytes at Capsaicin's capacity) without the
  *    multibounce, and comes back when it is prepared on; off, then prepared
  *    again, it drops once more; the world cache's stats say which.
- * 4. **The second-bounce ray's origin** (register D39, `bounce-offset.ts`):
+ * 4. **The sky at second-bounce hits** (RC6.1: the corner with no lights
+ *    under a constant sky, 6 frames): `GenerateMultibounceReservoirs` draws
+ *    the sky as `GenerateReservoirs` does (Capsaicin's environment light,
+ *    register D33). With the sky the only light, every second-bounce entry
+ *    that gets a shadow ray drew the sky (`GI_DIRECT_SKY_LIGHT`), so do the
+ *    first-bounce ones, and all but the rare one whose sky direction's packed
+ *    numbers land on the horizon (weight 0) get one; some second-bounce
+ *    entries exist, so the check can fail.
+ * 5. **The second-bounce ray's origin** (register D39, `bounce-offset.ts`):
  *    Capsaicin's `offsetPosition` (`rcOffsetPosition`) against its CPU twin,
  *    bit for bit on 4,096 points. Then on `cornell-box` and `sponza` (their
  *    first bookmark, 1280 x 720, 8 frames from an empty cache) and on the
@@ -83,15 +98,6 @@
  *    hits from each origin (a ray that starts behind a surface sees back
  *    faces: the leak to look for).
  *
- * 4. **The sky at second-bounce hits** (RC6.1: the corner with no lights
- *    under a constant sky, 6 frames): `GenerateMultibounceReservoirs` draws
- *    the sky as `GenerateReservoirs` does (Capsaicin's environment light,
- *    register D33). With the sky the only light, every second-bounce entry
- *    that gets a shadow ray drew the sky (`GI_DIRECT_SKY_LIGHT`), so do the
- *    first-bounce ones, and all but the rare one whose sky direction's packed
- *    numbers land on the horizon (weight 0) get one; some second-bounce
- *    entries exist, so the check can fail.
- *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.3 multibounce" -- pnpm test:gpu --filter radiance-cache-multibounce`.
  */
@@ -99,7 +105,7 @@
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { floatToHalfBits, halfBitsToFloat, makeRandom, rand, rand2, sampleBRDFAndEvaluateDiffuse } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { floatToHalfBits, halfBitsToFloat, makeRandom, offsetPosition, rand, rand2, sampleBRDFAndEvaluateDiffuse } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { HASH_GRID_COUNTER, type HashGridCacheCapacity } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
@@ -154,6 +160,11 @@ const INDIRECT_RADIANCE = (ALBEDO * LIT_RADIANCE) / (1 - DISCARD);
 const EDGE_MARGIN = 1e-3;
 /** How far the GPU's half-packed direction may sit from the CPU's, per component. */
 const DIRECTION_TOLERANCE = 2e-3;
+/** How far a second-bounce origin may sit from offsetPosition of the CPU's hit along the plane (file comment): giSurfaceAt's nudge, in rounding steps of the largest coordinate, and the probe ray's hit error, in f32 steps of the ray's length. */
+const NUDGE_STEPS = 64;
+const HIT_ERROR_STEPS = 32;
+/** The triangle point's own rounding, in f32 steps of the quad's largest corner coordinate. */
+const CORNER_ERROR_STEPS = 8;
 const KERNEL_FRAMES = 6;
 const CONVERGENCE_FRAMES = 40;
 
@@ -290,6 +301,9 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
     let worstDirection = 0;
     let worstBrdfOverPdf = 0;
     let wrongSecondHits = 0;
+    let wrongOrigins = 0;
+    let worstOriginSlide = 0;
+    const wrongOriginExamples: string[] = [];
     const wrongSecondHitExamples: string[] = [];
     for (let base = 0; base < count0; base++) {
         const ray = state.rays[state.visibilityQuery[base]];
@@ -331,6 +345,28 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
         const brdf = second.info[entry * 4];
         const pdf = second.info[entry * 4 + 3];
         worstBrdfOverPdf = Math.max(worstBrdfOverPdf, relativeError(brdf / pdf, ALBEDO), Math.abs(pdf - sample.pdf) / Math.max(sample.pdf, 1e-3));
+        // The origin: offsetPosition of the hit put on its plane (file comment).
+        const gpuOrigin = second.origin[entry];
+        const normalAxis = normal[1] === 1 ? 1 : 2;
+        const onPlane = [0, 1, 2].map((axis) => (axis === normalAxis ? 0 : ray.hit[axis])) as unknown as Vec3;
+        const expectedOrigin = offsetPosition(onPlane, normal);
+        // Along the plane the GPU's point is giSurfaceAt's, up to 64 rounding steps of its largest
+        // coordinate (giShadeRoundingStep) from the triangle point, and the CPU's hit is the probe ray's
+        // origin + t × direction, a few f32 steps of the ray's length from it.
+        const roundingStep = Math.max(Math.abs(onPlane[0]), Math.abs(onPlane[1]), Math.abs(onPlane[2]), 0.0625) * 2 ** -23;
+        const rayLength = ray.hitT + Math.max(Math.abs(ray.origin[0]), Math.abs(ray.origin[1]), Math.abs(ray.origin[2]));
+        // And the triangle point itself is rebuilt from the quad's corners, whose coordinates (200 m for
+        // the floor, 20 for the wall: traceCorner's extents) set its rounding.
+        const cornerCoordinate = ray.surface === 'floor' ? 200 : 20;
+        const allowedSlide = NUDGE_STEPS * roundingStep + CORNER_ERROR_STEPS * 2 ** -23 * cornerCoordinate + HIT_ERROR_STEPS * 2 ** -23 * rayLength;
+        const slide = Math.max(...[0, 1, 2].filter((axis) => axis !== normalAxis).map((axis) => Math.abs(gpuOrigin[axis] - expectedOrigin[axis]))) / allowedSlide;
+        worstOriginSlide = Math.max(worstOriginSlide, slide);
+        if (gpuOrigin[normalAxis] !== expectedOrigin[normalAxis] || !(slide <= 1)) {
+            wrongOrigins++;
+            if (wrongOriginExamples.length < 4) {
+                wrongOriginExamples.push(`entry ${base} (${ray.surface}): GPU origin ${gpuOrigin.map((v) => v.toPrecision(9)).join(', ')}, offsetPosition ${expectedOrigin.map((v) => v.toPrecision(9)).join(', ')}`);
+            }
+        }
         const end = second.origin[entry].map((value, axis) => value + second.hitT[entry] * direction[axis]);
         // Where the CPU's ray from the GPU's own origin meets the corner. The GPU's origin is giSurfaceAt's
         // point (moved up to 64 rounding steps into its triangle) pushed off the surface; the probe ray's
@@ -351,6 +387,7 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
     if (hitMismatches > 0) fail(`${hitMismatches} of ${kept} kept entries disagree with the CPU on hitting`);
     if (worstDirection > DIRECTION_TOLERANCE) fail(`a second-bounce direction is ${worstDirection} off the CPU's`);
     if (worstBrdfOverPdf > 4 * HALF_STEP) fail(`brdf / pdf or pdf is ${(worstBrdfOverPdf * 100).toFixed(3)}% off Lambert's`);
+    if (wrongOrigins > 0) fail(`${wrongOrigins} second-bounce origins are not offsetPosition of their hit: ${wrongOriginExamples.join('; ')}`);
     if (wrongSecondHits > 0) fail(`${wrongSecondHits} second-bounce hits are not where the CPU's ray meets the corner: ${wrongSecondHitExamples.join('; ')}`);
     if (second.count === 0) fail('no second-bounce entries');
     if (second.count !== state.counters[HASH_GRID_COUNTER.visibilityCount1]) fail('the second-bounce count and its lists disagree');
@@ -459,6 +496,7 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
             secondBounceEntries: second.count,
             raysNearAnEdge: nearEdges,
             worstDirectionError: worstDirection,
+            worstOriginSlideOverAllowed: worstOriginSlide,
             worstBrdfOverPdfError: worstBrdfOverPdf,
             baseCells: baseCells.length,
             baseCellsWithoutSamples: emptyCellsChecked,
@@ -781,7 +819,7 @@ try {
     failures.push(...room.failures);
     data.twoRoom = room.data;
 
-    // 4. The second-bounce ray's origin (register D39).
+    // 5. The second-bounce ray's origin (register D39).
     const twin = await checkOffsetPositionTwin(device);
     if (twin.mismatches > 0) failures.push(`offsetPosition: ${twin.mismatches} of ${twin.points} points differ from the CPU twin: ${twin.examples.join('; ')}`);
     const cornell = loadManifest('cornell-box');

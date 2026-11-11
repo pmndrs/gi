@@ -248,21 +248,24 @@ export function offsetPosition(position: Direction, normal: Direction): [number,
     return result;
 }
 
+/** The largest finite half (`RC_LARGEST_HALF`). */
+const LARGEST_HALF = 65504;
 /** The smallest normal half, 2^-14 (`RC_SMALLEST_NORMAL_HALF`). */
 const SMALLEST_NORMAL_HALF = 2 ** -14;
 
 /**
  * `rcNearestHalf` (wgsl/capsaicin.ts, register D59) on one f32, step for
- * step: the exponent from the magnitude (held at the smallest normal half),
+ * step: the value clamped to the half range, the exponent from the magnitude
+ * (held at the smallest normal half),
  * a scale by a power of two, `round` (ties to even), and the scale back. Every
  * step is exact in f32, so the result is the nearest half (ties to even) of
- * the value as an f32, for values within the half range. The GPU check is
+ * the value as an f32 (65,504 from 65,520 up). The GPU check is
  * `radiance-cache-filter` check 5; this twin shows it changes nothing where a
  * store already rounds to nearest.
  */
 export function nearestHalf(value: number): number {
-    const single = Math.fround(value);
-    if (!Number.isFinite(single)) return single;
+    const single = Math.min(Math.max(Math.fround(value), -LARGEST_HALF), LARGEST_HALF);
+    if (Number.isNaN(single)) return single;
     const magnitude = Math.max(Math.abs(single), SMALLEST_NORMAL_HALF);
     // frexp's exponent: magnitude = fraction × 2^exponent with fraction in [0.5, 1).
     const frexpExponent = Math.floor(Math.log2(magnitude)) + 1;

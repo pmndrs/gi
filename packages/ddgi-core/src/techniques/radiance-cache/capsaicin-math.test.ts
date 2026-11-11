@@ -237,6 +237,11 @@ describe('packing (screen_probes.hlsl, pack.hlsl)', () => {
             const mantissa = index % 4 === 0 ? (Math.floor((state / 2 ** 32) * 1024) + 0.5) / 1024 : state / 2 ** 32;
             values.push((index % 2 === 0 ? 1 : -1) * (1 + mantissa) * 2 ** exponent);
         }
+        // Past the half range: clamped to the largest half, where the nearest would be 65,536 or infinity.
+        for (const value of [65520, 70000, 1e30, Infinity]) {
+            expect(nearestHalf(value)).toBe(65504);
+            expect(nearestHalf(-value)).toBe(-65504);
+        }
         for (const value of values) {
             const rounded = nearestHalf(value);
             // It is the nearest half (ties to even), so it is exactly a half...
