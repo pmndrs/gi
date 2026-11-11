@@ -16,7 +16,8 @@
  * `median/` rows. Metrics, per multibounce setting (`mb_on`, `mb_off`):
  * `rc/<setting>/section/<Capsaicin section>/gpu_ms_median`,
  * `rc/<setting>/group/<native group>/gpu_ms` (the sum of its section
- * medians), `rc/<setting>/diffuse_subtotal_gpu_ms` (native's subtotal),
+ * medians), with lever 1's budget as `mb_on_budget` and an alternation's
+ * second round as `..._round2` (RC-L1), `rc/<setting>/diffuse_subtotal_gpu_ms` (native's subtotal),
  * `rc/<setting>/all_passes_gpu_ms_median` (the median frame of every
  * radiance-cache pass), `rc/<setting>/pass/<pass>/gpu_ms_median` (only for
  * a section that is several passes: the trace and the cells of
@@ -51,7 +52,11 @@ export function radianceCacheTimingRows(data: Record<string, SceneTiming>): Metr
     for (const [scene, timing] of Object.entries(data)) {
         rows.push({ scene, metric: 'rc/max_texture_size', value: timing.maxTextureSize }, { scene, metric: 'rc/triangles', value: timing.triangles });
         for (const setting of timing.settings) {
-            const prefix = `rc/${setting.useMultibounce ? 'mb_on' : 'mb_off'}`;
+            // Lever 1 (RC-L1): budget rows and later alternation rounds get their own names; a
+            // per-hit first round keeps the names it always had.
+            const cellShading = setting.cellShading === 'budget' ? '_budget' : '';
+            const round = (setting.round ?? 1) > 1 ? `_round${setting.round}` : '';
+            const prefix = `rc/${setting.useMultibounce ? 'mb_on' : 'mb_off'}${cellShading}${round}`;
             rows.push({ scene, metric: `${prefix}/frames_timed`, value: setting.framesTimed });
             for (const [section, ms] of Object.entries(setting.sections)) rows.push({ scene, metric: `${prefix}/section/${metricPart(section)}/gpu_ms_median`, value: ms });
             for (const group of CAPSAICIN_GROUPS) rows.push({ scene, metric: `${prefix}/group/${metricPart(group)}/gpu_ms`, value: setting.groups[group] });

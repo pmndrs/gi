@@ -43,7 +43,7 @@ export type CapsaicinGroup = (typeof CAPSAICIN_GROUPS)[number];
 export const DIFFUSE_GROUPS: readonly CapsaicinGroup[] = ['probe tracing and cell population', 'cache update and resolve', 'screen probes', 'denoise and resolve'];
 
 /** Each section the port times, in GI-1's order (gi1.cpp:2238-2936), with its group. */
-export const SECTIONS: readonly { readonly section: string; readonly group: CapsaicinGroup; readonly multibounceOnly?: true }[] = [
+export const SECTIONS: readonly { readonly section: string; readonly group: CapsaicinGroup; readonly multibounceOnly?: true; readonly cellShadingOnly?: 'perHit' | 'budget' }[] = [
     { section: 'SSGI', group: 'ssgi' },
     { section: 'PurgeRadianceCache', group: 'cache update and resolve' },
     { section: 'ReprojectScreenProbes', group: 'screen probes' },
@@ -53,7 +53,13 @@ export const SECTIONS: readonly { readonly section: string; readonly group: Caps
     { section: 'SampleScreenProbes', group: 'probe tracing and cell population' },
     { section: 'PopulateScreenProbesCells', group: 'probe tracing and cell population' },
     { section: 'PopulateMultibounceCells', group: 'probe tracing and cell population', multibounceOnly: true },
-    { section: 'GenerateReservoirs', group: 'probe tracing and cell population' },
+    // Capsaicin's light draw per hit, or lever 1's four kernels in its place (RC-L1, cellShading 'budget'):
+    // they light the cells, so they sit in the same group.
+    { section: 'GenerateReservoirs', group: 'probe tracing and cell population', cellShadingOnly: 'perHit' },
+    { section: 'CellShadingPick', group: 'probe tracing and cell population', cellShadingOnly: 'budget' },
+    { section: 'CellShadingRank', group: 'probe tracing and cell population', cellShadingOnly: 'budget' },
+    { section: 'CellShadingChoose', group: 'probe tracing and cell population', cellShadingOnly: 'budget' },
+    { section: 'CellShadingLight', group: 'probe tracing and cell population', cellShadingOnly: 'budget' },
     { section: 'GenerateMultibounceReservoirs', group: 'probe tracing and cell population', multibounceOnly: true },
     { section: 'PopulateRadianceCache', group: 'probe tracing and cell population' },
     { section: 'UpdateRadianceCache', group: 'cache update and resolve' },
@@ -98,6 +104,10 @@ export function groupOf(section: string): CapsaicinGroup | undefined {
 /** What the page reports for one scene and setting (main.ts; to-csv.ts reads it). */
 export interface SettingTiming {
     readonly useMultibounce: boolean;
+    /** Lever 1's mode (RC-L1); older files have none, which is `perHit`. */
+    readonly cellShading?: 'perHit' | 'budget';
+    /** With `alternate`, which turn of this mode it was (1, 2). */
+    readonly round?: number;
     readonly framesTimed: number;
     /** Median GPU ms of each timed pass, by its `stats.passes` name. */
     readonly passes: Record<string, number>;
