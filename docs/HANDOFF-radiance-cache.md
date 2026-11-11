@@ -44,7 +44,7 @@ These were held in the old machine's local agent memory, so they're written out 
 - **Feature-forward WebGPU.** Subgroups first, with one declared fallback per feature and no parallel GPU paths.
 - **three.js only** until the technique is validated. The core stays engine-free, and lint enforces it.
 - **Siblings.** Denoisers and upscaling go to `pmndrs/denoiser` and `pmndrs/upscaler`. Anything they lack is a request to Dennis, not code in this repo.
-- **Brixelizer** is being ported in another workstream and plugs in through the `WorldCache` slot. **id Tech 8** (Sousa, SIGGRAPH 2025) is the main source of performance levers. **GPUTex** handles compressed textures if needed.
+- **Brixelizer** is being ported in another workstream (`/Users/dex/Documents/Codex/2026-11-09/wha/outputs/brixelizer-webgpu/`) as a distance-field library, not a GI cache. It plugs in as a long-ray tracing backend (design doc, "Brixelizer: what it is and where it fits"), not through the `WorldCache` slot. **id Tech 8** (Sousa, SIGGRAPH 2025) is the main source of performance levers. **GPUTex** handles compressed textures if needed.
 - **Commit as you go**, so nothing is lost if usage runs out mid-row.
 
 ## The Mac setup (done 2026-11-10)

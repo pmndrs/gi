@@ -148,4 +148,4 @@ The order follows the phase 5 table, but the expected order is:
 - Lever 3 (resolution tiers) with the upscaler.
 - Levers 21 and 7 (screen trace and short rays), once lever 20 says what a ray really costs.
 - Then 4, 5, 6, 23 and 25 (formats, interleaving, memory).
-- Lever 9 (Brixelizer) when the other workstream lands.
+- Lever 9 (Brixelizer) as a long-ray backend: occlusion only first, then the far field read from the hash grid (design doc, "Brixelizer: what it is and where it fits"). It needs a tracer seam in the platform first.

@@ -29,7 +29,7 @@ Why: it is what DDGI is not. DDGI is a fixed probe grid, stable but blurry and s
 | Capsaicin's SSGI technique (near-field GI, bent-normal occlusion) | MIT (AMD) | Part of the baseline: GI-1 reads its output. About 350 lines. |
 | Capsaicin's blue-noise tables (`blue_noise_sampler_samples.h`) | No license header | Not copied. Regenerated (D7). |
 | GI-1.0 paper (arXiv 2310.19855), GI-1.1 paper, GI-1.2 page | Papers | Algorithms and reasons. |
-| FidelityFX Brixelizer GI | MIT (headers to verify) | Ported in another workstream; plugs in as a world cache and tracing backend ("World cache as a slot"). |
+| FidelityFX Brixelizer GI | MIT (headers to verify) | Ported in another workstream as a distance-field library (no GI, DEC-010); plugs in as a tracing backend ("World cache as a slot"). |
 | NVIDIA SHaRC, RTXGI, NRC | NVIDIA RTX SDK license | Never ported. Ideas from public docs only. |
 | Lumen, id Tech 8, EA surfels | Proprietary | Slides only. |
 
@@ -82,11 +82,11 @@ The technique needs the per-pixel data three already renders. The platform takes
 
 ## World cache as a slot
 
-The baseline world cache is Capsaicin's hash grid. Behind one interface ("radiance leaving this hit point toward this ray", plus "these cells need updating"), others can plug in: Brixelizer GI's brick cache (from the separate port, which also brings SDF tracing as a second query backend), a Lumen-style surface cache, or the DDGI volume as the last level (id Tech 8 style). The interface is designed in phase 3 with the Brixelizer port's needs in view, so plugging it in later doesn't change the screen cache.
+The baseline world cache is Capsaicin's hash grid. Behind one interface ("radiance leaving this hit point toward this ray", plus "these cells need updating"), others can plug in: a Lumen-style surface cache (cards), or the DDGI volume as the last level (id Tech 8 style). *Corrected 2026-11-11:* the separate Brixelizer port is a distance-field library, not a GI cache (its DEC-010 excludes GI), so it comes in as a tracing backend, not a world cache (see "Brixelizer: what it is and where it fits"). The interface is designed in phase 3 with the Brixelizer port's needs in view, so plugging it in later doesn't change the screen cache.
 
 ### The world-cache interface (lead, 2026-11-09, phase 3)
 
-The seam sits where Capsaicin's screen cache hands its probe rays to the hash grid: after the probe rays are traced, before they are blended. Everything between is the world cache's business, so a Brixelizer brick cache, a surface cache or the DDGI field can replace the hash grid without the screen cache changing.
+The seam sits where Capsaicin's screen cache hands its probe rays to the hash grid: after the probe rays are traced, before they are blended. Everything between is the world cache's business, so a surface cache or the DDGI field can replace the hash grid without the screen cache changing.
 
 - **Input:** the frame's traced probe rays in one GPU buffer: per ray its origin, direction, hit record (instance, primitive, barycentrics, distance, front face; a miss is marked) and a "bypass" flag, plus the ray count in a GPU counter (RC1.3's indirect arguments size the dispatches). The flag marks a ray the screen cache lit itself, which the world cache leaves alone. *Amended (RC3.2):* Capsaicin decides its bypass cases (emissive hits, rays shorter than their cell) inside the cache's own passes (`GenerateReservoirs`, `PopulateCells`), and the short-ray test needs the cache's cell size, so the hash grid decides and lights them itself; the screen cache sets the flag on no ray.
 - **Output:** for every ray without the bypass flag, the world cache **adds** the radiance leaving the hit toward the ray's origin into that ray's radiance slot (the buffer `BlendScreenProbes` reads). Misses are the screen cache's (the sky).
@@ -150,7 +150,7 @@ Dennis wants Lumen's surface cache tried as an experiment. It's a second `WorldC
   - Indirect light: from the hash grid or DDGI, not new probe rays.
 - **Lookup:** from a hit's instance and triangle to its mesh's cards, projection, then Lumen's blend. A miss or an uncovered hit falls back to the hash grid, so moving and deforming meshes keep working.
 - **Memory:** uncompressed 2048² channels are about 50 MB, plus about 32 MB of lighting (`rgba16float`). At 4096² it's four times that. Uncompressed BC isn't writable in WebGPU, so compression would be GPUTex's job.
-- **Brixelizer:** nothing to reuse yet. There's no Brixelizer code or repo on this Mac, and the slot is the only connection. Dennis has a repo; its interface gets checked against the slot when it's shared.
+- **Brixelizer:** checked 2026-11-11 (below). It gives no material or triangle at a hit, so if its distance-field tracing is used for far rays, cards are one way to give those hits a material, which is Lumen's reason for cards.
 
 **Effort and gain against lever 1.**
 - **Effort: XL** (weeks): card generation and splitting, a core raster pass with textures, a page allocator, two lighting passes, the lookup and its fallback. Lever 1 is L and reuses Capsaicin's passes.
@@ -160,6 +160,21 @@ Dennis wants Lumen's surface cache tried as an experiment. It's a second `WorldC
   - **Lighting:** it's budgeted, as in lever 1, so lever 1 already gets most of that part.
 
 **The lead's recommendation.** Build lever 1 (RC-L1) and bindless (RC6.3) first, then measure D2's image gain on Sponza and Bistro with bindless on Windows. Build cards only if bindless can't cover the platforms we care about, macOS above all, or if Brixelizer's distance-field tracing arrives and needs a material source for its hits. That's Lumen's case: distance-field hits don't know their triangle, so they need cards. A smaller first step: six box cards on the Cornell box and two-room, which have no single-mesh-room problem, to measure the lookup and the image before taking on the rest.
+
+### Brixelizer: what it is and where it fits (lead, 2026-11-11)
+
+Dennis's port is at `/Users/dex/Documents/Codex/2026-11-09/wha/outputs/brixelizer-webgpu/` (work in progress; read-only review, HEAD d24a181).
+- **What it is:** an engine-free distance-field library. It builds 8³ R8 bricks from triangles, with an octree, scrolling cascades, incremental updates and a ray march. It borrows the host's `GPUDevice` and needs no optional features. Its three adapter pins r186, against our r187.
+- **What it isn't:** a GI system. Its own decision DEC-010 excludes GI, so there's no radiance cache to plug into our slot.
+- **What a hit gives:** position, distance, a normal from the field's gradient, and a brick id (`FieldRayHit`, 64 bytes). There's no triangle, instance or material, by design (its CAP-Q14).
+- **Licence:** MIT (Dennis), with AMD's MIT headers kept for reference and Inigo Quilez's triangle-distance function noted in its THIRD_PARTY_NOTICES. Any code we take carries those notices.
+
+**Where it fits for us: a tracing backend for long rays (lever 9). There are three uses, cheapest first:**
+1. **Occlusion only:** cache shadow rays and long any-hit rays through the field. No material is needed. Speed is the question.
+2. **Far field read from the hash grid.** A probe ray past a few metres continues in the field, and its hit's position and normal look up an existing hash-grid cell (`worldCacheLookup(position, normal, direction)`, already in the interface). No triangle or material is needed. A hit with no lit cell yet falls back to the BVH, or counts as empty.
+3. **Far field with material:** only with cards, which is Lumen's arrangement (RC-X3).
+
+**What's missing on our side:** the platform has one tracer. `createTraceModule` (`platform/trace/wgsl.ts:282-300`) wires the BVH walk in directly, so a second backend needs a seam first. It's a platform option, `longRays: 'bvh' | 'field'`, with the BVH as the default and DDGI unchanged.
 
 ## World-cache memory
 
