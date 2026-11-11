@@ -423,14 +423,18 @@ const MAX_HITS_WITHOUT_LIGHT_SHARE = 1e-4;
  * traced, against what a budget above the cells in use with one sample asks: all lit, one ray each
  * (but for the rare horizon draw, as with the hits' draws).
  */
-function checkBudgetCounters(state: Awaited<ReturnType<typeof readFrameState>>, fail: (message: string) => void): { usedCells: number; litCells: number; shadowRays: number } {
+function checkBudgetCounters(state: Awaited<ReturnType<typeof readFrameState>>, fail: (message: string) => void): { usedCells: number; hitCells: number; litCells: number; shadowRays: number } {
     const usedCells = state.counters[HASH_GRID_COUNTER.usedCellCount];
     const litCells = state.counters[HASH_GRID_COUNTER.litCellCount];
     const shadowRays = state.counters[HASH_GRID_COUNTER.cellShadowRayCount];
     if (usedCells === 0) fail('no cell in use on a budget');
+    // Every non-emissive hit offers itself (no emissive surface in these sections), so the cells in use are this frame's hits' cells
+    // (but for the hit in 2^32 whose key is 0).
+    const hitCells = new Set(state.visibilityCell).size;
+    if (Math.abs(usedCells - hitCells) > 1) fail(`${usedCells} cells in use, this frame's hits are in ${hitCells} cells`);
     if (litCells !== usedCells) fail(`the budget lit ${litCells} of ${usedCells} cells in use; it is above them`);
     if (shadowRays > litCells || litCells - shadowRays > MAX_HITS_WITHOUT_LIGHT_SHARE * litCells) fail(`${shadowRays} shadow rays for ${litCells} lit cells at one sample each`);
-    return { usedCells, litCells, shadowRays };
+    return { usedCells, hitCells, litCells, shadowRays };
 }
 
 /** How the frame's hits drew their lights: how many drew the sky, and how many drew nothing. */

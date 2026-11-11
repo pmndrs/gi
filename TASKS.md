@@ -666,7 +666,7 @@ Each lever is a setting beside the faithful path (DECISIONS 2026-11-11). Its row
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC-L1 | Lever 1, budgeted cell shading (id Tech 8): `cellShading: 'perHit' \| 'budget'` with `cellShadingBudget`, `cellShadingSamples` and `cellShadingMaxAge`, inside the hash grid, as the design doc's "Budgeted cell shading" says | implementer | L | RC5.1 | review (implementer, 2026-11-11: built on `rc-l1`; every done-when number on the M5 in PROGRESS; Windows and the RTX 3060 timing not run) |
+| RC-L1 | Lever 1, budgeted cell shading (id Tech 8): `cellShading: 'perHit' \| 'budget'` with `cellShadingBudget`, `cellShadingSamples` and `cellShadingMaxAge`, inside the hash grid, as the design doc's "Budgeted cell shading" says | implementer | L | RC5.1 | review (implementer, 2026-11-11: built on `rc-l1`; review fixes 1-6 in, re-measured on the M5, PROGRESS "RC-L1 review fixes"; Windows and the RTX 3060 timing not run) |
 | RC-X3 | Extension 3, card cache (Lumen's surface cache) as a second `WorldCache`: design study | main session, scout (Lumen sources, Brixelizer workstream) | M | none | active (lead + scout, 2026-11-11) |
 
 - **RC-L1 done-when.**
