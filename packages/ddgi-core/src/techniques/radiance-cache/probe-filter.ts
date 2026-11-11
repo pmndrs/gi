@@ -11,7 +11,7 @@
  * second-pass cell that read an undecided first-pass cell is undecided too.
  */
 
-import { getOrthoVectors, halfBitsToFloat, floatToHalfBits, INVALID_ID, mapToHemiOctahedron, mapToHemiOctahedronInverse, toProbeFrame, unpackSeed, type Direction } from './capsaicin-math.ts';
+import { getOrthoVectors, halfBitsToFloat, floatToHalfBits, INVALID_ID, mapToHemiOctahedron, mapToHemiOctahedronInverse, nearestHalf, toProbeFrame, unpackSeed, type Direction } from './capsaicin-math.ts';
 import { PROBE_SIZE } from './settings.ts';
 import { BLUR_DIRECTIONS, FILTER_ANGLE_THRESHOLD, FILTER_RADIUS } from './wgsl/screen-irradiance.ts';
 
@@ -210,7 +210,8 @@ function filterPass(
             const index = 4 * (posX + posY * input.width);
             for (let channel = 0; channel < 4; channel++) {
                 const value = radiance[channel] / totalWeight;
-                output[index + channel] = roundOutput ? toHalf(value) : value;
+                // The kernel rounds to the nearest half before its store (rcNearestHalf, register D59).
+                output[index + channel] = roundOutput ? toHalf(nearestHalf(value)) : value;
             }
             outputUndecided[posX + posY * input.width] = undecided ? 1 : 0;
         }

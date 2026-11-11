@@ -9,6 +9,7 @@ import {
     makeRandom,
     mapToHemiOctahedron,
     mapToHemiOctahedronInverse,
+    nearestHalf,
     packHalf3,
     packSeed,
     probeCellOf,
@@ -217,6 +218,32 @@ describe('packing (screen_probes.hlsl, pack.hlsl)', () => {
         expect(floatToHalfBits(1 + 3 * 2 ** -11)).toBe(0x3c02);
         for (const bits of [0x0001, 0x03ff, 0x0400, 0x3555, 0x3c00, 0x7bff, 0x8001, 0xbc00]) {
             expect(floatToHalfBits(halfBitsToFloat(bits))).toBe(bits);
+        }
+    });
+
+    it('rounds to the nearest half before a store, which a store that rounds to nearest leaves alone (register D59)', () => {
+        const towardZero = (value: number): number => {
+            const nearest = floatToHalfBits(value);
+            return Math.abs(halfBitsToFloat(nearest)) > Math.abs(Math.fround(value)) ? nearest - 1 : nearest;
+        };
+        const values: number[] = [0, 1, -2, 40, 39.99999, 65504, 65519, -65519, 2 ** -24, 2 ** -25, 3 * 2 ** -25, 2 ** -14 * (1 - 2 ** -11), 1 + 2 ** -11, 1 + 3 * 2 ** -11, 1e-30];
+        let state = 7;
+        for (let index = 0; index < 20000; index++) {
+            state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+            const exponent = (state % 40) - 25;
+            state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+            // Every fourth a tie between two halves; the sign alternates.
+            const mantissa = index % 4 === 0 ? (Math.floor((state / 2 ** 32) * 1024) + 0.5) / 1024 : state / 2 ** 32;
+            values.push((index % 2 === 0 ? 1 : -1) * (1 + mantissa) * 2 ** exponent);
+        }
+        for (const value of values) {
+            const rounded = nearestHalf(value);
+            // It is the nearest half (ties to even), so it is exactly a half...
+            expect(rounded).toBe(halfBitsToFloat(floatToHalfBits(value)));
+            // ...which a nearest-rounding store keeps, giving what it gave without the rounding...
+            expect(floatToHalfBits(rounded)).toBe(floatToHalfBits(value));
+            // ...and a store that rounds toward zero keeps too.
+            expect(towardZero(rounded)).toBe(floatToHalfBits(value));
         }
     });
 

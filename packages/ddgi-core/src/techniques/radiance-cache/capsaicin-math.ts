@@ -221,6 +221,28 @@ export function halfBitsToFloat(bits: number): number {
     return sign * (1 + mantissa / 1024) * 2 ** (exponent - 15);
 }
 
+/** The smallest normal half, 2^-14 (`RC_SMALLEST_NORMAL_HALF`). */
+const SMALLEST_NORMAL_HALF = 2 ** -14;
+
+/**
+ * `rcNearestHalf` (wgsl/capsaicin.ts, register D59) on one f32, step for
+ * step: the exponent from the magnitude (held at the smallest normal half),
+ * a scale by a power of two, `round` (ties to even), and the scale back. Every
+ * step is exact in f32, so the result is the nearest half (ties to even) of
+ * the value as an f32, for values within the half range. The GPU check is
+ * `radiance-cache-filter` check 5; this twin shows it changes nothing where a
+ * store already rounds to nearest.
+ */
+export function nearestHalf(value: number): number {
+    const single = Math.fround(value);
+    if (!Number.isFinite(single)) return single;
+    const magnitude = Math.max(Math.abs(single), SMALLEST_NORMAL_HALF);
+    // frexp's exponent: magnitude = fraction × 2^exponent with fraction in [0.5, 1).
+    const frexpExponent = Math.floor(Math.log2(magnitude)) + 1;
+    const stepExponent = frexpExponent - 11;
+    return roundHalfToEven(single * 2 ** -stepExponent) * 2 ** stepExponent;
+}
+
 /** `packHalf3` (pack.hlsl:411-416): x and y in the first word, z in the low half of the second. */
 export function packHalf3(value: Direction): [number, number] {
     return [(floatToHalfBits(value[0]) | (floatToHalfBits(value[1]) << 16)) >>> 0, floatToHalfBits(value[2])];
