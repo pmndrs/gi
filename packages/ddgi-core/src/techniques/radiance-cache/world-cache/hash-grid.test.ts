@@ -27,6 +27,7 @@ import {
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
 import {
+    generateMultibounceReservoirsWgsl,
     populateCellsWgsl,
     populateMultibounceCellsWgsl,
     updateMultibounceCellsWgsl,
@@ -740,6 +741,9 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(populateCellsWgsl(perHit)).not.toContain('is_bypassing_first_bounce');
         expect(updateMultibounceCellsWgsl(budget)).toContain(`(base_flags & ${VISIBILITY_FLAG.litPick}u) != 0u`);
         expect(updateMultibounceCellsWgsl(perHit)).not.toContain('base_flags');
+        // A second-bounce draw with no light gives its cell a sample of 0 on a budget (its unused cells stop fading at 1).
+        expect(generateMultibounceReservoirsWgsl(budget)).toContain('lever 1: a sample of 0');
+        expect(generateMultibounceReservoirsWgsl(perHit)).not.toContain('a sample of 0');
         // The second bounce leaves from the lit picks and the bypassing hits, by their flags.
         expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('visibility_bypass_buffer, did) == 0u');
     });

@@ -1347,6 +1347,16 @@ ${firstBounceEntry}
  */
 export function generateMultibounceReservoirsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs;
+    // Lever 1 (cellShading 'budget'): a second-bounce hit whose draw finds no light gives its cell a
+    // sample of 0, as a lit cell's draw does (CellShadingLight). Per hit, Capsaicin's no-light draw adds
+    // nothing and the cell fades to empty; on a budget unused cells stop fading at a count of 1
+    // (updateTilesWgsl), so without the zero a second-bounce cell would keep a switched-off light
+    // and feed it to the second bounce.
+    const noLightSample = layout.cellShading
+        ? `
+        let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did);
+        atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);   // lever 1: a sample of 0`
+        : '';
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.generateMultibounceReservoirs)}
@@ -1386,7 +1396,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     let reservoir = draw.choice;
     let sample_params = draw.sample_params;
 
-    if (reservoir.light == GI_DIRECT_NO_LIGHT) {
+    if (reservoir.light == GI_DIRECT_NO_LIGHT) {${noLightSample}
         return;
     }
 

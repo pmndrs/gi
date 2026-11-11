@@ -358,7 +358,18 @@ async function checkCounters(device: GPUDevice, failures: string[]): Promise<Rec
             assert(lastLitWord !== null, 'a budget cache without its last-lit words');
             // The last-lit frames before the frame the choice is checked on (the frame overwrites the lit cells').
             const lastLitBefore = new Uint32Array(await readRange(device, cache.buffers.words, lastLitWord * 4, cache.capacity.numCells * 4));
+            // The tile slots before and after: a slot claimed this frame (its checksum changed) had its
+            // cells' last-lit words cleared by AddNewTile, so the GPU ranked them as new.
+            const hashWord = cache.layout.words.hashBuffer;
+            const slotsBefore = new Uint32Array(await readRange(device, cache.buffers.words, hashWord * 4, cache.capacity.numTiles * 4));
             await runFrames(device, scenario, 1);
+            const slotsAfter = new Uint32Array(await readRange(device, cache.buffers.words, hashWord * 4, cache.capacity.numTiles * 4));
+            let claimedTiles = 0;
+            for (let tile = 0; tile < cache.capacity.numTiles; tile++) {
+                if (slotsAfter[tile] === slotsBefore[tile] || slotsAfter[tile] === 0) continue;
+                claimedTiles++;
+                lastLitBefore.fill(0, tile * cache.capacity.numCellsPerTile, (tile + 1) * cache.capacity.numCellsPerTile);
+            }
 
             const counters = new Uint32Array(await readRange(device, cache.buffers.words, 0, 64 * 4));
             const usedCells = counters[HASH_GRID_COUNTER.usedCellCount];
@@ -404,7 +415,7 @@ async function checkCounters(device: GPUDevice, failures: string[]): Promise<Rec
             if (outOfOrder > 0) fail(`${outOfOrder} cells to light come after a cell of a later class`);
             // Only the classes with cells, as "class: in use / lit".
             const byClass = Object.fromEntries(twin.histogram.flatMap((count, ageClass) => (count > 0 ? [[ageClass, `${count} / ${chosenByClass[ageClass]}`]] : [])));
-            results[`budget ${budget}`] = { usedCells, litCells, shadowRays, samplesWritten: samples, samplesPerCell: COUNTER_SAMPLES, staleCells: counters[HASH_GRID_COUNTER.staleCellCount], frameIndex, inUseOverLitByClass: byClass };
+            results[`budget ${budget}`] = { usedCells, litCells, shadowRays, claimedTiles, samplesWritten: samples, samplesPerCell: COUNTER_SAMPLES, staleCells: counters[HASH_GRID_COUNTER.staleCellCount], frameIndex, inUseOverLitByClass: byClass };
         } finally {
             scenario.dispose();
             await device.queue.onSubmittedWorkDone();
