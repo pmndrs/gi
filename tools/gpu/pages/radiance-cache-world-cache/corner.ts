@@ -354,7 +354,9 @@ export async function readIndirectScratch(device: GPUDevice, cache: HashGridCach
     const cellBytes = 16;
     const staging = device.createBuffer({ label: 'world-cache indirect scratch', size: cells.length * cellBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'world-cache indirect scratch' });
-    const base = cache.layout.words.updateCellValueIndirectBuffer * 4;
+    const indirectScratch = cache.layout.words.updateCellValueIndirectBuffer;
+    if (indirectScratch === null) throw new Error('the world cache was prepared without multibounce: it has no indirect scratch');
+    const base = indirectScratch * 4;
     cells.forEach((cell, index) => encoder.copyBufferToBuffer(cache.buffers.words, base + cell * cellBytes, staging, index * cellBytes, cellBytes));
     device.queue.submit([encoder.finish()]);
     const words = new Uint32Array(await readRange(device, staging, 0, cells.length * cellBytes));
@@ -369,7 +371,9 @@ export async function readTiles(device: GPUDevice, cache: HashGridCache, tiles: 
     const tileBytes = capacity.numCellsPerTile * 8;
     const staging = device.createBuffer({ label: 'world-cache tiles', size: Math.max(4, tiles.length * tileBytes), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'world-cache tiles' });
-    const valueBase = (which === 'direct' ? cache.layout.cellValues.valueBuffer : cache.layout.cellValues.valueIndirectBuffer) * 8;
+    const valueElement = which === 'direct' ? cache.layout.cellValues.valueBuffer : cache.layout.cellValues.valueIndirectBuffer;
+    if (valueElement === null) throw new Error('the world cache was prepared without multibounce: it has no indirect values');
+    const valueBase = valueElement * 8;
     tiles.forEach((tile, index) => encoder.copyBufferToBuffer(cache.buffers.cellValues, valueBase + tile * tileBytes, staging, index * tileBytes, tileBytes));
     device.queue.submit([encoder.finish()]);
     const words = new Uint32Array(await readRange(device, staging, 0, tiles.length * tileBytes));

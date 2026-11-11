@@ -956,7 +956,8 @@ fn ${ENTRY_POINT.sample}(
     }
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
 
-    textureStore(rcPreviousProbeBuffer, pos, previousRadiance);
+    // A mean, so not a half yet: rounded to the nearest one (register D59).
+    textureStore(rcPreviousProbeBuffer, pos, rcNearestHalf(previousRadiance));
     textureStore(rcEvictedProbeBuffer, pos, textureLoad(rcProbeBuffer, pos, 0));
     rcProbeRays.rays[did].direction = rcPackSample(direction);
 }
@@ -1191,8 +1192,9 @@ fn ${ENTRY_POINT.blend}(
         let temporalBlend = rcTemporalBlend(rcLuminance(radiance.xyz), rcLuminance(previousRadiance.xyz));
         radiance = mix(radiance, previousRadiance, temporalBlend);
     }
-    // Stored as halves (register D19): the hit distance kept below the half range.
-    let stored = vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF));
+    // Stored as halves (register D19): the hit distance kept below the half range, every value
+    // rounded to its nearest half (register D59).
+    let stored = rcNearestHalf(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
 
     let lruCount = atomicLoad(&rcCounters[RC_COUNTER_CACHED_TILE_LRU]);
     var evictedProbeMask = atomicLoad(&rcProbeCacheWords[rcFrame.spawnProbeOffset + 2u * probeIndex + 0u]);

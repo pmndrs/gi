@@ -29,9 +29,10 @@
  *    same within a half step (the weights are normalised), its hit distance
  *    within two. The hit distance can only drift down: each neighbour takes
  *    the min of its own and the running mean, so an f32 rounding below 40 is
- *    kept and never one above, and the M5's `textureStore` to `rgba16float`
- *    rounds toward zero (NOTES), once per pass (first run: 8,137 of 156,160
- *    cells at 39.9375, two steps down; the twin, rounding to nearest, keeps 40).
+ *    kept and never one above. Before register D59's fix the M5's
+ *    `textureStore` to `rgba16float` rounded that toward zero (NOTES), once per
+ *    pass (first run: 8,137 of 156,160 cells at 39.9375, two steps down); the
+ *    kernel now rounds to the nearest half first, as the twin does.
  * 3. **No blur across a depth edge:** the box's probes at 10, the floor's at
  *    1, filtered: against the twin as in 1, and the floor's cells with a box
  *    probe among their six neighbours each way keep 1 within a half step
@@ -44,17 +45,20 @@
  *
  * 5. **How `textureStore` rounds to `rgba16float`** (register D59): 4,096
  *    f32 values that aren't halves, stored by a small kernel and read back,
- *    against round-to-nearest-even and round-toward-zero (reported).
- * 6. **Does the hit distance's drift add up?** (register D59, information):
- *    the constant atlas filtered 300 times over (each pass's store rounding
- *    feeding the next, with no new rays: the worst case), and the frame's
- *    own loop over 300 still frames, where the blend brings new rays in:
- *    the sky cells' hit distance at frames 10, 100 and 300. Checked: in the
- *    frame's loop it settles, falling no more than three half steps (12 m)
- *    from frame 100 to frame 300. (Stated first as "within 12 m of frame
- *    10"; the first run fell 27 m by frame 100, 0.4%, then 2.8 m more: it
- *    settles where new rays balance the stores' rounding, so the gate is on
- *    the settling and the total is reported.)
+ *    against round-to-nearest-even and round-toward-zero (reported: the M5
+ *    rounds toward zero). The same values stored through the atlas kernels'
+ *    `rcNearestHalf` (wgsl/capsaicin.ts, the production function) must all
+ *    come back as round-to-nearest-even, ties included.
+ * 6. **Does the hit distance drift?** (register D59): the constant atlas
+ *    filtered 300 times over (each pass's store feeding the next, with no new
+ *    rays: the worst case), and the frame's own loop over 300 still frames,
+ *    where the blend brings new rays in: the sky cells' hit distance at
+ *    frames 10, 100 and 300. Checked: the iterated filter's 40 m stays within
+ *    1 m (every listed cell, at rounds 1, 10, 100 and 300; RC6.2's
+ *    done-when; before the fix it fell to 29.7 m), and in the frame's loop
+ *    the sky cells fall no more than three half steps (12 m) from frame 100
+ *    to frame 300. (Before the fix the loop fell 27 m by frame 100, 0.4%,
+ *    then 2.8 m more; the fall is reported.)
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-filter`.
@@ -72,7 +76,7 @@ import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/tech
 import { FRAME_UNIFORM_BYTES, FRAME_UNIFORM_OFFSETS, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { SCREEN_PROBES_CONSTANTS_BYTES, SCREEN_PROBES_CONSTANTS_OFFSETS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-irradiance.ts';
 import { ScreenProbeFilter } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-filter.ts';
-import { LARGEST_QUANTIZED_HIT_DISTANCE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/capsaicin.ts';
+import { CAPSAICIN_WGSL, LARGEST_QUANTIZED_HIT_DISTANCE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/capsaicin.ts';
 import { FILTER_RADIUS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-irradiance.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
@@ -105,6 +109,8 @@ const CAPPED_HIT_DISTANCE_TOLERANCE = 4.01;
 /** Check 6: frames (and filter rounds) of the drift measurement, and how far the frame loop's sky hit distance may still fall after frame 100: three half steps at 6.7 km. */
 const DRIFT_FRAMES = 300;
 const DRIFT_TOLERANCE = 12.01;
+/** Check 6: how far the iterated filter's constant 40 m may fall in any listed cell (RC6.2's done-when). */
+const ITERATED_DRIFT_TOLERANCE = 1;
 const SKY_HIT_RANGE = [6000, 7000] as const;
 const ATLAS_WIDTH = TILES_X * PROBE_SIZE;
 const ATLAS_HEIGHT = TILES_Y * PROBE_SIZE;
@@ -288,16 +294,22 @@ async function filterAndCompare(device: GPUDevice, filter: PageFilter, inputs: P
 
 // ---- Checks 5 and 6: the half-float stores and the hit distance's drift ----------------------
 
+// Each value stored as it is (the store's own rounding) and through the atlas kernels' rcNearestHalf.
 const STORE_WGSL = /* wgsl */ `
+${CAPSAICIN_WGSL}
 @group(0) @binding(0) var<storage, read> values: array<f32>;
 @group(0) @binding(1) var stored: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var storedNearest: texture_storage_2d<rgba16float, write>;
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let width = textureDimensions(stored).x;
     if (id.x >= arrayLength(&values)) {
         return;
     }
-    textureStore(stored, vec2u(id.x % width, id.x / width), vec4f(values[id.x], 0.0, 0.0, 1.0));
+    let texel = vec2u(id.x % width, id.x / width);
+    let value = vec4f(values[id.x], 0.0, 0.0, 1.0);
+    textureStore(stored, texel, value);
+    textureStore(storedNearest, texel, rcNearestHalf(value));
 }
 `;
 
@@ -324,25 +336,16 @@ function towardZeroHalfBits(value: number): number {
     return halfBitsToFloat(nearest) > value ? nearest - 1 : nearest;
 }
 
-async function checkStoreRounding(device: GPUDevice): Promise<{ values: number; nearestEven: number; towardZero: number; both: number; neither: number }> {
-    const side = 64;
-    const values = storeValues(side * side);
-    const input = device.createBuffer({ size: values.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(input, 0, values);
-    const texture = device.createTexture({ size: [side, side], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
-    const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { module: device.createShaderModule({ code: STORE_WGSL }), entryPoint: 'main' } });
-    const group = device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: input } }, { binding: 1, resource: texture.createView() }] });
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(pipeline);
-    pass.setBindGroup(0, group);
-    pass.dispatchWorkgroups(values.length / 64);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
-    const bytes = await readTexture(device, texture, 8, side, side);
-    const bits = new Uint16Array(bytes.buffer, bytes.byteOffset, side * side * 4);
-    input.destroy();
-    texture.destroy();
+interface StoreRounding {
+    readonly values: number;
+    readonly nearestEven: number;
+    readonly towardZero: number;
+    readonly both: number;
+    readonly neither: number;
+}
+
+/** How each stored value came back: the nearest-even half, the one toward zero, both (no difference) or neither. */
+function classifyStores(values: Float32Array, bits: Uint16Array): StoreRounding {
     let nearestEven = 0;
     let towardZero = 0;
     let both = 0;
@@ -357,6 +360,42 @@ async function checkStoreRounding(device: GPUDevice): Promise<{ values: number; 
         else neither++;
     });
     return { values: values.length, nearestEven, towardZero, both, neither };
+}
+
+async function checkStoreRounding(device: GPUDevice): Promise<{ plain: StoreRounding; throughNearestHalf: StoreRounding }> {
+    const side = 64;
+    const values = storeValues(side * side);
+    const input = device.createBuffer({ size: values.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(input, 0, values);
+    const makeTexture = (): GPUTexture => device.createTexture({ size: [side, side], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
+    const plainTexture = makeTexture();
+    const nearestTexture = makeTexture();
+    const pipeline = await device.createComputePipelineAsync({ layout: 'auto', compute: { module: device.createShaderModule({ code: STORE_WGSL }), entryPoint: 'main' } });
+    const group = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+            { binding: 0, resource: { buffer: input } },
+            { binding: 1, resource: plainTexture.createView() },
+            { binding: 2, resource: nearestTexture.createView() },
+        ],
+    });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, group);
+    pass.dispatchWorkgroups(values.length / 64);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const readBits = async (texture: GPUTexture): Promise<Uint16Array> => {
+        const bytes = await readTexture(device, texture, 8, side, side);
+        return new Uint16Array(bytes.buffer, bytes.byteOffset, side * side * 4);
+    };
+    const plain = classifyStores(values, await readBits(plainTexture));
+    const throughNearestHalf = classifyStores(values, await readBits(nearestTexture));
+    input.destroy();
+    plainTexture.destroy();
+    nearestTexture.destroy();
+    return { plain, throughNearestHalf };
 }
 
 /**
@@ -561,12 +600,20 @@ try {
     for (const target of [1, 10, 100, DRIFT_FRAMES]) {
         pageFilter.encode(target - rounds);
         rounds = target;
-        iterated.push({ rounds, ...listedCells(await readAtlas(device, pageFilter.atlas), inputs.seeds) });
+        const cells = listedCells(await readAtlas(device, pageFilter.atlas), inputs.seeds);
+        iterated.push({ rounds, ...cells });
+        if (!(cells.lowestHitDistance >= CONSTANT_HIT_DISTANCE - ITERATED_DRIFT_TOLERANCE)) {
+            fail(`drift: after ${rounds} filter rounds a listed cell's hit distance is ${cells.lowestHitDistance} (constant ${CONSTANT_HIT_DISTANCE})`);
+        }
     }
     pageFilter.dispose();
 
     // 5. How the M5 stores halves to a texture.
     const storeRounding = await checkStoreRounding(device);
+    const nearestStores = storeRounding.throughNearestHalf;
+    if (nearestStores.nearestEven + nearestStores.both !== nearestStores.values) {
+        fail(`stores: ${nearestStores.values - nearestStores.nearestEven - nearestStores.both} of ${nearestStores.values} values stored through rcNearestHalf aren't the nearest-even half (${nearestStores.towardZero} toward zero)`);
+    }
 
     // 6b. The frame's own loop: the sky cells' hit distance over 300 still frames from a reset.
     technique.resetHistory();

@@ -44,7 +44,14 @@ export interface RadianceCacheSettings {
     useDirectLighting: boolean;
     /** `gi1_use_temporal_feedback` (gi1.h:54, default false): last frame's lit image fed back at hits. Phase 3. */
     useTemporalFeedback: boolean;
-    /** `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second-bounce cells. Phase 3. */
+    /**
+     * `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second-bounce
+     * cells. Phase 3. Like Capsaicin's `USE_MULTI_BOUNCE` define it sizes the
+     * world cache at `prepare` (register D42): off, the 535 MB of indirect
+     * values and scratch aren't made. Turning it on takes effect at the next
+     * `prepare` (call `GIPlatform.prepare()` again); turning it off stops the
+     * second bounce at once and frees the memory at the next `prepare`.
+     */
     useMultibounce: boolean;
     /**
      * `environment_light_enable` (Capsaicin's `LightBuilder`, light_builder.h:63,

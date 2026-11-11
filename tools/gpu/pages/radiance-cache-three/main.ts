@@ -235,7 +235,10 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
     const { device, renderer, log } = context;
     const allBounces = await renderAllBouncesDdgi(context, sceneId);
     // One bounce in both (file comment): the radiance cache without its multibounce, DDGI with bounceEnergy 0.
-    const radianceCache = new RadianceCacheTechnique({ useMultibounce: false });
+    // Prepared with the multibounce (its indirect arrays are made at prepare, register D42) and turned
+    // off after the prepare, before its first frame, so the information-only run below can turn it on
+    // without a prepare.
+    const radianceCache = new RadianceCacheTechnique();
     const scene = await loadCompositeScene(device, sceneId, {
         ...SIZE,
         giFrames: GI_FRAMES,
@@ -244,6 +247,8 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         techniques: [radianceCache],
         ddgiSettings: { bounceEnergy: 0 },
     });
+    if (radianceCache.worldCache?.preparedWithMultibounce !== true) throw new Error(`${sceneId}: the radiance cache was prepared without its multibounce`);
+    radianceCache.settings.useMultibounce = false;
     // DDGI keeps its warmed field; frames from here update no probes (units 0; the floor may still run a few).
     scene.threeGI.budget = { units: 0 };
     const reader = new HdrReader(renderer, SIZE.width, SIZE.height);

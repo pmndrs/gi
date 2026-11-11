@@ -318,6 +318,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private prepared: Prepared | null = null;
     /** Capsaicin's hash grid behind the world-cache slot (RC3.2), made in `prepare`. */
     private cache: HashGridCache | null = null;
+    /** Whether the host was told that turning `useMultibounce` on needs a new `prepare` (once per prepare). */
+    private warnedMultibounceNeedsPrepare = false;
     /** `resetHistory` empties the cache at the next `encodeScreen` (it has no encoder of its own). */
     private worldCacheResetPending = false;
     /** The screen probes' history starts afresh at the next `encodeScreen` (new resources, or `resetHistory`). */
@@ -882,6 +884,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const cache = this.cache ?? new HashGridCache(this.settings);
         await cache.prepare(context);
         this.worldCacheResetPending = false;
+        this.warnedMultibounceNeedsPrepare = false;
         return cache;
     }
 
@@ -894,6 +897,12 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources): void {
         const cache: WorldCache | null = this.cache;
         if (!cache) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        // The multibounce's arrays are made at prepare (register D42): until the host prepares
+        // again, the cache runs single bounce.
+        if (this.settings.useMultibounce && this.cache?.preparedWithMultibounce === false && !this.warnedMultibounceNeedsPrepare) {
+            this.warnedMultibounceNeedsPrepare = true;
+            this.context?.warn('@pmndrs/ddgi: useMultibounce was turned on after prepare; it takes effect at the next GIPlatform.prepare() (until then the radiance cache runs one bounce)');
+        }
         if (this.worldCacheResetPending) {
             cache.reset(encoder);
             this.worldCacheResetPending = false;

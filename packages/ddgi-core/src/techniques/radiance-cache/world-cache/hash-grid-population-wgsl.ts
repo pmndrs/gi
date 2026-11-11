@@ -276,12 +276,15 @@ export interface HashGridCacheRayListLayout {
  * entries, cell, query and ray lists (`max_combined_ray_count` each), the resolve list
  * (`max_ray_count`, first bounce only), a reservoir per visibility ray
  * (`g_Reservoir_IndirectSampleReservoirBuffer`), the second-bounce entries'
- * brdf and pdf (`max_ray_count`, gi1.cpp:688) and, ours, a bypass flag per
- * first-bounce entry (`max_ray_count`, register D40).
+ * brdf and pdf (`max_ray_count`, gi1.cpp:688; none without multibounce) and,
+ * ours, a bypass flag per first-bounce entry (`max_ray_count`, register D40).
+ * Without multibounce the resolve list stays: ours lists the lit hits there
+ * where Capsaicin's `ResolveCells` reads the shadow-ray list (register D42).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number): HashGridCacheRayListLayout {
-    // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
-    const maxCombinedRayCount = 2 * maxRayCount;
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, multibounce: boolean): HashGridCacheRayListLayout {
+    // With USE_MULTI_BOUNCE (Capsaicin's default, gi1.h:55) bounce 0 and bounce 1 share the
+    // visibility lists; without it they hold the first bounce alone (gi1.cpp:637).
+    const maxCombinedRayCount = multibounce ? 2 * maxRayCount : maxRayCount;
     const updateTileBuffer = 0;
     const visibilityBuffer = updateTileBuffer + Math.min(maxCombinedRayCount, numCells);
     const visibilityCellBuffer = visibilityBuffer + VISIBILITY_WORDS * maxCombinedRayCount;
@@ -290,7 +293,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const resolveBuffer = visibilityRayBuffer + maxCombinedRayCount;
     const reservoirBuffer = resolveBuffer + maxRayCount;
     const multibounceInfoBuffer = reservoirBuffer + RESERVOIR_WORDS * maxCombinedRayCount;
-    const visibilityBypassBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount;
+    const visibilityBypassBuffer = multibounceInfoBuffer + (multibounce ? MULTIBOUNCE_INFO_WORDS * maxRayCount : 0);
     const words = visibilityBypassBuffer + maxRayCount;
     return {
         maxRayCount,
@@ -480,7 +483,7 @@ fn HashGridCache_DrawLight(surface: GiSurface, random: ptr<function, RcRandom>) 
 `;
 
 /** INV_PI (math/math_constants.hlsl). */
-const INV_PI_WGSL = /* wgsl */ `
+export const INV_PI_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
 `;
 
@@ -827,6 +830,8 @@ export function updateTilesPerWorkgroup(tileCellRatio: number): number {
  */
 export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     const side = POPULATION_WORKGROUP_SIZE.updateTilesSide;
+    // USE_MULTI_BOUNCE (register D42): the indirect values' share, only in a cache that has them.
+    const multibounce = (code: string): string => (layout.multibounce ? code : '');
     return /* wgsl */ `
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.updateTiles)}
 
@@ -834,7 +839,7 @@ const UPDATE_TILES_GROUP_X: u32 = ${side}u;
 const UPDATE_TILES_GROUP_Y: u32 = ${side}u;
 
 var<workgroup> lds_UpdateTiles_ValueBuffer: array<array<vec2u, ${side}>, ${side}>;
-var<workgroup> lds_UpdateTiles_ValueIndirectBuffer: array<array<vec2u, ${side}>, ${side}>;
+${multibounce(`var<workgroup> lds_UpdateTiles_ValueIndirectBuffer: array<array<vec2u, ${side}>, ${side}>;`)}
 
 // Temporal accumulation of one cell (gi1.comp:2162-2177 for the direct values, 2179-2195 for
 // the indirect ones): the history and this frame's samples, each as a mean, blended with weight
@@ -881,14 +886,14 @@ fn UpdateTiles_SumDirect(position: vec2u, step: u32) -> vec4f {
     return radiance;
 }
 
-fn UpdateTiles_SumIndirect(position: vec2u, step: u32) -> vec4f {
+${multibounce(`fn UpdateTiles_SumIndirect(position: vec2u, step: u32) -> vec4f {
     var radiance = vec4f(0.0);
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + 0u][position.y + 0u]);
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + step][position.y + 0u]);
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + 0u][position.y + step]);
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + step][position.y + step]);
     return radiance;
-}
+}`)}
 
 // One coarser level (MIP 1, 2 or 3): a thread on the level's grid ('step' threads apart) sums
 // its 2 x 2 block of the level below and writes it to the tile and to the group's memory, where
@@ -901,10 +906,10 @@ fn UpdateTiles_FilterLevel(group_thread_id: vec2u, tile_cell_offset: vec2u, tile
     lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance;
     g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_radiance;
 
-    // USE_MULTI_BOUNCE
+    ${multibounce(`// USE_MULTI_BOUNCE
     let packed_radiance_indirect = HashGridCache_PackRadiance(UpdateTiles_SumIndirect(group_thread_id, step));
     lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance_indirect;
-    g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_radiance_indirect;
+    g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_radiance_indirect;`)}
 }
 
 @compute @workgroup_size(${side}, ${side})
@@ -939,20 +944,20 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
             HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]),
             UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index),
             g_HashGridCacheConstants.max_sample_count);
-        // USE_MULTI_BOUNCE
+        ${multibounce(`// USE_MULTI_BOUNCE
         let indirect_radiance = UpdateTiles_Accumulate(
             HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]),
             UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index),
-            g_HashGridCacheConstants.max_multibounce_sample_count);
+            g_HashGridCacheConstants.max_multibounce_sample_count);`)}
 
         // Pack
         let packed_direct_radiance = HashGridCache_PackRadiance(direct_radiance);
         lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_direct_radiance;
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_direct_radiance;
 
-        let packed_indirect_radiance = HashGridCache_PackRadiance(indirect_radiance);
+        ${multibounce(`let packed_indirect_radiance = HashGridCache_PackRadiance(indirect_radiance);
         lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_indirect_radiance;
-        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_indirect_radiance;
+        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_indirect_radiance;`)}
     }
 
     // MIP 1
@@ -1012,9 +1017,13 @@ fn ${POPULATION_ENTRY_POINT.resolveCells}(
 
     let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
     var radiance = (direct_radiance.rgb / max(direct_radiance.w, 1.0));
-    // USE_MULTI_BOUNCE
+    ${
+        layout.multibounce
+            ? `// USE_MULTI_BOUNCE
     let indirect_radiance = HashGridCache_FilteredRadianceIndirect(cell_index);
-    radiance += (indirect_radiance.rgb / max(indirect_radiance.w, 1.0));
+    radiance += (indirect_radiance.rgb / max(indirect_radiance.w, 1.0));`
+            : '// Without USE_MULTI_BOUNCE the cache has no indirect values (register D42).'
+    }
     ScreenProbes_AccumulateRadiance(query_index, radiance);
 }
 `;
@@ -1056,7 +1065,7 @@ fn HashGridCache_LoadMultibounceInfo(multibounce_index: u32) -> vec4f {
  * with the diffuse compensation there). The view direction only enters
  * Capsaicin's GGX half vector, so Lambert doesn't take it.
  */
-const SAMPLE_DIFFUSE_WGSL = /* wgsl */ `
+export const SAMPLE_DIFFUSE_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_TWO_PI: f32 = 6.28318530717959;
 
 // Quaternion::transform (quaternion.hlsl:46-51): the quaternion q = (axis xyz, w) applied to a direction.
@@ -1206,10 +1215,10 @@ fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(
     // Sample diffuse direction
     let diffuse_sample = HashGridCache_SampleBRDFAndEvaluateDiffuse(surface.albedo, surface.normal, rcRand2(&random));
 
-    // Trace: MakeRayInfoClosest(world, normal, direction, MAX_HIT_DISTANCE) pushes the origin off
-    // the surface along the normal with offsetPosition; ours with the platform's push along the same
-    // normal (register D39).
-    let ray = GiRay(giShadeOffsetRayOrigin(surface.position, surface.normal), 0.0, diffuse_sample.direction, RC_MAX_HIT_DISTANCE);
+    // Trace: MakeRayInfoClosest(world, normal, direction, MAX_HIT_DISTANCE) (trace_ray.hlsl:112-119,
+    // gi1.comp:1933) pushes the origin off the surface with offsetPosition along the same normal
+    // (register D39).
+    let ray = GiRay(rcOffsetPosition(surface.position, surface.normal), 0.0, diffuse_sample.direction, RC_MAX_HIT_DISTANCE);
     let hit = giTraceClosest(ray);
 
     // If we hit some geometry, we append a new world-space hash-grid cache query

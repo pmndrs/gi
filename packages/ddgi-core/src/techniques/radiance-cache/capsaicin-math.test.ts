@@ -9,6 +9,8 @@ import {
     makeRandom,
     mapToHemiOctahedron,
     mapToHemiOctahedronInverse,
+    nearestHalf,
+    offsetPosition,
     packHalf3,
     packSeed,
     probeCellOf,
@@ -218,6 +220,56 @@ describe('packing (screen_probes.hlsl, pack.hlsl)', () => {
         for (const bits of [0x0001, 0x03ff, 0x0400, 0x3555, 0x3c00, 0x7bff, 0x8001, 0xbc00]) {
             expect(floatToHalfBits(halfBitsToFloat(bits))).toBe(bits);
         }
+    });
+
+    it('rounds to the nearest half before a store, which a store that rounds to nearest leaves alone (register D59)', () => {
+        const towardZero = (value: number): number => {
+            const nearest = floatToHalfBits(value);
+            return Math.abs(halfBitsToFloat(nearest)) > Math.abs(Math.fround(value)) ? nearest - 1 : nearest;
+        };
+        const values: number[] = [0, 1, -2, 40, 39.99999, 65504, 65519, -65519, 2 ** -24, 2 ** -25, 3 * 2 ** -25, 2 ** -14 * (1 - 2 ** -11), 1 + 2 ** -11, 1 + 3 * 2 ** -11, 1e-30];
+        let state = 7;
+        for (let index = 0; index < 20000; index++) {
+            state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+            const exponent = (state % 40) - 25;
+            state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+            // Every fourth a tie between two halves; the sign alternates.
+            const mantissa = index % 4 === 0 ? (Math.floor((state / 2 ** 32) * 1024) + 0.5) / 1024 : state / 2 ** 32;
+            values.push((index % 2 === 0 ? 1 : -1) * (1 + mantissa) * 2 ** exponent);
+        }
+        // Past the half range: clamped to the largest half, where the nearest would be 65,536 or infinity.
+        for (const value of [65520, 70000, 1e30, Infinity]) {
+            expect(nearestHalf(value)).toBe(65504);
+            expect(nearestHalf(-value)).toBe(-65504);
+        }
+        for (const value of values) {
+            const rounded = nearestHalf(value);
+            // It is the nearest half (ties to even), so it is exactly a half...
+            expect(rounded).toBe(halfBitsToFloat(floatToHalfBits(value)));
+            // ...which a nearest-rounding store keeps, giving what it gave without the rounding...
+            expect(floatToHalfBits(rounded)).toBe(floatToHalfBits(value));
+            // ...and a store that rounds toward zero keeps too.
+            expect(towardZero(rounded)).toBe(floatToHalfBits(value));
+        }
+    });
+
+    it('pushes a point off its surface as offsetPosition does (geometry.hlsl:35-47, register D39)', () => {
+        const bits = (value: number): number => new Int32Array(new Float32Array([value]).buffer)[0];
+        // Along +z at z = 3: z steps 256 ulps up on its bits; x and y stay (their normal component truncates to 0).
+        const up = offsetPosition([1, 2, 3], [0, 0, 1]);
+        expect(up[0]).toBe(1);
+        expect(up[1]).toBe(2);
+        expect(bits(up[2]) - bits(3)).toBe(256);
+        // A negative coordinate steps further from zero for a normal pointing away from zero.
+        const down = offsetPosition([1, 2, -3], [0, 0, -1]);
+        expect(bits(down[2]) - bits(-3)).toBe(256);
+        expect(down[2]).toBeLessThan(-3);
+        // Within 1/32 of the origin: a plain n / 65536 push.
+        const nearOrigin = offsetPosition([0.01, 0, 5], [0.6, 0, 0.8]);
+        expect(nearOrigin[0]).toBe(Math.fround(Math.fround(0.01) + Math.fround(0.6) / 65536));
+        expect(nearOrigin[1]).toBe(0);
+        // 0.8 x 256 = 204.8 truncates to 204 steps.
+        expect(bits(nearOrigin[2]) - bits(5)).toBe(204);
     });
 
     it('packs a direction as three halves', () => {

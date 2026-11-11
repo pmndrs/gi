@@ -221,6 +221,58 @@ export function halfBitsToFloat(bits: number): number {
     return sign * (1 + mantissa / 1024) * 2 ** (exponent - 15);
 }
 
+const offsetFloats = new Float32Array(3);
+const offsetInts = new Int32Array(offsetFloats.buffer);
+
+/**
+ * `offsetPosition` (geometry.hlsl:35-47; `rcOffsetPosition`, register D39)
+ * on f32 inputs: each coordinate stepped on its bits by `trunc(256 n)`,
+ * away from zero along the normal, or, within 1/32 of the origin, moved by
+ * n / 65536. Bit for bit what the GPU gives (checked on
+ * `radiance-cache-multibounce`).
+ */
+export function offsetPosition(position: Direction, normal: Direction): [number, number, number] {
+    const result: [number, number, number] = [0, 0, 0];
+    for (let axis = 0; axis < 3; axis++) {
+        const coordinate = Math.fround(position[axis]);
+        const n = Math.fround(normal[axis]);
+        if (Math.abs(coordinate) < 1 / 32) {
+            result[axis] = Math.fround(coordinate + Math.fround(n * (1 / 65536)));
+            continue;
+        }
+        const step = Math.trunc(Math.fround(n * 256));
+        offsetFloats[axis] = coordinate;
+        offsetInts[axis] = (offsetInts[axis] + (coordinate < 0 ? -step : step)) | 0;
+        result[axis] = offsetFloats[axis];
+    }
+    return result;
+}
+
+/** The largest finite half (`RC_LARGEST_HALF`). */
+const LARGEST_HALF = 65504;
+/** The smallest normal half, 2^-14 (`RC_SMALLEST_NORMAL_HALF`). */
+const SMALLEST_NORMAL_HALF = 2 ** -14;
+
+/**
+ * `rcNearestHalf` (wgsl/capsaicin.ts, register D59) on one f32, step for
+ * step: the value clamped to the half range, the exponent from the magnitude
+ * (held at the smallest normal half),
+ * a scale by a power of two, `round` (ties to even), and the scale back. Every
+ * step is exact in f32, so the result is the nearest half (ties to even) of
+ * the value as an f32 (65,504 from 65,520 up). The GPU check is
+ * `radiance-cache-filter` check 5; this twin shows it changes nothing where a
+ * store already rounds to nearest.
+ */
+export function nearestHalf(value: number): number {
+    const single = Math.min(Math.max(Math.fround(value), -LARGEST_HALF), LARGEST_HALF);
+    if (Number.isNaN(single)) return single;
+    const magnitude = Math.max(Math.abs(single), SMALLEST_NORMAL_HALF);
+    // frexp's exponent: magnitude = fraction × 2^exponent with fraction in [0.5, 1).
+    const frexpExponent = Math.floor(Math.log2(magnitude)) + 1;
+    const stepExponent = frexpExponent - 11;
+    return roundHalfToEven(single * 2 ** -stepExponent) * 2 ** stepExponent;
+}
+
 /** `packHalf3` (pack.hlsl:411-416): x and y in the first word, z in the low half of the second. */
 export function packHalf3(value: Direction): [number, number] {
     return [(floatToHalfBits(value[0]) | (floatToHalfBits(value[1]) << 16)) >>> 0, floatToHalfBits(value[2])];

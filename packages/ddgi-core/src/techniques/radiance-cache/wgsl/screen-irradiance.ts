@@ -412,7 +412,9 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.filterProbes}(@builtin(workgroup_id) workgrou
         hitDistance = radiance.w / totalWeight;
     }
 
-    textureStore(rcOutputProbeBuffer, pos, radiance / totalWeight);
+    // Rounded to the nearest half before the store (register D59): a store that rounds toward
+    // zero would lose up to a step of hit distance each pass, which the min above keeps.
+    textureStore(rcOutputProbeBuffer, pos, rcNearestHalf(radiance / totalWeight));
 }
 `;
 

@@ -361,8 +361,9 @@ fn ${HISTORY_ENTRY_POINT.reproject}(
     } else {
         radiance = backup;
     }
-    // Stored as halves (register D19): the hit distance kept below the half range.
-    textureStore(rcProbeBuffer, did, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+    // Stored as halves (register D19): the hit distance kept below the half range, every value
+    // rounded to its nearest half (register D59).
+    textureStore(rcProbeBuffer, did, rcNearestHalf(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
 }
 `;
 
