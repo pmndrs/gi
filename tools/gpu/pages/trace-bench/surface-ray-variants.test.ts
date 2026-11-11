@@ -8,7 +8,8 @@
 import { describe, expect, it } from 'vitest';
 import { RAY_FLOATS } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import { COUNTED_WORD, COUNTED_WORDS, NO_ORIGIN } from './counted-walk-wgsl.ts';
+import { traceModuleWgsl } from '../../../../packages/ddgi-core/src/platform/trace/wgsl.ts';
+import { benchWalkWgsl, COUNTED_WORD, COUNTED_WORDS, countedKernelWgsl, NO_ORIGIN, TIE_BREAKS, tieBreakKernelWgsl } from './counted-walk-wgsl.ts';
 import { makeProbeRays, offsetRayOrigin } from './rc-rays.ts';
 import {
     cellMajorOrder,
@@ -174,5 +175,45 @@ describe('surface-ray variants', () => {
             { min: [0, 0, 0] as [number, number, number], max: [10, 10, 10] as [number, number, number] },
         ];
         expect(meanInstanceBoxesAtOrigins(rays, boxes, 1)).toBe(1.5);
+    });
+});
+
+/** A WGSL function's text from `fn <name>(` to its closing brace at the start of a line. */
+function functionText(source: string, name: string): string {
+    const start = source.indexOf(`fn ${name}(`);
+    if (start < 0) throw new Error(`no function ${name}`);
+    const end = source.indexOf('\n}\n', start);
+    return source.slice(start, end + 2);
+}
+
+/** Without comments, and with all whitespace runs as one space, so only code is compared. */
+function codeOnly(text: string): string {
+    return text
+        .replace(/\/\/[^\n]*/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+describe('bench walks', () => {
+    it("are the production walk line for line once counters are off (so traversal order can't drift)", () => {
+        const production = traceModuleWgsl({ group: 0, firstBinding: 0 });
+        for (const [kind, productionName] of [['closest', 'giWalkClosest'], ['any', 'giWalkAny']] as const) {
+            const copy = benchWalkWgsl({ kind, name: productionName, counters: false, tieBreak: 'none' });
+            expect(codeOnly(functionText(copy, productionName))).toBe(codeOnly(functionText(production, productionName)));
+        }
+    });
+
+    it('differ from production only in the child-order condition when a tie-break is on', () => {
+        const plain = codeOnly(benchWalkWgsl({ kind: 'closest', name: 'walk', counters: false, tieBreak: 'none' }));
+        for (const tieBreak of TIE_BREAKS.filter((entry) => entry !== 'none')) {
+            const broken = codeOnly(benchWalkWgsl({ kind: 'closest', name: 'walk', counters: false, tieBreak }));
+            expect(broken).not.toBe(plain);
+            expect(broken.replace(/if \(leftEntry < rightEntry \|\| \(leftEntry == rightEntry && [^{]*\) \{/, 'if (leftEntry <= rightEntry) {')).toBe(plain);
+        }
+    });
+
+    it('make whole kernels with one entry point each', () => {
+        for (const mode of ['closest', 'any'] as const) expect(countedKernelWgsl(mode)).toContain('fn benchCounted(');
+        for (const tieBreak of TIE_BREAKS) expect(tieBreakKernelWgsl(tieBreak)).toContain('fn benchTieBreak(');
     });
 });

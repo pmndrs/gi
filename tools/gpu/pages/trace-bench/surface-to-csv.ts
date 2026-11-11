@@ -17,7 +17,12 @@
  * `instance_entries_without_hit`, `triangle_tests`, `origin_boxes`,
  * `steps_before_first_hit`, `instance_boxes_at_origin`, `simd32_efficiency`,
  * `workgroup64_efficiency`, `hit_fraction`, `median_hit_t_m`,
- * `self_hit_fraction`, `origin_triangle_tested_fraction`.
+ * `self_hit_fraction`, `origin_triangle_tested_fraction`, `counted_agreement`
+ * (the counted copy against the production kernel), `agreement_with_instanced`
+ * (merged and split trees). The paired section (instanced and merged trees,
+ * and the tie-break walks, timed in turn) gives
+ * `surface/paired/<tree>/<set>/loaded_mrays_per_s_{median,min,max}_of_rounds`
+ * and `surface/paired/ratio/<name>/{median,min,max}_of_rounds`.
  * Without --append the rows are printed.
  */
 
@@ -53,6 +58,8 @@ const COUNT_METRICS: [string, (set: SurfaceSetResult) => number][] = [
     ['median_hit_t_m', (set) => set.medianHitT],
     ['self_hit_fraction', (set) => set.selfHitFraction],
     ['origin_triangle_tested_fraction', (set) => set.originTriangleTestedFraction],
+    ['counted_agreement', (set) => set.countedAgreement],
+    ['agreement_with_instanced', (set) => set.agreementWithInstanced ?? Number.NaN],
 ];
 
 /** A run's rows: `timed` changes from run to run, `counted` doesn't (the walk's work depends only on the rays and trees). */
@@ -67,9 +74,34 @@ export function surfaceRaysRows(data: SurfaceRaysData): { timed: MetricRow[]; co
     ];
     for (const set of data.sets) {
         const prefix = `surface/${set.tree}/${set.name}`;
-        timed.push({ scene, metric: `${prefix}/loaded_mrays_per_s`, value: set.loadedMrays }, { scene, metric: `${prefix}/single_mrays_per_s`, value: set.singleMrays });
-        for (const [name, read] of COUNT_METRICS) counted.push({ scene, metric: `${prefix}/${name}`, value: read(set) });
+        // The tie-break sets' rate is the paired section's median, so it is written there, not here.
+        if (set.group !== 'tie-break') {
+            timed.push({ scene, metric: `${prefix}/loaded_mrays_per_s`, value: set.loadedMrays }, { scene, metric: `${prefix}/single_mrays_per_s`, value: set.singleMrays });
+        }
+        for (const [name, read] of COUNT_METRICS) {
+            const value = read(set);
+            // No value (an instanced set has no agreement with itself; a tie-break set has no sampled boxes): no row.
+            if (Number.isFinite(value)) counted.push({ scene, metric: `${prefix}/${name}`, value });
+        }
     }
+    for (const entry of data.paired?.entries ?? []) {
+        const rates = [...entry.mraysPerRound].sort((a, b) => a - b);
+        const prefix = `surface/paired/${entry.tree}/${entry.name}`;
+        timed.push(
+            { scene, metric: `${prefix}/loaded_mrays_per_s_median_of_rounds`, value: rates[rates.length >> 1] },
+            { scene, metric: `${prefix}/loaded_mrays_per_s_min_of_rounds`, value: rates[0] },
+            { scene, metric: `${prefix}/loaded_mrays_per_s_max_of_rounds`, value: rates[rates.length - 1] },
+        );
+        counted.push({ scene, metric: `${prefix}/agreement_with_production`, value: entry.agreementWithProduction });
+    }
+    for (const ratio of data.paired?.ratios ?? []) {
+        timed.push(
+            { scene, metric: `surface/paired/ratio/${ratio.name}/median_of_rounds`, value: ratio.median },
+            { scene, metric: `surface/paired/ratio/${ratio.name}/min_of_rounds`, value: ratio.min },
+            { scene, metric: `surface/paired/ratio/${ratio.name}/max_of_rounds`, value: ratio.max },
+        );
+    }
+    if (data.paired) counted.push({ scene, metric: 'surface/paired/rounds', value: data.paired.rounds });
     return { timed, counted };
 }
 

@@ -19,6 +19,7 @@ import {
     RAY_FLOATS,
     HIT_RECORD_BYTES,
     HIT_RECORD_WORD,
+    TraceBatchKernel,
     uploadTraceScene,
     type TraceSceneBuffers,
     type TraceSceneData,
@@ -27,10 +28,10 @@ import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/
 import type { AdapterSummary } from '../../contract.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { BENCH_SCENE_SUBSETS, RAY_DIRECTION_SEED, RC_HALTON_FIRST_INDEX, RC_RAYS_PER_PROBE, RC_SEED, RC_TILE_SIZE, RC_VIEW } from './config.ts';
-import { COUNTED_WORD, COUNTED_WORDS, countedKernelWgsl, NO_ORIGIN } from './counted-walk-wgsl.ts';
+import { COUNTED_WORD, COUNTED_WORDS, countedKernelWgsl, NO_ORIGIN, TIE_BREAKS, tieBreakKernelWgsl, type TieBreak } from './counted-walk-wgsl.ts';
 import { createDispatchTimer } from './dispatch-timer.ts';
 import { IDENTITY_MATRIX, type BenchInstance, type BenchMeshGeometry } from './gltf-geometry.ts';
-import { buildOursScene, openOursPrepareTracer, readBuffer, runOursTracerOnSets, uploadRays, yieldToBrowser, type RaySetBuffer } from './ours-bench.ts';
+import { buildOursScene, openOursPrepareTracer, readBuffer, runOursTracerOnSets, timeRaySets, uploadRays, yieldToBrowser, type RaySetBuffer } from './ours-bench.ts';
 import { makePlacementRays, rayProblems, tileGrid } from './rc-rays.ts';
 import { makeProbeGrid, makeProbeRays as makeGridRays, makeSphereDirections, probePosition, type Box, type Vec3 } from './rays.ts';
 import { fullBrowserVersion, requestBenchDevice } from './run.ts';
@@ -76,7 +77,7 @@ const T_MAX_M = [0.5, 1, 2, 5, 10] as const;
 interface Variant {
     name: string;
     /** Which question it answers. */
-    group: 'baseline' | 'offset' | 't-min' | 'direction' | 'origin-swap' | 'region' | 'order' | 'length' | 'any-hit' | 'repeat';
+    group: 'baseline' | 'offset' | 't-min' | 'direction' | 'origin-swap' | 'region' | 'order' | 'length' | 'any-hit' | 'repeat' | 'tie-break';
     /** What differs from the set it is compared with, in words. */
     change: string;
     mode: 'closest' | 'any';
@@ -105,7 +106,17 @@ export type TreeLayout = 'instanced' | 'merged' | `split-${number}`;
 const SPLIT_TRIANGLES = [32_768, 4_096] as const;
 
 /** The sets also traced through the merged tree. */
-const MERGED_SETS = ['surface', 'air-grid', 'offset-500mm', 'air-origins-surface-dirs', 'air-region', 'tmax-2m', 'surface-any', 'air-grid-any'] as const;
+const MERGED_SETS = ['surface', 'air-grid', 'offset-500mm', 'air-origins-surface-dirs', 'air-region', 'tmax-2m', 'surface-any', 'air-grid-any', 'surface-again'] as const;
+
+/**
+ * The paired section: the surface set through the instanced and the merged
+ * trees, and through the tie-break walks, timed in turn for this many
+ * rounds, the order reversed every other round, so the GPU's drift over the
+ * run falls on both sides of every ratio (the batches above are timed one
+ * after the other, and the M5 drifted 13-29% over them).
+ */
+const PAIRED_ROUNDS = 5;
+const PAIRED_TIMING = { warmups: 2, timed: 5, loadedMs: 500 } as const;
 
 export interface SurfaceSetResult extends CountSummary {
     tree: TreeLayout;
@@ -144,6 +155,33 @@ export interface SurfaceRaysData {
     userAgent: string;
     browserVersion: string | null;
     sets: SurfaceSetResult[];
+    paired: PairedResult;
+}
+
+/** One kernel on one tree in the paired section: its loaded rate in every round. */
+export interface PairedEntry {
+    name: string;
+    tree: 'instanced' | 'merged';
+    walk: TieBreak;
+    mode: 'closest' | 'any';
+    mraysPerRound: number[];
+    /** Share of rays with the production instanced kernel's answer (first round). */
+    agreementWithProduction: number;
+}
+
+/** A ratio of two paired entries' rates, per round. */
+export interface PairedRatio {
+    name: string;
+    perRound: number[];
+    median: number;
+    min: number;
+    max: number;
+}
+
+export interface PairedResult {
+    rounds: number;
+    entries: PairedEntry[];
+    ratios: PairedRatio[];
 }
 
 /** Each instance's world-space box, from its mesh's object-space box. */
@@ -186,12 +224,13 @@ class CountedKernel {
         private readonly scene: TraceSceneBuffers,
     ) {}
 
-    static async create(device: GPUDevice, scene: TraceSceneBuffers): Promise<CountedKernel> {
+    /** `tieBreak` changes the closest-hit walk's order for children entered at the same distance (any-hit keeps production's). */
+    static async create(device: GPUDevice, scene: TraceSceneBuffers, tieBreak: TieBreak = 'none'): Promise<CountedKernel> {
         const make = (mode: 'closest' | 'any') =>
             device.createComputePipelineAsync({
                 label: `counted walk ${mode}`,
                 layout: 'auto',
-                compute: { module: device.createShaderModule({ label: `counted walk ${mode}`, code: countedKernelWgsl(mode) }), entryPoint: 'benchCounted' },
+                compute: { module: device.createShaderModule({ label: `counted walk ${mode}`, code: countedKernelWgsl(mode, tieBreak) }), entryPoint: 'benchCounted' },
             });
         const [closest, any] = await Promise.all([make('closest'), make('any')]);
         return new CountedKernel(device, { closest, any }, scene);
@@ -641,6 +680,207 @@ async function measureTree(
     return { results, answers };
 }
 
+/** Records one dispatch of the tie-break walk (same bindings and hit record as the production batch kernel). */
+function encodeTieBreak(
+    device: GPUDevice,
+    pipeline: GPUComputePipeline,
+    scene: TraceSceneBuffers,
+    encoder: GPUCommandEncoder,
+    set: RaySetBuffer,
+    results: GPUBuffer,
+    timestampWrites: GPUComputePassTimestampWrites | undefined,
+): void {
+    const pass = encoder.beginComputePass({ label: 'tie-break walk', timestampWrites });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(
+        0,
+        device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: scene.nodes } },
+                { binding: 1, resource: { buffer: scene.triangles } },
+                { binding: 2, resource: { buffer: scene.topLevel } },
+            ],
+        }),
+    );
+    pass.setBindGroup(
+        1,
+        device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(1),
+            entries: [
+                { binding: 0, resource: { buffer: set.rays, offset: 0, size: set.count * RAY_FLOATS * 4 } },
+                { binding: 1, resource: { buffer: results } },
+            ],
+        }),
+    );
+    const workgroups = Math.ceil(set.count / 64);
+    const x = Math.min(workgroups, device.limits.maxComputeWorkgroupsPerDimension);
+    pass.dispatchWorkgroups(x, Math.ceil(workgroups / x));
+    pass.end();
+}
+
+function ratioOf(name: string, numerator: PairedEntry, denominator: PairedEntry): PairedRatio {
+    const perRound = numerator.mraysPerRound.map((rate, round) => rate / denominator.mraysPerRound[round]);
+    const sorted = [...perRound].sort((a, b) => a - b);
+    return { name, perRound, median: sorted[sorted.length >> 1], min: sorted[0], max: sorted[sorted.length - 1] };
+}
+
+/**
+ * The paired section (see {@link PAIRED_ROUNDS}): the surface set's closest
+ * and any-hit rays through the instanced and merged trees with the
+ * production kernel, and its closest-hit rays through every tie-break walk
+ * on both trees, each timed once per round, the order reversed every other
+ * round. Ratios are taken within a round.
+ */
+async function pairedTiming(
+    context: MeasureContext,
+    instancedData: TraceSceneData,
+    mergedData: TraceSceneData,
+    surface: RaySetBuffer,
+    surfaceAny: RaySetBuffer,
+): Promise<PairedResult> {
+    const { device, timer, sceneId, progress } = context;
+    const scenes = { instanced: uploadTraceScene(device, instancedData, 'paired instanced'), merged: uploadTraceScene(device, mergedData, 'paired merged') };
+    try {
+        const production = await TraceBatchKernel.create(device, 'paired');
+        const tiePipelines = new Map<TieBreak, GPUComputePipeline>();
+        for (const tieBreak of TIE_BREAKS.filter((entry) => entry !== 'none')) {
+            tiePipelines.set(
+                tieBreak,
+                await device.createComputePipelineAsync({
+                    label: `tie-break ${tieBreak}`,
+                    layout: 'auto',
+                    compute: { module: device.createShaderModule({ label: `tie-break ${tieBreak}`, code: tieBreakKernelWgsl(tieBreak) }), entryPoint: 'benchTieBreak' },
+                }),
+            );
+        }
+        interface Plan {
+            entry: PairedEntry;
+            set: RaySetBuffer;
+            encode: Parameters<typeof timeRaySets>[5];
+        }
+        const plans: Plan[] = [];
+        for (const tree of ['instanced', 'merged'] as const) {
+            for (const walk of TIE_BREAKS) {
+                const pipeline = tiePipelines.get(walk);
+                plans.push({
+                    entry: { name: walk === 'none' ? 'surface' : `surface-tie-${walk}`, tree, walk, mode: 'closest', mraysPerRound: [], agreementWithProduction: Number.NaN },
+                    set: surface,
+                    encode: pipeline
+                        ? (encoder, set, results, timestampWrites) => encodeTieBreak(device, pipeline, scenes[tree], encoder, set, results, timestampWrites)
+                        : (encoder, set, results, timestampWrites) => production.encode(encoder, scenes[tree], { mode: set.mode, rays: set.rays, results, count: set.count, timestampWrites }),
+                });
+            }
+            plans.push({
+                entry: { name: 'surface-any', tree, walk: 'none', mode: 'any', mraysPerRound: [], agreementWithProduction: Number.NaN },
+                set: surfaceAny,
+                encode: (encoder, set, results, timestampWrites) => production.encode(encoder, scenes[tree], { mode: set.mode, rays: set.rays, results, count: set.count, timestampWrites }),
+            });
+        }
+        const firstAnswers = new Map<Plan, ArrayBuffer>();
+        for (let round = 0; round < PAIRED_ROUNDS; round++) {
+            const order = round % 2 === 0 ? plans : [...plans].reverse();
+            for (const plan of order) {
+                const [run] = await timeRaySets(device, timer, 'ours-tinybvh', [plan.set], PAIRED_TIMING, plan.encode);
+                plan.entry.mraysPerRound.push(run.mode.loaded?.mraysPerSecond ?? Number.NaN);
+                if (round === 0) firstAnswers.set(plan, run.results);
+                await yieldToBrowser();
+            }
+            progress(`${sceneId}: paired round ${round + 1} of ${PAIRED_ROUNDS}: ${plans.map((plan) => `${plan.entry.tree} ${plan.entry.name} ${plan.entry.mraysPerRound[round].toFixed(1)}`).join(', ')}`);
+        }
+        const find = (tree: 'instanced' | 'merged', name: string): Plan => {
+            const plan = plans.find((candidate) => candidate.entry.tree === tree && candidate.entry.name === name);
+            if (!plan) throw new Error(`no paired entry ${tree} ${name}`);
+            return plan;
+        };
+        for (const plan of plans) {
+            const reference = firstAnswers.get(find('instanced', plan.entry.mode === 'closest' ? 'surface' : 'surface-any'));
+            const answers = firstAnswers.get(plan);
+            if (reference && answers) plan.entry.agreementWithProduction = answerAgreement(plan.entry.mode, reference, answers, plan.set.count);
+        }
+        const ratios = [
+            ratioOf('merged_over_instanced_closest', find('merged', 'surface').entry, find('instanced', 'surface').entry),
+            ratioOf('merged_over_instanced_any', find('merged', 'surface-any').entry, find('instanced', 'surface-any').entry),
+        ];
+        for (const tree of ['instanced', 'merged'] as const) {
+            for (const walk of TIE_BREAKS.filter((entry) => entry !== 'none')) {
+                ratios.push(ratioOf(`${tree}_tie_${walk}_over_none`, find(tree, `surface-tie-${walk}`).entry, find(tree, 'surface').entry));
+            }
+        }
+        for (const ratio of ratios) progress(`${sceneId}: paired ${ratio.name}: median ${ratio.median.toFixed(3)} (${ratio.min.toFixed(3)}-${ratio.max.toFixed(3)} over ${PAIRED_ROUNDS} rounds)`);
+        return { rounds: PAIRED_ROUNDS, entries: plans.map((plan) => plan.entry), ratios };
+    } finally {
+        scenes.instanced.destroy();
+        scenes.merged.destroy();
+    }
+}
+
+/**
+ * The walk's work on the surface set with each tie-break, on one tree:
+ * counted results named `surface-tie-<rule>` (group `tie-break`), with the
+ * paired section's median rate.
+ */
+async function countTieBreaks(
+    context: MeasureContext,
+    tree: 'instanced' | 'merged',
+    data: TraceSceneData,
+    surface: Variant,
+    buffer: GPUBuffer,
+    paired: PairedResult,
+    reference: ArrayBuffer,
+): Promise<SurfaceSetResult[]> {
+    const { device } = context;
+    const sceneBuffers = uploadTraceScene(device, data, `tie-break ${tree}`);
+    const results: SurfaceSetResult[] = [];
+    try {
+        const count = surface.rays.length / RAY_FLOATS;
+        for (const walk of TIE_BREAKS.filter((entry) => entry !== 'none')) {
+            const kernel = await CountedKernel.create(device, sceneBuffers, walk);
+            const counts = await kernel.count('closest', buffer, surface.originIds, count);
+            const name = `surface-tie-${walk}`;
+            const entry = paired.entries.find((candidate) => candidate.tree === tree && candidate.name === name);
+            const rates = [...(entry?.mraysPerRound ?? [])].sort((a, b) => a - b);
+            const rate = rates.length > 0 ? rates[rates.length >> 1] : Number.NaN;
+            // The counted record's first words are a hit record's t, instance and triangle, so agreement is read as for the production answers.
+            const summary = summariseCounts(counts, count);
+            results.push({
+                tree,
+                name,
+                group: 'tie-break',
+                change: `surface, children entered at the same distance ordered by ${walk} instead of left first (bench-only walk)`,
+                mode: 'closest',
+                singleMedianMs: Number.NaN,
+                singleMrays: Number.NaN,
+                loadedMedianMs: Number.NaN,
+                loadedMrays: rate,
+                loadedDispatches: 0,
+                countedAgreement: answerAgreementCounted(reference, counts, count),
+                meanInstanceBoxesAtOrigin: Number.NaN,
+                agreementWithInstanced: null,
+                ...summary,
+            });
+            context.progress(`${context.sceneId} (${tree}): ${name}: steps ${summary.meanSteps.toFixed(1)}, median paired rate ${rate.toFixed(1)} Mrays/s, same closest hit as production on ${(results[results.length - 1].countedAgreement * 100).toFixed(3)}%`);
+        }
+    } finally {
+        sceneBuffers.destroy();
+    }
+    return results;
+}
+
+/** Share of rays whose counted closest `t` matches a production hit record's (hit and miss alike, `t` within 1e-4 relative). */
+function answerAgreementCounted(production: ArrayBuffer, counted: ArrayBuffer, count: number): number {
+    const recordWords = HIT_RECORD_BYTES / 4;
+    const floats = new Float32Array(production);
+    const countedFloats = new Float32Array(counted);
+    let agree = 0;
+    for (let ray = 0; ray < count; ray++) {
+        const t = floats[ray * recordWords + HIT_RECORD_WORD.t];
+        const countedT = countedFloats[ray * COUNTED_WORDS + COUNTED_WORD.t];
+        if ((t < 0 && countedT < 0) || (t >= 0 && countedT >= 0 && Math.abs(t - countedT) <= 1e-4 * Math.max(1, t))) agree++;
+    }
+    return count > 0 ? agree / count : 1;
+}
+
 export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
     const startTime = performance.now();
     const lines: string[] = [];
@@ -720,6 +960,19 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
             );
             results.push(...mergedRun.results);
 
+            // Instanced against merged, and the tie-break walks, timed in turn so drift cancels.
+            const surfaceIndex = variants.findIndex((variant) => variant.name === 'surface');
+            const surfaceAnyIndex = variants.findIndex((variant) => variant.name === 'surface-any');
+            const asSet = (index: number): RaySetBuffer => ({ raySet: variants[index].name, mode: variants[index].mode, rays: buffers[index], count: variants[index].rays.length / RAY_FLOATS });
+            progress(`${sceneId}: paired section, ${PAIRED_ROUNDS} rounds`);
+            const paired = await pairedTiming(measureContext, ours.data, mergedScene.data, asSet(surfaceIndex), asSet(surfaceAnyIndex));
+            const surfaceAnswers = instanced.answers.get('surface');
+            if (!surfaceAnswers) throw new Error('the instanced surface set has no answers');
+            results.push(...(await countTieBreaks(measureContext, 'instanced', ours.data, variants[surfaceIndex], buffers[surfaceIndex], paired, surfaceAnswers)));
+            const mergedSurface = mergedVariants.find((variant) => variant.name === 'surface');
+            if (!mergedSurface) throw new Error('the merged sets have no surface set');
+            results.push(...(await countTieBreaks(measureContext, 'merged', mergedScene.data, mergedSurface, buffers[surfaceIndex], paired, surfaceAnswers)));
+
             // The instanced layout with every mesh cut into compact pieces: instancing kept, smaller top-level boxes.
             for (const piece of SPLIT_TRIANGLES) {
                 const split = splitMeshes(scene.meshes, scene.instances, piece);
@@ -755,11 +1008,14 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
                 userAgent: navigator.userAgent,
                 browserVersion: await fullBrowserVersion(),
                 sets: results,
+                paired,
             };
             const disagreeing = results.filter((result) => result.countedAgreement < MIN_COUNTED_AGREEMENT);
+            const pairedDisagreeing = paired.entries.filter((entry) => !(entry.agreementWithProduction >= MIN_MERGED_AGREEMENT));
             const mergedDisagreeing = results.filter((result) => result.agreementWithInstanced !== null && result.agreementWithInstanced < MIN_MERGED_AGREEMENT);
             const failures = [
                 ...disagreeing.map((result) => `the counted copy of the walk disagrees with the production kernel on ${result.tree} ${result.name}: ${(result.countedAgreement * 100).toFixed(3)}%`),
+                ...pairedDisagreeing.map((entry) => `paired ${entry.tree} ${entry.name} disagrees with the production instanced kernel: ${(entry.agreementWithProduction * 100).toFixed(3)}%`),
                 ...mergedDisagreeing.map((result) => `the ${result.tree} tree disagrees with the instanced one on ${result.name}: ${((result.agreementWithInstanced ?? 0) * 100).toFixed(3)}%`),
             ];
             if (failures.length > 0) {
