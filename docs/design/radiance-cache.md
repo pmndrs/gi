@@ -174,6 +174,15 @@ Dennis's port is at `/Users/dex/Documents/Codex/2026-11-09/wha/outputs/brixelize
 2. **Far field read from the hash grid.** A probe ray past a few metres continues in the field, and its hit's position and normal look up an existing hash-grid cell (`worldCacheLookup(position, normal, direction)`, already in the interface). No triangle or material is needed. A hit with no lit cell yet falls back to the BVH, or counts as empty.
 3. **Far field with material:** only with cards, which is Lumen's arrangement (RC-X3).
 
+**Measured by the port (2026-11-11, its own bench: one Apple GPU, a 5,840-triangle procedural room, single runs; its docs/COMPARISON_PLAN.md):**
+- **Speed:** short AO rays (499k, ≤ 0.5 m, any-hit) run at about 135 Mrays/s through the coarse field and 77 through the fine one, against about 2.4 Grays/s for pmndrs/bvh. So the field is 10–30× slower on a small scene.
+- **Agreement:** it matches the BVH on 97.5–99% of rays, with no false misses.
+- **Memory:** 37–103 MiB, against 0.44 MiB for the BVH.
+- **Not measured:** large or dynamic scenes, or long rays, where a field could win.
+- **Expected fix:** its hierarchy walk restarts from the root at every step (its DIV-012).
+- **So for now:** the BVH stays the long-ray default. Lever 9 waits for DIV-012 and numbers on Sponza and Bistro.
+- **Its query:** `traceFieldRay` / `traceClipmapRay(origin, dir, tMin, tMax, maxSteps, hitEpsilon)`, composed into our shader. It binds 3 storage buffers, a uniform, a 3D texture and a sampler at group 0, so it needs a group-index option before we can compose it. StepLimit, Pending and InvalidField mean "unknown", never "miss". A start within the hit tolerance of a surface hits immediately, so the field suits continuing a ray far from surfaces, not starting one on them.
+
 **What's missing on our side:** the platform has one tracer. `createTraceModule` (`platform/trace/wgsl.ts:282-300`) wires the BVH walk in directly, so a second backend needs a seam first. It's a platform option, `longRays: 'bvh' | 'field'`, with the BVH as the default and DDGI unchanged.
 
 ## World-cache memory
