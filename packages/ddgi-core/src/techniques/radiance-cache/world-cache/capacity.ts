@@ -94,7 +94,38 @@ export interface HashGridCacheOptions {
      * face gives the probe ray its emission and bypasses the cache.
      */
     useDirectLighting: boolean;
+    /**
+     * Ours, lever 1 (RC-L1; docs/design/radiance-cache.md, "Budgeted cell
+     * shading, id Tech 8's way"): how the cache's cells get their light.
+     * `perHit` (the default) is Capsaicin's: every probe-ray hit draws a light
+     * and traces its shadow ray (`GenerateReservoirs`, `PopulateCells`).
+     * `budget` is id Tech 8's: a hit only finds its cell and offers its hit
+     * record; a separate pass lights at most `cellShadingBudget` cells a
+     * frame, most urgent first, and a cell keeps its light until it is lit
+     * again. Read at `prepare`: `budget` adds buffers and kernels.
+     */
+    cellShading: CellShading;
+    /** With `budget`: the most cells lit a frame (id Tech 8 lights about 20,000 for a whole level). Read every frame. */
+    cellShadingBudget: number;
+    /** With `budget`: light draws, each with its shadow ray, per lit cell a frame. Read every frame. */
+    cellShadingSamples: number;
+    /**
+     * With `budget`: frames since a cell was last lit after which it counts as
+     * stale (the stale-cell counter, for a frame budget to read). The order
+     * the cells are lit in doesn't depend on it: new cells first, then by
+     * frames since lit, oldest first (ages told apart up to 255). Read every
+     * frame.
+     */
+    cellShadingMaxAge: number;
 }
+
+/** How the hash grid's cells get their light (lever 1): Capsaicin's per hit, or id Tech 8's budget of cells. */
+export type CellShading = 'perHit' | 'budget';
+
+/** The largest `cellShadingMaxAge`: the ranking tells ages apart up to 255 frames (a 256-entry histogram: new, then one per age). */
+export const MAX_CELL_SHADING_AGE = 255;
+/** The largest `cellShadingSamples`. */
+export const MAX_CELL_SHADING_SAMPLES = 64;
 
 /** Capsaicin's defaults (gi1.h:58-65). */
 export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = Object.freeze({
@@ -109,7 +140,23 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     useMultibounce: true,
     environmentLightEnable: true,
     useDirectLighting: true,
+    // Lever 1 off: Capsaicin's per-hit population. The budget values are ours, for when it's on:
+    // id Tech 8's 20,000 cells a frame (Sousa, SIGGRAPH 2025, S20), one sample, stale after 8 frames.
+    cellShading: 'perHit',
+    cellShadingBudget: 20000,
+    cellShadingSamples: 1,
+    cellShadingMaxAge: 8,
 });
+
+/** Throws a RangeError unless the cell-shading settings can be used (they are read every frame). */
+export function checkCellShadingOptions(options: Pick<HashGridCacheOptions, 'cellShading' | 'cellShadingBudget' | 'cellShadingSamples' | 'cellShadingMaxAge'>): void {
+    if (options.cellShading !== 'perHit' && options.cellShading !== 'budget') {
+        throw new RangeError(`@pmndrs/ddgi: cellShading must be 'perHit' or 'budget', got ${String(options.cellShading)}`);
+    }
+    checkWhole('cellShadingBudget', options.cellShadingBudget, 0, 0xffffffff);
+    checkWhole('cellShadingSamples', options.cellShadingSamples, 1, MAX_CELL_SHADING_SAMPLES);
+    checkWhole('cellShadingMaxAge', options.cellShadingMaxAge, 1, MAX_CELL_SHADING_AGE);
+}
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */
 export const TILE_MIP_LEVELS = 4;
@@ -210,6 +257,23 @@ export const HASH_GRID_COUNTER = {
      * insert pass (made once, at `prepare`) can read it.
      */
     probeRayCount: 8,
+    /** Lever 1 (`cellShading: 'budget'`): cells that a hit offered itself to this frame, the cells in use. */
+    usedCellCount: 9,
+    /** Lever 1: cells the budget lit this frame, min(budget, cells in use). */
+    litCellCount: 10,
+    /** Lever 1: shadow rays the budgeted lighting traced this frame (lit cells × samples when every draw finds a light). */
+    cellShadowRayCount: 11,
+    /** Lever 1: cells in use that are stale (never lit, or lit `cellShadingMaxAge` frames ago or more), before this frame's lighting. */
+    staleCellCount: 12,
+    /** Lever 1: samples the budgeted lighting added to cells this frame: lit cells × samples, a draw with no light a sample of 0. */
+    cellSampleCount: 13,
+    /** Lever 1: first-bounce hits the second bounce leaves from on a budget (the lit cells' picks and the bypassing hits). */
+    multibounceSourceCount: 14,
+    /**
+     * Lever 1: cells in use last lit 255 frames ago or more, where the ranking
+     * stops telling ages apart (it can't go round more than 255 × budget cells).
+     */
+    ageClampedCellCount: 15,
 } as const;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
@@ -221,6 +285,8 @@ export interface HashGridCacheBufferLayout {
      * without the code that reads them.
      */
     readonly multibounce: boolean;
+    /** Whether the cache holds lever 1's per-cell words (`cellShading: 'budget'` at `prepare`). */
+    readonly cellShading: boolean;
     /**
      * Cache words, in words: the counters ({@link HASH_GRID_COUNTER}), then
      * `numTiles` words each of hash, decay, packed tile index 0 and 1 and the
@@ -238,6 +304,13 @@ export interface HashGridCacheBufferLayout {
         readonly updateCellValueBuffer: number;
         /** `UpdateCellValueIndirectBuffer`: four words per cell; null without multibounce. */
         readonly updateCellValueIndirectBuffer: number | null;
+        /**
+         * Lever 1, one word per cell (null in `perHit`): the key of the hit
+         * the cell keeps this frame (0 for none; the choice resets it), and the
+         * frame plus one it was last lit by the budget (0 for never).
+         */
+        readonly cellShadingKeptHitBuffer: number | null;
+        readonly cellShadingLastLitBuffer: number | null;
         readonly bytes: number;
     };
     /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells` (null without multibounce). */
@@ -265,8 +338,11 @@ function alignWords(words: number): number {
  * The packed buffers for a capacity. `multibounce` false leaves out the
  * indirect values and the indirect update scratch, as Capsaicin frees them
  * without `gi1_use_multibounce` (gi1.cpp:497-510, 535-552; register D42).
+ * `cellShading` (lever 1's `budget`) adds two words per cell after the
+ * scratch, in the cache words because the pass that lights cells binds the
+ * platform's hit shading and has no storage buffer to spare.
  */
-export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity, multibounce: boolean): HashGridCacheBufferLayout {
+export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity, multibounce: boolean, cellShading = false): HashGridCacheBufferLayout {
     const { numTiles, numCells } = capacity;
     const hashBuffer = COUNTER_WORDS;
     const decayTileBuffer = alignWords(hashBuffer + numTiles);
@@ -277,7 +353,10 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity, multi
     const updateCellValueBuffer = alignWords(updateListedTileBuffer + numTiles);
     const directScratchEnd = updateCellValueBuffer + scratchWordsPerArray;
     const updateCellValueIndirectBuffer = multibounce ? alignWords(directScratchEnd) : null;
-    const wordCount = updateCellValueIndirectBuffer === null ? directScratchEnd : updateCellValueIndirectBuffer + scratchWordsPerArray;
+    const scratchEnd = updateCellValueIndirectBuffer === null ? directScratchEnd : updateCellValueIndirectBuffer + scratchWordsPerArray;
+    const cellShadingKeptHitBuffer = cellShading ? alignWords(scratchEnd) : null;
+    const cellShadingLastLitBuffer = cellShadingKeptHitBuffer === null ? null : alignWords(cellShadingKeptHitBuffer + numCells);
+    const wordCount = cellShadingLastLitBuffer === null ? scratchEnd : cellShadingLastLitBuffer + numCells;
     // Word indices are u32 on the GPU, the scratch's included.
     if (wordCount > 0xffffffff) throw new RangeError(`@pmndrs/ddgi: the world cache's ${wordCount} cache words are too many to index with 32 bits`);
     const wordsBytes = wordCount * WORD_BYTES;
@@ -285,7 +364,19 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity, multi
     const cellValuesBytes = cellValueArrays * numCells * CELL_VALUE_BYTES;
     return {
         multibounce,
-        words: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, updateCellValueBuffer, updateCellValueIndirectBuffer, bytes: wordsBytes },
+        cellShading,
+        words: {
+            hashBuffer,
+            decayTileBuffer,
+            packedTileIndexBuffer0,
+            packedTileIndexBuffer1,
+            updateListedTileBuffer,
+            updateCellValueBuffer,
+            updateCellValueIndirectBuffer,
+            cellShadingKeptHitBuffer,
+            cellShadingLastLitBuffer,
+            bytes: wordsBytes,
+        },
         cellValues: { valueBuffer: 0, valueIndirectBuffer: multibounce ? numCells : null, bytes: cellValuesBytes },
         totalBytes: wordsBytes + cellValuesBytes,
     };

@@ -32,7 +32,13 @@
  *
  * Switches, for hand use: `VITE_RC_TIMING_SCENES=sponza,two-room` picks
  * scenes, `VITE_RC_TIMING_MULTIBOUNCE=on|off|both` (default both) the
- * multibounce settings, `VITE_DDGI_MAX_TEXTURE_SIZE` the model textures'
+ * multibounce settings, `VITE_RC_TIMING_CELL_SHADING=perHit|budget|alternate`
+ * (default perHit) lever 1's mode (RC-L1; `alternate` runs perHit, budget,
+ * perHit, budget for each multibounce setting, so the M5's drift with heat
+ * falls on both modes alike; each change prepares the platform again, as
+ * the mode is read at prepare; the budget at its defaults, and its counters
+ * read back after the timed frames), `VITE_RC_TIMING_BUDGET` the budget's
+ * `cellShadingBudget` (default the setting's default, 20,000), `VITE_DDGI_MAX_TEXTURE_SIZE` the model textures'
  * largest side (default 1024: native Capsaicin's runs used 1k textures, and
  * GI reads only their averages).
  *
@@ -47,6 +53,7 @@ import { NodeMaterial, QuadMesh, type Mesh, type Node, type Object3D, type WebGP
 import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { CellShading } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
@@ -70,6 +77,8 @@ const DEFAULT_MAX_TEXTURE_SIZE = 1024;
 const env = import.meta.env as Record<string, unknown>;
 const SCENES = typeof env.VITE_RC_TIMING_SCENES === 'string' && env.VITE_RC_TIMING_SCENES.trim() !== '' ? env.VITE_RC_TIMING_SCENES.split(',').map((id) => id.trim()) : [...DEFAULT_SCENES];
 const MULTIBOUNCE_SETTINGS = multibounceSettings(env.VITE_RC_TIMING_MULTIBOUNCE);
+const CELL_SHADING_SEQUENCE = cellShadingSequence(env.VITE_RC_TIMING_CELL_SHADING);
+const CELL_SHADING_BUDGET = typeof env.VITE_RC_TIMING_BUDGET === 'string' && env.VITE_RC_TIMING_BUDGET.trim() !== '' ? Number(env.VITE_RC_TIMING_BUDGET) : undefined;
 const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : DEFAULT_MAX_TEXTURE_SIZE;
 
 function multibounceSettings(value: unknown): boolean[] {
@@ -82,6 +91,20 @@ function multibounceSettings(value: unknown): boolean[] {
             return [false];
         default:
             throw new Error(`VITE_RC_TIMING_MULTIBOUNCE must be on, off or both, got "${String(value)}"`);
+    }
+}
+
+/** Lever 1's modes to time in turn for each multibounce setting (RC-L1). */
+function cellShadingSequence(value: unknown): CellShading[] {
+    switch (value ?? 'perHit') {
+        case 'perHit':
+            return ['perHit'];
+        case 'budget':
+            return ['budget'];
+        case 'alternate':
+            return ['perHit', 'budget', 'perHit', 'budget'];
+        default:
+            throw new Error(`VITE_RC_TIMING_CELL_SHADING must be perHit, budget or alternate, got "${String(value)}"`);
     }
 }
 
@@ -127,7 +150,9 @@ async function timeScene(context: ThreePageContext, sceneId: string): Promise<Sc
     const camera = shotCamera(manifest, SIZE.width, SIZE.height);
 
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-timing ${sceneId}`, gpuTiming: true });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ useMultibounce: MULTIBOUNCE_SETTINGS[0] }));
+    const technique = platform.addTechnique(
+        new RadianceCacheTechnique({ useMultibounce: MULTIBOUNCE_SETTINGS[0], cellShading: CELL_SHADING_SEQUENCE[0], ...(CELL_SHADING_BUDGET === undefined ? {} : { cellShadingBudget: CELL_SHADING_BUDGET }) }),
+    );
     platform.setOutput(technique);
     const preparing = platform.prepare();
     // Chrome sends the compile requests when this JavaScript task ends (ThreeGI's file comment).
@@ -159,8 +184,14 @@ async function timeScene(context: ThreePageContext, sceneId: string): Promise<Sc
 
     try {
         const settings: SettingTiming[] = [];
-        for (const useMultibounce of MULTIBOUNCE_SETTINGS) {
+        const runs = MULTIBOUNCE_SETTINGS.flatMap((useMultibounce) => CELL_SHADING_SEQUENCE.map((cellShading, index) => ({ useMultibounce, cellShading, round: Math.floor(index / 2) + 1 })));
+        for (const { useMultibounce, cellShading, round } of runs) {
             technique.settings.useMultibounce = useMultibounce;
+            // Lever 1's mode is read at prepare (its buffers and kernels); the multibounce turns on only at prepare too.
+            if (technique.worldCache?.preparedCellShading !== cellShading || (useMultibounce && technique.worldCache?.preparedWithMultibounce === false)) {
+                technique.settings.cellShading = cellShading;
+                await platform.prepare();
+            }
             for (let warm = 0; warm < WARMUP_FRAMES; warm++) await frame();
             assert(!platform.rays.building, `${sceneId}: mesh trees still building after the warm-up`);
 
@@ -179,14 +210,15 @@ async function timeScene(context: ThreePageContext, sceneId: string): Promise<Sc
                     timedFrames.add(timed.frame);
                 }
             }
-            settings.push(summarise(sceneId, useMultibounce, byPass, timedFrames, { ...technique.counters }));
+            const cellShadingCounters = await readCellShadingCounters(device, technique);
+            settings.push(summarise(sceneId, { useMultibounce, cellShading, round }, byPass, timedFrames, { ...technique.counters, ...cellShadingCounters }));
             const latest = settings[settings.length - 1];
             log(
-                `${sceneId}, multibounce ${useMultibounce ? 'on' : 'off'}, ${latest.framesTimed} frames: ` +
+                `${sceneId}, multibounce ${useMultibounce ? 'on' : 'off'}, ${cellShading} (round ${round}), ${latest.framesTimed} frames: ` +
                     CAPSAICIN_GROUPS.map((group) => `${group} ${latest.groups[group].toFixed(3)}`).join(', ') +
                     `; diffuse subtotal ${latest.diffuseSubtotalMs.toFixed(3)} ms; all passes ${latest.radianceCacheFrameMs.toFixed(3)} ms a frame`,
             );
-            log(`${sceneId}, multibounce ${useMultibounce ? 'on' : 'off'}, sections: ${Object.entries(latest.sections).map(([section, ms]) => `${section} ${ms.toFixed(3)}`).join(', ')}`);
+            log(`${sceneId}, multibounce ${useMultibounce ? 'on' : 'off'}, ${cellShading} (round ${round}), sections: ${Object.entries(latest.sections).map(([section, ms]) => `${section} ${ms.toFixed(3)}`).join(', ')}`);
         }
         return { triangles: loaded.stats.triangles, maxTextureSize: MAX_TEXTURE_SIZE, settings };
     } finally {
@@ -199,9 +231,32 @@ async function timeScene(context: ThreePageContext, sceneId: string): Promise<Sc
     }
 }
 
+/** Lever 1's counters for the latest frame (cells in use, lit, their shadow rays), read back; none per hit. */
+async function readCellShadingCounters(device: GPUDevice, technique: RadianceCacheTechnique): Promise<Record<string, number>> {
+    const words = technique.worldCache?.cellShadingCounters;
+    if (!words) return {};
+    const readback = device.createBuffer({ label: 'radiance-cache-timing counters', size: 64 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = device.createCommandEncoder({ label: 'radiance-cache-timing counters' });
+    encoder.copyBufferToBuffer(words.usedCells.buffer, 0, readback, 0, 64 * 4);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const counters = new Uint32Array(readback.getMappedRange().slice(0));
+    readback.unmap();
+    readback.destroy();
+    const at = (word: { offset: number }): number => counters[word.offset / 4];
+    return { 'cell shading cells in use': at(words.usedCells), 'cell shading cells lit': at(words.litCells), 'cell shading shadow rays': at(words.shadowRays) };
+}
+
 /** Medians per pass, section and group, with the checks (the file comment). */
-function summarise(sceneId: string, useMultibounce: boolean, byPass: ReadonlyMap<string, ReadonlyMap<number, number>>, timedFrames: ReadonlySet<number>, counters: Record<string, number>): SettingTiming {
-    const label = `${sceneId}, multibounce ${useMultibounce ? 'on' : 'off'}`;
+function summarise(
+    sceneId: string,
+    setting: { readonly useMultibounce: boolean; readonly cellShading: CellShading; readonly round: number },
+    byPass: ReadonlyMap<string, ReadonlyMap<number, number>>,
+    timedFrames: ReadonlySet<number>,
+    counters: Record<string, number>,
+): SettingTiming {
+    const { useMultibounce, cellShading } = setting;
+    const label = `${sceneId}, multibounce ${useMultibounce ? 'on' : 'off'}, ${cellShading} (round ${setting.round})`;
     assert(timedFrames.size >= MEASURED_FRAMES / 2, `${label}: only ${timedFrames.size} timed frames`);
     const passes: Record<string, number> = {};
     const platformPasses: Record<string, number> = {};
@@ -227,10 +282,10 @@ function summarise(sceneId: string, useMultibounce: boolean, byPass: ReadonlyMap
 
     const sections: Record<string, number> = {};
     const groups = Object.fromEntries(CAPSAICIN_GROUPS.map((group) => [group, 0])) as Record<CapsaicinGroup, number>;
-    for (const { section, group, multibounceOnly } of SECTIONS) {
+    for (const { section, group, multibounceOnly, cellShadingOnly } of SECTIONS) {
         const frames = sectionFrames.get(section);
-        if (multibounceOnly && !useMultibounce) {
-            assert(frames === undefined, `${label}: ${section} ran with the multibounce off`);
+        if ((multibounceOnly && !useMultibounce) || (cellShadingOnly !== undefined && cellShadingOnly !== cellShading)) {
+            assert(frames === undefined, `${label}: ${section} ran with the multibounce ${useMultibounce ? 'on' : 'off'} and cellShading ${cellShading}`);
             continue;
         }
         assert(frames !== undefined && frames.size >= timedFrames.size / 2, `${label}: ${section} was timed in ${frames?.size ?? 0} of ${timedFrames.size} frames`);
@@ -241,6 +296,8 @@ function summarise(sceneId: string, useMultibounce: boolean, byPass: ReadonlyMap
     }
     return {
         useMultibounce,
+        cellShading,
+        round: setting.round,
         framesTimed: timedFrames.size,
         passes,
         sections,
@@ -255,7 +312,7 @@ function summarise(sceneId: string, useMultibounce: boolean, byPass: ReadonlyMap
 await runThreePage(
     async (context) => {
         assert(context.device.features.has('timestamp-query'), 'timing needs the timestamp-query feature');
-        context.log(`scenes ${SCENES.join(', ')}; multibounce ${MULTIBOUNCE_SETTINGS.map((on) => (on ? 'on' : 'off')).join(', ')}; textures at most ${MAX_TEXTURE_SIZE} px; ${WARMUP_FRAMES} warm-up and ${MEASURED_FRAMES} timed frames per setting`);
+        context.log(`scenes ${SCENES.join(', ')}; multibounce ${MULTIBOUNCE_SETTINGS.map((on) => (on ? 'on' : 'off')).join(', ')}; cell shading ${CELL_SHADING_SEQUENCE.join(', ')}; textures at most ${MAX_TEXTURE_SIZE} px; ${WARMUP_FRAMES} warm-up and ${MEASURED_FRAMES} timed frames per setting`);
         for (const sceneId of SCENES) context.data[sceneId] = await timeScene(context, sceneId);
     },
     SIZE,

@@ -667,7 +667,7 @@ Each lever is a setting beside the faithful path (DECISIONS 2026-11-11). Its row
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC-L1 | Lever 1, budgeted cell shading (id Tech 8): `cellShading: 'perHit' \| 'budget'` with `cellShadingBudget`, `cellShadingSamples` and `cellShadingMaxAge`, inside the hash grid, as the design doc's "Budgeted cell shading" says | implementer | L | RC5.1 | active (implementer, 2026-11-11) |
+| RC-L1 | Lever 1, budgeted cell shading (id Tech 8): `cellShading: 'perHit' \| 'budget'` with `cellShadingBudget`, `cellShadingSamples` and `cellShadingMaxAge`, inside the hash grid, as the design doc's "Budgeted cell shading" says | implementer | L | RC5.1 | done (2026-11-11, Mac lead; Opus review failed twice, notes fixed, the reviewer's E3 fix for no-light draws reproduced; budget vs perHit on the M5: Sponza about 16.4 → 10 ms, Bistro interior 19.5 → 11.5 ms; converged within 1% (two-room +0.9%); lamp-off lag 57 frames against perHit's 62 at an ample budget; small budgets lag (1/16 lamp off to 1%: about 830 frames); perHit unchanged; Windows not run) |
 | RC-X3 | Extension 3, card cache (Lumen's surface cache) as a second `WorldCache`: design study | main session, scout (Lumen sources, Brixelizer workstream) | M | none | done (2026-11-11: study in the design doc; Dennis: the hash grid stays primary, cards only if needed; not built) |
 
 - **RC-L1 done-when.**

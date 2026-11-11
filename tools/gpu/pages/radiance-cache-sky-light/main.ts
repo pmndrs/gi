@@ -15,6 +15,12 @@
  * - the hash grid's lists: the hits that drew a light this frame, and how
  *   many of them drew the sky.
  *
+ * RC-L1 adds a third run, `environmentLightEnable` on with lever 1's
+ * budgeted cell shading (`cellShading: 'budget'`, a budget above the cells
+ * in use, max age 1, one sample), reported beside the per-hit run: its mean
+ * E over the per-hit run's, and the budget's counters (cells in use, lit,
+ * shadow rays) in place of the hits' sky draws.
+ *
  * Information for PROGRESS, not a gate: it fails only on errors (a device
  * error, a scene that doesn't load) or a value that isn't finite. Scenes load
  * as `radiance-cache-overflow` loads them. Through the lock:
@@ -25,6 +31,7 @@ import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/con
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { GI_DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/contract/shade.ts';
 import { RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
@@ -61,15 +68,17 @@ interface RunResult {
     readonly hits: number;
     readonly hitsWithLight: number;
     readonly skyDraws: number;
+    /** Lever 1, on a budget: the cells in use, lit and their shadow rays this frame. */
+    readonly budget?: { readonly usedCells: number; readonly litCells: number; readonly shadowRays: number };
 }
 
 type LoadedScene = Awaited<ReturnType<typeof loadScene>>;
 
-async function runOnce(device: GPUDevice, manifest: SceneManifest, loaded: LoadedScene, environmentLightEnable: boolean): Promise<RunResult> {
+async function runOnce(device: GPUDevice, manifest: SceneManifest, loaded: LoadedScene, settings: Partial<RadianceCacheSettings>): Promise<RunResult> {
     const bookmark = manifest.cameras[0];
     const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 2000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-sky-light ${manifest.id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ environmentLightEnable }));
+    const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
     platform.setOutput(technique);
     await platform.prepare();
     const sync = new SceneSync(platform.scene, { device, warn: () => {} });
@@ -155,6 +164,9 @@ async function runOnce(device: GPUDevice, manifest: SceneManifest, loaded: Loade
             hits: counters[HASH_GRID_COUNTER.visibilityCount0] + counters[HASH_GRID_COUNTER.visibilityCount1],
             hitsWithLight: shadowRays,
             skyDraws,
+            ...(cache.preparedCellShading === 'budget'
+                ? { budget: { usedCells: counters[HASH_GRID_COUNTER.usedCellCount], litCells: counters[HASH_GRID_COUNTER.litCellCount], shadowRays: counters[HASH_GRID_COUNTER.cellShadowRayCount] } }
+                : {}),
         };
     } finally {
         screen.dispose();
@@ -173,11 +185,16 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
         if ((object as { isMesh?: boolean }).isMesh && !content.has(object)) object.userData.giContributes = false;
     });
     loaded.scene.updateMatrixWorld();
-    const before = await runOnce(device, manifest, loaded, false);
-    const after = await runOnce(device, manifest, loaded, true);
+    const before = await runOnce(device, manifest, loaded, { environmentLightEnable: false });
+    const after = await runOnce(device, manifest, loaded, { environmentLightEnable: true });
+    // Lever 1 (RC-L1): the same with the cells lit on a budget above the cells in use.
+    const afterBudget = await runOnce(device, manifest, loaded, { environmentLightEnable: true, cellShading: 'budget', cellShadingBudget: 1_000_000, cellShadingMaxAge: 1, cellShadingSamples: 1 });
     return {
         before,
         after,
+        afterBudget,
+        budgetMeanEOverPerHit: afterBudget.meanE / after.meanE,
+        budgetHitRayRadianceOverPerHit: afterBudget.meanHitRayRadiance / after.meanHitRayRadiance,
         meanEAfterOverBefore: after.meanE / before.meanE,
         hitRayRadianceAfterOverBefore: after.meanHitRayRadiance / before.meanHitRayRadiance,
         skyDrawShare: after.skyDraws / Math.max(after.hitsWithLight, 1),
