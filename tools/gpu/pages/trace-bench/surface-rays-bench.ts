@@ -37,6 +37,7 @@ import { fullBrowserVersion, requestBenchDevice } from './run.ts';
 import { findManifest, loadBenchScene } from './scene-source.ts';
 import {
     cellMajorOrder,
+    mortonCode,
     makeVariantProbeRays,
     meanInstanceBoxesAtOrigins,
     probeOrigins,
@@ -88,9 +89,20 @@ interface Variant {
  * Which trees the scene is traced through: `instanced` is the platform's
  * (a tree per mesh under a top level over the instances); `merged` is every
  * instance's triangles in world space in one mesh tree under a one-instance
- * top level, to see what the top level's overlapping instance boxes cost.
+ * top level, to see what the top level's overlapping instance boxes cost;
+ * `split-N` is the instanced layout with every mesh cut into compact pieces
+ * of at most N triangles (see {@link SPLIT_TRIANGLES}).
  */
-export type TreeLayout = 'instanced' | 'merged';
+export type TreeLayout = 'instanced' | 'merged' | `split-${number}`;
+
+/**
+ * Triangles per piece for the split layouts: every mesh cut into pieces of
+ * at most this many triangles (consecutive along the Morton order of their
+ * centroids, so each piece is compact), each piece its own mesh and every
+ * instance one instance per piece. Instancing stays; only the top level's
+ * boxes get smaller.
+ */
+const SPLIT_TRIANGLES = [32_768, 4_096] as const;
 
 /** The sets also traced through the merged tree. */
 const MERGED_SETS = ['surface', 'air-grid', 'offset-500mm', 'air-origins-surface-dirs', 'air-region', 'tmax-2m', 'surface-any', 'air-grid-any'] as const;
@@ -110,7 +122,7 @@ export interface SurfaceSetResult extends CountSummary {
     countedAgreement: number;
     /** Instances whose world box contains the ray's origin (sampled). */
     meanInstanceBoxesAtOrigin: number;
-    /** Merged tree only: share of rays whose closest hit (or blocked flag) matches the instanced tree's. */
+    /** Merged and split trees only: share of rays whose closest hit (or blocked flag) matches the instanced tree's. */
     agreementWithInstanced: number | null;
 }
 
@@ -435,6 +447,91 @@ function mergeInstances(meshes: readonly BenchMeshGeometry[], instances: readonl
     return { mesh: { positions, indices }, triangleOffsets, box };
 }
 
+/**
+ * Every mesh cut into compact pieces of at most `piece` triangles (sorted
+ * by the Morton code of their centroids in the mesh's box, then cut in
+ * runs), and every instance repeated once per piece of its mesh with the
+ * same transform. Returns where each original (instance, triangle) went.
+ */
+function splitMeshes(
+    meshes: readonly BenchMeshGeometry[],
+    instances: readonly BenchInstance[],
+    piece: number,
+): { meshes: BenchMeshGeometry[]; instances: BenchInstance[]; mapId(instance: number, triangle: number): [number, number] } {
+    const pieces: BenchMeshGeometry[] = [];
+    /** Per original mesh: the first piece's index, and per triangle its piece (relative) and index in the piece. */
+    const meshPieces = meshes.map((mesh) => {
+        const triangleCount = mesh.indices.length / 3;
+        const box = boxAround(mesh.positions);
+        const codes = new Float64Array(triangleCount);
+        const centroid = [0, 0, 0];
+        for (let triangle = 0; triangle < triangleCount; triangle++) {
+            for (let axis = 0; axis < 3; axis++) {
+                centroid[axis] =
+                    (mesh.positions[mesh.indices[triangle * 3] * 3 + axis] +
+                        mesh.positions[mesh.indices[triangle * 3 + 1] * 3 + axis] +
+                        mesh.positions[mesh.indices[triangle * 3 + 2] * 3 + axis]) /
+                    3;
+            }
+            codes[triangle] = mortonCode(centroid, box);
+        }
+        const order = Array.from({ length: triangleCount }, (_, index) => index).sort((a, b) => codes[a] - codes[b] || a - b);
+        const firstPiece = pieces.length;
+        const pieceOf = new Uint32Array(triangleCount);
+        const indexInPiece = new Uint32Array(triangleCount);
+        for (let start = 0; start < triangleCount; start += piece) {
+            const end = Math.min(triangleCount, start + piece);
+            const vertexMap = new Map<number, number>();
+            const positions: number[] = [];
+            const indices = new Uint32Array((end - start) * 3);
+            for (let slot = start; slot < end; slot++) {
+                const triangle = order[slot];
+                pieceOf[triangle] = pieces.length - firstPiece;
+                indexInPiece[triangle] = slot - start;
+                for (let corner = 0; corner < 3; corner++) {
+                    const vertex = mesh.indices[triangle * 3 + corner];
+                    let mapped = vertexMap.get(vertex);
+                    if (mapped === undefined) {
+                        mapped = vertexMap.size;
+                        vertexMap.set(vertex, mapped);
+                        positions.push(mesh.positions[vertex * 3], mesh.positions[vertex * 3 + 1], mesh.positions[vertex * 3 + 2]);
+                    }
+                    indices[(slot - start) * 3 + corner] = mapped;
+                }
+            }
+            pieces.push({ positions: Float32Array.from(positions), indices });
+        }
+        return { firstPiece, pieceCount: pieces.length - firstPiece, pieceOf, indexInPiece };
+    });
+    const splitInstances: BenchInstance[] = [];
+    const firstInstanceOf: number[] = [];
+    for (const instance of instances) {
+        const { firstPiece, pieceCount } = meshPieces[instance.meshIndex];
+        firstInstanceOf.push(splitInstances.length);
+        for (let offset = 0; offset < pieceCount; offset++) splitInstances.push({ meshIndex: firstPiece + offset, objectToWorld: instance.objectToWorld });
+    }
+    return {
+        meshes: pieces,
+        instances: splitInstances,
+        mapId: (instance, triangle) => {
+            const mesh = meshPieces[instances[instance].meshIndex];
+            return [firstInstanceOf[instance] + mesh.pieceOf[triangle], mesh.indexInPiece[triangle]];
+        },
+    };
+}
+
+/** Per-ray origin records through a renumbering of (instance, triangle). */
+function mappedOriginIds(originIds: Uint32Array, mapId: (instance: number, triangle: number) => [number, number]): Uint32Array {
+    const ids = originIds.slice();
+    for (let slot = 0; slot < ids.length; slot += 2) {
+        if (ids[slot] === NO_ORIGIN) continue;
+        const [instance, triangle] = mapId(ids[slot], ids[slot + 1]);
+        ids[slot] = instance;
+        ids[slot + 1] = triangle;
+    }
+    return ids;
+}
+
 /** Per-ray origin records for the merged tree: instance 0, the instance's triangle offset plus the triangle. */
 function mergedOriginIds(originIds: Uint32Array, triangleOffsets: readonly number[]): Uint32Array {
     const ids = originIds.slice();
@@ -623,6 +720,24 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
             );
             results.push(...mergedRun.results);
 
+            // The instanced layout with every mesh cut into compact pieces: instancing kept, smaller top-level boxes.
+            for (const piece of SPLIT_TRIANGLES) {
+                const split = splitMeshes(scene.meshes, scene.instances, piece);
+                progress(`${sceneId}: split into pieces of at most ${piece} triangles: ${split.meshes.length} meshes, ${split.instances.length} instances`);
+                const splitScene = await buildOursScene(builder, split.meshes, split.instances);
+                const splitVariants = mergedIndices.map((index) => ({ ...variants[index], originIds: mappedOriginIds(variants[index].originIds, split.mapId) }));
+                const splitRun = await measureTree(
+                    measureContext,
+                    `split-${piece}`,
+                    splitScene.data,
+                    splitVariants,
+                    mergedIndices.map((index) => buffers[index]),
+                    instanceWorldBoxes(split.meshes, split.instances),
+                    instanced.answers,
+                );
+                results.push(...splitRun.results);
+            }
+
             data = {
                 benchmark: 'surface-rays',
                 scene: sceneId,
@@ -645,7 +760,7 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
             const mergedDisagreeing = results.filter((result) => result.agreementWithInstanced !== null && result.agreementWithInstanced < MIN_MERGED_AGREEMENT);
             const failures = [
                 ...disagreeing.map((result) => `the counted copy of the walk disagrees with the production kernel on ${result.tree} ${result.name}: ${(result.countedAgreement * 100).toFixed(3)}%`),
-                ...mergedDisagreeing.map((result) => `the merged tree disagrees with the instanced one on ${result.name}: ${((result.agreementWithInstanced ?? 0) * 100).toFixed(3)}%`),
+                ...mergedDisagreeing.map((result) => `the ${result.tree} tree disagrees with the instanced one on ${result.name}: ${((result.agreementWithInstanced ?? 0) * 100).toFixed(3)}%`),
             ];
             if (failures.length > 0) {
                 status = 'fail';
