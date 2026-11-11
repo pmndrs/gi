@@ -25,11 +25,17 @@
  *    cutoff, the twin's count of the cutoff class, none after.
  * 3. **Lag** (two-room, Capsaicin's defaults otherwise, max age 8, one
  *    sample): `perHit`, and the budget at 1, 1/4 and 1/16 of the cells in use
- *    (counted on the lit room). Its lamp off for 30 frames, then on: frames
- *    until the mean interpolated and denoised E are within 10% of their
- *    converged value (the mean of frames 209-240 after the event), first, and
- *    for good. Then a cut to the second bookmark (`resetScreenProbes`, the
- *    world cache warm): the same. Information.
+ *    (counted on the lit room). Its lamp off for 30 frames, then on, for 720
+ *    frames: frames until the mean interpolated and denoised E are within 10%
+ *    of the converged value, first, and for good (read every frame for the
+ *    first 128, then every 8th, so a lag past 128 frames is known to 8). The converged value is
+ *    `perHit`'s (the mean of its last 32 frames): every mode converges to the
+ *    same image (section 1), but a small budget isn't there yet by the end,
+ *    so its own end value would understate its lag (a first run measured
+ *    against each run's own end did: 1/16's lamp-on end value was 4.8% below
+ *    `perHit`'s). Each run's own end value is reported beside it. Then a cut
+ *    to the second bookmark (`resetScreenProbes`, the world cache warm): the
+ *    same. Information.
  *
  * Correctness only, no timing (`radiance-cache-timing` times both modes).
  * Through the lock:
@@ -41,6 +47,7 @@ import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/con
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
+import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { cellShadingClass, chooseCells } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-cpu.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
@@ -72,9 +79,12 @@ const COUNTER_WARM_FRAMES = 12;
 
 /** Section 3: frames before the lamp comes on, frames after each event, the converged window at their end, the lag's tolerance. */
 const LAMP_OFF_FRAMES = 30;
-const EVENT_FRAMES = 240;
+const EVENT_FRAMES = 720;
 const LAG_TOLERANCE = 0.1;
 const LAG_BUDGET_SHARES = [1, 1 / 4, 1 / 16] as const;
+/** Section 3 reads the images every frame up to this one after an event, then every LAG_COARSE_STEP-th. */
+const LAG_FINE_FRAMES = 128;
+const LAG_COARSE_STEP = 8;
 
 
 // ---- A run: a platform with the radiance cache over one scene, through the page screen -----------
@@ -358,35 +368,72 @@ async function checkCounters(device: GPUDevice, failures: string[]): Promise<Rec
 
 // ---- Section 3: lag -------------------------------------------------------------------------------------
 
-interface Lag {
-    /** Frames after the event until the mean is first within 10% of its converged value, and until it stays there; -1 for never. */
-    readonly firstWithin: number;
-    readonly within: number;
-    readonly converged: number;
+/** Every half's value, for means over whole images without converting them (the lag section reads thousands). */
+const HALF_VALUES = (() => {
+    const values = new Float32Array(65536);
+    for (let bits = 0; bits < 65536; bits++) values[bits] = halfBitsToFloat(bits);
+    return values;
+})();
+
+/** The mean rgb E over `surface` of an `rgba16float` image as read back (four halves a pixel). */
+function halfImageMean(bytes: Uint8Array, surface: Uint32Array): number {
+    const words = new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+    let sum = 0;
+    for (const pixel of surface) sum += HALF_VALUES[words[pixel * 4]] + HALF_VALUES[words[pixel * 4 + 1]] + HALF_VALUES[words[pixel * 4 + 2]];
+    return sum / 3 / Math.max(surface.length, 1);
 }
 
-function lagOf(means: readonly number[]): Lag {
-    const converged = average(means.slice(means.length - MEASURED_FRAMES));
+interface Lag {
+    /** Frames after the event until the mean is first within 10% of the converged value, and until it stays there; -1 for never. */
+    readonly firstWithin: number;
+    readonly within: number;
+    /** The converged value it is measured against (perHit's), and this run's own mean over its last 32 frames. */
+    readonly converged: number;
+    readonly ownEnd: number;
+}
+
+/** The mean over an event's last 32 frames (its last readings: every 8th frame by then, so 4 of them). */
+function endValue(means: readonly number[]): number {
+    return average(means.slice(means.length - MEASURED_FRAMES / LAG_COARSE_STEP));
+}
+
+/** An event's means and the frames (counted from 1, the first frame after the event) they were read at. */
+interface EventMeans {
+    readonly frames: number[];
+    readonly interpolated: number[];
+    readonly denoised: number[];
+}
+
+function lagOf(frames: readonly number[], means: readonly number[], converged: number): Lag {
     const near = means.map((mean) => Math.abs(mean - converged) <= LAG_TOLERANCE * converged);
     const firstWithin = near.indexOf(true);
     let within = -1;
     for (let index = near.length - 1; index >= 0 && near[index]; index--) within = index;
-    // Frames are counted from 1: the first frame after the event is frame 1.
-    return { firstWithin: firstWithin < 0 ? -1 : firstWithin + 1, within: within < 0 ? -1 : within + 1, converged };
+    return { firstWithin: firstWithin < 0 ? -1 : frames[firstWithin], within: within < 0 ? -1 : frames[within], converged, ownEnd: endValue(means) };
 }
 
-async function eventMeans(device: GPUDevice, run: Run, surface: Uint32Array): Promise<{ interpolated: number[]; denoised: number[] }> {
-    const means = { interpolated: [] as number[], denoised: [] as number[] };
-    for (let frame = 0; frame < EVENT_FRAMES; frame++) {
+/** perHit's converged values after each event: what every run's lag is measured against. */
+interface LagReference {
+    readonly lampOn: { readonly interpolated: number; readonly denoised: number };
+    readonly cut: { readonly interpolated: number; readonly denoised: number };
+}
+
+async function eventMeans(device: GPUDevice, run: Run, surface: Uint32Array): Promise<EventMeans> {
+    const means: EventMeans = { frames: [], interpolated: [], denoised: [] };
+    const probes = run.technique.probes;
+    const denoised = run.technique.denoiser?.output;
+    assert(probes && denoised, 'no interpolated or denoised irradiance');
+    for (let frame = 1; frame <= EVENT_FRAMES; frame++) {
         await run.frame();
-        const images = await readImages(device, run);
-        means.interpolated.push(imageMean(images.interpolated, surface));
-        means.denoised.push(imageMean(images.denoised, surface));
+        if (frame > LAG_FINE_FRAMES && frame % LAG_COARSE_STEP !== 0) continue;
+        means.frames.push(frame);
+        means.interpolated.push(halfImageMean(await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT), surface));
+        means.denoised.push(halfImageMean(await readTexture(device, denoised, 8, WIDTH, HEIGHT), surface));
     }
     return means;
 }
 
-async function measureLag(device: GPUDevice, label: string, settings: Partial<RadianceCacheSettings>): Promise<Record<string, unknown>> {
+async function measureLag(device: GPUDevice, label: string, settings: Partial<RadianceCacheSettings>, given?: LagReference): Promise<{ result: Record<string, unknown>; reference: LagReference }> {
     const manifest = loadManifest('two-room');
     const lampIntensity = manifest.lights[0].intensity;
     const run = await startRun(device, 'two-room', settings, { lampIntensity: 0 });
@@ -403,14 +450,21 @@ async function measureLag(device: GPUDevice, label: string, settings: Partial<Ra
         await run.frame();
         const surfaceB = await surfacePixels(device, run);
         const cut = await eventMeans(device, run, surfaceB);
+        const reference = given ?? {
+            lampOn: { interpolated: endValue(lampOn.interpolated), denoised: endValue(lampOn.denoised) },
+            cut: { interpolated: endValue(cut.interpolated), denoised: endValue(cut.denoised) },
+        };
         return {
-            label,
-            counters,
-            lampOn: { interpolated: lagOf(lampOn.interpolated), denoised: lagOf(lampOn.denoised) },
-            cut: { interpolated: lagOf(cut.interpolated), denoised: lagOf(cut.denoised) },
-            // The first frames' means, for plotting.
-            lampOnInterpolatedMeans: lampOn.interpolated.slice(0, 64),
-            cutInterpolatedMeans: cut.interpolated.slice(0, 64),
+            reference,
+            result: {
+                label,
+                counters,
+                lampOn: { interpolated: lagOf(lampOn.frames, lampOn.interpolated, reference.lampOn.interpolated), denoised: lagOf(lampOn.frames, lampOn.denoised, reference.lampOn.denoised) },
+                cut: { interpolated: lagOf(cut.frames, cut.interpolated, reference.cut.interpolated), denoised: lagOf(cut.frames, cut.denoised, reference.cut.denoised) },
+                // Every 8th frame's mean, for plotting.
+                lampOnInterpolatedMeans: lampOn.interpolated.filter((_, index) => lampOn.frames[index] % 8 === 0),
+                cutInterpolatedMeans: cut.interpolated.filter((_, index) => cut.frames[index] % 8 === 0),
+            },
         };
     } finally {
         run.dispose();
@@ -420,15 +474,18 @@ async function measureLag(device: GPUDevice, label: string, settings: Partial<Ra
 
 async function checkLag(device: GPUDevice): Promise<Record<string, unknown>> {
     const results: Record<string, unknown> = {};
-    results.perHit = await measureLag(device, 'perHit', {});
+    const perHit = await measureLag(device, 'perHit', {});
+    results.perHit = perHit.result;
+    results.reference = perHit.reference;
     // The cells in use on the lit room, from a budget run above them.
-    const ample = await measureLag(device, 'budget, all cells', { cellShading: 'budget', cellShadingBudget: 1_000_000 });
-    const usedCells = (ample.counters as { usedCells: number } | null)?.usedCells ?? 0;
+    const ample = await measureLag(device, 'budget, all cells', { cellShading: 'budget', cellShadingBudget: 1_000_000 }, perHit.reference);
+    const usedCells = (ample.result.counters as { usedCells: number } | null)?.usedCells ?? 0;
     assert(usedCells > 0, 'two-room: no cells in use on a budget');
-    results['budget 1'] = ample;
+    results['budget 1'] = ample.result;
     for (const share of LAG_BUDGET_SHARES.slice(1)) {
         const budget = Math.max(1, Math.round(usedCells * share));
-        results[`budget 1/${Math.round(1 / share)}`] = await measureLag(device, `budget ${budget} (1/${Math.round(1 / share)} of ${usedCells})`, { cellShading: 'budget', cellShadingBudget: budget });
+        const label = `budget ${budget} (1/${Math.round(1 / share)} of ${usedCells})`;
+        results[`budget 1/${Math.round(1 / share)}`] = (await measureLag(device, label, { cellShading: 'budget', cellShadingBudget: budget }, perHit.reference)).result;
     }
     return results;
 }
@@ -445,9 +502,12 @@ try {
     window.addEventListener('pagehide', () => device.destroy(), { once: true });
     deviceErrors = watchDevice(device);
     const failures: string[] = [];
-    const counters = await checkCounters(device, failures);
-    const converged = await checkConverged(device, failures);
-    const lag = await checkLag(device);
+    // VITE_RC_CELL_SHADING_SECTIONS=counters,converged,lag (default all) runs some sections only, for hand use.
+    const env = import.meta.env as Record<string, unknown>;
+    const sections = typeof env.VITE_RC_CELL_SHADING_SECTIONS === 'string' && env.VITE_RC_CELL_SHADING_SECTIONS.trim() !== '' ? env.VITE_RC_CELL_SHADING_SECTIONS.split(',').map((name) => name.trim()) : ['counters', 'converged', 'lag'];
+    const counters = sections.includes('counters') ? await checkCounters(device, failures) : 'not run';
+    const converged = sections.includes('converged') ? await checkConverged(device, failures) : 'not run';
+    const lag = sections.includes('lag') ? await checkLag(device) : 'not run';
     await drainDevice(device);
     reportGpuTest({
         status: failures.length === 0 ? 'pass' : 'fail',
