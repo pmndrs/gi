@@ -80,6 +80,7 @@ import { RadianceCacheShadingModule } from './shading.ts';
 import { ScreenSpaceGI } from './ssgi.ts';
 import { createGIDenoiser, encodeGIDenoiser } from './gi-denoiser.ts';
 import { beginTimedPass, KEEP_HISTORY_SECTION, POPULATE_TRACE_SECTION } from './timed-pass.ts';
+import { CellShadingAgeWatch } from './cell-shading-watch.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
@@ -320,6 +321,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private cache: HashGridCache | null = null;
     /** Whether the host was told that turning `useMultibounce` on needs a new `prepare` (once per prepare). */
     private warnedMultibounceNeedsPrepare = false;
+    /** Lever 1's watch on cells past the oldest age the ranking tells apart (budget mode only). */
+    private cellShadingWatch: CellShadingAgeWatch | null = null;
     /** Whether the host was told that a new `cellShading` needs a new `prepare` (once per prepare). */
     private warnedCellShadingNeedsPrepare = false;
     /** `resetHistory` empties the cache at the next `encodeScreen` (it has no encoder of its own). */
@@ -836,7 +839,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // What the CPU knows without a readback: the spawned count stays on the GPU. The world
         // cache adds its capacity and memory (its per-frame counts stay on the GPU too).
         const screen: Record<string, number> = layout ? { 'spawn tiles': layout.maxProbeSpawnCount, 'probe rays at most': layout.maxRayCount } : {};
-        return { ...screen, ...worldCacheCounters(this.cache) };
+        const watch = this.cellShadingWatch?.agedCells;
+        // Lever 1: the latest reading of cells in use unlit for 255 frames or more (the budget can't go round them).
+        const aged: Record<string, number> = watch === undefined || watch === null ? {} : { 'world cache cells unlit 255+ frames (latest reading)': watch };
+        return { ...screen, ...worldCacheCounters(this.cache), ...aged };
     }
 
     /** GPU bytes: the screen probes' buffers, the SH and irradiance (RC2.2), SSGI's outputs (RC4.2), the GI denoiser's (RC4.3) and the world cache's (about 1 GiB at Capsaicin's default capacity). */
@@ -869,6 +875,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     }
 
     dispose(): void {
+        this.cellShadingWatch?.dispose();
+        this.cellShadingWatch = null;
         this.releaseScreen();
         this.releasePrepared();
         this.cache?.dispose();
@@ -923,6 +931,13 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             radiance: resources.rayScratch.rayResults,
         };
         cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height }, rays);
+        // Lever 1: warn once if the budget can't go round the cells in use (ages past 255 frames).
+        const ageCounter = this.cache?.cellShadingCounters?.ageClampedCells;
+        if (ageCounter && this.context) {
+            const context = this.context;
+            this.cellShadingWatch ??= new CellShadingAgeWatch(context.device, (message) => context.warn(message));
+            this.cellShadingWatch.record(encoder, ageCounter, this.settings.cellShadingBudget);
+        }
     }
 
     private resourcesFor(context: TechniqueContext, prepared: Prepared, screen: FrameScreen): ScreenResources {

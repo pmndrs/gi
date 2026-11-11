@@ -363,7 +363,9 @@ const HASHGRIDCACHE_USEDCELLCOUNT: u32 = ${HASH_GRID_COUNTER.usedCellCount}u;
 const HASHGRIDCACHE_LITCELLCOUNT: u32 = ${HASH_GRID_COUNTER.litCellCount}u;
 const HASHGRIDCACHE_CELLSHADOWRAYCOUNT: u32 = ${HASH_GRID_COUNTER.cellShadowRayCount}u;
 const HASHGRIDCACHE_STALECELLCOUNT: u32 = ${HASH_GRID_COUNTER.staleCellCount}u;
-const HASHGRIDCACHE_CELLSAMPLECOUNT: u32 = ${HASH_GRID_COUNTER.cellSampleCount}u;`;
+const HASHGRIDCACHE_CELLSAMPLECOUNT: u32 = ${HASH_GRID_COUNTER.cellSampleCount}u;
+const HASHGRIDCACHE_MULTIBOUNCESOURCECOUNT: u32 = ${HASH_GRID_COUNTER.multibounceSourceCount}u;
+const HASHGRIDCACHE_AGECLAMPEDCELLCOUNT: u32 = ${HASH_GRID_COUNTER.ageClampedCellCount}u;`;
 }
 
 /**
@@ -755,7 +757,9 @@ fn ${HASH_GRID_ENTRY_POINT.clearCounters}() {
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_LITCELLCOUNT], 0u);
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADOWRAYCOUNT], 0u);
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_STALECELLCOUNT], 0u);
-    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSAMPLECOUNT], 0u);`
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSAMPLECOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_MULTIBOUNCESOURCECOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_AGECLAMPEDCELLCOUNT], 0u);`
             : ''
     }
 }

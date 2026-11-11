@@ -176,7 +176,7 @@ export const POPULATION_BINDINGS = {
 } as const satisfies Record<string, PopulationBindings>;
 
 /**
- * Bytes of `HashGridCacheRayLists`: thirteen words (lever 1 added two), the
+ * Bytes of `HashGridCacheRayLists`: fourteen words (lever 1 added three), the
  * uniform buffer rounded up to 16 bytes.
  */
 export const RAY_LISTS_UNIFORM_BYTES = 64;
@@ -284,6 +284,8 @@ export interface HashGridCacheRayListLayout {
     readonly usedCellBuffer: number;
     /** Lever 1: the kept entries of the cells to light, most urgent first (`max_ray_count`; empty in `perHit`). */
     readonly chosenCellBuffer: number;
+    /** Lever 1: the first-bounce entries the second bounce leaves from, the picks of lit cells and the bypassing hits, each once (`max_ray_count`; empty in `perHit`). */
+    readonly multibounceSourceBuffer: number;
     readonly bytes: number;
 }
 
@@ -314,7 +316,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     // Lever 1's two lists: at most one entry per first-bounce hit each (a cell in use has a hit).
     const usedCellBuffer = visibilityBypassBuffer + maxRayCount;
     const chosenCellBuffer = usedCellBuffer + (cellShading ? maxRayCount : 0);
-    const words = chosenCellBuffer + (cellShading ? maxRayCount : 0);
+    const multibounceSourceBuffer = chosenCellBuffer + (cellShading ? maxRayCount : 0);
+    const words = multibounceSourceBuffer + (cellShading ? maxRayCount : 0);
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -329,6 +332,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         visibilityBypassBuffer,
         usedCellBuffer,
         chosenCellBuffer,
+        multibounceSourceBuffer,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -384,6 +388,7 @@ struct HashGridCacheRayLists {
     visibility_bypass_buffer: u32,  // ours (register D40): per first-bounce entry, 1 when its probe ray bypasses the cache
     used_cell_buffer: u32,          // ours, lever 1: the visibility entry each cell in use kept this frame
     chosen_cell_buffer: u32,        // ours, lever 1: the kept entries of the cells to light, most urgent first
+    multibounce_source_buffer: u32, // ours, lever 1: the entries the second bounce leaves from (picks of lit cells, bypassing hits)
 }
 
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.rayLists}) var<uniform> g_HashGridCache_RayLists: HashGridCacheRayLists;
@@ -895,8 +900,9 @@ export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     // reaches 0 (gi1.comp:2170-2177): per hit every cell in use gets a sample each frame, so only
     // cells nobody looks at fade. On a budget most cells in use go unlit for frames and would fade
     // too, so a cell in use this frame (its kept-hit word is set) with no new sample is left as it
-    // is; a cell nobody used fades by Capsaicin's rule, as per hit. A lit cell always has new
-    // samples (a draw with no light is a sample of 0), so a light switched off fades from it.
+    // is; a cell nobody used fades by Capsaicin's rule, as per hit. A lit cell whose draws all found
+    // no light (CellShadingLight clears its word) fades the same way, so a light switched off
+    // leaves it.
     // UpdateTiles is the last pass to read the kept-hit word, and resets it for the next frame's
     // offers: every cell in use is in a tile touched this frame, so on this frame's update list.
     const keepUnlitCells = layout.cellShading
@@ -1211,21 +1217,22 @@ export function populateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout, 
     // Which first-bounce entries trace: every hit (Capsaicin's), or, with lever 1's budget, the
     // hit each lit cell kept (one per lit cell, docs/design/radiance-cache.md, "Budgeted cell
     // shading", step 5), so the second bounce is on the same budget, and every hit that bypasses
-    // the cache, whose probe ray gets its second bounce directly as per hit (register D40). Both
-    // carry their flag in the bypass list (CellShadingPick, CellShadingChoose); the random numbers
-    // are the ones Capsaicin's pass draws for the same entry, so the discard keeps the same share.
-    const firstBounceEntry = `    let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    // the cache, whose probe ray gets its second bounce directly as per hit (register D40).
+    // CellShadingPick lists the bypassing hits and CellShadingChoose the other picks, each entry
+    // once, so the dispatch is sized by them, not by every hit; the random numbers are the ones
+    // Capsaicin's pass draws for the same entry, so the discard keeps the same share.
+    const firstBounceEntry =
+        source === 'everyHit'
+            ? `    let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
     if (did >= atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0])) {
         return; // out of bounds
-    }${
-        source === 'everyHit'
-            ? ''
-            : `
-    // Lever 1: only the lit cells' picks and the bypassing hits leave a second bounce.
-    if (HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_bypass_buffer, did) == 0u) {
-        return;
     }`
-    }`;
+            : `    let source_index = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    if (source_index >= atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_MULTIBOUNCESOURCECOUNT])) {
+        return; // out of bounds
+    }
+    // Lever 1: a lit cell's pick or a bypassing hit.
+    let did = HashGridCache_RayListWord(g_HashGridCache_RayLists.multibounce_source_buffer, source_index);`;
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.populateMultibounceCells)}

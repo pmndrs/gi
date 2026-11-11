@@ -267,6 +267,13 @@ export const HASH_GRID_COUNTER = {
     staleCellCount: 12,
     /** Lever 1: samples the budgeted lighting added to cells this frame: lit cells × samples, a draw with no light a sample of 0. */
     cellSampleCount: 13,
+    /** Lever 1: first-bounce hits the second bounce leaves from on a budget (the lit cells' picks and the bypassing hits). */
+    multibounceSourceCount: 14,
+    /**
+     * Lever 1: cells in use last lit 255 frames ago or more, where the ranking
+     * stops telling ages apart (it can't go round more than 255 × budget cells).
+     */
+    ageClampedCellCount: 15,
 } as const;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */

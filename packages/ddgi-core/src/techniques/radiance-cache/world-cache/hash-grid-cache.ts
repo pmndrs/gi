@@ -324,6 +324,7 @@ export class HashGridCache implements WorldCache {
         readonly shadowRays: GpuWord;
         readonly staleCells: GpuWord;
         readonly samples: GpuWord;
+        readonly ageClampedCells: GpuWord;
     } | null {
         const prepared = this.require();
         if (!prepared.cellShading) return null;
@@ -334,6 +335,7 @@ export class HashGridCache implements WorldCache {
             shadowRays: word(HASH_GRID_COUNTER.cellShadowRayCount),
             staleCells: word(HASH_GRID_COUNTER.staleCellCount),
             samples: word(HASH_GRID_COUNTER.cellSampleCount),
+            ageClampedCells: word(HASH_GRID_COUNTER.ageClampedCellCount),
         };
     }
 
@@ -395,9 +397,9 @@ export class HashGridCache implements WorldCache {
                   populationKernel('PopulateMultibounceCells', 'populateMultibounceCells', populateMultibounceCellsWgsl(layout, budget ? 'litCells' : 'everyHit'), true),
                   populationKernel('GenerateMultibounceReservoirs', 'generateMultibounceReservoirs', generateMultibounceReservoirsWgsl(layout), true),
                   populationKernel('UpdateMultibounceCells', 'updateMultibounceCells', updateMultibounceCellsWgsl(layout), false),
-                  // generateDispatch(radiance_cache_visibility_count_buffer0_, ...) (gi1.cpp:2389); on a budget too, the
-                  // threads of entries that are neither a lit pick nor bypassing leave at once.
-                  indirectArgs('PopulateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount0, POPULATION_WORKGROUP_SIZE.populateMultibounceCells),
+                  // generateDispatch(radiance_cache_visibility_count_buffer0_, ...) (gi1.cpp:2389); on a budget, the
+                  // short list of the lit cells' picks and the bypassing hits.
+                  indirectArgs('PopulateMultibounceCells args', budget ? HASH_GRID_COUNTER.multibounceSourceCount : HASH_GRID_COUNTER.visibilityCount0, POPULATION_WORKGROUP_SIZE.populateMultibounceCells),
                   // generateDispatch(radiance_cache_visibility_count_buffer1_, ...) (gi1.cpp:2430, 2511)
                   indirectArgs('GenerateMultibounceReservoirs args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs),
                   indirectArgs('UpdateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.updateMultibounceCells),
@@ -702,6 +704,7 @@ export class HashGridCache implements WorldCache {
                 layout.visibilityBypassBuffer,
                 layout.usedCellBuffer,
                 layout.chosenCellBuffer,
+                layout.multibounceSourceBuffer,
             ]),
         );
         /** The ray-data group's entries for the buffers a pass binds (POPULATION_BINDINGS). */

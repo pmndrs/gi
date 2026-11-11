@@ -4,6 +4,11 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-11
 
+- **RC-L1: two gates of `radiance-cache-cell-shading` were set after a failed run** (implementer, 2026-11-11, RC-L1 review; the lead asked for this entry).
+  - *Starvation (section 2b).* Asked first: every cell in use lit within ceil(N / B) + 1 frames, N the cells in use in one frame. Measured 14 frames against 10 on the corner. The screen probes are re-placed every frame, so about 11,000 of 47,000 cells in use weren't in use the frame before; the cells that share the budget are those in use over the last frames (77,000 over 10). The bound is now ceil(N' / B) + 1 (+2 before the lighting), N' the cells in use over the last ceil(N / B) frames (16 on the corner; worst measured 15), with a check that the oldest age doesn't grow. The reviewer judged it sound: the 10-frame window undercounts, so the bound is tighter, not looser.
+  - *Lamp off (section 3).* Asked first: under 1% of the lamp-on E within 720 frames, every budget. Measured 4% at 1/4 and 37% at 1/16 of the cells in use with the multibounce on: a small budget fades slowly by design, as its cells are lit in turn. Now: per hit and the budget above the cells in use, under 1% within 720 frames (unchanged); smaller budgets, run until under 1% or 4,096 frames, and must be under 1% or still fall by at least 10% over their last 512 frames, so a fade that stops above zero fails (the reviewer's rule; the first replacement, "half the frame-720 value", couldn't tell a slow fade from one that stops).
+  - Revisit: if lever 1 gets the change priority class (cells near a SceneChanges region first), the small-budget lamp-off bound can be tightened.
+
 - **radiance-cache: budgeted cell shading the id Tech 8 way (lever 1), and a card-cache experiment (extension 3)** (Dennis, 2026-11-11: "if thats what IDTech is doing then it sounds good to me... We should totally do it the ID tech way... If the cards as an experiment in your extension 3 as well im even more for it").
   - Lever 1 is built as `cellShading: 'perHit' | 'budget'`, with `perHit` (Capsaicin) the default. The design is in docs/design/radiance-cache.md, "Budgeted cell shading". Row RC-L1.
   - The card cache is a second `WorldCache` behind the slot. It starts as a design study. Row RC-X3.

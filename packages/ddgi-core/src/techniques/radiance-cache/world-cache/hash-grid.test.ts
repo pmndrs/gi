@@ -10,7 +10,7 @@ import { SHADE_MODULE_ENTRIES } from '../../../platform/shade/wgsl.ts';
 import { TRACE_MODULE_ENTRIES } from '../../../platform/trace/wgsl.ts';
 import { checkCellShadingOptions, checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity, MAX_CELL_SHADING_AGE } from './capacity.ts';
 import { CELL_SHADING_OLDEST_AGE, cellShadingClass, cellShadingIsStale, cellShadingKey, chooseCells } from './cell-shading-cpu.ts';
-import { CELL_SHADING_OLDEST_AGE as WGSL_OLDEST_AGE } from './hash-grid-cell-shading-wgsl.ts';
+import { CELL_SHADING_OLDEST_AGE as WGSL_OLDEST_AGE, cellShadingLightWgsl } from './hash-grid-cell-shading-wgsl.ts';
 import { HashGridCache } from './hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
@@ -633,7 +633,9 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(perHit.chosenCellBuffer).toBe(perHit.usedCellBuffer);
         expect(perHit.bytes).toBe(perHit.usedCellBuffer * 4);
         expect(budget.chosenCellBuffer).toBe(budget.usedCellBuffer + maxRayCount);
-        expect(budget.bytes - perHit.bytes).toBe(2 * maxRayCount * 4);
+        expect(budget.multibounceSourceBuffer).toBe(budget.chosenCellBuffer + maxRayCount);
+        expect(perHit.multibounceSourceBuffer).toBe(perHit.usedCellBuffer);
+        expect(budget.bytes - perHit.bytes).toBe(3 * maxRayCount * 4);
     });
 
     it('checks its settings', () => {
@@ -734,7 +736,9 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(updateMultibounceCellsWgsl(budget)).toContain(`(base_flags & ${VISIBILITY_FLAG.litPick}u) != 0u`);
         expect(updateMultibounceCellsWgsl(perHit)).not.toContain('base_flags');
         // The second bounce leaves from the lit picks and the bypassing hits, by their flags.
-        expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('visibility_bypass_buffer, did) == 0u');
+        expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('HashGridCache_RayListWord(g_HashGridCache_RayLists.multibounce_source_buffer, source_index)');
+        // A lit cell whose draws all found no light this frame is let go (not in use), so it fades as Capsaicin's.
+        expect(cellShadingLightWgsl(budget)).toContain('} else {\n            // Every draw found no light');
     });
 
     it("builds the per-hit kernels as before: the budget's words appear in no per-hit kernel", () => {

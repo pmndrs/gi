@@ -50,13 +50,13 @@
  *    frames (read every 32nd past 720), and reports the frames to 1% too.
  *    Gates (a light switched off must leave the cells): per hit and with the
  *    budget above the cells in use, under 1% within 720 frames; with the
- *    smaller budgets, the mean keeps falling (at the end at most half of
- *    what it was at frame 720, or under 1%). A small budget fades slowly by
- *    design: a lit cell takes 1/16 of the way to 0 each time it is lit, and
- *    at 1/16 of the cells it is lit only every 30-40 frames (its second
- *    bounce a third as often), so 1% takes thousands of frames. The first
- *    run, which asked for 1% within 720 frames of every budget, read 4% at
- *    1/4 and 37% at 1/16 with the multibounce on. The converged value is
+ *    smaller budgets, under 1% by the end, or still falling at its tail: at
+ *    least 10% lower than 512 frames before the end (a fade that stops above
+ *    0 fails; DECISIONS 2026-11-11, RC-L1). A small budget fades more slowly
+ *    by design: its cells are lit in turn. The first run, which asked for 1%
+ *    within 720 frames of every budget, read 4% at 1/4 and 37% at 1/16 with
+ *    the multibounce on (before the RC-L1 re-review's change to no-light
+ *    draws). The converged value is
  *    `perHit`'s (the mean of its last 32 frames): every mode converges to the
  *    same image (section 1), but a small budget isn't there yet by the end,
  *    so its own end value would understate its lag (a first run measured
@@ -113,6 +113,9 @@ const STARVATION_FRAMES = 16;
 const LAMP_OFF_REMAINDER = 0.01;
 const LAMP_OFF_MAX_FRAMES = 4096;
 const LAMP_OFF_COARSE_STEP = 32;
+/** A smaller budget's lamp-off fade must still fall this share over its last frames, if it isn't under 1% by then. */
+const LAMP_OFF_TAIL_FRAMES = 512;
+const LAMP_OFF_TAIL_FALL = 0.1;
 
 /** Section 3: frames before the lamp comes on, frames after each event, the converged window at their end, the lag's tolerance. */
 const LAMP_OFF_FRAMES = 30;
@@ -671,14 +674,16 @@ async function measureLag(
         const lampOffEnd: EventValues = { interpolated: lampOff.interpolated[lampOff.interpolated.length - 1], denoised: lampOff.denoised[lampOff.denoised.length - 1] };
         const ample = settings.cellShading !== 'budget' || (settings.cellShadingBudget ?? 0) >= 1_000_000;
         const framesToGone = { interpolated: firstFrameAtMost(lampOff, 'interpolated', gone.interpolated), denoised: firstFrameAtMost(lampOff, 'denoised', gone.denoised) };
+        const lastFrame = lampOff.frames[lampOff.frames.length - 1];
         for (const image of ['interpolated', 'denoised'] as const) {
             const atEventEnd = meanAt(lampOff, image, EVENT_FRAMES);
+            const tailStart = meanAt(lampOff, image, lastFrame - LAMP_OFF_TAIL_FRAMES);
             const percent = (value: number): string => `${((100 * value) / cutEnd[image]).toFixed(2)}%`;
             if (ample && !(framesToGone[image] > 0 && framesToGone[image] <= EVENT_FRAMES)) {
                 failures.push(`lag ${label}: with the lamp off again the mean ${image} E is ${percent(atEventEnd)} of its lamp-on value at frame ${EVENT_FRAMES} (under 1% by then asked)`);
             }
-            if (!ample && !(lampOffEnd[image] <= gone[image] || lampOffEnd[image] <= 0.5 * atEventEnd)) {
-                failures.push(`lag ${label}: with the lamp off again the mean ${image} E went from ${percent(atEventEnd)} at frame ${EVENT_FRAMES} to ${percent(lampOffEnd[image])} at ${lampOff.frames[lampOff.frames.length - 1]}: it doesn't keep fading`);
+            if (!ample && !(lampOffEnd[image] <= gone[image] || lampOffEnd[image] <= (1 - LAMP_OFF_TAIL_FALL) * tailStart)) {
+                failures.push(`lag ${label}: with the lamp off again the mean ${image} E went from ${percent(tailStart)} at frame ${lastFrame - LAMP_OFF_TAIL_FRAMES} to ${percent(lampOffEnd[image])} at ${lastFrame}: it stopped fading above 1%`);
             }
         }
         const lags = (means: EventMeans, converged: EventValues, before: EventValues): Record<string, Lag> => ({

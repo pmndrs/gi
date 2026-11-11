@@ -51,9 +51,11 @@ THE SOFTWARE.
  *    through `giSurfaceAt` (the hit record, so lever 27's real textures reach
  *    it too), then `cell_shading_samples` times `GenerateReservoirs`' light
  *    draw (the sky among the lights) and `PopulateCells`' shadow ray, into the
- *    cell's update scratch, each a sample even when it finds no light or its
- *    shadow ray is blocked (so a light switched off fades from the cell);
- *    `UpdateTiles` blends it as it blends hits' samples.
+ *    cell's update scratch; a blocked shadow ray is a sample of 0, a draw that
+ *    finds no light no sample, as per hit, and a cell whose draws all found
+ *    no light this frame counts as not in use, so it fades as Capsaicin's
+ *    (a light switched off leaves it); `UpdateTiles` blends the samples as it
+ *    blends hits'.
  *
  * The age classes: 0 for a cell never lit (new), then one class per age,
  * oldest first: class 1 for 255 frames or more since lit, class 255 for lit
@@ -207,6 +209,11 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingPick}(
     let bypass_cache = ray_length < cell_size;
     let bypass_bit = select(0u, HASHGRIDCACHE_BYPASS_BIT, bypass_cache);
     HashGridCache_SetRayListWord(g_HashGridCache_RayLists.visibility_bypass_buffer, did, select(0u, HASHGRIDCACHE_VISIBILITY_FLAG_BYPASS, bypass_cache));
+    if (bypass_cache) {
+        // Its probe ray gets its own second bounce, as per hit (PopulateMultibounceCells' list).
+        let source_index = atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_MULTIBOUNCESOURCECOUNT], 1u);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_source_buffer, source_index, did);
+    }
 
     // Offer this hit to its cell, the bypassing ones too: the cell keeps the largest key (a
     // uniformly random hit, see the key), and its light is that pick's alone (a bypassing hit's own
@@ -263,6 +270,7 @@ var<workgroup> lds_CellShading_Histogram: array<atomic<u32>, ${CELL_SHADING_CLAS
 var<workgroup> lds_CellShading_UsedCount: atomic<u32>;
 var<workgroup> lds_CellShading_UsedBase: u32;
 var<workgroup> lds_CellShading_StaleCount: atomic<u32>;
+var<workgroup> lds_CellShading_AgeClampedCount: atomic<u32>;
 
 @compute @workgroup_size(${size})
 fn ${CELL_SHADING_ENTRY_POINT.cellShadingRank}(
@@ -276,6 +284,7 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingRank}(
     if (local_index == 0u) {
         atomicStore(&lds_CellShading_UsedCount, 0u);
         atomicStore(&lds_CellShading_StaleCount, 0u);
+        atomicStore(&lds_CellShading_AgeClampedCount, 0u);
     }
     workgroupBarrier();
 
@@ -297,6 +306,10 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingRank}(
         if (HashGridCache_CellShadingIsStale(last_lit)) {
             atomicAdd(&lds_CellShading_StaleCount, 1u);
         }
+        // Past the oldest age the ranking tells apart: the budget is too small to go round (the technique warns).
+        if (last_lit != 0u && HashGridCache_CellShadingAge(last_lit) >= HASHGRIDCACHE_CELLSHADING_OLDEST_AGE) {
+            atomicAdd(&lds_CellShading_AgeClampedCount, 1u);
+        }
     }
     workgroupBarrier();
 
@@ -304,6 +317,7 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingRank}(
     if (local_index == 0u) {
         lds_CellShading_UsedBase = atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_USEDCELLCOUNT], atomicLoad(&lds_CellShading_UsedCount));
         atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_STALECELLCOUNT], atomicLoad(&lds_CellShading_StaleCount));
+        atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_AGECLAMPEDCELLCOUNT], atomicLoad(&lds_CellShading_AgeClampedCount));
     }
     for (var bin = local_index; bin < ${CELL_SHADING_CLASSES}u; bin += ${size}u) {
         let count = atomicLoad(&lds_CellShading_Histogram[bin]);
@@ -357,8 +371,13 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingChoose}(
                    atomicAdd(&g_HashGridCache_CellShadingClasses[HASHGRIDCACHE_CELLSHADING_CURSOR + age_class], 1u);
         if (rank < g_HashGridCacheConstants.cell_shading_budget) {
             HashGridCache_SetRayListWord(g_HashGridCache_RayLists.chosen_cell_buffer, rank, did);
-            // The second bounce leaves from this hit (PopulateMultibounceCells, lit cells).
-            atomicOr(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.visibility_bypass_buffer + did], HASHGRIDCACHE_VISIBILITY_FLAG_LIT_PICK);
+            // The second bounce leaves from this hit (PopulateMultibounceCells, lit cells); a bypassing
+            // hit is on that list already (CellShadingPick).
+            let flags = atomicOr(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.visibility_bypass_buffer + did], HASHGRIDCACHE_VISIBILITY_FLAG_LIT_PICK);
+            if ((flags & HASHGRIDCACHE_VISIBILITY_FLAG_BYPASS) == 0u) {
+                let source_index = atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_MULTIBOUNCESOURCECOUNT], 1u);
+                HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_source_buffer, source_index, did);
+            }
             atomicAdd(&lds_CellShading_LitCount, 1u);
         }
     }
@@ -383,10 +402,14 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingChoose}(
  * clear the BRDF toward the probe ray times the light's radiance and weight.
  * Each sample is quantised as `PopulateCells` quantises a hit's and counts one
  * in the cell's sample count, so `UpdateTiles` blends a lit cell's samples as
- * it would the same number of hits'. A draw that finds no light, or whose
- * shadow ray is blocked, is a sample of 0: per hit the cell's other hits
- * keep it current, here only the lit cell's own samples do, and a cell whose
- * light went out must fade to it. The sample's light point goes through the
+ * it would the same number of hits'. A blocked shadow ray is a sample of 0,
+ * as per hit. A draw that finds no light adds no sample, as per hit, where
+ * such a hit adds nothing to its cell (counting it as 0 read Sponza 2.5%
+ * darker than per hit, about 30% of its draws finding no light; RC-L1
+ * re-review). A cell whose draws all found no light this frame is marked not
+ * in use (its kept-hit word set to 0), so `UpdateTiles` fades it as
+ * Capsaicin fades a cell no hit lit, and a light switched off leaves it. The
+ * sample's light point goes through the
  * reservoir's 16-bit packing first, as `PopulateCells` reads it back. Built
  * with the platform's hit-shading module (group 0).
  */
@@ -427,8 +450,7 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingLight}(
         for (var sample_index = 0u; sample_index < g_HashGridCacheConstants.cell_shading_samples; sample_index++) {
             let draw = HashGridCache_DrawLight(surface, &random);
             if (draw.choice.light == GI_DIRECT_NO_LIGHT) {
-                quantized_sum += vec4u(0u, 0u, 0u, 1u);   // no light, no shadow ray: a sample of 0
-                continue;
+                continue;   // as GenerateReservoirs and PopulateCells: no light, no shadow ray and no sample
             }
             let sample_params = unpack2x16unorm(pack2x16unorm(draw.sample_params));
             let light_ray = giDirectLightRay(surface, draw.choice.light, sample_params);
@@ -453,6 +475,10 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingLight}(
         }
         if (quantized_sum.w > 0u) {
             atomicAdd(&g_HashGridCache_Words[scratch + 3u], quantized_sum.w);
+        } else {
+            // Every draw found no light: not kept as in use, so UpdateTiles fades the cell as
+            // Capsaicin fades a cell no hit lit (UpdateTiles reads this word after this pass).
+            atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u);
         }
         // Lit this frame: the frame plus one (0 is "never"; the one frame in 2^32 where that
         // wraps to 0 stores 1, a hair old, rather than "never").
