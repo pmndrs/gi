@@ -162,6 +162,7 @@ Rows whose stated cause looks wrong on reading the evidence (2026-11-11). The ca
 - **What is really behind it:** Texture-average albedo is how DDGI's `giSurfaceAt` works, and the material's constant emission stands in for Capsaicin's alpha-scaled emissive texture at the hit (`gi1.comp:2441-2445`). Texture arrays or an atlas, with UVs at hits, work in WebGPU today
 - **Challenge:** **High** on textured scenes (Sponza, Bistro). Real albedo and emission at hits through an array or atlas
 - **Way back / others' workarounds:** Texture arrays or an atlas with real UVs at hits; compressed textures (GPUTex, T3.12) to afford it; the WebGPU bindless proposal
+- **Bindless (2026-11-11):** "WebGPU has no bindless" is true only of stable WebGPU. Chrome has bindless texture sampling behind the Unsafe WebGPU Support flag: sampled textures and samplers in a resource table, on Windows, Linux and Android, with macOS pending ([toji.dev, 2026-10-06](https://toji.dev/2026/10/06/webgpu-bindless.html)). It's still being designed in the WebGPU group. The way back is lever 27, a platform option with the average as its fallback (DECISIONS 2026-11-11).
 - **Assessment (2026-11-11):** Our rule: shared hit shading, one record per material (no bindless is forced; averaging isn't). Image impact high. Speed: Matching adds texture fetches at every hit (unknown). Effort to match: L: texture arrays or an atlas with UVs at hits, in the platform's hit record (shared with DDGI). Recommendation: Measure first: the image on Sponza and Bistro with real albedo at hits, against the Cycles references.
 
 ### D3
@@ -1182,6 +1183,32 @@ Things that look wrong in Capsaicin v1.3 itself, found while porting (none was r
 - Staging differences, such as phase 2's cache-bypass path, aren't rows. They go in the phase notes and must be gone by the end of their phase.
 - When a row changes cause (for example, a WebGPU feature arrives, or someone shows a rule isn't needed), update the line and say so in PROGRESS.
 - Rows measured only on Windows say "M5 not checked yet" until someone runs them on the Mac.
+
+## Can each fix be a switch?
+
+Added 2026-11-11 at Dennis's request: before a fix starts, say whether it can be a setting next to today's behaviour, or whether it would be hard to walk back. The kinds are defined in [radiance-cache-speed.md](radiance-cache-speed.md) ("Can it be a switch?").
+
+| ID | Can it be a switch? | How |
+| --- | --- | --- |
+| [D1](#d1) | n/a | Waits for ray tracing in WebGPU. |
+| [D2](#d2) | Platform option | Lever 27: a platform option, `hitTextures: 'average' | 'bindless'`, through Chrome's experimental bindless textures. The scene copy already has UVs and per-material texture mappings, and the hit record already has the triangle and barycentrics, so nothing in the contract has to change shape. The average stays the fallback. Built in place, every hit would pay for it, and it would only run where bindless exists. |
+| [D3](#d3) | Platform option | A visibility channel in `FrameScreen` is additive: the host provides it if it can, and techniques fall back without it. |
+| [D4](#d4) | Platform option | Capsaicin's light sampler as a second platform light sampler (`lightSampler: 'grid' | 'stream'`). Replacing the grid would change DDGI's lighting too, so it must be an option. |
+| [D8](#d8) | Platform option | Roughness and metalness are additive fields in the material descriptor, with defaults that keep Lambert. GGX at hits is a hit-shading option; reflections (GI-1.1) are a technique switch. Changing the descriptor's shape in place would be the hard-to-undo version. |
+| [D12](#d12) | n/a | Waits for a second WebGPU queue. |
+| [D13](#d13) | n/a | Waits for a public three API. |
+| [D16](#d16) | Setting, live | Comes back with D8, as a setting. |
+| [D17](#d17) | Platform option | A geometric-normal or visibility channel in `FrameScreen` (with D3); additive. |
+| [D20](#d20) | Setting, at prepare | The sky bake size, or reading the host's environment map, as a setting. |
+| [D21](#d21) | Platform option | Emissive triangles as platform lights, behind an option. DDGI's lighting would change too, so it can't be in place. |
+| [D27](#d27) | Setting, live | A noise-source setting (white or blue). Blue noise is a platform texture shared with D55. |
+| [D30](#d30) | Hard to walk back | Fusing the insert into the trace ties the trace to the hash grid, which breaks the world-cache slot that Brixelizer plugs into. Only as a second path when the hash grid is the cache, never in place. |
+| [D33](#d33) | Already a setting | Fixed today (RC6.1) as `environmentLightEnable`, Capsaicin's own option. |
+| [D37](#d37) | Setting, live | Hand the cache the unpushed point as well: an additive field, then a setting. |
+| [D39](#d39) | Replaced, not a switch | Fixed today (RC6.2): Capsaicin's push replaced our shortcut. It could be a switch, but there's no reason to keep the old push. |
+| [D42](#d42) | Already a setting | Fixed today (RC6.2): `useMultibounce` at prepare. |
+| [D55](#d55) | Setting, live | The same noise-source setting as D27. |
+| [D59](#d59) | Replaced, not a switch | Fixed today (RC6.2): the old stores drifted, so there's nothing to keep. |
 
 ## Shortlist
 

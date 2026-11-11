@@ -489,6 +489,8 @@ Rules for every row:
 - **Hardware:** the RTX 3060 is the target and GPU timing is taken GPU-loaded under the bench lock (`tools/reference/bench-lock.ts`), VALID runs only; the Intel UHD is correctness only. Never time anything while a native Capsaicin run (`scene_viewer.exe`) is going.
 - **Every divergence from Capsaicin** (a three backend step, a missing feature) gets a row in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md), numbered from the next free ID, with its cause, evidence, impact, effort to match, recommendation and way back.
 - An Opus review against the done-when before a row is marked done.
+- **Switchable or flagged** (DECISIONS 2026-11-11). A lever or fix names its setting and default (the faithful behaviour), or it's marked hard to walk back. A hard-to-walk-back row doesn't start without Dennis. Reviewers check that both paths still pass.
+- **Bindless-ready** (DECISIONS 2026-11-11). New hit-side data keeps the texture reference and UV mapping reachable from a hit; don't bake in one value per material.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -660,12 +662,14 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
 
 ### radiance-cache: divergence fixes
 
-From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md). Each row moves the port closer to Capsaicin, so the fix replaces our path; its register row is updated to say it's closed, or what remains.
+From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/radiance-cache-divergences.md). Each row moves the port closer to Capsaicin. A fix replaces our path only when the old one was wrong or our own shortcut; otherwise it's a setting (DECISIONS 2026-11-11, "Every lever and fix is a setting"). Its register row is updated to say it's closed, or what remains.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | done (2026-11-11, Mac lead; Opus review passed with notes, all fixed; Capsaicin's sky-as-light-0 sampling at cache hits through `giDirectChooseLightWithSky`, DDGI unchanged; constant sky 0.995 πL, closed box 0; Sponza +1%, Bistro exterior +5.5% mean E; the box-edge leak is D17's (lead); Windows and timing not run) |
 | RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | done (2026-11-11, Mac lead; Opus review passed with notes, all fixed; D59: history stores rounded to nearest half on any GPU, 40 m stays 40 over 300 filters, D3D11.3 §3.2.2 rounds toward zero so Capsaicin probably drifts too (not run); D42: 552 MB less with multibounce off; D39: offsetPosition ported, 422 of 60,155 Sponza rays change hit; D31 and D19 disputed for the lead; Windows not run) |
+| RC6.3 | Lever 27, bindless hit textures: the lead designs a hit-shading option, `hitTextures: 'average' \| 'bindless'`, through Chrome's experimental sampling resource table. It's shared with DDGI; the average stays the default and fallback, and it closes D2 | main session (design), then implementer | M-L | none (Windows Chrome with Unsafe WebGPU Support; macOS has no bindless yet) | todo |
+| RC6.4 | A Chrome bindless demo on the examples site: average against bindless hit textures on Sponza and Bistro, image and GPU cost side by side | implementer | M | RC6.3 | todo |
 
 - **RC6.1 done-when.**
   - The port follows Capsaicin's environment-light sampling at cache hits, cited line by line: how the sky is picked against the other lights, its pdf, and its shadow ray.

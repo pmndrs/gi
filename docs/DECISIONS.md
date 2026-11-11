@@ -4,6 +4,19 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
 
 ## 2026-11-11
 
+- **Every lever and fix is a setting beside the faithful path; anything hard to walk back is flagged first** (Dennis, 2026-11-11: "I dont want to make architectural change that is difficult to walkback later... If these things could be configurable so we can test them in isolation then I want to do it, if they will be a step we cant walk back easily I want to know that before we start").
+  - Each lever (docs/design/radiance-cache-speed.md) and each open fix (docs/design/radiance-cache-divergences.md, "Can each fix be a switch?") is classed as one of: a live setting; a setting read at prepare; a second path behind a setting; a platform option (DDGI sees it too); hard to walk back.
+  - Hard to walk back today: lever 5 (compact formats across the board), lever 8 (scratch per tile), lever 24 (fewer rays per probe: the 8 × 8 probe is in every pass), and D30 (fusing the insert into the trace breaks the world-cache slot). None of these starts without Dennis's go-ahead. Each starts with the refactor that makes it a setting, or says why it can't be one.
+  - A second path must keep passing its checks with the faithful path, so neither rots. A task row says its setting's name and default (the faithful behaviour).
+  - This sits beside the subgroups rule (2026-11-04): that rule is about one fallback for a missing GPU feature. This one is about choices we make ourselves.
+
+- **Bindless textures: build for them as an option, and show them off later** (Dennis, 2026-11-11: "chrome supports bindless textures behind a feature flag and is upcoming. If we made a GI system that supported it at least as an option it could be great PR... as we build we should consider building to allow it, and then later build a chrome demo to showcase the gains of going bindless").
+  - Chrome has bindless texture sampling behind the Unsafe WebGPU Support flag: sampled textures and samplers in a resource table, on Windows, Linux and Android, with macOS pending. Brandon Jones's post: https://toji.dev/2026/10/06/webgpu-bindless.html. The feature name, `chromium-experimental-sampling-resource-table`, is from a typeshade issue; confirm it in Canary.
+  - Lever 27: a hit-shading option, `hitTextures: 'average' | 'bindless'`, shared by DDGI and the radiance cache. The average stays the default and the one fallback. It closes D2, Capsaicin's real textures at hits.
+  - The contract already allows it: meshes carry UVs (two sets), materials carry `albedoUv` and `emissiveUv` mappings, and a hit carries instance, triangle and barycentrics. New work keeps it that way. Don't bake "one value per material" into new hit-side data; keep the texture reference and UV mapping reachable from a hit.
+  - Testing needs the Windows laptop (or Linux or Android): the Mac's Chrome has no bindless yet.
+  - A Chrome demo comparing average and bindless hit textures (image and cost) comes after lever 27, on the examples site.
+
 - **radiance-cache: timing resumes; divergences and speed are the work now** (Dennis, 2026-11-11, Mac lead session; his words: "We can run timing on the windows machine until tomorrow. So lets organize, clean, and do what we can. I think addressing divergence and speed issues we can do now").
   - Lifts the 2026-11-09 deferral below. The RTX 3060 under the bench lock is still the record. Timing on the Apple M5 is allowed as a hint for ordering work and is labelled M5 wherever it is written down.
   - The faithful-port rule stands: a fix for a divergence or a speed lever is a switch beside the faithful path unless the row says it replaces it (a Capsaicin bug fix, or a difference with no reason to keep).
