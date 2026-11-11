@@ -226,7 +226,12 @@ export class GpuTimer implements GpuTimerScope {
         return this.reserveQueries(name);
     }
 
-    /** Encodes copying the timestamps to a readable buffer. Call after the last timed pass, before `finish()`. */
+    /**
+     * Encodes copying the timestamps to a readable buffer. Call after the last timed pass, before `finish()`.
+     * A submit timed across several encoders may call it again after more passes (in a later encoder,
+     * submitted later): each call copies every pass so far, and the last copy in queue order is what the
+     * readback reads.
+     */
     resolve(encoder: GPUCommandEncoder): void {
         const slot = this.activeSlot;
         if (!slot || slot.passNames.length === 0 || this.currentStatus !== 'ready') return;

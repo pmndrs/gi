@@ -28,6 +28,7 @@ export function installWebGpuGlobals(): void {
     const scope = globalThis as unknown as Record<string, unknown>;
     scope.GPUBufferUsage ??= BUFFER_USAGE;
     scope.GPUShaderStage ??= { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 };
+    scope.GPUMapMode ??= { READ: 1, WRITE: 2 };
 }
 
 export class FakeBuffer {
@@ -47,6 +48,17 @@ export class FakeBuffer {
     destroy(): void {
         this.destroyed = true;
     }
+
+    /** Mapping for reading: the bytes as the last submit left them (the GPU timer's readback). */
+    mapAsync(): Promise<void> {
+        return this.destroyed ? Promise.reject(new Error(`mapAsync on destroyed buffer "${this.label}"`)) : Promise.resolve();
+    }
+
+    getMappedRange(offset = 0, size = this.size - offset): ArrayBuffer {
+        return this.bytes.slice(offset, offset + size).buffer;
+    }
+
+    unmap(): void {}
 
     get words(): Uint32Array {
         return new Uint32Array(this.bytes.buffer);
