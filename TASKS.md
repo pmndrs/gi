@@ -664,7 +664,7 @@ From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/ra
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | active (implementer, 2026-11-11) |
+| RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | review (implementer, 2026-11-11: `giSkyLightSample` and `giDirectChooseLightWithSky` in hit shading, `environmentLightEnable`; constant sky on the open floor 0.995 of πL, sky and sun 1.000, closed box 0; Sponza E +1%, Bistro exterior +5%; 19 pages pass on the M5; Windows not run) |
 | RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | active (implementer, 2026-11-11) |
 
 - **RC6.1 done-when.**
