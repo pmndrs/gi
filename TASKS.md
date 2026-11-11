@@ -667,7 +667,7 @@ Each lever is a setting beside the faithful path (DECISIONS 2026-11-11). Its row
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | RC-L1 | Lever 1, budgeted cell shading (id Tech 8): `cellShading: 'perHit' \| 'budget'` with `cellShadingBudget`, `cellShadingSamples` and `cellShadingMaxAge`, inside the hash grid, as the design doc's "Budgeted cell shading" says | implementer | L | RC5.1 | active (implementer, 2026-11-11) |
-| RC-X3 | Extension 3, card cache (Lumen's surface cache) as a second `WorldCache`: design study | main session, scout (Lumen sources, Brixelizer workstream) | M | none | active (lead + scout, 2026-11-11) |
+| RC-X3 | Extension 3, card cache (Lumen's surface cache) as a second `WorldCache`: design study | main session, scout (Lumen sources, Brixelizer workstream) | M | none | review (2026-11-11: study in the design doc; recommendation to build after RC-L1 and RC6.3; Dennis decides) |
 
 - **RC-L1 done-when.**
   - In `perHit` mode nothing changes: every RC page passes as before, and the timing page's pass list is the same.

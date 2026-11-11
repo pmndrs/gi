@@ -124,14 +124,42 @@ Dennis chose this on 2026-11-11 (DECISIONS). It's id Tech 8's design (Sousa, SIG
 
 **Its partners:** lever 22 (a frame budget) turns `cellShadingBudget` as a dial. Lever 27 (bindless) gets cheaper here, because textures are read once per lit cell instead of once per hit.
 
-### Card cache experiment (extension 3; lead, 2026-11-11)
+### Card cache experiment (extension 3; lead, 2026-11-11): design study
 
-Dennis wants Lumen's surface cache tried too, as an experiment. It's a second `WorldCache` behind the slot, so it's a switch by design.
-- **Cards** are small rasterised captures of each static mesh, holding albedo, normal and emission, in an atlas.
-- **Lighting** is applied to cards on a budget, as in lever 1.
-- **Reading:** a ray that hits a static mesh reads the card texel at its hit, found through instance, triangle and barycentrics. Moving meshes and misses fall back to the hash grid.
+Dennis wants Lumen's surface cache tried as an experiment. It's a second `WorldCache` behind the slot, so it's a switch by design (`worldCache: 'hashGrid' | 'cards'`). Facts below are from Wright, Narkowicz and Kelly, SIGGRAPH 2022 Advances ([deck](https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-Lumen-Wright%20et%20al.pdf); page numbers as p.N), and the current UE docs ([Lumen Technical Details](https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-technical-details-in-unreal-engine)). The deck is 2022, so current UE may differ.
 
-It closes D2 without bindless, because the material is captured by rasterising, and it's the software path Lumen still uses. It starts as a design study (RC-X3): Lumen's card layout and capture, card lighting and its budget, how a hit finds its card texel without a card search, memory on Sponza and Bistro, and what the Brixelizer workstream already provides through the same slot.
+**What Lumen does.**
+- **Cards** are axis-aligned projections of each mesh, chosen when the mesh is imported: surfels are clustered, and the clusters with the most coverage become cards. UE allows up to 12 per mesh by default, and the fallback is six box faces (p.60). Generation takes about 0.2 ms for a 1.5M-triangle mesh.
+- **The atlas** is 4096² in 128² pages, filled by a virtual cache: low-resolution pages around the camera always resident, high-resolution pages on demand from GPU feedback (p.65-67).
+- **Channels,** BC-compressed at runtime: albedo, opacity, depth, normal and emissive, about 88 MB in all (p.69).
+- **Capture** rasterises each mesh with an orthographic camera into its cards, 512² texels a frame by priority (p.68-69). Cards are fixed at import, so deforming meshes and characters aren't covered.
+- **Lighting** is done in the atlas on two budgets (p.73-77):
+  - Direct light: 1024² texels a frame, the first 8 lights of each 8 × 8 tile, with shadow maps plus traced shadow rays.
+  - Indirect light: 512² texels a frame, through one 4 × 4 hemisphere probe per 4 × 4 texels.
+  - Priority: last used minus last updated, chosen through a histogram, which is our lever 1's selection.
+- **Lookup** (p.70): from the mesh's card grid, take the 3 cards facing the hit best; weight 4 depth taps per card by the difference from the hit's depth, by the normals and bilinearly; blend. A hit no card covers loses its energy rather than leaking.
+- **Cost:** 0.47-0.93 ms for the surface cache on PS5 at 1080p ("Lumen in the Land of Nanite"), 1.68 ms in the Matrix Awakens demo.
+- **Hardware RT:** UE's current docs say rays read the surface cache by default there too, and "Hit Lighting" is an expensive opt-in.
+- **Known limits:** coverage holes; foliage with many layers; walls under 10 cm leak; no single-mesh rooms.
+
+**How it would map onto our platform.**
+- **Generation:** at load, in the scene copy's worker. Start with six box cards per mesh, Lumen's own fallback, and add surfel clustering only if coverage needs it. Big single meshes, like Sponza's or Bistro's buildings, are the "single-mesh room" case Lumen can't do. They would need splitting into pieces first. RC5.4 already splits meshes for its bench, so that's reusable.
+- **Capture:** a raster pass in the core over the scene copy, with each material's real textures bound per draw. Rasterising needs no bindless, so this is how cards close D2 without it. The platform keeps the textures it averages today, and GPUTex can compress them if memory needs it.
+- **Lighting:** the same budget and histogram as lever 1.
+  - Direct light: through the platform's light choice and our BVH shadow rays (no shadow maps in the core).
+  - Indirect light: from the hash grid or DDGI, not new probe rays.
+- **Lookup:** from a hit's instance and triangle to its mesh's cards, projection, then Lumen's blend. A miss or an uncovered hit falls back to the hash grid, so moving and deforming meshes keep working.
+- **Memory:** uncompressed 2048² channels are about 50 MB, plus about 32 MB of lighting (`rgba16float`). At 4096² it's four times that. Uncompressed BC isn't writable in WebGPU, so compression would be GPUTex's job.
+- **Brixelizer:** nothing to reuse yet. There's no Brixelizer code or repo on this Mac, and the slot is the only connection. Dennis has a repo; its interface gets checked against the slot when it's shared.
+
+**Effort and gain against lever 1.**
+- **Effort: XL** (weeks): card generation and splitting, a core raster pass with textures, a page allocator, two lighting passes, the lookup and its fallback. Lever 1 is L and reuses Capsaicin's passes.
+- **Gain:**
+  - **Image:** real albedo and emission at hits (D2), the same thing lever 27 gives with bindless.
+  - **Speed:** cards don't make ray tracing cheaper, and tracing is our cost (RC5.1: 12.5 of Sponza's 16.6 ms on the M5). Lumen is fast because cards come with distance-field tracing. For us, that's cards plus Brixelizer.
+  - **Lighting:** it's budgeted, as in lever 1, so lever 1 already gets most of that part.
+
+**The lead's recommendation.** Build lever 1 (RC-L1) and bindless (RC6.3) first, then measure D2's image gain on Sponza and Bistro with bindless on Windows. Build cards only if bindless can't cover the platforms we care about, macOS above all, or if Brixelizer's distance-field tracing arrives and needs a material source for its hits. That's Lumen's case: distance-field hits don't know their triangle, so they need cards. A smaller first step: six box cards on the Cornell box and two-room, which have no single-mesh-room problem, to measure the lookup and the image before taking on the rest.
 
 ## World-cache memory
 
