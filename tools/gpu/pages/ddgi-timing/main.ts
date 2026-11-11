@@ -36,6 +36,9 @@ function median(values: readonly number[]): number {
 /** Runs frames with this budget and collects each DDGI pass's GPU ms by frame, and the probes updated. */
 async function timeFrames(device: GPUDevice, platform: GIPlatformImpl, budget: number | FrameBudget, frames: number, probesUpdated: () => number) {
     const byPass = new Map<string, Map<number, number>>(PASSES.map((name) => [name, new Map()]));
+    // Every pass name the platform timed, DDGI's or not (RC5.1: the platform's timestamps resolve after the
+    // screen stage too, which a host that never calls encodeScreen must not notice).
+    const passNames = new Set<string>();
     const updated: number[] = [];
     // Timestamps arrive a few frames late; keep going until enough frames reported every pass.
     for (let frame = 0; byPass.get('ddgi/trace')!.size < frames && frame < frames * 3; frame++) {
@@ -45,13 +48,14 @@ async function timeFrames(device: GPUDevice, platform: GIPlatformImpl, budget: n
         // Let the readback's mapAsync callbacks run before the next encode collects them.
         await new Promise((resolve) => setTimeout(resolve, 0));
         for (const pass of platform.stats.passes) {
+            passNames.add(pass.name);
             if (pass.gpuMs === undefined || pass.gpuMs < 0) continue;
             byPass.get(pass.name)?.set(pass.frame, pass.gpuMs);
         }
     }
     assert(byPass.get('ddgi/trace')!.size >= frames / 2, `only ${byPass.get('ddgi/trace')!.size} timed frames`);
     const medians = Object.fromEntries(PASSES.map((name) => [name, median([...byPass.get(name)!.values()])])) as Record<(typeof PASSES)[number], number>;
-    return { medians, totalMs: PASSES.reduce((sum, name) => sum + medians[name], 0), medianUpdated: median(updated) };
+    return { medians, totalMs: PASSES.reduce((sum, name) => sum + medians[name], 0), medianUpdated: median(updated), passNames: [...passNames].sort() };
 }
 
 await runGpuTest(
@@ -79,6 +83,7 @@ await runGpuTest(
                     writeMs: timed.medians['ddgi/write'],
                     msPerProbe: perProbeMs,
                     probesIn2Ms: Math.floor(BUDGET_MS / perProbeMs),
+                    passNames: timed.passNames,
                 };
                 log(`${sceneId}, ${updated} probes: trace ${timed.medians['ddgi/trace'].toFixed(3)}, blend ${timed.medians['ddgi/blend'].toFixed(3)}, write ${timed.medians['ddgi/write'].toFixed(4)} ms; ${(perProbeMs * 1000).toFixed(2)} µs per probe; ${Math.floor(BUDGET_MS / perProbeMs)} probes in ${BUDGET_MS} ms`);
             }

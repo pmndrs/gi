@@ -2,11 +2,14 @@
 /**
  * Turns test-runner `--json` files from the `radiance-cache-timing` page into
  * CSV rows: `bench/results/radiance-cache-m5-passes.csv` for the Apple M5
- * (every row's note says the numbers are an M5 hint), and
+ * (every row's note says a Mac's numbers are a hint), and
  * `bench/results/radiance-cache-passes.csv` for any other GPU (the RTX 3060's
  * rows are the record; NVIDIA rows get the clock notes).
  *
- *   node tools/gpu/pages/radiance-cache-timing/to-csv.ts <runner.json> [more.json ...] [--append] [--csv <file>] [--commit <hash>] [--browser <text>] [--clock-file <file>]
+ *   node tools/gpu/pages/radiance-cache-timing/to-csv.ts <runner.json> [more.json ...] [--append] [--csv <file>] [--device <text>] [--commit <hash>] [--browser <text>] [--clock-file <file>]
+ *
+ * Chrome reports no description for Apple GPUs, so name the Mac's with
+ * --device (the M5's rows say `Apple M5 Pro (apple/metal-3)`).
  *
  * Columns: date, commit, device, browser, scene, metric, value, note. Several
  * files of the same GPU are repeated runs: `run1/`, `run2/`, ... plus
@@ -35,7 +38,8 @@ const CSV_HEADER = 'date,commit,device,browser,scene,metric,value,note';
 const RESULTS = resolve(import.meta.dirname, '..', '..', '..', '..', 'bench', 'results');
 const M5_CSV = resolve(RESULTS, 'radiance-cache-m5-passes.csv');
 const RECORD_CSV = resolve(RESULTS, 'radiance-cache-passes.csv');
-const M5_NOTE = 'M5 hint not the record; radiance-cache-timing page; 1280x720 first bookmark; medians of 120 frames after 300 warm-up';
+/** Every Apple row says what it is: the Mac's timing orders work, the RTX 3060 under the bench lock is the record (DECISIONS 2026-11-11). */
+const APPLE_NOTE = 'Mac GPU timing: a hint not the record; radiance-cache-timing page; 1280x720 first bookmark; medians of 120 frames after 300 warm-up';
 const PAGE = 'radiance-cache-timing';
 
 /** A metric name part: no commas (the CSV has no quoting for metrics) and no spaces. */
@@ -67,17 +71,17 @@ async function main(): Promise<void> {
     const { values, positionals } = parseArgs({
         args: process.argv.slice(2),
         allowPositionals: true,
-        options: { append: { type: 'boolean' }, csv: { type: 'string' }, commit: { type: 'string' }, browser: { type: 'string' }, 'clock-file': { type: 'string' } },
+        options: { append: { type: 'boolean' }, csv: { type: 'string' }, device: { type: 'string' }, commit: { type: 'string' }, browser: { type: 'string' }, 'clock-file': { type: 'string' } },
     });
     if (positionals.length === 0) {
-        console.error('Usage: node tools/gpu/pages/radiance-cache-timing/to-csv.ts <runner.json> [more.json ...] [--append] [--csv <file>] [--commit <hash>] [--browser <text>] [--clock-file <file>]');
+        console.error('Usage: node tools/gpu/pages/radiance-cache-timing/to-csv.ts <runner.json> [more.json ...] [--append] [--csv <file>] [--device <text>] [--commit <hash>] [--browser <text>] [--clock-file <file>]');
         process.exit(2);
     }
     const clockNotes = clockNoteRowsFromOption(values['clock-file']);
     const groups = new Map<string, { prefix: string[]; runs: MetricRow[][] }>();
     for (const file of positionals) {
         const summary = JSON.parse(await readFile(file, 'utf8')) as RunSummary;
-        const device = deviceNameFromAdapter(summary.adapter);
+        const device = values.device ?? deviceNameFromAdapter(summary.adapter);
         for (const page of summary.pages) {
             if (page.name !== PAGE) continue;
             if (page.outcome !== 'pass') {
@@ -95,7 +99,7 @@ async function main(): Promise<void> {
     for (const { prefix, runs } of groups.values()) {
         const device = prefix[2];
         const rows = [...(runs.length === 1 ? runs[0] : repeatedRunRows(runs)), ...(isNvidiaDeviceName(device) ? clockNotes : [])];
-        const note = isAppleDevice(device) ? M5_NOTE : '';
+        const note = isAppleDevice(device) ? APPLE_NOTE : '';
         const file = values.csv ? resolve(values.csv) : isAppleDevice(device) ? M5_CSV : RECORD_CSV;
         const lines = linesByFile.get(file) ?? [];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value), note].join(',')));
