@@ -314,14 +314,27 @@ export class HashGridCache implements WorldCache {
 
     /**
      * Lever 1's counters for the latest frame, words of the cache words (null
-     * per hit): the cells in use (a hit offered itself), the cells lit, and
-     * the shadow rays their lighting traced.
+     * per hit): the cells in use (a hit offered itself), the cells lit, the
+     * shadow rays their lighting traced, the cells in use that were stale, and
+     * the samples written to the lit cells.
      */
-    get cellShadingCounters(): { readonly usedCells: GpuWord; readonly litCells: GpuWord; readonly shadowRays: GpuWord } | null {
+    get cellShadingCounters(): {
+        readonly usedCells: GpuWord;
+        readonly litCells: GpuWord;
+        readonly shadowRays: GpuWord;
+        readonly staleCells: GpuWord;
+        readonly samples: GpuWord;
+    } | null {
         const prepared = this.require();
         if (!prepared.cellShading) return null;
         const word = (counter: number): GpuWord => ({ buffer: prepared.buffers.words, offset: counter * WORD_BYTES });
-        return { usedCells: word(HASH_GRID_COUNTER.usedCellCount), litCells: word(HASH_GRID_COUNTER.litCellCount), shadowRays: word(HASH_GRID_COUNTER.cellShadowRayCount) };
+        return {
+            usedCells: word(HASH_GRID_COUNTER.usedCellCount),
+            litCells: word(HASH_GRID_COUNTER.litCellCount),
+            shadowRays: word(HASH_GRID_COUNTER.cellShadowRayCount),
+            staleCells: word(HASH_GRID_COUNTER.staleCellCount),
+            samples: word(HASH_GRID_COUNTER.cellSampleCount),
+        };
     }
 
     async prepare(context: WorldCacheContext): Promise<void> {
@@ -331,8 +344,9 @@ export class HashGridCache implements WorldCache {
         // and the kernels are compiled without them (gi1.cpp:1428-1431).
         const multibounce = this.options.useMultibounce;
         // Lever 1: read at prepare, as its words, buffers and kernels are made here.
-        checkCellShadingOptions(this.options);
         const budget = this.options.cellShading === 'budget';
+        if (budget) checkCellShadingOptions(this.options);
+        else if (this.options.cellShading !== 'perHit') throw new RangeError(`@pmndrs/ddgi: cellShading must be 'perHit' or 'budget', got ${String(this.options.cellShading)}`);
         const layout = hashGridCacheBufferLayout(capacity, multibounce, budget);
         // Before anything is made: a device that can't hold the cache gets the limit's name (register D14).
         checkHashGridCacheLimits(layout, device.limits);
@@ -381,8 +395,9 @@ export class HashGridCache implements WorldCache {
                   populationKernel('PopulateMultibounceCells', 'populateMultibounceCells', populateMultibounceCellsWgsl(layout, budget ? 'litCells' : 'everyHit'), true),
                   populationKernel('GenerateMultibounceReservoirs', 'generateMultibounceReservoirs', generateMultibounceReservoirsWgsl(layout), true),
                   populationKernel('UpdateMultibounceCells', 'updateMultibounceCells', updateMultibounceCellsWgsl(layout), false),
-                  // generateDispatch(radiance_cache_visibility_count_buffer0_, ...) (gi1.cpp:2389); on a budget, the lit cells.
-                  indirectArgs('PopulateMultibounceCells args', budget ? HASH_GRID_COUNTER.litCellCount : HASH_GRID_COUNTER.visibilityCount0, POPULATION_WORKGROUP_SIZE.populateMultibounceCells),
+                  // generateDispatch(radiance_cache_visibility_count_buffer0_, ...) (gi1.cpp:2389); on a budget too, the
+                  // threads of entries that are neither a lit pick nor bypassing leave at once.
+                  indirectArgs('PopulateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount0, POPULATION_WORKGROUP_SIZE.populateMultibounceCells),
                   // generateDispatch(radiance_cache_visibility_count_buffer1_, ...) (gi1.cpp:2430, 2511)
                   indirectArgs('GenerateMultibounceReservoirs args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs),
                   indirectArgs('UpdateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.updateMultibounceCells),
@@ -627,8 +642,8 @@ export class HashGridCache implements WorldCache {
         this.encodePopulationPass(encoder, prepared, rayData, 'cellShadingPick', 'CellShadingPick');
         const rank = this.beginPass(encoder, prepared, 'CellShadingRank');
         this.encodePopulationDispatch(rank, prepared, rayData, 'cellShadingRank');
-        // Classes 0 (new) to max age (lit last frame), the order the cells are taken in.
-        cellShading.scan.encode(rank, this.options.cellShadingMaxAge + 1);
+        // Every class: 0 (new), then by age, oldest first; the order the cells are taken in.
+        cellShading.scan.encode(rank, CELL_SHADING_CLASSES);
         rank.end();
         this.encodePopulationPass(encoder, prepared, rayData, 'cellShadingChoose', 'CellShadingChoose');
         this.encodePopulationPass(encoder, prepared, rayData, 'cellShadingLight', 'CellShadingLight');
@@ -754,8 +769,8 @@ export class HashGridCache implements WorldCache {
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
         words[word.useMultibounce] = this.multibounceActive ? 1 : 0;
         words[word.environmentLightEnable] = options.environmentLightEnable ? 1 : 0;
-        // Lever 1's settings, read every frame (the mode itself was read at prepare).
-        checkCellShadingOptions(options);
+        // Lever 1's settings, read every frame on a budget (the mode itself was read at prepare).
+        if (prepared.cellShading) checkCellShadingOptions(options);
         words[word.cellShadingBudget] = options.cellShadingBudget;
         words[word.cellShadingSamples] = options.cellShadingSamples;
         words[word.cellShadingMaxAge] = options.cellShadingMaxAge;

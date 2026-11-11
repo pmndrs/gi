@@ -111,8 +111,10 @@ export interface HashGridCacheOptions {
     cellShadingSamples: number;
     /**
      * With `budget`: frames since a cell was last lit after which it counts as
-     * stale. Cells are ranked new first, then stale, then by frames since lit
-     * (older first); the stale ones share one rank. Read every frame.
+     * stale (the stale-cell counter, for a frame budget to read). The order
+     * the cells are lit in doesn't depend on it: new cells first, then by
+     * frames since lit, oldest first (ages told apart up to 255). Read every
+     * frame.
      */
     cellShadingMaxAge: number;
 }
@@ -120,7 +122,7 @@ export interface HashGridCacheOptions {
 /** How the hash grid's cells get their light (lever 1): Capsaicin's per hit, or id Tech 8's budget of cells. */
 export type CellShading = 'perHit' | 'budget';
 
-/** The largest `cellShadingMaxAge`: the age classes are a 256-entry histogram (new, stale, and one per younger age). */
+/** The largest `cellShadingMaxAge`: the ranking tells ages apart up to 255 frames (a 256-entry histogram: new, then one per age). */
 export const MAX_CELL_SHADING_AGE = 255;
 /** The largest `cellShadingSamples`. */
 export const MAX_CELL_SHADING_SAMPLES = 64;
@@ -261,6 +263,10 @@ export const HASH_GRID_COUNTER = {
     litCellCount: 10,
     /** Lever 1: shadow rays the budgeted lighting traced this frame (lit cells × samples when every draw finds a light). */
     cellShadowRayCount: 11,
+    /** Lever 1: cells in use that are stale (never lit, or lit `cellShadingMaxAge` frames ago or more), before this frame's lighting. */
+    staleCellCount: 12,
+    /** Lever 1: samples the budgeted lighting added to cells this frame: lit cells × samples, a draw with no light a sample of 0. */
+    cellSampleCount: 13,
 } as const;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */

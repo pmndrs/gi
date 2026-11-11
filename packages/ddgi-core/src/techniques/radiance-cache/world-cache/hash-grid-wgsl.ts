@@ -361,7 +361,9 @@ const HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER: u32 = ${cellShadingKeptHitBuffer}u
 const HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER: u32 = ${cellShadingLastLitBuffer}u;
 const HASHGRIDCACHE_USEDCELLCOUNT: u32 = ${HASH_GRID_COUNTER.usedCellCount}u;
 const HASHGRIDCACHE_LITCELLCOUNT: u32 = ${HASH_GRID_COUNTER.litCellCount}u;
-const HASHGRIDCACHE_CELLSHADOWRAYCOUNT: u32 = ${HASH_GRID_COUNTER.cellShadowRayCount}u;`;
+const HASHGRIDCACHE_CELLSHADOWRAYCOUNT: u32 = ${HASH_GRID_COUNTER.cellShadowRayCount}u;
+const HASHGRIDCACHE_STALECELLCOUNT: u32 = ${HASH_GRID_COUNTER.staleCellCount}u;
+const HASHGRIDCACHE_CELLSAMPLECOUNT: u32 = ${HASH_GRID_COUNTER.cellSampleCount}u;`;
 }
 
 /**
@@ -751,7 +753,9 @@ fn ${HASH_GRID_ENTRY_POINT.clearCounters}() {
     // Lever 1's counters (cellShading 'budget').
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_USEDCELLCOUNT], 0u);
     atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_LITCELLCOUNT], 0u);
-    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADOWRAYCOUNT], 0u);`
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADOWRAYCOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_STALECELLCOUNT], 0u);
+    atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSAMPLECOUNT], 0u);`
             : ''
     }
 }

@@ -9,7 +9,8 @@ import { SCENE_MODULE_ENTRIES } from '../../../platform/scene/wgsl.ts';
 import { SHADE_MODULE_ENTRIES } from '../../../platform/shade/wgsl.ts';
 import { TRACE_MODULE_ENTRIES } from '../../../platform/trace/wgsl.ts';
 import { checkCellShadingOptions, checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity, MAX_CELL_SHADING_AGE } from './capacity.ts';
-import { cellShadingClass, cellShadingKey, chooseCells } from './cell-shading-cpu.ts';
+import { CELL_SHADING_OLDEST_AGE, cellShadingClass, cellShadingIsStale, cellShadingKey, chooseCells } from './cell-shading-cpu.ts';
+import { CELL_SHADING_OLDEST_AGE as WGSL_OLDEST_AGE } from './hash-grid-cell-shading-wgsl.ts';
 import { HashGridCache } from './hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
@@ -25,6 +26,12 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
+import {
+    populateCellsWgsl,
+    populateMultibounceCellsWgsl,
+    updateMultibounceCellsWgsl,
+    VISIBILITY_FLAG,
+} from './hash-grid-population-wgsl.ts';
 import { CELL_SHADING_CLASS_WORDS, CELL_SHADING_CLASSES, hashGridCacheRayListLayout, MULTIBOUNCE_INFO_WORDS, RESERVOIR_WORDS, resolveCellsWgsl, updateTilesPerWorkgroup, updateTilesWgsl, VISIBILITY_WORD, VISIBILITY_WORDS } from './hash-grid-population-wgsl.ts';
 import {
     HASH_GRID_CACHE_GROUP_ENTRIES,
@@ -664,19 +671,38 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         for (const count of wins) expect(Math.abs(count / frames - 1 / hits.length)).toBeLessThan(0.02);
     });
 
-    it('ranks never-lit cells first, then stale ones, then by age, oldest first', () => {
-        const frame = 100;
-        const maxAge = 4;
-        // lastLit holds the frame plus one: lit at frame 99 (last frame) is 100.
-        expect(cellShadingClass(0, frame, maxAge)).toBe(0);
-        expect(cellShadingClass(100, frame, maxAge)).toBe(maxAge);
-        expect(cellShadingClass(99, frame, maxAge)).toBe(maxAge - 1);
-        expect(cellShadingClass(100 - 3, frame, maxAge)).toBe(1);
-        expect(cellShadingClass(1, frame, maxAge)).toBe(1);
-        // With maxAge 1 every lit cell is stale.
-        expect(cellShadingClass(100, frame, 1)).toBe(1);
+    it('ranks never-lit cells first, then by the real age, oldest first, up to 255 frames', () => {
+        const frame = 1000;
+        // lastLit holds the frame plus one: lit at frame 999 (last frame) is 1000.
+        expect(cellShadingClass(0, frame)).toBe(0);
+        expect(cellShadingClass(1000, frame)).toBe(255);
+        expect(cellShadingClass(999, frame)).toBe(254);
+        expect(cellShadingClass(1001 - 255, frame)).toBe(1);
+        expect(cellShadingClass(1, frame)).toBe(1);
         // Across the frame counter's wrap: lit at frame 2^32 - 2 (stored 2^32 - 1), three frames before frame 1.
-        expect(cellShadingClass(0xffffffff, 1, maxAge)).toBe(1 + (maxAge - 3));
+        expect(cellShadingClass(0xffffffff, 1)).toBe(1 + (255 - 3));
+        // The WGSL tells apart as many ages as the histogram has classes after "new".
+        expect(CELL_SHADING_OLDEST_AGE).toBe(CELL_SHADING_CLASSES - 1);
+        expect(WGSL_OLDEST_AGE).toBe(CELL_SHADING_OLDEST_AGE);
+        // maxAge only marks staleness: never lit, or that many frames or more since lit.
+        expect(cellShadingIsStale(0, frame, 4)).toBe(true);
+        expect(cellShadingIsStale(1001 - 4, frame, 4)).toBe(true);
+        expect(cellShadingIsStale(1001 - 3, frame, 4)).toBe(false);
+    });
+
+    it('goes round every cell in use: with N cells and budget B, each is lit within ceil(N / B) frames (CPU model of the ranking)', () => {
+        const cells = 1000;
+        const budget = 64;
+        const lastLit = new Array<number>(cells).fill(0);
+        let worstAge = 0;
+        for (let frame = 0; frame < 400; frame++) {
+            const classes = lastLit.map((value) => cellShadingClass(value, frame));
+            // The GPU's order inside a class is the atomics'; the model takes cells in index order within a class.
+            const order = [...classes.keys()].sort((a, b) => classes[a] - classes[b] || a - b);
+            for (const cell of order.slice(0, budget)) lastLit[cell] = frame + 1;
+            if (frame >= 50) for (const value of lastLit) worstAge = Math.max(worstAge, frame + 1 - value);
+        }
+        expect(worstAge).toBeLessThanOrEqual(Math.ceil(cells / budget));
     });
 
     it('lights min(budget, cells in use), whole classes in order and part of the last', () => {
@@ -686,13 +712,29 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(chooseCells(classes, 4, 0).litCount).toBe(0);
     });
 
-    it("keeps a cell with no new sample as it is in UpdateTiles, only on a budget", () => {
+    it("keeps a cell in use with no new sample as it is in UpdateTiles, only on a budget; an unused cell fades as Capsaicin's", () => {
         expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, true)).toEqual([32, 32, 32, 16]);
+        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16, false)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 0], 16));
         expect(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16, true)).toEqual(updateTilesAccumulate([32, 32, 32, 16], [8, 8, 8, 4], 16));
+        // A lit cell whose light went out: its samples of 0 take it down by 1 / 16 of the way each frame.
+        expect(updateTilesAccumulate([32, 32, 32, 16], [0, 0, 0, 1], 16, true)[0]).toBeCloseTo(30, 5);
         const perHit = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true));
         const budget = updateTilesWgsl(hashGridCacheBufferLayout(capacity, true, true));
         expect(perHit).not.toContain('new_samples.w <= 0.0');
-        expect(budget).toContain('new_samples.w <= 0.0');
+        expect(budget).toContain('keep_without_samples && new_samples.w <= 0.0');
+        // The kept-hit word says "in use this frame", and UpdateTiles resets it for the next frame's offers.
+        expect(budget).toContain('atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u)');
+    });
+
+    it('on a budget, keeps bypassing first-bounce hits out of their cell, and puts only a pick\'s second bounce in it', () => {
+        const budget = hashGridCacheBufferLayout(capacity, true, true);
+        const perHit = hashGridCacheBufferLayout(capacity, true);
+        expect(populateCellsWgsl(budget)).toContain('if (!is_bypassing_first_bounce)');
+        expect(populateCellsWgsl(perHit)).not.toContain('is_bypassing_first_bounce');
+        expect(updateMultibounceCellsWgsl(budget)).toContain(`(base_flags & ${VISIBILITY_FLAG.litPick}u) != 0u`);
+        expect(updateMultibounceCellsWgsl(perHit)).not.toContain('base_flags');
+        // The second bounce leaves from the lit picks and the bypassing hits, by their flags.
+        expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('visibility_bypass_buffer, did) == 0u');
     });
 
     it("builds the per-hit kernels as before: the budget's words appear in no per-hit kernel", () => {

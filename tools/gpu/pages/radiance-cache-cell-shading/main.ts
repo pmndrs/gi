@@ -16,26 +16,43 @@
  *    either image.
  * 2. **The counters on a smaller budget, exactly** (the sunlit corner of
  *    `radiance-cache-world-cache`, black sky, so every draw finds the sun and
- *    traces a shadow ray): budget 5,000 (the cells in use are about 65,000),
+ *    traces a shadow ray): budget 5,000 (the cells in use are about 48,000),
  *    3 samples, max age 4, after 12 frames; then the budget above the cells in
- *    use. Lit cells = min(budget, cells in use) and shadow rays = lit cells × 3,
- *    exactly. The cells to light, read back, are distinct cells in use, and
- *    their age classes (from the last-lit frames read before the frame) are
- *    what the CPU twin's choice says: every cell of the classes before the
- *    cutoff, the twin's count of the cutoff class, none after.
+ *    use. Lit cells = min(budget, cells in use), shadow rays and samples
+ *    written = lit cells × 3, exactly. The cells to light, read back, are
+ *    distinct cells in use, and their age classes (from the last-lit frames
+ *    read before the frame) are what the CPU twin's choice says: every cell
+ *    of the classes before the cutoff, the twin's count of the cutoff class,
+ *    none after. After the frame every kept-hit word is 0 again (UpdateTiles
+ *    resets them). And the samples reach the cells: one frame from an empty
+ *    cache (multibounce off, the budget above the cells in use), every
+ *    finest cell with samples counts exactly 3, and there are as many as lit
+ *    cells.
+ * 2b. **No cell starves** (the corner, budget 5,000, one sample, multibounce
+ *    on, max age 8; after 40 frames, 16 frames read back): with N cells in use
+ *    over budget B, ranking by age goes round them all. After each frame
+ *    every cell in use was lit within ceil(N / B) + 1 frames, and before the
+ *    lighting the oldest cell that was in use the frame before too is at most
+ *    ceil(N / B) + 2 frames old. (A cell that comes back into use after
+ *    frames away is old and is lit at once.)
  * 3. **Lag** (two-room, Capsaicin's defaults otherwise, max age 8, one
- *    sample): `perHit`, and the budget at 1, 1/4 and 1/16 of the cells in use
- *    (counted on the lit room). Its lamp off for 30 frames, then on, for 720
- *    frames: frames until the mean interpolated and denoised E are within 10%
- *    of the converged value, first, and for good (read every frame for the
- *    first 128, then every 8th, so a lag past 128 frames is known to 8). The converged value is
+ *    sample; multibounce on, then off): `perHit`, and the budget at 1, 1/4
+ *    and 1/16 of the cells in use (counted on the lit room). Its lamp off for
+ *    30 frames, then on, for 720 frames; a cut; then the lamp off again for
+ *    720 frames. For each event, frames until the mean interpolated and
+ *    denoised E are within 10% of the step from the value before the event to
+ *    the converged value, first, and for good (read every frame for the first
+ *    128, then every 8th, so a lag past 128 frames is known to 8). Gate: with
+ *    the lamp off again, the mean E falls to under 1% of what it was with the
+ *    lamp on, in every run (a light switched off must leave the cells). The converged value is
  *    `perHit`'s (the mean of its last 32 frames): every mode converges to the
  *    same image (section 1), but a small budget isn't there yet by the end,
  *    so its own end value would understate its lag (a first run measured
  *    against each run's own end did: 1/16's lamp-on end value was 4.8% below
- *    `perHit`'s). Each run's own end value is reported beside it. Then a cut
- *    to the second bookmark (`resetScreenProbes`, the world cache warm): the
- *    same. Information.
+ *    `perHit`'s, of the same multibounce setting). Each run's own end value
+ *    is reported beside it. The cut is to the second bookmark
+ *    (`resetScreenProbes`, the world cache warm). Information, but for the
+ *    lamp-off gate.
  *
  * Correctness only, no timing (`radiance-cache-timing` times both modes).
  * Through the lock:
@@ -49,6 +66,7 @@ import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techn
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { CELL_SHADING_CLASSES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
 import { cellShadingClass, chooseCells } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-cpu.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -59,7 +77,7 @@ import { describeScene, loadManifest } from '../ddgi-shared/harness.ts';
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
-import { readRange, runFrames, startScenario, sun, SUN_TRAVEL } from '../radiance-cache-world-cache/corner.ts';
+import { cellValue, readRange, readTiles, runFrames, startScenario, sun, SUN_TRAVEL } from '../radiance-cache-world-cache/corner.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -76,6 +94,11 @@ const SMALL_BUDGET = 5000;
 const COUNTER_SAMPLES = 3;
 const COUNTER_MAX_AGE = 4;
 const COUNTER_WARM_FRAMES = 12;
+/** Section 2b. */
+const STARVATION_WARM_FRAMES = 40;
+const STARVATION_FRAMES = 16;
+/** Section 3's gate: with the lamp off again, the mean E under this share of its lamp-on value. */
+const LAMP_OFF_REMAINDER = 0.01;
 
 /** Section 3: frames before the lamp comes on, frames after each event, the converged window at their end, the lag's tolerance. */
 const LAMP_OFF_FRAMES = 30;
@@ -329,6 +352,14 @@ async function checkCounters(device: GPUDevice, failures: string[]): Promise<Rec
             const shadowRays = counters[HASH_GRID_COUNTER.cellShadowRayCount];
             if (litCells !== Math.min(budget, usedCells)) fail(`${litCells} cells lit, min(budget, ${usedCells} in use) is ${Math.min(budget, usedCells)}`);
             if (shadowRays !== litCells * COUNTER_SAMPLES) fail(`${shadowRays} shadow rays for ${litCells} lit cells × ${COUNTER_SAMPLES} samples`);
+            const samples = counters[HASH_GRID_COUNTER.cellSampleCount];
+            if (samples !== litCells * COUNTER_SAMPLES) fail(`${samples} samples written for ${litCells} lit cells × ${COUNTER_SAMPLES} samples`);
+            // UpdateTiles reset every kept-hit word for the next frame's offers.
+            const keptWord = cache.layout.words.cellShadingKeptHitBuffer;
+            assert(keptWord !== null, 'a budget cache without its kept-hit words');
+            const kept = new Uint32Array(await readRange(device, cache.buffers.words, keptWord * 4, cache.capacity.numCells * 4));
+            const keptLeft = kept.reduce((count, word) => count + (word !== 0 ? 1 : 0), 0);
+            if (keptLeft > 0) fail(`${keptLeft} kept-hit words still set after the frame`);
 
             const lists = cache.rayLists;
             assert(lists, 'no per-ray lists after a frame');
@@ -347,9 +378,9 @@ async function checkCounters(device: GPUDevice, failures: string[]): Promise<Rec
             // This frame's index: a cell lit this frame holds it plus one.
             const lastLitAfter = new Uint32Array(await readRange(device, cache.buffers.words, (lastLitWord + chosenCells[0]) * 4, 4))[0];
             const frameIndex = lastLitAfter - 1;
-            const classOf = (cell: number): number => cellShadingClass(lastLitBefore[cell], frameIndex, COUNTER_MAX_AGE);
-            const twin = chooseCells(Array.from(used, (visibility) => classOf(cellOf(visibility))), COUNTER_MAX_AGE + 1, budget);
-            const chosenByClass = new Array<number>(COUNTER_MAX_AGE + 1).fill(0);
+            const classOf = (cell: number): number => cellShadingClass(lastLitBefore[cell], frameIndex);
+            const twin = chooseCells(Array.from(used, (visibility) => classOf(cellOf(visibility))), CELL_SHADING_CLASSES, budget);
+            const chosenByClass = new Array<number>(CELL_SHADING_CLASSES).fill(0);
             for (const cell of chosenCells) chosenByClass[classOf(cell)]++;
             const expectedByClass = twin.histogram.map((count, ageClass) => (ageClass < twin.cutoffClass ? count : ageClass === twin.cutoffClass ? twin.litInCutoffClass : 0));
             if (chosenByClass.some((count, ageClass) => count !== expectedByClass[ageClass])) fail(`lit cells by age class ${chosenByClass.join(', ')}, the twin's choice ${expectedByClass.join(', ')}`);
@@ -357,13 +388,109 @@ async function checkCounters(device: GPUDevice, failures: string[]): Promise<Rec
             let outOfOrder = 0;
             for (let index = 1; index < chosenCells.length; index++) if (classOf(chosenCells[index]) < classOf(chosenCells[index - 1])) outOfOrder++;
             if (outOfOrder > 0) fail(`${outOfOrder} cells to light come after a cell of a later class`);
-            results[`budget ${budget}`] = { usedCells, litCells, shadowRays, samples: COUNTER_SAMPLES, frameIndex, histogram: twin.histogram, litByClass: chosenByClass };
+            // Only the classes with cells, as "class: in use / lit".
+            const byClass = Object.fromEntries(twin.histogram.flatMap((count, ageClass) => (count > 0 ? [[ageClass, `${count} / ${chosenByClass[ageClass]}`]] : [])));
+            results[`budget ${budget}`] = { usedCells, litCells, shadowRays, samplesWritten: samples, samplesPerCell: COUNTER_SAMPLES, staleCells: counters[HASH_GRID_COUNTER.staleCellCount], frameIndex, inUseOverLitByClass: byClass };
         } finally {
             scenario.dispose();
             await device.queue.onSubmittedWorkDone();
         }
     }
+    results.samplesInCells = await checkSamplesInCells(device, failures);
     return results;
+}
+
+/** Section 2's last check: one frame from an empty cache, every finest cell with samples counts exactly the samples per lit cell. */
+async function checkSamplesInCells(device: GPUDevice, failures: string[]): Promise<Record<string, number>> {
+    const fail = (message: string): void => void failures.push(`samples in the cells: ${message}`);
+    const scenario = await startScenario(device, 'cell shading samples', [sun(SUN_TRAVEL)], false, {
+        useMultibounce: false,
+        cellShading: 'budget',
+        cellShadingBudget: 1_000_000,
+        cellShadingSamples: COUNTER_SAMPLES,
+    });
+    try {
+        // startScenario empties the cache at the next frame: this one.
+        await runFrames(device, scenario, 1);
+        const counters = new Uint32Array(await readRange(device, scenario.cache.buffers.words, 0, 64 * 4));
+        const litCells = counters[HASH_GRID_COUNTER.litCellCount];
+        const packed = scenario.cache.packedTiles;
+        const packedCount = new Uint32Array(await readRange(device, packed.count.buffer, packed.count.offset, 4))[0];
+        const tiles = Array.from(new Uint32Array(await readRange(device, scenario.cache.buffers.words, packed.firstWord * 4, packedCount * 4)));
+        const values = await readTiles(device, scenario.cache, tiles);
+        const capacity = scenario.cache.capacity;
+        let cellsWithSamples = 0;
+        let otherCounts = 0;
+        tiles.forEach((_, slot) => {
+            for (let cell = 0; cell < capacity.numCellsPerTileMip[0]; cell++) {
+                const count = cellValue(values, capacity, slot, cell)[3];
+                if (count > 0) cellsWithSamples++;
+                if (count > 0 && count !== COUNTER_SAMPLES) otherCounts++;
+            }
+        });
+        if (litCells === 0) fail('nothing lit');
+        if (cellsWithSamples !== litCells) fail(`${cellsWithSamples} cells have samples, ${litCells} were lit`);
+        if (otherCounts > 0) fail(`${otherCounts} cells count other than ${COUNTER_SAMPLES} samples`);
+        return { litCells, cellsWithSamples, cellsWithOtherCounts: otherCounts };
+    } finally {
+        scenario.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+// ---- Section 2b: no cell starves ---------------------------------------------------------------------
+
+async function checkStarvation(device: GPUDevice, failures: string[]): Promise<Record<string, unknown>> {
+    const fail = (message: string): void => void failures.push(`starvation: ${message}`);
+    const scenario = await startScenario(device, 'cell shading starvation', [sun(SUN_TRAVEL)], false, { cellShading: 'budget', cellShadingBudget: SMALL_BUDGET, cellShadingSamples: 1 });
+    try {
+        await runFrames(device, scenario, STARVATION_WARM_FRAMES);
+        const cache = scenario.cache;
+        const lastLitWord = cache.layout.words.cellShadingLastLitBuffer;
+        assert(lastLitWord !== null, 'a budget cache without its last-lit words');
+        let previousUsed = new Set<number>();
+        let previousLastLit: Uint32Array | null = null;
+        const frames: { usedCells: number; oldestAfter: number; oldestBefore: number; returning: number; staleCells: number }[] = [];
+        let maxUsed = 0;
+        for (let frame = 0; frame < STARVATION_FRAMES; frame++) {
+            await runFrames(device, scenario, 1);
+            const counters = new Uint32Array(await readRange(device, cache.buffers.words, 0, 64 * 4));
+            const usedCells = counters[HASH_GRID_COUNTER.usedCellCount];
+            maxUsed = Math.max(maxUsed, usedCells);
+            const lists = cache.rayLists;
+            assert(lists, 'no per-ray lists after a frame');
+            const layout = lists.layout;
+            const words = new Uint32Array(await readRange(device, lists.buffer, 0, lists.buffer.size));
+            const usedCellList = Array.from(words.slice(layout.usedCellBuffer, layout.usedCellBuffer + usedCells), (visibility) => words[layout.visibilityCellBuffer + visibility]);
+            const lastLit = new Uint32Array(await readRange(device, cache.buffers.words, lastLitWord * 4, cache.capacity.numCells * 4));
+            // This frame's index: the newest last-lit frame among the cells in use, minus one.
+            const frameIndex = usedCellList.reduce((newest, cell) => Math.max(newest, lastLit[cell]), 0) - 1;
+            let oldestAfter = 0;
+            let oldestBefore = 0;
+            let returning = 0;
+            for (const cell of usedCellList) {
+                // Frames since lit after this frame's lighting (0: lit this frame), never-lit counted as the frame count.
+                oldestAfter = Math.max(oldestAfter, lastLit[cell] === 0 ? frameIndex + 1 : frameIndex + 1 - lastLit[cell]);
+                if (!previousUsed.has(cell)) {
+                    returning++;
+                    continue;
+                }
+                if (previousLastLit) oldestBefore = Math.max(oldestBefore, previousLastLit[cell] === 0 ? frameIndex + 1 : frameIndex + 1 - previousLastLit[cell]);
+            }
+            frames.push({ usedCells, oldestAfter, oldestBefore, returning, staleCells: counters[HASH_GRID_COUNTER.staleCellCount] });
+            previousUsed = new Set(usedCellList);
+            previousLastLit = lastLit;
+        }
+        const rounds = Math.ceil(maxUsed / SMALL_BUDGET);
+        const worstAfter = Math.max(...frames.map((entry) => entry.oldestAfter));
+        const worstBefore = Math.max(...frames.slice(1).map((entry) => entry.oldestBefore));
+        if (worstAfter > rounds + 1) fail(`a cell in use was last lit ${worstAfter} frames ago; with ${maxUsed} cells over a budget of ${SMALL_BUDGET} every one is lit within ${rounds} (+1)`);
+        if (worstBefore > rounds + 2) fail(`before the lighting, a cell in use since the frame before was ${worstBefore} frames old (ceil(N / B) = ${rounds}, + 2)`);
+        return { budget: SMALL_BUDGET, maxUsedCells: maxUsed, ceilUsedOverBudget: rounds, worstFramesSinceLitAfter: worstAfter, worstAgeBefore: worstBefore, frames };
+    } finally {
+        scenario.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
 }
 
 // ---- Section 3: lag -------------------------------------------------------------------------------------
@@ -404,19 +531,29 @@ interface EventMeans {
     readonly denoised: number[];
 }
 
-function lagOf(frames: readonly number[], means: readonly number[], converged: number): Lag {
-    const near = means.map((mean) => Math.abs(mean - converged) <= LAG_TOLERANCE * converged);
+/** Frames until the means are within 10% of the step from `before` to `converged` (perHit's values). */
+function lagOf(frames: readonly number[], means: readonly number[], converged: number, before: number): Lag {
+    const tolerance = LAG_TOLERANCE * Math.abs(converged - before);
+    const near = means.map((mean) => Math.abs(mean - converged) <= tolerance);
     const firstWithin = near.indexOf(true);
     let within = -1;
     for (let index = near.length - 1; index >= 0 && near[index]; index--) within = index;
     return { firstWithin: firstWithin < 0 ? -1 : frames[firstWithin], within: within < 0 ? -1 : frames[within], converged, ownEnd: endValue(means) };
 }
 
-/** perHit's converged values after each event: what every run's lag is measured against. */
-interface LagReference {
-    readonly lampOn: { readonly interpolated: number; readonly denoised: number };
-    readonly cut: { readonly interpolated: number; readonly denoised: number };
+interface EventValues {
+    readonly interpolated: number;
+    readonly denoised: number;
 }
+
+/** perHit's converged values after each event (of the same multibounce setting): what every run's lag is measured against. */
+interface LagReference {
+    readonly lampOn: EventValues;
+    readonly cut: EventValues;
+    readonly lampOff: EventValues;
+}
+
+const ends = (means: EventMeans): EventValues => ({ interpolated: endValue(means.interpolated), denoised: endValue(means.denoised) });
 
 async function eventMeans(device: GPUDevice, run: Run, surface: Uint32Array): Promise<EventMeans> {
     const means: EventMeans = { frames: [], interpolated: [], denoised: [] };
@@ -433,7 +570,13 @@ async function eventMeans(device: GPUDevice, run: Run, surface: Uint32Array): Pr
     return means;
 }
 
-async function measureLag(device: GPUDevice, label: string, settings: Partial<RadianceCacheSettings>, given?: LagReference): Promise<{ result: Record<string, unknown>; reference: LagReference }> {
+async function measureLag(
+    device: GPUDevice,
+    label: string,
+    settings: Partial<RadianceCacheSettings>,
+    failures: string[],
+    given?: LagReference,
+): Promise<{ result: Record<string, unknown>; reference: LagReference; usedCells: number }> {
     const manifest = loadManifest('two-room');
     const lampIntensity = manifest.lights[0].intensity;
     const run = await startRun(device, 'two-room', settings, { lampIntensity: 0 });
@@ -450,20 +593,37 @@ async function measureLag(device: GPUDevice, label: string, settings: Partial<Ra
         await run.frame();
         const surfaceB = await surfacePixels(device, run);
         const cut = await eventMeans(device, run, surfaceB);
-        const reference = given ?? {
-            lampOn: { interpolated: endValue(lampOn.interpolated), denoised: endValue(lampOn.denoised) },
-            cut: { interpolated: endValue(cut.interpolated), denoised: endValue(cut.denoised) },
-        };
+
+        // The lamp off again, at the second bookmark: its light must leave the cells.
+        for (const light of run.lights) run.platform.scene.updateLight(light, { intensity: 0 });
+        const lampOff = await eventMeans(device, run, surfaceB);
+        const reference = given ?? { lampOn: ends(lampOn), cut: ends(cut), lampOff: ends(lampOff) };
+        const lampOffEnd = ends(lampOff);
+        const cutEnd = ends(cut);
+        for (const image of ['interpolated', 'denoised'] as const) {
+            if (!(lampOffEnd[image] <= LAMP_OFF_REMAINDER * cutEnd[image])) {
+                failures.push(`lag ${label}: with the lamp off again the mean ${image} E is ${lampOffEnd[image].toExponential(3)}, ${((100 * lampOffEnd[image]) / cutEnd[image]).toFixed(2)}% of its lamp-on ${cutEnd[image].toFixed(4)}`);
+            }
+        }
+        const lags = (means: EventMeans, converged: EventValues, before: EventValues): Record<string, Lag> => ({
+            interpolated: lagOf(means.frames, means.interpolated, converged.interpolated, before.interpolated),
+            denoised: lagOf(means.frames, means.denoised, converged.denoised, before.denoised),
+        });
+        const none: EventValues = { interpolated: 0, denoised: 0 };
         return {
             reference,
+            usedCells: counters?.usedCells ?? 0,
             result: {
                 label,
                 counters,
-                lampOn: { interpolated: lagOf(lampOn.frames, lampOn.interpolated, reference.lampOn.interpolated), denoised: lagOf(lampOn.frames, lampOn.denoised, reference.lampOn.denoised) },
-                cut: { interpolated: lagOf(cut.frames, cut.interpolated, reference.cut.interpolated), denoised: lagOf(cut.frames, cut.denoised, reference.cut.denoised) },
+                // From the dark room (0), from the first view's light (the step to the second's: its own value), and from the lamp-on value.
+                lampOn: lags(lampOn, reference.lampOn, none),
+                cut: lags(cut, reference.cut, none),
+                lampOff: lags(lampOff, reference.lampOff, reference.cut),
+                lampOffRemainder: { interpolated: lampOffEnd.interpolated / cutEnd.interpolated, denoised: lampOffEnd.denoised / cutEnd.denoised },
                 // Every 8th frame's mean, for plotting.
                 lampOnInterpolatedMeans: lampOn.interpolated.filter((_, index) => lampOn.frames[index] % 8 === 0),
-                cutInterpolatedMeans: cut.interpolated.filter((_, index) => cut.frames[index] % 8 === 0),
+                lampOffInterpolatedMeans: lampOff.interpolated.filter((_, index) => lampOff.frames[index] % 8 === 0),
             },
         };
     } finally {
@@ -472,20 +632,24 @@ async function measureLag(device: GPUDevice, label: string, settings: Partial<Ra
     }
 }
 
-async function checkLag(device: GPUDevice): Promise<Record<string, unknown>> {
+async function checkLag(device: GPUDevice, failures: string[]): Promise<Record<string, unknown>> {
     const results: Record<string, unknown> = {};
-    const perHit = await measureLag(device, 'perHit', {});
-    results.perHit = perHit.result;
-    results.reference = perHit.reference;
-    // The cells in use on the lit room, from a budget run above them.
-    const ample = await measureLag(device, 'budget, all cells', { cellShading: 'budget', cellShadingBudget: 1_000_000 }, perHit.reference);
-    const usedCells = (ample.result.counters as { usedCells: number } | null)?.usedCells ?? 0;
-    assert(usedCells > 0, 'two-room: no cells in use on a budget');
-    results['budget 1'] = ample.result;
-    for (const share of LAG_BUDGET_SHARES.slice(1)) {
-        const budget = Math.max(1, Math.round(usedCells * share));
-        const label = `budget ${budget} (1/${Math.round(1 / share)} of ${usedCells})`;
-        results[`budget 1/${Math.round(1 / share)}`] = (await measureLag(device, label, { cellShading: 'budget', cellShadingBudget: budget }, perHit.reference)).result;
+    for (const useMultibounce of [true, false]) {
+        const setting = `multibounce ${useMultibounce ? 'on' : 'off'}`;
+        const perSetting: Record<string, unknown> = {};
+        const perHit = await measureLag(device, `perHit, ${setting}`, { useMultibounce }, failures);
+        perSetting.perHit = perHit.result;
+        perSetting.reference = perHit.reference;
+        // The cells in use on the lit room, from a budget run above them.
+        const ample = await measureLag(device, `budget, all cells, ${setting}`, { useMultibounce, cellShading: 'budget', cellShadingBudget: 1_000_000 }, failures, perHit.reference);
+        assert(ample.usedCells > 0, 'two-room: no cells in use on a budget');
+        perSetting['budget 1'] = ample.result;
+        for (const share of LAG_BUDGET_SHARES.slice(1)) {
+            const budget = Math.max(1, Math.round(ample.usedCells * share));
+            const label = `budget ${budget} (1/${Math.round(1 / share)} of ${ample.usedCells}), ${setting}`;
+            perSetting[`budget 1/${Math.round(1 / share)}`] = (await measureLag(device, label, { useMultibounce, cellShading: 'budget', cellShadingBudget: budget }, failures, perHit.reference)).result;
+        }
+        results[setting] = perSetting;
     }
     return results;
 }
@@ -504,15 +668,19 @@ try {
     const failures: string[] = [];
     // VITE_RC_CELL_SHADING_SECTIONS=counters,converged,lag (default all) runs some sections only, for hand use.
     const env = import.meta.env as Record<string, unknown>;
-    const sections = typeof env.VITE_RC_CELL_SHADING_SECTIONS === 'string' && env.VITE_RC_CELL_SHADING_SECTIONS.trim() !== '' ? env.VITE_RC_CELL_SHADING_SECTIONS.split(',').map((name) => name.trim()) : ['counters', 'converged', 'lag'];
+    const sections =
+        typeof env.VITE_RC_CELL_SHADING_SECTIONS === 'string' && env.VITE_RC_CELL_SHADING_SECTIONS.trim() !== ''
+            ? env.VITE_RC_CELL_SHADING_SECTIONS.split(',').map((name) => name.trim())
+            : ['counters', 'starvation', 'converged', 'lag'];
     const counters = sections.includes('counters') ? await checkCounters(device, failures) : 'not run';
+    const starvation = sections.includes('starvation') ? await checkStarvation(device, failures) : 'not run';
     const converged = sections.includes('converged') ? await checkConverged(device, failures) : 'not run';
-    const lag = sections.includes('lag') ? await checkLag(device) : 'not run';
+    const lag = sections.includes('lag') ? await checkLag(device, failures) : 'not run';
     await drainDevice(device);
     reportGpuTest({
         status: failures.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.slice(0, 20).join(' | '),
-        data: { width: WIDTH, height: HEIGHT, adapterStorageBuffersPerStage, counters, converged, lag },
+        data: { width: WIDTH, height: HEIGHT, adapterStorageBuffersPerStage, counters, starvation, converged, lag },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

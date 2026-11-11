@@ -18,15 +18,26 @@ export function cellShadingKey(visibilityIndex: number, frameIndex: number): num
     return x;
 }
 
+/** The oldest age the ranking tells apart: classes 1 (this age or more) to 255 (lit last frame). */
+export const CELL_SHADING_OLDEST_AGE = 255;
+
+/** `HashGridCache_CellShadingAge`: frames since lit, at least 1 (`lastLit` is the frame plus one; wraps with the frame counter). */
+export function cellShadingAge(lastLit: number, frameIndex: number): number {
+    return Math.max((frameIndex + 1 - lastLit) >>> 0, 1);
+}
+
 /**
- * `HashGridCache_CellShadingClass`: 0 for never lit (`lastLit` 0), 1 for
- * stale (lit `maxAge` or more frames ago), then one class per younger age,
- * up to `maxAge` for a cell lit last frame. `lastLit` is the frame plus one.
+ * `HashGridCache_CellShadingClass`: 0 for never lit (`lastLit` 0), then by
+ * age, oldest first: 1 for 255 frames or more, 255 for lit last frame.
  */
-export function cellShadingClass(lastLit: number, frameIndex: number, maxAge: number): number {
+export function cellShadingClass(lastLit: number, frameIndex: number): number {
     if (lastLit === 0) return 0;
-    const age = Math.min(Math.max(((frameIndex + 1 - lastLit) >>> 0), 1), maxAge);
-    return 1 + (maxAge - age);
+    return 1 + (CELL_SHADING_OLDEST_AGE - Math.min(cellShadingAge(lastLit, frameIndex), CELL_SHADING_OLDEST_AGE));
+}
+
+/** `HashGridCache_CellShadingIsStale`: never lit, or lit `maxAge` frames ago or more. */
+export function cellShadingIsStale(lastLit: number, frameIndex: number, maxAge: number): boolean {
+    return lastLit === 0 || cellShadingAge(lastLit, frameIndex) >= maxAge;
 }
 
 /** What `chooseCells` says about one frame's cells in use. */
