@@ -643,7 +643,7 @@ Started 2026-11-11 (DECISIONS 2026-11-11: timing resumes). The levers and the or
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | todo |
+| RC5.1 | Screen-stage GPU timing (lever 17): the platform resolves its timestamps after `encodeScreen`, so radiance-cache passes stop reading 0 ms; a `radiance-cache-timing` page shaped like `ddgi-timing`; a first M5 per-pass table | implementer | S | none | review |
 | RC5.2 | Windows re-run: the twelve `radiance-cache-*` pages plus `hit-shading-lights` and `ddgi-furnace` on the RTX 3060 and the Intel UHD; nothing has run there since phase 2 | gpu-tester | S | none (Windows laptop, 2026-11-12) | todo |
 | RC5.3 | The phase 5 table: VALID per-pass timing on the RTX 3060 beside native Capsaicin's groups (Sponza, Bistro interior and exterior, two-room); a cause and an attention-list row for each pass over native; accuracy against the path tracer per scene | gpu-tester, native-runner | M | RC5.1, RC5.2 | todo |
 | RC5.4 | Slow surface rays (lever 20): find why probe rays leaving surfaces trace at 17-35 Mrays/s while rays from points in the air reach about 87 (RC1.5); cause and a proposed fix, no tracer change without the lead | implementer | M | none | todo |

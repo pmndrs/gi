@@ -12,6 +12,8 @@ The technique already labels its passes for GPU timing. Capsaicin's section name
 
 **But on 2026-11-11 every radiance-cache pass read 0 ms.** This was a snapshot on the Apple M5 Pro, viewer path, Sponza and Cornell, 300 warm-up frames then 120 measured, through the bench lock. The cause is in `packages/ddgi-core/src/platform/gi-platform.ts`. `encode()` resolves the frame's timestamps at its end (around line 376). Every radiance-cache pass runs later, in `encodeScreen()` (line 387), so their timestamps are written after the resolve. DDGI is timed correctly because its passes run inside `encode()`. Only `platform/top-level refit` gave a real number.
 
+*Fixed in RC5.1 (2026-11-11):* the platform resolves again after the screen stage, every Capsaicin section is its own timed pass, and `radiance-cache-timing` writes the first M5 per-pass table to `bench/results/radiance-cache-m5-passes.csv`.
+
 So **fixing this is the first speed task** (lever 17). It is small: resolve the timer after the screen stage when a technique has one, and add a test that a screen-stage pass reads more than 0. Next to it goes a `radiance-cache-timing` page shaped like `ddgi-timing`: per-pass medians over a warmed run, on Sponza, the two Bistros and two-room, written to `bench/results/`. Phase 5 needs that page anyway.
 
 What the snapshot could give is wall time per frame, including the wait for the GPU, on the M5 at 1280 × 720. Sponza was 33.2 ms and Cornell 16.55 ms (`bench/results/radiance-cache-m5-passes.csv`). Both look tied to the display rate (one and two 60 Hz frames), so they only say that Sponza takes between about 17 and 33 ms. They are not GPU times.
