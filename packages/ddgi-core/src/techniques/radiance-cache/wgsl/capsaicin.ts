@@ -1,7 +1,8 @@
 /*
  * Ported from AMD Capsaicin v1.3 (914b915): src/core/src/render_techniques/gi1/gi1.hlsl,
  * screen_probes.hlsl and gi1.comp; src/core/src/math/sampling.hlsl, pack.hlsl, color.hlsl,
- * math.hlsl and transform.hlsl; src/core/src/components/random_number_generator/random_number_generator.hlsl.
+ * math.hlsl and transform.hlsl; src/core/src/geometry/geometry.hlsl;
+ * src/core/src/components/random_number_generator/random_number_generator.hlsl.
  *
  * Copyright © 2023 Advanced Micro Devices, Inc.
  *
@@ -259,6 +260,32 @@ fn rcFromProbeFrame(direction: vec3f, normal: vec3f) -> vec3f {
 fn rcToProbeFrame(direction: vec3f, normal: vec3f) -> vec3f {
     let basis = rcGetOrthoVectors(normal);
     return vec3f(dot(direction, basis.b1), dot(direction, basis.b2), dot(direction, normal));
+}
+
+// ---- geometry/geometry.hlsl -----------------------------------------------------------------
+
+// offsetPosition (geometry.hlsl:35-47): Wachter and Binder's offset from Ray Tracing Gems
+// (chapter 6, "A Fast and Robust Method for Avoiding Self-Intersection"). Each coordinate moves
+// along the normal by 256 x its normal component in steps of its own f32 rounding (an integer
+// step on its bits), so the push scales with the coordinate's error; within 1/32 of the origin,
+// where those steps vanish, by 1/65536 along the normal instead. Capsaicin passes the hit's
+// interpolated normal, turned to the side the ray came from (gi1.comp:1903, 1933). Used for the
+// second-bounce ray only (register D39); the platform's other rays use giShadeOffsetRayOrigin,
+// which pushes along the normal exactly (NOTES: this one's per-coordinate steps tilt along the
+// surface, which carried 8 corner points of the trace oracle's thin box past the next face).
+fn rcOffsetPosition(position: vec3f, normal: vec3f) -> vec3f {
+    let origin = 1.0 / 32.0;
+    let floatScale = 1.0 / 65536.0;
+    let intScale = 256.0;
+
+    // int3(normal * intScale): truncated toward zero, as HLSL's conversion.
+    let intN = vec3i(normal * intScale);
+    // asfloat(asint(position) + (position < 0 ? -intN : intN)): a step away from zero on the
+    // bits moves a negative coordinate further negative, hence the sign flip.
+    let positionI = bitcast<vec3f>(bitcast<vec3i>(position) + select(intN, -intN, position < vec3f(0.0)));
+
+    let posOffset = position + normal * floatScale;
+    return select(positionI, posOffset, abs(position) < vec3f(origin));
 }
 
 // ---- components/random_number_generator/random_number_generator.hlsl -----------------------

@@ -67,6 +67,21 @@
  *    arrays (534,773,760 bytes at Capsaicin's capacity) without the
  *    multibounce, and comes back when it is prepared on; off, then prepared
  *    again, it drops once more; the world cache's stats say which.
+ * 4. **The second-bounce ray's origin** (register D39, `bounce-offset.ts`):
+ *    Capsaicin's `offsetPosition` (`rcOffsetPosition`) against its CPU twin,
+ *    bit for bit on 4,096 points. Then on `cornell-box` and `sponza` (their
+ *    first bookmark, 1280 x 720, 8 frames from an empty cache) and on the
+ *    corner of sections 1 and 2, every kept
+ *    second-bounce ray of the latest frame traced from Capsaicin's origin
+ *    and from the platform's push, which the port used before RC6.2.
+ *    Checked: the page's rays from Capsaicin's origin are the production
+ *    kernel's (their hits equal its second-bounce entries, within the
+ *    cache's refused inserts and 0.1% for two compiles of the same code),
+ *    and every one of Capsaicin's origins is above its surface along the
+ *    normal. Reported: how many rays change hit (a hit against a miss, or
+ *    another triangle), how many of those hit within 1 mm, and the back-face
+ *    hits from each origin (a ray that starts behind a surface sees back
+ *    faces: the leak to look for).
  *
  * 4. **The sky at second-bounce hits** (RC6.1: the corner with no lights
  *    under a constant sky, 6 frames): `GenerateMultibounceReservoirs` draws
@@ -101,11 +116,15 @@ import { GI_DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
+import { bookmarkCamera, describeSponza } from '../radiance-cache-probes/scenes.ts';
+import { checkOffsetPositionTwin, measureBounceOffset, type BounceOffsetMeasure } from './bounce-offset.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 import {
     ALBEDO,
+    CAMERA as CORNER_CAMERA,
     cellValue,
+    describeCorner,
     LIT_RADIANCE,
     MAX_SAMPLE_COUNT,
     readFrameState,
@@ -271,6 +290,7 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
     let worstDirection = 0;
     let worstBrdfOverPdf = 0;
     let wrongSecondHits = 0;
+    const wrongSecondHitExamples: string[] = [];
     for (let base = 0; base < count0; base++) {
         const ray = state.rays[state.visibilityQuery[base]];
         const normal = surfaceNormal(ray);
@@ -312,13 +332,26 @@ async function checkKernels(device: GPUDevice, scenario: Scenario): Promise<Chec
         const pdf = second.info[entry * 4 + 3];
         worstBrdfOverPdf = Math.max(worstBrdfOverPdf, relativeError(brdf / pdf, ALBEDO), Math.abs(pdf - sample.pdf) / Math.max(sample.pdf, 1e-3));
         const end = second.origin[entry].map((value, axis) => value + second.hitT[entry] * direction[axis]);
-        if (traced.point && Math.hypot(...end.map((value, axis) => value - (traced.point as Vec3)[axis])) > 1e-2 * Math.max(1, second.hitT[entry])) wrongSecondHits++;
+        // Where the CPU's ray from the GPU's own origin meets the corner. The GPU's origin is giSurfaceAt's
+        // point (moved up to 64 rounding steps into its triangle) pushed off the surface; the probe ray's
+        // hit can sit 4e-5 m away from it, which a ray grazing the wall turns into centimetres (seen on
+        // a floor point 4 mm from the wall: 1.8 cm along a ray 0.13 degrees off the wall's plane).
+        const fromGpuOrigin = traceCorner(second.origin[entry], sample.direction).point ?? traced.point;
+        if (fromGpuOrigin && Math.hypot(...end.map((value, axis) => value - fromGpuOrigin[axis])) > 1e-2 * Math.max(1, second.hitT[entry])) {
+            wrongSecondHits++;
+            if (wrongSecondHitExamples.length < 4) {
+                wrongSecondHitExamples.push(
+                    `entry ${base} (${ray.surface} at ${ray.hit.map((v) => v.toFixed(5)).join(', ')}): the GPU's ray from ${second.origin[entry].map((v) => v.toPrecision(7)).join(', ')} ` +
+                        `ends at t ${second.hitT[entry].toPrecision(4)}, the CPU's at ${fromGpuOrigin.map((v) => v.toFixed(4)).join(', ')}`,
+                );
+            }
+        }
     }
     if (discardMismatches > 0) fail(`${discardMismatches} discarded entries traced`);
     if (hitMismatches > 0) fail(`${hitMismatches} of ${kept} kept entries disagree with the CPU on hitting`);
     if (worstDirection > DIRECTION_TOLERANCE) fail(`a second-bounce direction is ${worstDirection} off the CPU's`);
     if (worstBrdfOverPdf > 4 * HALF_STEP) fail(`brdf / pdf or pdf is ${(worstBrdfOverPdf * 100).toFixed(3)}% off Lambert's`);
-    if (wrongSecondHits > 0) fail(`${wrongSecondHits} second-bounce hits are not where the CPU's ray meets the corner`);
+    if (wrongSecondHits > 0) fail(`${wrongSecondHits} second-bounce hits are not where the CPU's ray meets the corner: ${wrongSecondHitExamples.join('; ')}`);
     if (second.count === 0) fail('no second-bounce entries');
     if (second.count !== state.counters[HASH_GRID_COUNTER.visibilityCount1]) fail('the second-bounce count and its lists disagree');
 
@@ -747,6 +780,42 @@ try {
     const room = await checkTwoRoom(device, gallery);
     failures.push(...room.failures);
     data.twoRoom = room.data;
+
+    // 4. The second-bounce ray's origin (register D39).
+    const twin = await checkOffsetPositionTwin(device);
+    if (twin.mismatches > 0) failures.push(`offsetPosition: ${twin.mismatches} of ${twin.points} points differ from the CPU twin: ${twin.examples.join('; ')}`);
+    const cornell = loadManifest('cornell-box');
+    const sponza = loadManifest('sponza');
+    const offsetScenes = [
+        // The sunlit corner of sections 1 and 2: a 400 m floor, so far points have large coordinates beside a 0 on the normal's axis.
+        {
+            name: 'corner',
+            camera: CORNER_CAMERA,
+            describe: async (platform: GIPlatformImpl): Promise<void> => {
+                describeCorner(platform, [sun(SUN_TRAVEL)], false);
+            },
+        },
+        {
+            name: 'cornell-box',
+            camera: bookmarkCamera(cornell, 100),
+            describe: async (platform: GIPlatformImpl): Promise<void> => {
+                describeScene(platform, cornell);
+            },
+        },
+        { name: 'sponza', camera: bookmarkCamera(sponza, 1000), describe: (platform: GIPlatformImpl) => describeSponza(platform, device, sponza) },
+    ];
+    const offsets: Record<string, BounceOffsetMeasure> = {};
+    for (const scene of offsetScenes) {
+        const measure = await measureBounceOffset(device, scene.name, scene.camera, scene.describe);
+        offsets[scene.name] = measure;
+        const allowed = measure.bucketOverflows + Math.ceil(0.001 * measure.secondBounceRays);
+        if (!(Math.abs(measure.hitsFromCapsaicinOrigin - measure.productionEntries) <= allowed)) {
+            failures.push(`${scene.name}: the page's second-bounce rays hit ${measure.hitsFromCapsaicinOrigin} times, the production kernel made ${measure.productionEntries} entries (allowed ${allowed} apart)`);
+        }
+        if (measure.lift.capsaicinNotAbove > 0) failures.push(`${scene.name}: ${measure.lift.capsaicinNotAbove} of offsetPosition's origins are not above their surface`);
+        if (measure.secondBounceRays === 0) failures.push(`${scene.name}: no second-bounce rays`);
+    }
+    data.bounceOffset = { offsetPositionTwin: twin, scenes: offsets };
 
     await drainDevice(device);
     reportGpuTest({

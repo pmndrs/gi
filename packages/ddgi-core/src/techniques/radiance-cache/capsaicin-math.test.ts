@@ -10,6 +10,7 @@ import {
     mapToHemiOctahedron,
     mapToHemiOctahedronInverse,
     nearestHalf,
+    offsetPosition,
     packHalf3,
     packSeed,
     probeCellOf,
@@ -245,6 +246,25 @@ describe('packing (screen_probes.hlsl, pack.hlsl)', () => {
             // ...and a store that rounds toward zero keeps too.
             expect(towardZero(rounded)).toBe(floatToHalfBits(value));
         }
+    });
+
+    it('pushes a point off its surface as offsetPosition does (geometry.hlsl:35-47, register D39)', () => {
+        const bits = (value: number): number => new Int32Array(new Float32Array([value]).buffer)[0];
+        // Along +z at z = 3: z steps 256 ulps up on its bits; x and y stay (their normal component truncates to 0).
+        const up = offsetPosition([1, 2, 3], [0, 0, 1]);
+        expect(up[0]).toBe(1);
+        expect(up[1]).toBe(2);
+        expect(bits(up[2]) - bits(3)).toBe(256);
+        // A negative coordinate steps further from zero for a normal pointing away from zero.
+        const down = offsetPosition([1, 2, -3], [0, 0, -1]);
+        expect(bits(down[2]) - bits(-3)).toBe(256);
+        expect(down[2]).toBeLessThan(-3);
+        // Within 1/32 of the origin: a plain n / 65536 push.
+        const nearOrigin = offsetPosition([0.01, 0, 5], [0.6, 0, 0.8]);
+        expect(nearOrigin[0]).toBe(Math.fround(Math.fround(0.01) + Math.fround(0.6) / 65536));
+        expect(nearOrigin[1]).toBe(0);
+        // 0.8 x 256 = 204.8 truncates to 204 steps.
+        expect(bits(nearOrigin[2]) - bits(5)).toBe(204);
     });
 
     it('packs a direction as three halves', () => {

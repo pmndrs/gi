@@ -483,7 +483,7 @@ fn HashGridCache_DrawLight(surface: GiSurface, random: ptr<function, RcRandom>) 
 `;
 
 /** INV_PI (math/math_constants.hlsl). */
-const INV_PI_WGSL = /* wgsl */ `
+export const INV_PI_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
 `;
 
@@ -1065,7 +1065,7 @@ fn HashGridCache_LoadMultibounceInfo(multibounce_index: u32) -> vec4f {
  * with the diffuse compensation there). The view direction only enters
  * Capsaicin's GGX half vector, so Lambert doesn't take it.
  */
-const SAMPLE_DIFFUSE_WGSL = /* wgsl */ `
+export const SAMPLE_DIFFUSE_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_TWO_PI: f32 = 6.28318530717959;
 
 // Quaternion::transform (quaternion.hlsl:46-51): the quaternion q = (axis xyz, w) applied to a direction.
@@ -1215,10 +1215,10 @@ fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(
     // Sample diffuse direction
     let diffuse_sample = HashGridCache_SampleBRDFAndEvaluateDiffuse(surface.albedo, surface.normal, rcRand2(&random));
 
-    // Trace: MakeRayInfoClosest(world, normal, direction, MAX_HIT_DISTANCE) pushes the origin off
-    // the surface along the normal with offsetPosition; ours with the platform's push along the same
-    // normal (register D39).
-    let ray = GiRay(giShadeOffsetRayOrigin(surface.position, surface.normal), 0.0, diffuse_sample.direction, RC_MAX_HIT_DISTANCE);
+    // Trace: MakeRayInfoClosest(world, normal, direction, MAX_HIT_DISTANCE) (trace_ray.hlsl:112-119,
+    // gi1.comp:1933) pushes the origin off the surface with offsetPosition along the same normal
+    // (register D39).
+    let ray = GiRay(rcOffsetPosition(surface.position, surface.normal), 0.0, diffuse_sample.direction, RC_MAX_HIT_DISTANCE);
     let hit = giTraceClosest(ray);
 
     // If we hit some geometry, we append a new world-space hash-grid cache query

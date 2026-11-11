@@ -221,6 +221,33 @@ export function halfBitsToFloat(bits: number): number {
     return sign * (1 + mantissa / 1024) * 2 ** (exponent - 15);
 }
 
+const offsetFloats = new Float32Array(3);
+const offsetInts = new Int32Array(offsetFloats.buffer);
+
+/**
+ * `offsetPosition` (geometry.hlsl:35-47; `rcOffsetPosition`, register D39)
+ * on f32 inputs: each coordinate stepped on its bits by `trunc(256 n)`,
+ * away from zero along the normal, or, within 1/32 of the origin, moved by
+ * n / 65536. Bit for bit what the GPU gives (checked on
+ * `radiance-cache-multibounce`).
+ */
+export function offsetPosition(position: Direction, normal: Direction): [number, number, number] {
+    const result: [number, number, number] = [0, 0, 0];
+    for (let axis = 0; axis < 3; axis++) {
+        const coordinate = Math.fround(position[axis]);
+        const n = Math.fround(normal[axis]);
+        if (Math.abs(coordinate) < 1 / 32) {
+            result[axis] = Math.fround(coordinate + Math.fround(n * (1 / 65536)));
+            continue;
+        }
+        const step = Math.trunc(Math.fround(n * 256));
+        offsetFloats[axis] = coordinate;
+        offsetInts[axis] = (offsetInts[axis] + (coordinate < 0 ? -step : step)) | 0;
+        result[axis] = offsetFloats[axis];
+    }
+    return result;
+}
+
 /** The smallest normal half, 2^-14 (`RC_SMALLEST_NORMAL_HALF`). */
 const SMALLEST_NORMAL_HALF = 2 ** -14;
 
