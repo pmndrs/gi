@@ -26,6 +26,8 @@ describe('settings (gi1.h)', () => {
             useDirectLighting: true,
             useTemporalFeedback: false,
             useMultibounce: true,
+            // The light builder's environment_light_enable (light_builder.h:63): the sky is a light at cache hits (RC6.1).
+            environmentLightEnable: true,
             useResampling: false,
             hashGridCacheCellSize: 32,
             hashGridCacheMinCellSize: 0.1,

@@ -54,6 +54,12 @@
  *    floor moved by 1.3% between runs), is within the Lambert check's 2.5%
  *    (DECISIONS 2026-11-10) for the open floor (V ≥ 0.99, the done-when's
  *    E = πL), the whole floor and the wall, in every channel.
+ * 6b. **The sky against a light** (the same sky and section 1's sun, 60
+ *    frames): the draw picks between the sky and the sun by their weights,
+ *    so a cell's mean is albedo × L × V + albedo / π × the sun's E (the sun
+ *    reaches every floor and wall hit in front of the wall); the same sums
+ *    within 2.5% for the three groups, every channel, and both lights are
+ *    drawn.
  * 7. **A closed box with no lights** (the same sky outside, 20 frames; one
  *    mesh, large enough that the camera sees one wall and no edge, so every
  *    probe starts inside: on an edge pixel an origin rebuilt from depth can
@@ -415,9 +421,10 @@ function skyDraws(state: Awaited<ReturnType<typeof readFrameState>>): { hits: nu
     return { hits, skyDraws: sky, otherDraws: state.visibilityRay.length - sky, withoutLight: hits - state.visibilityRay.length };
 }
 
-function checkSkyDraws(draws: ReturnType<typeof skyDraws>, fail: (message: string) => void): void {
+function checkSkyDraws(draws: ReturnType<typeof skyDraws>, withSun: boolean, fail: (message: string) => void): void {
     if (draws.hits === 0) fail('no hits');
-    if (draws.otherDraws > 0) fail(`${draws.otherDraws} hits drew something other than the sky, with no other light in the scene`);
+    if (!withSun && draws.otherDraws > 0) fail(`${draws.otherDraws} hits drew something other than the sky, with no other light in the scene`);
+    if (withSun && (draws.otherDraws === 0 || draws.skyDraws === 0)) fail(`with the sun and the sky, ${draws.skyDraws} hits drew the sky and ${draws.otherDraws} the sun: both should be drawn`);
     if (draws.withoutLight > MAX_HITS_WITHOUT_LIGHT_SHARE * draws.hits) fail(`${draws.withoutLight} of ${draws.hits} hits drew no light; the sky reaches every one`);
 }
 
@@ -442,10 +449,19 @@ function percentile(values: readonly number[], share: number): number {
 /** Section 6 reads the cells this many times, a history's length (16 frames) apart, and sums the readings. */
 const SKY_READINGS = 4;
 
-async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+/**
+ * Section 6 (and 6b with `sunRadiance`, the light the sun adds to every
+ * cell: section 1's `LIT_RADIANCE`, 0 without the sun).
+ */
+function checkSkyCorner(sunRadiance: number): (device: GPUDevice, scenario: Scenario) => Promise<Checks> {
+    return (device, scenario) => checkSkyCornerWith(device, scenario, sunRadiance);
+}
+
+async function checkSkyCornerWith(device: GPUDevice, scenario: Scenario, sunRadiance: number): Promise<Checks> {
+    const withSun = sunRadiance > 0;
     const failures: string[] = [];
     const fail = (message: string): void => {
-        if (failures.length < 12) failures.push(`sky corner: ${message}`);
+        if (failures.length < 12) failures.push(`${withSun ? 'sky and sun' : 'sky corner'}: ${message}`);
     };
     const groups = { openFloor: newSkyGroup(), floor: newSkyGroup(), wall: newSkyGroup() };
     let mixedCells = 0;
@@ -453,7 +469,7 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
     let draws = { hits: 0, skyDraws: 0, otherDraws: 0, withoutLight: 0 };
     for (let reading = 0; reading < SKY_READINGS; reading++) {
         if (reading > 0) await runFrames(device, scenario, MAX_SAMPLE_COUNT);
-        const counts = await readSkyCorner(device, scenario, groups, fail);
+        const counts = await readSkyCorner(device, scenario, groups, sunRadiance, fail);
         mixedCells += counts.mixedCells;
         cellsWithoutSamples += counts.cellsWithoutSamples;
         draws = { hits: draws.hits + counts.draws.hits, skyDraws: draws.skyDraws + counts.draws.skyDraws, otherDraws: draws.otherDraws + counts.draws.otherDraws, withoutLight: draws.withoutLight + counts.draws.withoutLight };
@@ -463,7 +479,7 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
     for (const [name, group] of Object.entries(groups)) {
         const ratio = [0, 1, 2].map((channel) => group.measured[channel] / group.expected[channel]);
         if (group.cells === 0) fail(`no ${name} cells with samples`);
-        else if (ratio.some((value) => !(Math.abs(value - 1) <= LAMBERT_TOLERANCE))) fail(`${name}: the cells read ${ratio.map((value) => value.toFixed(4)).join(', ')} x albedo x L x V (rgb), over ${group.cells} cell readings`);
+        else if (ratio.some((value) => !(Math.abs(value - 1) <= LAMBERT_TOLERANCE))) fail(`${name}: the cells read ${ratio.map((value) => value.toFixed(4)).join(', ')} x the expected (rgb), over ${group.cells} cell readings`);
         summary[name] = {
             cellReadings: group.cells,
             meanVisibility: group.visibilitySum / Math.max(group.cells, 1),
@@ -473,19 +489,20 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
             perCellRedRatioP95: percentile(group.ratios, 0.95),
         };
     }
-    return { failures, data: { skyRadiance: SKY_RADIANCE, readings: SKY_READINGS, ...draws, mixedCells, cellsWithoutSamples, ...summary } };
+    return { failures, data: { skyRadiance: SKY_RADIANCE, sunRadiance, readings: SKY_READINGS, ...draws, skyDrawShare: draws.skyDraws / Math.max(draws.skyDraws + draws.otherDraws, 1), mixedCells, cellsWithoutSamples, ...summary } };
 }
 
-/** One reading of section 6: this frame's hits by cell, and each cell's value against albedo × L × V, added into `groups`. */
+/** One reading of section 6: this frame's hits by cell, and each cell's value against albedo × L × V (+ the sun's), added into `groups`. */
 async function readSkyCorner(
     device: GPUDevice,
     scenario: Scenario,
     groups: Record<'openFloor' | 'floor' | 'wall', SkyGroup>,
+    sunRadiance: number,
     fail: (message: string) => void,
 ): Promise<{ draws: ReturnType<typeof skyDraws>; mixedCells: number; cellsWithoutSamples: number }> {
     const state = await readFrameState(device, scenario);
     const draws = skyDraws(state);
-    checkSkyDraws(draws, fail);
+    checkSkyDraws(draws, sunRadiance > 0, fail);
 
     // This frame's hits by cell: which surface, and the share of the sky each sees.
     const hitsByCell = new Map<number, { surface: 'floor' | 'wall' | 'mixed'; visibility: number[] }>();
@@ -524,9 +541,9 @@ async function readSkyCorner(
             group.visibilitySum += visibility;
             for (let channel = 0; channel < 3; channel++) {
                 group.measured[channel] += value[channel] / value[3];
-                group.expected[channel] += ALBEDO * SKY_RADIANCE[channel] * visibility;
+                group.expected[channel] += ALBEDO * SKY_RADIANCE[channel] * visibility + sunRadiance;
             }
-            group.ratios.push(value[0] / value[3] / (ALBEDO * SKY_RADIANCE[0] * visibility));
+            group.ratios.push(value[0] / value[3] / (ALBEDO * SKY_RADIANCE[0] * visibility + sunRadiance));
         }
     }
     return { draws, mixedCells, cellsWithoutSamples };
@@ -539,7 +556,7 @@ async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Ch
     };
     const state = await readFrameState(device, scenario);
     const draws = skyDraws(state);
-    checkSkyDraws(draws, fail);
+    checkSkyDraws(draws, false, fail);
     const misses = state.rays.filter((ray) => ray.hitT < 0).length;
     if (misses > 0) fail(`${misses} probe rays left the box`);
     // Every probe sits on the back wall, inside the box (the camera sees no edge: CLOSED_BOX).
@@ -620,7 +637,8 @@ try {
     await run('resolve', [{ type: 'point', position: [0, 1.5, 2], range: 0, color: [1, 1, 1], intensity: 10, label: 'point' }], false, 1, checkResolve);
     await run('emissive', [sun(SUN_TRAVEL)], true, 1, checkEmissive);
     await run('twoSuns', [sun(SUN_TRAVEL, [1, 0, 0]), sun(BLUE_SUN_TRAVEL, [0, 0, 1])], false, CONVERGENCE_FRAMES, checkTwoSuns);
-    await run('skyCorner', [], false, 60, checkSkyCorner, { sky: SKY_RADIANCE });
+    await run('skyCorner', [], false, 60, checkSkyCorner(0), { sky: SKY_RADIANCE });
+    await run('skyAndSun', [sun(SUN_TRAVEL)], false, 60, checkSkyCorner(LIT_RADIANCE), { sky: SKY_RADIANCE });
     await run('closedBox', [], false, 20, checkClosedBox, { sky: SKY_RADIANCE, closedBox: true });
 
     await drainDevice(device);
