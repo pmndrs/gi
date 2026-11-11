@@ -44,9 +44,9 @@ THE SOFTWARE.
  * 3. `CellShadingChoose`, over the cells in use: each takes the next rank of
  *    its class; the first `cell_shading_budget` ranks go on the list of cells
  *    to light, in rank order, and their kept hits are flagged as lit picks
- *    (the second bounce leaves from them). No sort. The kept-hit word stays
- *    set until `UpdateTiles`, which reads it as "in use this frame" and
- *    resets it.
+ *    (the second bounce leaves from them). No sort. The kept-hit word then
+ *    says "in use this frame" until `UpdateTiles` reads and resets it
+ *    (`CELL_SHADING_MARK`).
  * 4. `CellShadingLight`, over the cells to light: the kept hit's surface
  *    through `giSurfaceAt` (the hit record, so lever 27's real textures reach
  *    it too), then `cell_shading_samples` times `GenerateReservoirs`' light
@@ -73,6 +73,7 @@ import {
     LIGHT_DRAW_WGSL,
     populationHeadWgsl,
     RESERVOIR_WORDS,
+    CELL_SHADING_MARK,
     VISIBILITY_FLAG,
     VISIBILITY_SURFACE_WGSL,
     type PopulationBindings,
@@ -355,6 +356,8 @@ fn ${CELL_SHADING_ENTRY_POINT.cellShadingChoose}(
         let age_class = HashGridCache_CellShadingClass(atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER + cell_index]));
         let rank = atomicLoad(&g_HashGridCache_CellShadingClasses[HASHGRIDCACHE_CELLSHADING_HISTOGRAM + age_class]) +
                    atomicAdd(&g_HashGridCache_CellShadingClasses[HASHGRIDCACHE_CELLSHADING_CURSOR + age_class], 1u);
+        // The key has done its work (Rank); from here the word says "in use this frame" (CELL_SHADING_MARK).
+        atomicStore(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], ${CELL_SHADING_MARK.inUse}u);
         if (rank < g_HashGridCacheConstants.cell_shading_budget) {
             HashGridCache_SetRayListWord(g_HashGridCache_RayLists.chosen_cell_buffer, rank, did);
             // The second bounce leaves from this hit (PopulateMultibounceCells, lit cells).

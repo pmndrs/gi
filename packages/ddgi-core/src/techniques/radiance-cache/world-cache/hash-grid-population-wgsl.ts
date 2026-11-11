@@ -223,6 +223,16 @@ export const RESERVOIR_WORDS = 3;
  */
 export const VISIBILITY_FLAG = { bypass: 1, litPick: 2 } as const;
 
+/**
+ * Lever 1: what a cell's kept-hit word says once the choice has run (until
+ * then it holds the kept hit's key): `inUse`, a hit offered itself to the
+ * cell this frame (`CellShadingChoose` writes it); `readUnlit`, a
+ * second-bounce hit landed in it and drew no light
+ * (`GenerateMultibounceReservoirs`, an atomicMax, so it never covers
+ * `inUse`); 0, nothing touched it. `UpdateTiles` reads and resets it.
+ */
+export const CELL_SHADING_MARK = { inUse: 0xffffffff, readUnlit: 1 } as const;
+
 /** The top bit of a visibility-ray or resolve entry: the ray bypasses the cache (gi1.comp:2566, 2582). */
 export const BYPASS_CACHE_BIT = 0x80000000;
 
@@ -900,10 +910,12 @@ export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     // dark or coarse until their turn comes (two-room at 1/16 of its cells read 0.867 of per hit,
     // Sponza at a full budget 0.975, RC-L1 review). At a count of 1 the cell keeps its last light at
     // the lowest weight: its next sample takes half the weight, and the ones after it more of the
-    // history as the count grows (1 / count each). Only cells the budget has lit stop at 1: a cell
-    // only second-bounce hits reach is lit per hit, as Capsaicin lights it (a draw that finds no
-    // light adds no sample), so it keeps Capsaicin's fade to empty and lets go of a light switched
-    // off (with the floor, two-room's second bounce held 25% of its lamp's light). A lit cell always has new
+    // history as the count grows (1 / count each). Only cells the budget has lit, and that nothing
+    // read this frame, stop at 1. Second-bounce hits are lit per hit, as Capsaicin lights them (a
+    // draw that finds no light adds no sample); a cell such a hit read with no light fades to empty,
+    // as Capsaicin's, so the second bounce lets go of a light switched off (with the floor on every
+    // unused cell, two-room's second bounce held 25% of its lamp's light, and 7% with it on every
+    // cell the budget had lit). A lit cell always has new
     // samples (a draw with no light is a sample of 0), so a light switched off still fades from it.
     // This rule is ours, not Capsaicin's; the faithful path is perHit.
     // UpdateTiles is the last pass to read the kept-hit word, and resets it for the next frame's
@@ -919,9 +931,12 @@ export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     const inUse = layout.cellShading
         ? `
         // Lever 1: in use this frame (a hit offered itself), then reset for the next frame's offers.
-        let in_use = atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u) != 0u;
-        // Lit by the budget at some time since its tile was claimed: only such cells stop fading at a count of 1.
-        let budget_lit = atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER + cell_index]) != 0u;`
+        // (CELL_SHADING_MARK: in use, read by a second bounce that drew no light, or untouched; reset for the next frame's offers.)
+        let mark = atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u);
+        let in_use = mark == ${CELL_SHADING_MARK.inUse}u;
+        // Untouched this frame and lit by the budget at some time since its tile was claimed: only such cells
+        // stop fading at a count of 1.
+        let budget_lit = mark == 0u && atomicLoad(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGLASTLITBUFFER + cell_index]) != 0u;`
         : '';
     return /* wgsl */ `
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.updateTiles)}
@@ -1352,6 +1367,14 @@ ${firstBounceEntry}
  */
 export function generateMultibounceReservoirsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs;
+    // Lever 1 (cellShading 'budget'): a second-bounce hit that draws no light adds no sample, as
+    // Capsaicin's; it marks its cell as read and unlit, so UpdateTiles fades the cell to empty, as
+    // Capsaicin's, instead of keeping it at the budget's floor (updateTilesWgsl).
+    const readUnlitMark = layout.cellShading
+        ? `
+        let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did);
+        atomicMax(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], ${CELL_SHADING_MARK.readUnlit}u);   // lever 1: read, unlit`
+        : '';
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout, POPULATION_BINDINGS.generateMultibounceReservoirs)}
@@ -1391,7 +1414,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     let reservoir = draw.choice;
     let sample_params = draw.sample_params;
 
-    if (reservoir.light == GI_DIRECT_NO_LIGHT) {
+    if (reservoir.light == GI_DIRECT_NO_LIGHT) {${readUnlitMark}
         return;
     }
 

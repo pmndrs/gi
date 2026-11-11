@@ -26,7 +26,9 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
+import { cellShadingChooseWgsl } from './hash-grid-cell-shading-wgsl.ts';
 import {
+    CELL_SHADING_MARK,
     generateMultibounceReservoirsWgsl,
     populateCellsWgsl,
     populateMultibounceCellsWgsl,
@@ -734,6 +736,8 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(budget).toContain('new_samples.w <= 0.0 && (keep_without_samples || (budget_lit && previous_radiance.w <= 1.0))');
         // The kept-hit word says "in use this frame", and UpdateTiles resets it for the next frame's offers.
         expect(budget).toContain('atomicExchange(&g_HashGridCache_Words[HASHGRIDCACHE_CELLSHADINGKEPTHITBUFFER + cell_index], 0u)');
+        // Choose turns the kept hit's key into the "in use" mark once Rank has used it.
+        expect(cellShadingChooseWgsl(hashGridCacheBufferLayout(capacity, true, true))).toContain(`${CELL_SHADING_MARK.inUse}u);`);
     });
 
     it('on a budget, keeps bypassing first-bounce hits out of their cell, and puts only a pick\'s second bounce in it', () => {
@@ -743,8 +747,10 @@ describe("lever 1, budgeted cell shading (id Tech 8's way, RC-L1)", () => {
         expect(populateCellsWgsl(perHit)).not.toContain('is_bypassing_first_bounce');
         expect(updateMultibounceCellsWgsl(budget)).toContain(`(base_flags & ${VISIBILITY_FLAG.litPick}u) != 0u`);
         expect(updateMultibounceCellsWgsl(perHit)).not.toContain('base_flags');
-        // Second-bounce draws are Capsaicin's in both modes: no light, no sample.
-        expect(generateMultibounceReservoirsWgsl(budget)).toBe(generateMultibounceReservoirsWgsl({ ...budget, cellShading: false }));
+        // A second-bounce draw with no light adds no sample in both modes (Capsaicin's); on a budget it marks its cell read and unlit.
+        expect(generateMultibounceReservoirsWgsl(budget)).toContain(`${CELL_SHADING_MARK.readUnlit}u);   // lever 1: read, unlit`);
+        expect(generateMultibounceReservoirsWgsl(perHit)).not.toContain('read, unlit');
+        expect(updateTilesWgsl(budget)).toContain(`mark == ${CELL_SHADING_MARK.inUse}u`);
         // The second bounce leaves from the lit picks and the bypassing hits, by their flags.
         expect(populateMultibounceCellsWgsl(budget, 'litCells')).toContain('visibility_bypass_buffer, did) == 0u');
     });
