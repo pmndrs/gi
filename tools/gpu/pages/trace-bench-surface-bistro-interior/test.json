@@ -1,0 +1,5 @@
+{
+    "description": "Surface-ray investigation (RC5.4, lever 20) on bistro-interior: RC1.5's probe rays against probe-grid rays and one-change-at-a-time variants, Mrays/s through the production batch kernel plus the walk's work from a bench-only counted copy. Timing runs under the bench lock, on their own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

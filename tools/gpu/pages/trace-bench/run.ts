@@ -79,7 +79,7 @@ interface BenchContext {
  * Every feature the adapter has is requested because three reads `device.features` at init
  * and drops to a reduced mode without `core-features-and-limits`.
  */
-async function requestBenchDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice; record: DeviceRecord }> {
+export async function requestBenchDevice(): Promise<{ adapter: GPUAdapter; device: GPUDevice; record: DeviceRecord }> {
     if (!navigator.gpu) throw new Error('WebGPU is not available in this browser.');
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) throw new Error('requestAdapter() returned null (no usable GPU).');
