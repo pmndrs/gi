@@ -665,7 +665,7 @@ From the shortlist in [docs/design/radiance-cache-divergences.md](docs/design/ra
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | RC6.1 | D33: sky light at cache hits, as Capsaicin's light sampling gives it, through a platform helper that samples the baked sky; radiance cache only (DDGI's `gi/direct` is unchanged: DDGI gets the sky through probe rays that miss) | implementer | M | none | done (2026-11-11, Mac lead; Opus review passed with notes, all fixed; Capsaicin's sky-as-light-0 sampling at cache hits through `giDirectChooseLightWithSky`, DDGI unchanged; constant sky 0.995 πL, closed box 0; Sponza +1%, Bistro exterior +5.5% mean E; the box-edge leak is D17's (lead); Windows and timing not run) |
-| RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | active (implementer, 2026-11-11) |
+| RC6.2 | Three small fixes, one commit each: D59 (the M5's half-float stores round down), D42 (free the 535 MB when multi-bounce is off), D39 (Capsaicin's `offsetPosition` for the second-bounce ray) | implementer | S | none | review (implementer, 2026-11-11: D59, D42, D39 fixed, one commit each on `rc6-2`; twelve RC pages on the M5; Windows GPUs not run) |
 
 - **RC6.1 done-when.**
   - The port follows Capsaicin's environment-light sampling at cache hits, cited line by line: how the sky is picked against the other lights, its pdf, and its shadow ray.
