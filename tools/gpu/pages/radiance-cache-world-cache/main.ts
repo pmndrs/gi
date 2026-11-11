@@ -41,6 +41,20 @@
  *    in proportion to its brightness, so each sample lights one channel; the
  *    mean over every hit ray of red and of blue is within 2% of albedo / π ×
  *    the light's E on that surface, and green stays 0.
+ * 6. **Sky light at cache hits** (RC6.1: no lights, a constant sky of
+ *    radiance L = (1, 0.8, 0.6), 60 frames from an empty cache): with
+ *    Capsaicin's environment light every hit draws the sky (all but the
+ *    rare direction whose packed numbers land on the horizon, weight 0), and
+ *    a cell's radiance is albedo / π × E with E = π L V, V the share of the
+ *    sky its hits see (`sky-view.ts`: the wall hides part of the floor's sky,
+ *    the floor part of the wall's). The sum over cells of the cells' rgb /
+ *    count against the sum of albedo × L × V (V the mean over the cell's hits
+ *    this frame) is within the Lambert check's 2.5% (DECISIONS 2026-11-10)
+ *    for the open floor (V ≥ 0.99, the done-when's E = πL), the whole floor
+ *    and the wall, in every channel.
+ * 7. **A closed box with no lights** (the same sky outside, 20 frames): no
+ *    probe ray misses, every hit draws the sky as above, and its shadow ray
+ *    is blocked, so every cell with samples and every hit ray reads 0.
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
@@ -58,6 +72,7 @@ import {
     verticalFieldOfView,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import { BYPASS_CACHE_BIT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { requestBudgetDevice } from '../radiance-cache-probes/budget-device.ts';
@@ -85,7 +100,9 @@ import {
     TOLERANCE,
     WIDTH,
     type Scenario,
+    type ScenarioWorld,
 } from './corner.ts';
+import { cornerSkyVisibility } from './sky-view.ts';
 
 // ---- Section 1 and 2: the lit plane and UpdateTiles ----------------------------------------------
 
@@ -366,6 +383,169 @@ async function checkTwoSuns(device: GPUDevice, scenario: Scenario): Promise<Chec
     return { failures, data: { hits, meanRedOverExpected: redRatio, meanBlueOverExpected: blueRatio, meanGreen: greenMean } };
 }
 
+// ---- Sections 6 and 7: the sky as a light (RC6.1) ------------------------------------------------
+
+/** Section 6's constant sky radiance, a colour so each channel is checked on its own. */
+const SKY_RADIANCE: Vec3 = [1, 0.8, 0.6];
+/** The Lambert check's threshold (DECISIONS 2026-11-10, RC2.2). */
+const LAMBERT_TOLERANCE = 0.025;
+/** Floor cells whose hits see at least this share of the sky are the "open floor". */
+const OPEN_FLOOR_VISIBILITY = 0.99;
+/** `GI_DIRECT_SKY_LIGHT` (platform/shade/wgsl.ts): the reservoir's light word when it drew the sky. */
+const SKY_LIGHT = 0xfffffffe;
+/**
+ * Hits allowed to draw nothing: the sky's direction is two numbers kept at 16 bits, and one in
+ * about 131,000 rounds to 1, a direction on the horizon whose weight is 0.
+ */
+const MAX_HITS_WITHOUT_LIGHT_SHARE = 1e-4;
+
+/** How the frame's hits drew their lights: how many drew the sky, and how many drew nothing. */
+function skyDraws(state: Awaited<ReturnType<typeof readFrameState>>): { hits: number; skyDraws: number; otherDraws: number; withoutLight: number } {
+    const hits = state.counters[HASH_GRID_COUNTER.visibilityCount0];
+    let sky = 0;
+    for (let ray = 0; ray < state.visibilityRay.length; ray++) {
+        if (state.reservoirs[ray * RESERVOIR_WORDS] === SKY_LIGHT) sky++;
+    }
+    return { hits, skyDraws: sky, otherDraws: state.visibilityRay.length - sky, withoutLight: hits - state.visibilityRay.length };
+}
+
+function checkSkyDraws(draws: ReturnType<typeof skyDraws>, fail: (message: string) => void): void {
+    if (draws.hits === 0) fail('no hits');
+    if (draws.otherDraws > 0) fail(`${draws.otherDraws} hits drew something other than the sky, with no other light in the scene`);
+    if (draws.withoutLight > MAX_HITS_WITHOUT_LIGHT_SHARE * draws.hits) fail(`${draws.withoutLight} of ${draws.hits} hits drew no light; the sky reaches every one`);
+}
+
+interface SkyGroup {
+    cells: number;
+    measured: [number, number, number];
+    expected: [number, number, number];
+    ratios: number[];
+    visibilitySum: number;
+}
+
+function newSkyGroup(): SkyGroup {
+    return { cells: 0, measured: [0, 0, 0], expected: [0, 0, 0], ratios: [], visibilitySum: 0 };
+}
+
+function percentile(values: readonly number[], share: number): number {
+    if (values.length === 0) return Number.NaN;
+    const sorted = [...values].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor(share * sorted.length))];
+}
+
+async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`sky corner: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const draws = skyDraws(state);
+    checkSkyDraws(draws, fail);
+
+    // This frame's hits by cell: which surface, and the share of the sky each sees.
+    const hitsByCell = new Map<number, { surface: 'floor' | 'wall' | 'mixed'; visibility: number[] }>();
+    state.visibilityCell.forEach((cell, visibility) => {
+        const ray = state.rays[state.visibilityQuery[visibility]];
+        if (ray.surface !== 'floor' && ray.surface !== 'wall') return;
+        const entry = hitsByCell.get(cell) ?? { surface: ray.surface, visibility: [] };
+        if (entry.surface !== ray.surface) entry.surface = 'mixed';
+        entry.visibility.push(cornerSkyVisibility(ray.hit, ray.surface));
+        hitsByCell.set(cell, entry);
+    });
+
+    const capacity = scenario.cache.capacity;
+    const tileOf = (cell: number): number => Math.floor(cell / capacity.numCellsPerTile);
+    const tiles = [...new Set([...hitsByCell.keys()].map(tileOf))];
+    const slotOfTile = new Map(tiles.map((tile, slot) => [tile, slot]));
+    const values = await readTiles(device, scenario.cache, tiles);
+
+    const groups = { openFloor: newSkyGroup(), floor: newSkyGroup(), wall: newSkyGroup() };
+    let mixedCells = 0;
+    let cellsWithoutSamples = 0;
+    for (const [cell, hits] of hitsByCell) {
+        if (hits.surface === 'mixed') {
+            mixedCells++;
+            continue;
+        }
+        const tile = tileOf(cell);
+        const value = cellValue(values, capacity, slotOfTile.get(tile) ?? 0, cell - tile * capacity.numCellsPerTile);
+        if (!(value[3] > 0)) {
+            cellsWithoutSamples++;
+            continue;
+        }
+        const visibility = hits.visibility.reduce((sum, share) => sum + share, 0) / hits.visibility.length;
+        const into = hits.surface === 'wall' ? [groups.wall] : visibility >= OPEN_FLOOR_VISIBILITY ? [groups.floor, groups.openFloor] : [groups.floor];
+        for (const group of into) {
+            group.cells++;
+            group.visibilitySum += visibility;
+            for (let channel = 0; channel < 3; channel++) {
+                group.measured[channel] += value[channel] / value[3];
+                group.expected[channel] += ALBEDO * SKY_RADIANCE[channel] * visibility;
+            }
+            group.ratios.push(value[0] / value[3] / (ALBEDO * SKY_RADIANCE[0] * visibility));
+        }
+    }
+
+    const summary: Record<string, unknown> = {};
+    for (const [name, group] of Object.entries(groups)) {
+        const ratio = [0, 1, 2].map((channel) => group.measured[channel] / group.expected[channel]);
+        if (group.cells === 0) fail(`no ${name} cells with samples`);
+        else if (ratio.some((value) => !(Math.abs(value - 1) <= LAMBERT_TOLERANCE))) fail(`${name}: the cells read ${ratio.map((value) => value.toFixed(4)).join(', ')} x albedo x L x V (rgb), over ${group.cells} cells`);
+        summary[name] = {
+            cells: group.cells,
+            meanVisibility: group.visibilitySum / Math.max(group.cells, 1),
+            overExpected: ratio,
+            perCellRedRatioP5: percentile(group.ratios, 0.05),
+            perCellRedRatioP50: percentile(group.ratios, 0.5),
+            perCellRedRatioP95: percentile(group.ratios, 0.95),
+        };
+    }
+    return { failures, data: { skyRadiance: SKY_RADIANCE, ...draws, mixedCells, cellsWithoutSamples, ...summary } };
+}
+
+async function checkClosedBox(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`closed box: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const draws = skyDraws(state);
+    checkSkyDraws(draws, fail);
+    const misses = state.rays.filter((ray) => ray.hitT < 0).length;
+    if (misses > 0) fail(`${misses} probe rays left the box`);
+
+    // Every hit ray, and every cell with samples, reads 0: the sky can't be seen from inside.
+    let litRays = 0;
+    let brightestRay = 0;
+    state.rays.forEach((ray, index) => {
+        if (ray.hitT < 0) return;
+        const brightest = Math.max(state.radiance[index * 4], state.radiance[index * 4 + 1], state.radiance[index * 4 + 2]);
+        brightestRay = Math.max(brightestRay, brightest);
+        if (brightest !== 0) litRays++;
+    });
+    if (litRays > 0) fail(`${litRays} hit rays read light (brightest ${brightestRay})`);
+
+    const capacity = scenario.cache.capacity;
+    const tiles = Array.from(state.packedTiles);
+    const values = await readTiles(device, scenario.cache, tiles);
+    let cellsWithSamples = 0;
+    let litCells = 0;
+    let brightestCell = 0;
+    tiles.forEach((_, slot) => {
+        for (let cell = 0; cell < capacity.numCellsPerTileMip[0]; cell++) {
+            const value = cellValue(values, capacity, slot, cell);
+            if (!(value[3] > 0)) continue;
+            cellsWithSamples++;
+            const brightest = Math.max(value[0], value[1], value[2]);
+            brightestCell = Math.max(brightestCell, brightest);
+            if (brightest !== 0) litCells++;
+        }
+    });
+    if (cellsWithSamples === 0) fail('no cell has samples');
+    if (litCells > 0) fail(`${litCells} of ${cellsWithSamples} cells read light (brightest ${brightestCell})`);
+    return { failures, data: { ...draws, misses, litRays, cellsWithSamples, litCells } };
+}
+
 // ---- The page --------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -383,8 +563,15 @@ try {
     const data: Record<string, unknown> = { adapterStorageBuffersPerStage };
     // Capsaicin's single-bounce configuration (gi1_use_multibounce off): the checks below expect the
     // first bounce alone (RC3.3's multibounce has its own page, radiance-cache-multibounce).
-    const run = async (name: string, lights: readonly LightDescriptor[], withPatch: boolean, frames: number, check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>): Promise<void> => {
-        const scenario = await startScenario(device, name, lights, withPatch, { useMultibounce: false });
+    const run = async (
+        name: string,
+        lights: readonly LightDescriptor[],
+        withPatch: boolean,
+        frames: number,
+        check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>,
+        world: ScenarioWorld = {},
+    ): Promise<void> => {
+        const scenario = await startScenario(device, name, lights, withPatch, { useMultibounce: false }, world);
         try {
             await runFrames(device, scenario, frames);
             const checks = await check(device, scenario);
@@ -400,6 +587,8 @@ try {
     await run('resolve', [{ type: 'point', position: [0, 1.5, 2], range: 0, color: [1, 1, 1], intensity: 10, label: 'point' }], false, 1, checkResolve);
     await run('emissive', [sun(SUN_TRAVEL)], true, 1, checkEmissive);
     await run('twoSuns', [sun(SUN_TRAVEL, [1, 0, 0]), sun(BLUE_SUN_TRAVEL, [0, 0, 1])], false, CONVERGENCE_FRAMES, checkTwoSuns);
+    await run('skyCorner', [], false, 60, checkSkyCorner, { sky: SKY_RADIANCE });
+    await run('closedBox', [], false, 20, checkClosedBox, { sky: SKY_RADIANCE, closedBox: true });
 
     await drainDevice(device);
     reportGpuTest({

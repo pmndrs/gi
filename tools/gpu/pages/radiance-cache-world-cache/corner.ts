@@ -5,7 +5,8 @@
  * both grey (albedo 0.5), under a black sky, seen from (0, 2, 6) at
  * 1280 x 720 through primary rays (radiance-cache-probes' `PageScreen`); and
  * the readbacks of the technique's probe rays, the hash grid's counters,
- * per-ray lists and cell values.
+ * per-ray lists and cell values. RC6.1 adds a constant sky for the corner,
+ * and a closed box around the camera (`ScenarioWorld`).
  */
 import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
@@ -86,16 +87,58 @@ export function quad(platform: GIPlatformImpl, label: string, corners: readonly 
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
 }
 
-export function describeCorner(platform: GIPlatformImpl, lights: readonly LightDescriptor[], withPatch: boolean): void {
-    const half = 200;
-    quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0], ALBEDO);
-    quad(platform, 'wall', [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]], [0, 0, 1], ALBEDO);
+/** The floor's half side and the wall's corners, for the CPU's view of the corner (RC6.1's sky check). */
+export const FLOOR_HALF_SIDE = 200;
+export const WALL = { minX: -20, maxX: 20, height: 10 } as const;
+
+/** What a scenario's scene holds besides its lights: the corner (default) or the closed box, and the sky. */
+export interface ScenarioWorld {
+    /** The constant sky's radiance (RC6.1); black by default. */
+    readonly sky?: Vec3;
+    /** The closed box around the camera instead of the corner (RC6.1). */
+    readonly closedBox?: boolean;
+}
+
+/** The closed box (RC6.1): 8 x 4 x 10 m around the camera at (0, 2, 6), every side grey and facing in. */
+export const CLOSED_BOX = { minX: -4, maxX: 4, minY: 0, maxY: 4, minZ: -1, maxZ: 9 } as const;
+
+export function describeCorner(platform: GIPlatformImpl, lights: readonly LightDescriptor[], withPatch: boolean, world: ScenarioWorld = {}): void {
+    if (world.closedBox) {
+        describeClosedBox(platform);
+    } else {
+        const half = FLOOR_HALF_SIDE;
+        quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0], ALBEDO);
+        quad(platform, 'wall', [[WALL.minX, 0, 0], [WALL.maxX, 0, 0], [WALL.maxX, WALL.height, 0], [WALL.minX, WALL.height, 0]], [0, 0, 1], ALBEDO);
+    }
     if (withPatch) {
         const { minX, maxX, minZ, maxZ, y } = PATCH;
         quad(platform, 'emissive patch', [[minX, y, maxZ], [maxX, y, maxZ], [maxX, y, minZ], [minX, y, minZ]], [0, 1, 0], ALBEDO, EMISSION);
     }
     for (const light of lights) platform.scene.createLight(light);
-    platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+    platform.scene.setEnvironment({ type: 'color', color: [...(world.sky ?? [0, 0, 0])], intensity: 1 });
+}
+
+/** Six quads sharing their corners exactly, so the box has no gap a shadow ray could leave through. */
+function describeClosedBox(platform: GIPlatformImpl): void {
+    const { minX, maxX, minY, maxY, minZ, maxZ } = CLOSED_BOX;
+    const sides: { label: string; corners: Vec3[]; normal: Vec3 }[] = [
+        { label: 'box floor', corners: [[minX, minY, minZ], [minX, minY, maxZ], [maxX, minY, maxZ], [maxX, minY, minZ]], normal: [0, 1, 0] },
+        { label: 'box ceiling', corners: [[minX, maxY, minZ], [maxX, maxY, minZ], [maxX, maxY, maxZ], [minX, maxY, maxZ]], normal: [0, -1, 0] },
+        { label: 'box back', corners: [[minX, minY, minZ], [maxX, minY, minZ], [maxX, maxY, minZ], [minX, maxY, minZ]], normal: [0, 0, 1] },
+        { label: 'box front', corners: [[minX, minY, maxZ], [minX, maxY, maxZ], [maxX, maxY, maxZ], [maxX, minY, maxZ]], normal: [0, 0, -1] },
+        { label: 'box left', corners: [[minX, minY, minZ], [minX, maxY, minZ], [minX, maxY, maxZ], [minX, minY, maxZ]], normal: [1, 0, 0] },
+        { label: 'box right', corners: [[maxX, minY, minZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [maxX, maxY, minZ]], normal: [-1, 0, 0] },
+    ];
+    for (const side of sides) {
+        // quad() makes the corners' winding the front face: check it faces into the box.
+        const [a, b, c] = side.corners;
+        const edge1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        const edge2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        const cross = [edge1[1] * edge2[2] - edge1[2] * edge2[1], edge1[2] * edge2[0] - edge1[0] * edge2[2], edge1[0] * edge2[1] - edge1[1] * edge2[0]];
+        const facing = cross[0] * side.normal[0] + cross[1] * side.normal[1] + cross[2] * side.normal[2];
+        assert(facing > 0, `${side.label}: its corners wind away from its normal`);
+        quad(platform, side.label, side.corners, side.normal, ALBEDO);
+    }
 }
 
 export function sun(travel: Vec3, color: Vec3 = [1, 1, 1]): LightDescriptor {
@@ -112,12 +155,13 @@ export async function startScenario(
     lights: readonly LightDescriptor[],
     withPatch: boolean,
     settings: Partial<RadianceCacheSettings> = {},
+    world: ScenarioWorld = {},
 ): Promise<Scenario> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-world-cache ${name}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
     platform.setOutput(technique);
     await platform.prepare();
-    describeCorner(platform, lights, withPatch);
+    describeCorner(platform, lights, withPatch, world);
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
         const encoder = device.createCommandEncoder({ label: `radiance-cache-world-cache ${name}` });

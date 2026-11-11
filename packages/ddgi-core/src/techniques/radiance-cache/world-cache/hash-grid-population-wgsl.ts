@@ -440,6 +440,45 @@ fn HashGridCache_VisibilitySurface(visibility: HashGridCache_Visibility) -> GiSu
 }
 `;
 
+/**
+ * The light draw `GenerateReservoirs` and `GenerateMultibounceReservoirs`
+ * share (both call `sampleLightsListCone<kReservoir_SampleCount>`,
+ * gi1.comp:2513, 2659), on the platform's light choice (register D4). With
+ * the light builder's `environment_light_enable` the sky is one of the
+ * candidates, as Capsaicin's environment light is the first light of its
+ * list (light_builder.cpp:131, 200-207) and so a candidate of every cell of
+ * its light sampler (light_sampler_grid_stream_build.comp:120 streams light
+ * 0 into each cell's first reservoir): its direction uniform over the
+ * shading normal's hemisphere, pdf 1 / 2π (`sampleEnvironmentLight`,
+ * light_sampling.hlsl:164-180, Capsaicin's default `Uniform` mode), weighed by
+ * that direction's light (register D33 for what remains different).
+ *
+ * The random numbers: one for the draw, two for the point on a drawn light
+ * (Capsaicin's `sampleParams`, which the reservoir keeps), then two for the
+ * sky's direction, so a scene without a sky draws exactly as before. The
+ * sky's numbers go through the reservoir's 16-bit packing before they are
+ * used, so `PopulateCells` rebuilds the very direction that was weighed
+ * (Capsaicin packs them as halves, `packReservoir`, reservoir.hlsl:545-551,
+ * and rebuilds the direction from those, a hair off the one it weighed).
+ */
+const LIGHT_DRAW_WGSL = /* wgsl */ `
+struct HashGridCache_LightDraw {
+    choice: GiDirectLightChoice,
+    sample_params: vec2f,   // what the reservoir keeps: the point on the light, or the sky's direction
+}
+
+fn HashGridCache_DrawLight(surface: GiSurface, random: ptr<function, RcRandom>) -> HashGridCache_LightDraw {
+    let draw_random = rcRand(random);
+    let light_params = rcRand2(random);
+    if (g_HashGridCacheConstants.use_environment_light == 0u) {
+        return HashGridCache_LightDraw(giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, draw_random), light_params);
+    }
+    let sky_params = unpack2x16unorm(pack2x16unorm(rcRand2(random)));
+    let choice = giDirectChooseLightWithSky(surface, HASHGRIDCACHE_LIGHT_GROUPS, draw_random, sky_params);
+    return HashGridCache_LightDraw(choice, select(light_params, sky_params, choice.light == GI_DIRECT_SKY_LIGHT));
+}
+`;
+
 /** INV_PI (math/math_constants.hlsl). */
 const INV_PI_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
@@ -572,7 +611,7 @@ ${populationHeadWgsl(layout, POPULATION_BINDINGS.generateReservoirs)}
 ${VISIBILITY_SURFACE_WGSL}
 
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
-
+${LIGHT_DRAW_WGSL}
 // g_HashGridCache_ResolveBuffer[resolve_index] = entry, appended.
 fn HashGridCache_AppendResolve(entry: u32) {
     let resolve_index = atomicAdd(&g_HashGridCache_Words[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 1u);
@@ -614,12 +653,12 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     // Temporal radiance feedback (gi1.comp:2454-2496) runs only with gi1_use_temporal_feedback,
     // off by default (gi1.h:54): not part of the baseline.
 
-    // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2506-2510);
-    // the platform's materials are diffuse already (register D8). Capsaicin's light list also
-    // holds the environment map; the platform's doesn't (register D33).
+    // Sample new lights, the sky among them (LIGHT_DRAW_WGSL). Capsaicin forces a diffuse material
+    // on this bounce (gi1.comp:2506-2510); the platform's materials are diffuse already (register D8).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
-    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
-    let sample_params = rcRand2(&random);
+    let draw = HashGridCache_DrawLight(surface, &random);
+    let reservoir = draw.choice;
+    let sample_params = draw.sample_params;
 
     // Here, we check that the ray has traversed at least a full hash cell
     // before hitting something.
@@ -719,7 +758,11 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     // Decode the light sample from our reservoir, and traverse the BVH. The platform's light ray
     // leaves along the geometric normal, as Capsaicin's (MakeRayInfoShadow), but by its own
     // offset, and takes the light's cosine on the shading normal where Capsaicin's BRDF takes it
-    // on the geometric one (gi1.comp:2062-2063, 2073-2076, 2018; register D36).
+    // on the geometric one (gi1.comp:2062-2063, 2073-2076, 2018; register D36). For the sky
+    // (GI_DIRECT_SKY_LIGHT) the reservoir's sample_params are its direction, rebuilt about the
+    // same normal GenerateReservoirs drew it about (Capsaicin's evaluateLightConeSampledAM,
+    // light_evaluation.hlsl:1039-1051, at the sharpest level its solid angle gives,
+    // gi1.comp:2071), and the shadow ray is unbounded (MakeRayInfoShadowDir, trace_ray.hlsl:147-150).
     let light_ray = giDirectLightRay(surface, light, sample_params);
     let occluded = light_ray.castsShadows && giTraceAny(light_ray.shadowRay);
 
@@ -1197,7 +1240,7 @@ ${populationHeadWgsl(layout, POPULATION_BINDINGS.generateMultibounceReservoirs)}
 ${VISIBILITY_SURFACE_WGSL}
 
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
-
+${LIGHT_DRAW_WGSL}
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -1223,11 +1266,12 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     // entry (gi1.comp:2635-2646 interpolates the triangle; giSurfaceAt does the same).
     let origin = HashGridCache_VisibilitySurface(HashGridCache_LoadVisibility(query_index)).position;
 
-    // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2650-2656);
-    // the platform's materials are diffuse already (register D8).
+    // Sample new lights, the sky among them (LIGHT_DRAW_WGSL). Capsaicin forces a diffuse material
+    // on this bounce (gi1.comp:2650-2656); the platform's materials are diffuse already (register D8).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
-    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
-    let sample_params = rcRand2(&random);
+    let draw = HashGridCache_DrawLight(surface, &random);
+    let reservoir = draw.choice;
+    let sample_params = draw.sample_params;
 
     if (reservoir.light == GI_DIRECT_NO_LIGHT) {
         return;
