@@ -19,7 +19,7 @@
 import { traceModuleWgsl } from '../../../../packages/ddgi-core/src/platform/trace/wgsl.ts';
 
 /** Words per ray the counted kernel writes, in the order of {@link COUNTED_WORD}. */
-export const COUNTED_WORDS = 16;
+export const COUNTED_WORDS = 17;
 
 /** Where each counter sits in a ray's {@link COUNTED_WORDS} words. */
 export const COUNTED_WORD = {
@@ -55,6 +55,8 @@ export const COUNTED_WORD = {
     maxStack: 14,
     /** Steps while the ray's current closest `t` was still `tMax` (nothing found yet), inside any instance. */
     meshStepsBeforeFirstHit: 15,
+    /** Instances entered in which the walk accepted at least one hit (closest) or found the blocker (any). */
+    instancesWithHit: 16,
 } as const;
 
 /** "This ray did not leave from a surface" in the per-ray origin record. */
@@ -75,6 +77,10 @@ function countedWalkWgsl(kind: 'closest' | 'any'): string {
                         counts.firstHitIsOrigin = select(0u, 1u, isOriginTriangle);
                     }
                     counts.hitsAccepted += 1u;
+                    if (!hitInThisInstance) {
+                        counts.instancesWithHit += 1u;
+                        hitInThisInstance = true;
+                    }
                     hitT = candidate.t;
                     hitInstance = instance.instanceIndex;
                     hitTriangle = triangle.originalIndex;
@@ -82,6 +88,7 @@ function countedWalkWgsl(kind: 'closest' | 'any'): string {
         : `counts.stepsBeforeFirstHit = counts.steps;
                     counts.firstHitIsOrigin = select(0u, 1u, isOriginTriangle);
                     counts.hitsAccepted = 1u;
+                    counts.instancesWithHit += 1u;
                     hitT = 1.0;
                     return benchFinish(counts, hitT, hitInstance, hitTriangle);`;
     return /* wgsl */ `
@@ -103,6 +110,7 @@ fn ${name}(ray: GiRay, origin: vec2u) -> BenchCounts {
 
     var insideInstance = false;
     var instance: GiInstance;
+    var hitInThisInstance = false;
     ${farDeclaration}
 
     var stack: array<u32, GI_STACK_SIZE>;
@@ -172,6 +180,7 @@ fn ${name}(ray: GiRay, origin: vec2u) -> BenchCounts {
             stack[stackSize] = GI_REF_INSTANCE_MARKER;
             stackSize += 1u;
             insideInstance = true;
+            hitInThisInstance = false;
             current = giMakeReference(0u, 0u);
             continue;
         } else {
@@ -231,6 +240,7 @@ struct BenchCounts {
     firstHitIsOrigin: u32,
     maxStack: u32,
     meshStepsBeforeFirstHit: u32,
+    instancesWithHit: u32,
 }
 
 fn benchFinish(countsIn: BenchCounts, t: f32, instanceIndex: u32, triangle: u32) -> BenchCounts {

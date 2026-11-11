@@ -338,6 +338,8 @@ export interface CountSummary {
     /** Share of rays whose first accepted hit was the triangle they left from (a self-hit). */
     selfHitFraction: number;
     meanMaxStack: number;
+    /** Instances entered in which the walk found nothing to keep. */
+    meanInstanceEntriesWithoutHit: number;
     /**
      * Per group of `width` consecutive rays (one SIMD group, or one
      * workgroup), the steps of its slowest ray: the group runs that long.
@@ -418,6 +420,7 @@ export function summariseCounts(counts: ArrayBuffer, rayCount: number): CountSum
         originTriangleTestedFraction: rayCount > 0 ? originTested / rayCount : 0,
         selfHitFraction: rayCount > 0 ? selfHits / rayCount : 0,
         meanMaxStack: mean(COUNTED_WORD.maxStack),
+        meanInstanceEntriesWithoutHit: mean(COUNTED_WORD.instanceEntries) - mean(COUNTED_WORD.instancesWithHit),
         simd32Efficiency: simd.efficiency,
         workgroup64Efficiency: groupEfficiency(steps, 64).efficiency,
         simd32StepsPaidPerRay: simd.paidPerRay,

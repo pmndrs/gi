@@ -14,14 +14,22 @@
  * One scene per page; the counts don't depend on the GPU, the rates do.
  */
 
-import { createMeshBvhBuilder, RAY_FLOATS, HIT_RECORD_BYTES, HIT_RECORD_WORD, uploadTraceScene, type TraceSceneBuffers } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import {
+    createMeshBvhBuilder,
+    RAY_FLOATS,
+    HIT_RECORD_BYTES,
+    HIT_RECORD_WORD,
+    uploadTraceScene,
+    type TraceSceneBuffers,
+    type TraceSceneData,
+} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
 import type { AdapterSummary } from '../../contract.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { BENCH_SCENE_SUBSETS, RAY_DIRECTION_SEED, RC_HALTON_FIRST_INDEX, RC_RAYS_PER_PROBE, RC_SEED, RC_TILE_SIZE, RC_VIEW } from './config.ts';
-import { COUNTED_WORD, COUNTED_WORDS, countedKernelWgsl } from './counted-walk-wgsl.ts';
+import { COUNTED_WORD, COUNTED_WORDS, countedKernelWgsl, NO_ORIGIN } from './counted-walk-wgsl.ts';
 import { createDispatchTimer } from './dispatch-timer.ts';
-import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
+import { IDENTITY_MATRIX, type BenchInstance, type BenchMeshGeometry } from './gltf-geometry.ts';
 import { buildOursScene, openOursPrepareTracer, readBuffer, runOursTracerOnSets, uploadRays, yieldToBrowser, type RaySetBuffer } from './ours-bench.ts';
 import { makePlacementRays, rayProblems, tileGrid } from './rc-rays.ts';
 import { makeProbeGrid, makeProbeRays as makeGridRays, makeSphereDirections, probePosition, type Box, type Vec3 } from './rays.ts';
@@ -50,6 +58,12 @@ const SURFACE_TIMING = { warmups: 3, timed: 10, loadedMs: 800 } as const;
 const INSTANCE_BOX_SAMPLE_STRIDE = 29;
 /** The counted copy of the walk must find the production kernel's answer on at least this share of rays. */
 const MIN_COUNTED_AGREEMENT = 0.9999;
+/**
+ * The merged tree holds the same triangles in world space, so its hits must
+ * match; rounding differs (the transform is applied before the f32 test, not
+ * inside it), so a few edge-grazing rays may differ.
+ */
+const MIN_MERGED_AGREEMENT = 0.999;
 
 /** Pushes off the surface (m) for the offset variants. The baseline is the platform's 256 rounding steps. */
 const OFFSET_PUSHES_M = [0.001, 0.01, 0.05, 0.2, 0.5] as const;
@@ -61,7 +75,7 @@ const T_MAX_M = [0.5, 1, 2, 5, 10] as const;
 interface Variant {
     name: string;
     /** Which question it answers. */
-    group: 'baseline' | 'offset' | 't-min' | 'direction' | 'origin-swap' | 'order' | 'length' | 'any-hit' | 'repeat';
+    group: 'baseline' | 'offset' | 't-min' | 'direction' | 'origin-swap' | 'region' | 'order' | 'length' | 'any-hit' | 'repeat';
     /** What differs from the set it is compared with, in words. */
     change: string;
     mode: 'closest' | 'any';
@@ -70,7 +84,19 @@ interface Variant {
     originIds: Uint32Array;
 }
 
+/**
+ * Which trees the scene is traced through: `instanced` is the platform's
+ * (a tree per mesh under a top level over the instances); `merged` is every
+ * instance's triangles in world space in one mesh tree under a one-instance
+ * top level, to see what the top level's overlapping instance boxes cost.
+ */
+export type TreeLayout = 'instanced' | 'merged';
+
+/** The sets also traced through the merged tree. */
+const MERGED_SETS = ['surface', 'air-grid', 'offset-500mm', 'air-origins-surface-dirs', 'air-region', 'tmax-2m', 'surface-any', 'air-grid-any'] as const;
+
 export interface SurfaceSetResult extends CountSummary {
+    tree: TreeLayout;
     name: string;
     group: Variant['group'];
     change: string;
@@ -84,6 +110,8 @@ export interface SurfaceSetResult extends CountSummary {
     countedAgreement: number;
     /** Instances whose world box contains the ray's origin (sampled). */
     meanInstanceBoxesAtOrigin: number;
+    /** Merged tree only: share of rays whose closest hit (or blocked flag) matches the instanced tree's. */
+    agreementWithInstanced: number | null;
 }
 
 export interface SurfaceRaysData {
@@ -96,6 +124,9 @@ export interface SurfaceRaysData {
     probesPlaced: number;
     gridProbes: number;
     gridDimensions: number[];
+    /** The region grid: points filling the box around the screen probes' surface points. */
+    regionGridProbes: number;
+    regionBox: Box;
     raysPerProbe: number;
     timing: typeof SURFACE_TIMING;
     userAgent: string;
@@ -233,6 +264,7 @@ function countedAgreement(mode: 'closest' | 'any', production: ArrayBuffer, coun
 function makeVariants(
     probes: ReturnType<typeof surfaceProbes>,
     grid: ReturnType<typeof makeProbeGrid>,
+    regionGrid: ReturnType<typeof makeProbeGrid>,
     sharedDirections: Float32Array,
     sceneBox: Box,
 ): Variant[] {
@@ -314,6 +346,28 @@ function makeVariants(
         originIds: noIdsFor(surface),
     });
 
+    // Region: points in the air, but only in the box around the screen probes' surfaces
+    // (the part of the scene the camera sees), not the whole manifest volume.
+    const regionRays = makeGridRays(regionGrid, sharedDirections);
+    variants.push({
+        name: 'air-region',
+        group: 'region',
+        change: "air-grid's shared directions from grid points filling the box around the screen probes' surface points",
+        mode: 'closest',
+        rays: regionRays,
+        originIds: noIdsFor(regionRays),
+    });
+    const regionOrigins = new Float64Array(probes.count * 3);
+    for (let probe = 0; probe < probes.count; probe++) regionOrigins.set(probePosition(regionGrid, probe % regionGrid.probeCount), probe * 3);
+    variants.push({
+        name: 'air-region-surface-dirs',
+        group: 'region',
+        change: "surface's directions, each probe's origin moved to a point of the region grid",
+        mode: 'closest',
+        rays: transplantOrigins(surface, raysPerProbe, regionOrigins),
+        originIds: noIdsFor(surface),
+    });
+
     // Order: the same rays, threads grouped differently.
     const orders: [string, string, Uint32Array][] = [
         ['order-shuffled', 'surface, rays in a random order (no two neighbours from one probe)', shuffledOrder(probes.count * raysPerProbe, createRandom(RC_SEED + 11))],
@@ -339,6 +393,155 @@ function makeVariants(
     variants.push({ name: 'surface-again', group: 'repeat', change: 'surface, timed again at the end', mode: 'closest', rays: surface, originIds: surfaceIds });
     variants.push({ name: 'air-grid-again', group: 'repeat', change: 'air-grid, timed again at the end', mode: 'closest', rays: airGrid, originIds: airIds });
     return variants;
+}
+
+/** The box around a list of `x, y, z` points. */
+function boxAround(points: ArrayLike<number>): Box {
+    const min: Vec3 = [Infinity, Infinity, Infinity];
+    const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+    for (let index = 0; index < points.length; index += 3) {
+        for (let axis = 0; axis < 3; axis++) {
+            min[axis] = Math.min(min[axis], points[index + axis]);
+            max[axis] = Math.max(max[axis], points[index + axis]);
+        }
+    }
+    return { min, max };
+}
+
+/** Every instance's triangles in world space as one mesh, and where each instance's triangles start in it. */
+function mergeInstances(meshes: readonly BenchMeshGeometry[], instances: readonly BenchInstance[]): { mesh: BenchMeshGeometry; triangleOffsets: number[]; box: Box } {
+    const vertexCount = instances.reduce((total, instance) => total + meshes[instance.meshIndex].positions.length / 3, 0);
+    const indexCount = instances.reduce((total, instance) => total + meshes[instance.meshIndex].indices.length, 0);
+    const positions = new Float32Array(vertexCount * 3);
+    const indices = new Uint32Array(indexCount);
+    const triangleOffsets: number[] = [];
+    let vertexBase = 0;
+    let indexBase = 0;
+    for (const instance of instances) {
+        const mesh = meshes[instance.meshIndex];
+        const m = instance.objectToWorld;
+        triangleOffsets.push(indexBase / 3);
+        for (let vertex = 0; vertex < mesh.positions.length / 3; vertex++) {
+            const x = mesh.positions[vertex * 3];
+            const y = mesh.positions[vertex * 3 + 1];
+            const z = mesh.positions[vertex * 3 + 2];
+            for (let axis = 0; axis < 3; axis++) positions[(vertexBase + vertex) * 3 + axis] = m[axis] * x + m[4 + axis] * y + m[8 + axis] * z + m[12 + axis];
+        }
+        for (let index = 0; index < mesh.indices.length; index++) indices[indexBase + index] = mesh.indices[index] + vertexBase;
+        vertexBase += mesh.positions.length / 3;
+        indexBase += mesh.indices.length;
+    }
+    const box = boxAround(positions);
+    return { mesh: { positions, indices }, triangleOffsets, box };
+}
+
+/** Per-ray origin records for the merged tree: instance 0, the instance's triangle offset plus the triangle. */
+function mergedOriginIds(originIds: Uint32Array, triangleOffsets: readonly number[]): Uint32Array {
+    const ids = originIds.slice();
+    for (let slot = 0; slot < ids.length; slot += 2) {
+        if (ids[slot] === NO_ORIGIN) continue;
+        ids[slot + 1] = triangleOffsets[ids[slot]] + ids[slot + 1];
+        ids[slot] = 0;
+    }
+    return ids;
+}
+
+/** Share of rays with the same answer in two scenes whose triangle numbering differs: closest by `t`, any by the blocked flag. */
+function answerAgreement(mode: 'closest' | 'any', a: ArrayBuffer, b: ArrayBuffer, count: number): number {
+    let agree = 0;
+    if (mode === 'closest') {
+        const recordWords = HIT_RECORD_BYTES / 4;
+        const floatsA = new Float32Array(a);
+        const floatsB = new Float32Array(b);
+        for (let ray = 0; ray < count; ray++) {
+            const tA = floatsA[ray * recordWords + HIT_RECORD_WORD.t];
+            const tB = floatsB[ray * recordWords + HIT_RECORD_WORD.t];
+            if ((tA < 0 && tB < 0) || (tA >= 0 && tB >= 0 && Math.abs(tA - tB) <= 1e-4 * Math.max(1, tA))) agree++;
+        }
+    } else {
+        const blockedA = new Uint32Array(a);
+        const blockedB = new Uint32Array(b);
+        for (let ray = 0; ray < count; ray++) if ((blockedA[ray] !== 0) === (blockedB[ray] !== 0)) agree++;
+    }
+    return count > 0 ? agree / count : 1;
+}
+
+interface MeasureContext {
+    device: GPUDevice;
+    timer: Awaited<ReturnType<typeof createDispatchTimer>>;
+    sceneId: string;
+    progress(message: string): void;
+}
+
+/**
+ * Times every set through the production batch kernel on `data`, then
+ * counts the walk's work on each with the counted copy. With
+ * `instancedAnswers`, also compares each set's answers with the instanced
+ * tree's (the merged tree must find the same hits).
+ */
+async function measureTree(
+    context: MeasureContext,
+    tree: TreeLayout,
+    data: TraceSceneData,
+    variants: readonly Variant[],
+    buffers: readonly GPUBuffer[],
+    instanceBoxes: readonly Box[],
+    instancedAnswers: ReadonlyMap<string, ArrayBuffer> | null,
+): Promise<{ results: SurfaceSetResult[]; answers: Map<string, ArrayBuffer> }> {
+    const { device, timer, sceneId, progress } = context;
+    const timedSets: RaySetBuffer[] = variants.map((variant, index) => ({
+        raySet: variant.name,
+        mode: variant.mode,
+        rays: buffers[index],
+        count: variant.rays.length / RAY_FLOATS,
+    }));
+    progress(`${sceneId} (${tree}): timing ${variants.length} sets through the production batch kernel`);
+    const runs = await runOursTracerOnSets(device, timer, 'ours-tinybvh', data, timedSets, SURFACE_TIMING);
+
+    progress(`${sceneId} (${tree}): counting the walk's work on each set (bench-only counted copy)`);
+    const sceneBuffers = uploadTraceScene(device, data, `counted ${tree}`);
+    const results: SurfaceSetResult[] = [];
+    const answers = new Map<string, ArrayBuffer>();
+    try {
+        const counted = await CountedKernel.create(device, sceneBuffers);
+        for (const [index, variant] of variants.entries()) {
+            const count = variant.rays.length / RAY_FLOATS;
+            const run = runs[index];
+            answers.set(variant.name, run.results);
+            const reference = instancedAnswers?.get(variant.name) ?? null;
+            const counts = await counted.count(variant.mode, buffers[index], variant.originIds, count);
+            const loaded = run.mode.loaded;
+            const result: SurfaceSetResult = {
+                tree,
+                name: variant.name,
+                group: variant.group,
+                change: variant.change,
+                mode: variant.mode,
+                singleMedianMs: run.mode.timing.medianMs,
+                singleMrays: run.mode.mraysPerSecond,
+                loadedMedianMs: loaded?.medianMs ?? Number.NaN,
+                loadedMrays: loaded?.mraysPerSecond ?? Number.NaN,
+                loadedDispatches: loaded?.dispatches ?? 0,
+                countedAgreement: countedAgreement(variant.mode, run.results, counts, count),
+                meanInstanceBoxesAtOrigin: meanInstanceBoxesAtOrigins(variant.rays, instanceBoxes, INSTANCE_BOX_SAMPLE_STRIDE),
+                agreementWithInstanced: reference ? answerAgreement(variant.mode, reference, run.results, count) : null,
+                ...summariseCounts(counts, count),
+            };
+            results.push(result);
+            progress(
+                `${sceneId} (${tree}): ${variant.name.padEnd(26)} ${result.loadedMrays.toFixed(1).padStart(6)} Mrays/s loaded (${result.singleMrays.toFixed(1)} single); ` +
+                    `steps ${result.meanSteps.toFixed(1)} (p90 ${result.p90Steps}), mesh nodes ${result.meanMeshNodes.toFixed(1)}, top ${result.meanTopLevelNodes.toFixed(1)}, ` +
+                    `instances ${result.meanInstanceEntries.toFixed(2)} (${result.meanInstanceEntriesWithoutHit.toFixed(2)} without a hit), tris ${result.meanTriangleTests.toFixed(1)}, ` +
+                    `origin boxes ${result.meanOriginBoxes.toFixed(1)}, simd32 ${(result.simd32Efficiency * 100).toFixed(0)}%, hit ${(result.hitFraction * 100).toFixed(1)}%, ` +
+                    `median t ${result.medianHitT.toFixed(2)}, self-hit ${(result.selfHitFraction * 100).toFixed(2)}%, counted agrees ${(result.countedAgreement * 100).toFixed(3)}%` +
+                    (result.agreementWithInstanced === null ? '' : `, agrees with instanced ${(result.agreementWithInstanced * 100).toFixed(3)}%`),
+            );
+            await yieldToBrowser();
+        }
+    } finally {
+        sceneBuffers.destroy();
+    }
+    return { results, answers };
 }
 
 export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
@@ -386,7 +589,10 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
             const sharedDirections = makeSphereDirections(RC_RAYS_PER_PROBE, RAY_DIRECTION_SEED);
             progress(`${sceneId}: ${probes.count} screen probes; air grid ${grid.dimensions.join(' x ')} = ${grid.probeCount} points in the manifest volume`);
 
-            const variants = makeVariants(probes, grid, sharedDirections, scene.geometryBounds);
+            const regionBox = boxAround(probes.positions);
+            const regionGrid = makeProbeGrid(regionBox, probes.count);
+            progress(`${sceneId}: region grid ${regionGrid.dimensions.join(' x ')} = ${regionGrid.probeCount} points in the box around the screen probes (${regionBox.min.map((v) => v.toFixed(1)).join(', ')} to ${regionBox.max.map((v) => v.toFixed(1)).join(', ')})`);
+            const variants = makeVariants(probes, grid, regionGrid, sharedDirections, scene.geometryBounds);
             const problems = variants.flatMap((variant) => rayProblems(variant.name, variant.rays));
             if (problems.length > 0) throw new Error(`bad rays: ${problems.join('; ')}`);
 
@@ -395,55 +601,27 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
                 gpuBuffers.push(buffer);
                 return buffer;
             });
-            const timedSets: RaySetBuffer[] = variants.map((variant, index) => ({
-                raySet: variant.name,
-                mode: variant.mode,
-                rays: buffers[index],
-                count: variant.rays.length / RAY_FLOATS,
-            }));
-
-            progress(`${sceneId}: timing ${variants.length} sets through the production batch kernel`);
-            const runs = await runOursTracerOnSets(device, timer, 'ours-tinybvh', ours.data, timedSets, SURFACE_TIMING);
-
-            progress(`${sceneId}: counting the walk's work on each set (bench-only counted copy)`);
             const instanceBoxes = instanceWorldBoxes(scene.meshes, scene.instances);
-            const sceneBuffers = uploadTraceScene(device, ours.data, 'counted');
-            const results: SurfaceSetResult[] = [];
-            try {
-                const counted = await CountedKernel.create(device, sceneBuffers);
-                for (const [index, variant] of variants.entries()) {
-                    const count = variant.rays.length / RAY_FLOATS;
-                    const run = runs[index];
-                    const counts = await counted.count(variant.mode, buffers[index], variant.originIds, count);
-                    const loaded = run.mode.loaded;
-                    const result: SurfaceSetResult = {
-                        name: variant.name,
-                        group: variant.group,
-                        change: variant.change,
-                        mode: variant.mode,
-                        singleMedianMs: run.mode.timing.medianMs,
-                        singleMrays: run.mode.mraysPerSecond,
-                        loadedMedianMs: loaded?.medianMs ?? Number.NaN,
-                        loadedMrays: loaded?.mraysPerSecond ?? Number.NaN,
-                        loadedDispatches: loaded?.dispatches ?? 0,
-                        countedAgreement: countedAgreement(variant.mode, run.results, counts, count),
-                        meanInstanceBoxesAtOrigin: meanInstanceBoxesAtOrigins(variant.rays, instanceBoxes, INSTANCE_BOX_SAMPLE_STRIDE),
-                        ...summariseCounts(counts, count),
-                    };
-                    results.push(result);
-                    progress(
-                        `${sceneId}: ${variant.name.padEnd(26)} ${result.loadedMrays.toFixed(1).padStart(6)} Mrays/s loaded (${result.singleMrays.toFixed(1)} single); ` +
-                            `steps ${result.meanSteps.toFixed(1)} (p90 ${result.p90Steps}), mesh nodes ${result.meanMeshNodes.toFixed(1)}, top ${result.meanTopLevelNodes.toFixed(1)}, ` +
-                            `instances ${result.meanInstanceEntries.toFixed(2)}, tris ${result.meanTriangleTests.toFixed(1)}, origin boxes ${result.meanOriginBoxes.toFixed(1)}, ` +
-                            `steps before 1st hit ${result.meanStepsBeforeFirstHit.toFixed(1)}, in origin instance ${result.meanStepsInOriginInstance.toFixed(1)}, ` +
-                            `simd32 ${(result.simd32Efficiency * 100).toFixed(0)}%, hit ${(result.hitFraction * 100).toFixed(1)}%, median t ${result.medianHitT.toFixed(2)}, ` +
-                            `self-hit ${(result.selfHitFraction * 100).toFixed(2)}%, agree ${(result.countedAgreement * 100).toFixed(3)}%`,
-                    );
-                    await yieldToBrowser();
-                }
-            } finally {
-                sceneBuffers.destroy();
-            }
+            const measureContext = { device, timer, sceneId, progress };
+            const instanced = await measureTree(measureContext, 'instanced', ours.data, variants, buffers, instanceBoxes, null);
+            const results = instanced.results;
+
+            // The same rays through one tree over the whole scene: no top level to speak of.
+            progress(`${sceneId}: building one tree over every instance's triangles in world space (tinybvh, in the worker)`);
+            const merged = mergeInstances(scene.meshes, scene.instances);
+            const mergedScene = await buildOursScene(builder, [merged.mesh], [{ meshIndex: 0, objectToWorld: IDENTITY_MATRIX }]);
+            const mergedIndices = variants.flatMap((variant, index) => ((MERGED_SETS as readonly string[]).includes(variant.name) ? [index] : []));
+            const mergedVariants = mergedIndices.map((index) => ({ ...variants[index], originIds: mergedOriginIds(variants[index].originIds, merged.triangleOffsets) }));
+            const mergedRun = await measureTree(
+                measureContext,
+                'merged',
+                mergedScene.data,
+                mergedVariants,
+                mergedIndices.map((index) => buffers[index]),
+                [merged.box],
+                instanced.answers,
+            );
+            results.push(...mergedRun.results);
 
             data = {
                 benchmark: 'surface-rays',
@@ -455,6 +633,8 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
                 probesPlaced: probes.count,
                 gridProbes: grid.probeCount,
                 gridDimensions: [...grid.dimensions],
+                regionGridProbes: regionGrid.probeCount,
+                regionBox,
                 raysPerProbe: RC_RAYS_PER_PROBE,
                 timing: SURFACE_TIMING,
                 userAgent: navigator.userAgent,
@@ -462,9 +642,14 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
                 sets: results,
             };
             const disagreeing = results.filter((result) => result.countedAgreement < MIN_COUNTED_AGREEMENT);
-            if (disagreeing.length > 0) {
+            const mergedDisagreeing = results.filter((result) => result.agreementWithInstanced !== null && result.agreementWithInstanced < MIN_MERGED_AGREEMENT);
+            const failures = [
+                ...disagreeing.map((result) => `the counted copy of the walk disagrees with the production kernel on ${result.tree} ${result.name}: ${(result.countedAgreement * 100).toFixed(3)}%`),
+                ...mergedDisagreeing.map((result) => `the merged tree disagrees with the instanced one on ${result.name}: ${((result.agreementWithInstanced ?? 0) * 100).toFixed(3)}%`),
+            ];
+            if (failures.length > 0) {
                 status = 'fail';
-                message = `the counted copy of the walk disagrees with the production kernel: ${disagreeing.map((result) => `${result.name} ${(result.countedAgreement * 100).toFixed(3)}%`).join(', ')}`;
+                message = failures.join(' | ');
             }
         } finally {
             builder.dispose();
