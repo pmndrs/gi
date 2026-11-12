@@ -14,6 +14,7 @@ Settled choices, newest first. Each entry is short: the decision, why, and what 
   - Cards come back only for a need the hash grid can't meet, such as a material at Brixelizer far-field hits (use 3 in the design doc's Brixelizer section) if the field can't carry an id.
 - **Brixelizer: use it however helps the cells** (Dennis, 2026-11-11: "We can always expand things in the brixelizer project if it helps us build the cells... For brixelizer I havent even thought about what to do with it so anything we want is fine").
   - Requests went to its session: an includable WGSL query, per-ray tMin and start distance, three r187, an optional id at the hit, and Mrays/s numbers.
+  - *Parked for GI (Dennis, 2026-11-12: "if it doesnt effect us right now lets leave it to that agent").* Its field is 10–30× slower than pmndrs/bvh on its own bench, so lever 9 waits. Its tree-walk rewrite (DIV-012) and big-scene numbers are the port's own call. The track asks for nothing more until those numbers change a lot.
 - **The BVH lane's merged static tree comes before its release** (Dennis, 2026-11-11: "Priority wise its doing a lot and this comes before release"). Passed to `bvh-6d`.
 - **three: assume the latest release** (Dennis, 2026-11-11: "I dont know why stuff keeps getting stuck on older versions of three, assume latest"). Today the latest is r187 (0.187.0), which this repo uses. Sibling projects pinned below it are asked to move up.
 
