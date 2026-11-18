@@ -191,7 +191,9 @@ An adapter does four things. Nothing else is required.
    - The adapter watches its engine for changes and sends only what changed.
    - The core keeps its own GPU copy. That copy is simplified on purpose: diffuse albedo, emissive and cutout only.
 3. **Drive a frame.** The host calls `gi.update(commandEncoder, budget)` once per frame.
-   - The core records its work into the host's encoder: no extra queue submits and no CPU readback, frame after frame. The one exception is a frame that uploads meshes (at load, and meshes added or replaced later): the GPU's build of those meshes' first trees is submitted by the core and reads back a few words of stats per mesh (T2.12 and T3.2; DECISIONS 2026-11-08, confirmed at M2 sign-off, and 2026-11-09, for Dennis to confirm). Deforming meshes add two (T3.3; DECISIONS 2026-11-10, provisional, for Dennis to confirm): while a mesh is being posed, its refit's stats (a few words) are read back at most once every 15 frames; and a drift rebuild submits its own H-PLOC build and reads back that one tree's stats and layout.
+   - The core records its work into the host's encoder: no extra queue submits and no CPU readback, frame after frame. The exceptions, all confirmed by Dennis:
+     - **A frame that uploads meshes** (at load, and meshes added or replaced later): the GPU's build of those meshes' first trees is submitted by the core and reads back a few words of stats per mesh (T2.12 and T3.2; DECISIONS 2026-11-08, confirmed at M2 sign-off; 2026-11-09, confirmed 2026-11-18).
+     - **A deforming mesh** (T3.3; DECISIONS 2026-11-10, confirmed 2026-11-18): while it is being posed, its refit's stats (a few words) are read back at most once every 15 frames; and a drift rebuild submits its own H-PLOC build and reads back that one tree's stats and layout.
    - The host decides when to call it, how much time to spend, and whether to pause.
 4. **Read the GI while shading.** The active technique publishes a **shading module**, the same shape for every technique. It has three parts:
    - WGSL functions:
