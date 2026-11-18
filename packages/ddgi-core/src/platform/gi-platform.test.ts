@@ -400,6 +400,15 @@ describe('the rays backend over the scene copy', () => {
 });
 
 describe('the platform object', () => {
+    it("gives hosts hit shading's live sampleTextures setting, on by default (DECISIONS 2026-11-18)", () => {
+        const platform = new GIPlatformImpl(createPlatformGpu().device);
+        expect(platform.hitShadingSettings.sampleTextures).toBe(true);
+        // The same object hit shading reads each frame, so the host's change is what the next encode writes.
+        platform.hitShadingSettings.sampleTextures = false;
+        expect(platform.shade.settings.sampleTextures).toBe(false);
+        platform.dispose();
+    });
+
     it('refuses to encode before prepare, and after the device is lost', async () => {
         const gpu = createPlatformGpu();
         const platform = new GIPlatformImpl(gpu.device);

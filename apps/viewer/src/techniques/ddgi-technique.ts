@@ -645,9 +645,9 @@ export class DdgiTechnique extends ScenePassTechnique {
     /** Settings that are uniforms: no shader is rebuilt. (The atlas choice and the change view change `overlayKey`.) */
     private applyDisplaySettings(): void {
         if (this.debugMaterial && isCoreScreenView(this.settings.screenView)) this.debugMaterial.view = DDGI_SCREEN_VIEWS[this.settings.screenView];
-        // GI's textures on or off: the platform's hit-shading setting (its implementation has it; see albedo-at-hits.ts).
-        const internals = albedoViewPlatform(this.platform);
-        if (internals && internals.shade.settings.sampleTextures !== this.settings.giTextures) internals.shade.settings.sampleTextures = this.settings.giTextures;
+        // GI's textures on or off: the platform's host-facing hit-shading setting (DECISIONS 2026-11-18).
+        const hitShading = this.platform?.hitShadingSettings;
+        if (hitShading && hitShading.sampleTextures !== this.settings.giTextures) hitShading.sampleTextures = this.settings.giTextures;
         if (this.spheres) this.spheres.colorBy = this.settings.probeColor;
         if (this.settings.changeFullScalePercent !== null) this.frameChange.fullScalePercent = this.settings.changeFullScalePercent;
     }

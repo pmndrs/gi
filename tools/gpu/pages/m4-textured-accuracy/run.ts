@@ -17,9 +17,10 @@
  * Writes `<out>/<scene>/<camera>/ddgi-textured-gi.exr` (the GI term in the
  * reference's row order), comparison PNGs beside it, and
  * `<out>/m4-textured-accuracy-<gpu>.json` with every row. `--compare-only`
- * compares the EXRs already written (no GPU). `--no-occlusion` is a
- * diagnostic: the same without GTAO on the GI term (files and summary named
- * `-no-ao`), to tell the occlusion's share of a difference from the field's.
+ * compares the EXRs already written (no GPU). `--no-occlusion` runs the
+ * same without GTAO on the GI term (files and summary named `-no-ao`): the
+ * composite's default since 2026-11-18, and the way to tell the occlusion's
+ * share of a difference from the field's.
  *
  * What is compared, as M1's HD accuracy (DECISIONS 2026-11-06; T1.14's
  * `three-composite-ao/run.ts --upscale performance --resolution-scale 0.5`,

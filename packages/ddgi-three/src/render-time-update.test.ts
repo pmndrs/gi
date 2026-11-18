@@ -120,32 +120,29 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
         return scenePass;
     }
 
-    it('by default runs GTAO at half resolution, 1 m, on an upscaled (reduced) pass, and none on a full-resolution pass (DECISIONS 2026-11-06)', () => {
+    it('by default runs no occlusion, on a full-resolution pass and on an upscaled (reduced) one (DECISIONS 2026-11-18)', () => {
+        expect(ddgi(compositePass(), new DDGIVolume()).occlusionNode).toBeNull();
         const reduced = compositePass();
         reduced.setResolutionScale(0.5);
-        const upscaled = ddgi(reduced, new DDGIVolume());
-        expect(upscaled.occlusionNode).not.toBeNull();
-        expect(upscaled.occlusionNode!.radius.value).toBe(1);
-        expect(upscaled.occlusionNode!.resolutionScale).toBe(0.5);
-        expect(ddgi(compositePass(), new DDGIVolume()).occlusionNode).toBeNull();
+        expect(ddgi(reduced, new DDGIVolume()).occlusionNode).toBeNull();
     });
 
-    it('chooses the default occlusion when the pipeline builds it (setup), and frees a GTAO it replaces', () => {
+    it('makes no occlusion at the build either, whatever the pass scale is by then', () => {
         const scenePass = compositePass();
         const node = ddgi(scenePass, { light: new GILight(fakeShading()) });
-        expect(node.occlusionNode).toBeNull();
-        // The pass is reduced after ddgi(): the build follows the pass as it is then.
+        // The pass is reduced after ddgi(), as a host adding an upscaler later would.
         scenePass.setResolutionScale(0.5);
         node.setup({} as Parameters<typeof node.setup>[0]);
-        const gtao = node.occlusionNode!;
-        expect(gtao).not.toBeNull();
-        expect(gtao.resolutionScale).toBe(0.5);
-        // Back to full resolution: the next build drops the default GTAO and frees it.
-        const dispose = vi.spyOn(gtao, 'dispose');
-        scenePass.setResolutionScale(1);
-        node.setup({} as Parameters<typeof node.setup>[0]);
         expect(node.occlusionNode).toBeNull();
-        expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('makes the 1 m GTAO a host opts in to, at the resolution it asks for', () => {
+        const reduced = compositePass();
+        reduced.setResolutionScale(0.5);
+        const node = ddgi(reduced, new DDGIVolume(), { occlusion: { resolutionScale: 0.5 } });
+        expect(node.occlusionNode).not.toBeNull();
+        expect(node.occlusionNode!.radius.value).toBe(1);
+        expect(node.occlusionNode!.resolutionScale).toBe(0.5);
     });
 
     it("sizes its GTAO from the scene pass (not the drawing buffer), with GTAO's own scale relative to the pass", () => {
@@ -170,7 +167,7 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
 
     it('takes occlusion settings, or none', () => {
         const half = ddgi(compositePass(), new DDGIVolume(), { occlusion: { radius: 0.5, resolutionScale: 0.5, samples: 8 } });
-        // An explicit choice stands on a full-resolution pass too (native GTAO is opt-in).
+        // An explicit choice stands on a full-resolution pass too.
         expect(half.occlusionNode!.radius.value).toBe(0.5);
         expect(half.occlusionNode!.resolutionScale).toBe(0.5);
         expect(half.occlusionNode!.samples.value).toBe(8);
@@ -205,7 +202,7 @@ describe('the composite node, ddgi(scenePass, volume)', () => {
         warn.mockRestore();
     });
 
-    it('adds no second occlusion when the pass already applies AO to its materials', () => {
+    it('adds no second occlusion by default when the pass already applies AO to its materials', () => {
         const scenePass = compositePass();
         scenePass.setResolutionScale(0.5);
         scenePass.contextNode = builtinAOContext(float(0.5));

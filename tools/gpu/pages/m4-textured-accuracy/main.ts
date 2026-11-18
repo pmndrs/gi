@@ -4,7 +4,9 @@
  * accuracy was judged on (DECISIONS 2026-11-06, T1.14's default): the
  * composite (`ddgi()`) through `@pmndrs/upscaler` at its Performance preset,
  * with three's GTAO on the GI term at half the reduced pass's resolution
- * (1 m, 16 samples), read back at the reference's 1920 × 1080.
+ * (1 m, 16 samples), read back at the reference's 1920 × 1080. That GTAO
+ * was the composite's default until 2026-11-18; the default since has no
+ * occlusion (DECISIONS 2026-11-18), which `run.ts --no-occlusion` measures.
  *
  * What differs from M1's run (`three-composite-ao`, match mode): the scene
  * keeps its own materials. M1 replaced them with Lambert materials holding
@@ -72,9 +74,9 @@ export interface TexturedAccuracyJob {
     /** The upscaler preset; M1's default path is Performance. */
     readonly preset: UpscalePreset;
     /**
-     * GTAO on the GI term, as the default path has it (true), or none (false: a diagnostic, to tell
-     * the occlusion's share of a difference from the field's). Its resolution against the reduced
-     * pass, and its samples (M1's default path: 0.5, 16).
+     * GTAO on the GI term, as M1's default path had it (true), or none (false: the composite's
+     * default since 2026-11-18, and the way to tell the occlusion's share of a difference from the
+     * field's). Its resolution against the reduced pass, and its samples (M1's default path: 0.5, 16).
      */
     readonly occlusion: boolean;
     readonly occlusionScale: number;
