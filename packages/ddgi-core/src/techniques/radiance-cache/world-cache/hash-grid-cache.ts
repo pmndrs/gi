@@ -157,8 +157,8 @@ export class HashGridCache implements WorldCache {
     private bufferPingPong = 0;
     /** The value the last `encodeFrame` used, or null before the first. */
     private lastFramePingPong: number | null = null;
-    /** `useMultibounce` at the last `encodeFrame`, or null before the first: a change empties the cache. */
-    private lastUseMultibounce: boolean | null = null;
+    /** The options whose change empties the cache, as the last `encodeFrame` read them; null before the first. */
+    private lastClearOptions: HashGridCacheClearOptions | null = null;
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
     constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
@@ -365,7 +365,7 @@ export class HashGridCache implements WorldCache {
         };
         this.bufferPingPong = 0;
         this.lastFramePingPong = null;
-        this.lastUseMultibounce = null;
+        this.lastClearOptions = null;
     }
 
     /**
@@ -397,17 +397,25 @@ export class HashGridCache implements WorldCache {
         const rayData = this.rayDataFor(prepared, rays);
         this.writeConstants(prepared, frame);
 
-        // gi1_use_multibounce changed: Capsaicin empties the cache (needs_hash_grid_clear,
-        // gi1.cpp:1740-1745) and remakes its indirect buffers, the scratch cleared (gi1.cpp:535-546).
+        // Capsaicin empties the cache when the cell size, the smallest cell size or multibounce
+        // changes (needs_hash_grid_clear, gi1.cpp:1740-1745, cleared at 1786-1789): cells keyed at
+        // the old sizes would otherwise live on beside the new ones until they decay. Its other two
+        // reasons are the debug view's mip level and propagation (we have no such options), and its
+        // first frame (our buffers start empty from prepare). Turning multibounce on or off also
+        // remakes its indirect buffers, the scratch cleared (gi1.cpp:497-552).
         // Before the count below: emptying the cache zeroes the tile words it is copied into.
-        const useMultibounce = this.options.useMultibounce;
-        if (this.lastUseMultibounce !== null && this.lastUseMultibounce !== useMultibounce) {
+        const clearOptions = hashGridCacheClearOptions(this.options);
+        const last = this.lastClearOptions;
+        if (last && !sameClearOptions(last, clearOptions)) {
             this.reset(encoder);
-            const scratch = prepared.layout.updateScratch;
-            const indirectStart = scratch.updateCellValueIndirectBuffer * WORD_BYTES;
-            encoder.clearBuffer(prepared.buffers.updateScratch, indirectStart, scratch.bytes - indirectStart);
+            if (last.useMultibounce !== clearOptions.useMultibounce) {
+                const scratch = prepared.layout.updateScratch;
+                const indirectStart = scratch.updateCellValueIndirectBuffer * WORD_BYTES;
+                encoder.clearBuffer(prepared.buffers.updateScratch, indirectStart, scratch.bytes - indirectStart);
+            }
         }
-        this.lastUseMultibounce = useMultibounce;
+        this.lastClearOptions = clearOptions;
+        const useMultibounce = clearOptions.useMultibounce;
 
         // The probe-ray count where the insert pass's indirect arguments read it.
         encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.tileWords, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
@@ -569,6 +577,21 @@ export class HashGridCache implements WorldCache {
         if (!this.prepared) throw new Error('@pmndrs/gi: the world cache is used before prepare()');
         return this.prepared;
     }
+}
+
+/** The options whose change empties the cache (gi1.cpp:1740-1745), read once per frame. */
+export interface HashGridCacheClearOptions {
+    readonly cellSize: number;
+    readonly minCellSize: number;
+    readonly useMultibounce: boolean;
+}
+
+export function hashGridCacheClearOptions(options: HashGridCacheOptions): HashGridCacheClearOptions {
+    return { cellSize: options.hashGridCacheCellSize, minCellSize: options.hashGridCacheMinCellSize, useMultibounce: options.useMultibounce };
+}
+
+export function sameClearOptions(a: HashGridCacheClearOptions, b: HashGridCacheClearOptions): boolean {
+    return a.cellSize === b.cellSize && a.minCellSize === b.minCellSize && a.useMultibounce === b.useMultibounce;
 }
 
 function groupEntries(buffers: HashGridCacheBuffers): GPUBindGroupEntry[] {

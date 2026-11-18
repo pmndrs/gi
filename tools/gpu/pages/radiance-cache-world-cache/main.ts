@@ -123,6 +123,19 @@
  * 10. **Multibounce off** (40 frames): no second-bounce entry, no shadow ray
  *    and no resolve entry (Capsaicin resolves its shadow-ray list without
  *    multibounce, register D34), and every probe ray reads 0.
+ * 11. **Both misdirected additions, predicted** (the sunlit corner with
+ *    multibounce on, 40 frames; the furnace never fires the second one):
+ *    every probe ray not bypassed itself reads its cell's levels, plus
+ *    `UpdateMultibounceCells`' addition where predicted (its exact sample,
+ *    from the second cell's levels and the entry's BRDF and pdf), plus 0 or
+ *    albedo / π × E where `PopulateCells`' is (the wall shades some second
+ *    hits); both must fire. Rays that bypass the cache themselves are left
+ *    out: their own addition and a misdirected one in the same dispatch can
+ *    race (`ScreenProbes_AccumulateRadiance` is not atomic; NOTES).
+ * 12. **Emptied when a cell size changes** (the corner, single bounce): after
+ *    a frame with `hashGridCacheCellSize`, then `hashGridCacheMinCellSize`,
+ *    changed, the live tiles are exactly the frame's (gi1.cpp:1740-1745);
+ *    a frame with nothing changed keeps more.
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
@@ -206,7 +219,14 @@ const FURNACE = {
 const DISCARD_PROBABILITY = 0.7;
 /** The floor's light: ρ E / π. */
 const FLOOR_RADIANCE = (FURNACE.albedo * FURNACE.sunIntensity) / Math.PI;
-/** A ceiling cell's settled indirect value: ρ L_f / (1 - p). */
+/** The second bounce a ceiling cell stands for: ρ L_f = ρ² E / π, what an unbiased estimate would settle at. */
+const TRUE_SECOND_BOUNCE = FURNACE.albedo * FLOOR_RADIANCE;
+/**
+ * Capsaicin's factor on it: 1 / (1 - p), since only kept rays add a sample (NOTES, RC3.3). A
+ * switch that removes the bias would test against TRUE_SECOND_BOUNCE alone.
+ */
+const CAPSAICIN_FACTOR = 1 / (1 - DISCARD_PROBABILITY);
+/** A ceiling cell's settled indirect value, as Capsaicin computes it (`multibounceSettledIndirect`). */
 const CEILING_INDIRECT = multibounceSettledIndirect(FURNACE.albedo, FLOOR_RADIANCE, DISCARD_PROBABILITY);
 /** The ceiling's normal on the side the probe rays hit: down. */
 const CEILING_NORMAL: Vec3 = [0, -1, 0];
@@ -1303,6 +1323,10 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
         return result;
     };
     const indirectTally = judgeCells(indirectCells, CEILING_INDIRECT, 'indirect');
+    // The measured indirect value over the true second bounce: Capsaicin's factor, 1 / (1 - p).
+    let indirectMeanSum = 0;
+    for (const value of indirectCells.values()) if (value[3] > 0) indirectMeanSum += value[0] / value[3];
+    const measuredOverTrueSecondBounce = indirectMeanSum / Math.max(indirectTally.cells, 1) / TRUE_SECOND_BOUNCE;
     const directTally = judgeCells(directCells, FLOOR_RADIANCE, 'direct');
     // The first-bounce cells with direct samples: those of far tiles that hold the floor too.
     const ceilingCellsWithDirect = new Set(Array.from(state.visibilityCell).filter((cell) => (directCells.get(cell)?.[3] ?? 0) > 0)).size;
@@ -1385,7 +1409,10 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
     return {
         failures,
         data: {
+            trueSecondBounce: TRUE_SECOND_BOUNCE,
+            capsaicinFactor: CAPSAICIN_FACTOR,
             expectedCeilingIndirect: CEILING_INDIRECT,
+            measuredOverTrueSecondBounce,
             expectedFloorRadiance: FLOOR_RADIANCE,
             frameIndex,
             hits: hits.length,
@@ -1508,6 +1535,138 @@ async function checkMultibounceOff(device: GPUDevice, scenario: Scenario): Promi
     return { failures, data: { hits: hits.length, secondBounceEntries: state.multibounceCell.length, shadowRays: state.visibilityRay.length, resolveEntries: state.resolve.length, raysLit, indirectSamples } };
 }
 
+// ---- Section 11: Capsaicin's misdirected bypass additions where both paths fire -------------------
+
+/**
+ * GIDenoiser_RemoveNaNs on one finite non-negative channel, as the WGSL computes it: c / (1 + c),
+ * clamped, mapped back. Close to the identity below about 1e4.
+ */
+function removeNaNs(value: number): number {
+    const mapped = Math.min(Math.max(Math.fround(value / (1 + value)), 0), 1);
+    return Math.fround(mapped / Math.max(1 - mapped, 1e-4));
+}
+
+async function checkCornerMisdirected(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`corner misdirected: ${message}`);
+    };
+    const cache = scenario.cache;
+    const capacity = cache.capacity;
+    const state = await readFrameState(device, scenario);
+    const firstCount = state.visibilityCell.length;
+    const tileOf = (cell: number): number => Math.floor(cell / capacity.numCellsPerTile);
+
+    // PopulateCells: a second-bounce shadow ray with the bypass bit adds its light, which is
+    // albedo / pi x E where the sun reaches the hit and nothing (a zero isn't added) where the
+    // wall shades it, to the probe ray numbered as its first-bounce entry.
+    const populateCellsTargets = new Set<number>();
+    for (const entry of state.visibilityRay) {
+        const visibility = entry & ~BYPASS_CACHE_BIT;
+        if ((entry & BYPASS_CACHE_BIT) !== 0 && visibility >= firstCount) populateCellsTargets.add(state.multibounceQuery[visibility - firstCount]);
+    }
+    // UpdateMultibounceCells: where the shadow-ray list's word at the entry's visibility index has
+    // the bypass bit, the entry's sample goes to that probe ray too. Its value is known exactly:
+    // the second cell's filtered direct (the levels as read back: nothing writes them after) x
+    // BRDF / pdf / (1 - p).
+    const updateEntries: number[] = [];
+    state.multibounceQuery.forEach((_, entry) => {
+        if ((state.visibilityRayWords[firstCount + entry] & BYPASS_CACHE_BIT) !== 0) updateEntries.push(entry);
+    });
+
+    const resolved = Array.from(state.resolve).filter((entry) => (entry & BYPASS_CACHE_BIT) === 0);
+    const bypassedRays = new Set(Array.from(state.resolve).filter((entry) => (entry & BYPASS_CACHE_BIT) !== 0).map((entry) => state.visibilityQuery[entry & ~BYPASS_CACHE_BIT]));
+    const resolvedCellOf = new Map(resolved.map((entry) => [state.visibilityQuery[entry], state.visibilityCell[entry]]));
+    const tiles = [...new Set([...resolved.map((entry) => tileOf(state.visibilityCell[entry])), ...updateEntries.map((entry) => tileOf(state.multibounceCell[entry]))])];
+    const slotOfTile = new Map(tiles.map((tile, slot) => [tile, slot]));
+    const direct = await readTiles(device, cache, tiles, false);
+    const indirect = await readTiles(device, cache, tiles, true);
+    const levelsOf = (cell: number, values: Float32Array): CellValue => pickLevel(values, cache, slotOfTile.get(tileOf(cell)) ?? 0, cell, MAX_SAMPLE_COUNT).value;
+
+    const updateAdds = new Map<number, number[]>();
+    for (const entry of updateEntries) {
+        const value = levelsOf(state.multibounceCell[entry], direct);
+        const info = state.multibounceInfo.slice(entry * 4, entry * 4 + 4);
+        const sample = [0, 1, 2].map((channel) => removeNaNs(((value[channel] / Math.max(value[3], 1)) * info[channel]) / info[3] / (1 - DISCARD_PROBABILITY)));
+        if (Math.max(...sample) > 0) updateAdds.set(state.multibounceQuery[entry], sample);
+    }
+
+    const tally = { judged: 0, skippedBypassed: 0, off: 0, worst: 0, populateCellsLit: 0, populateCellsNothing: 0, updateMultibounceCellsAdds: 0 };
+    state.rays.forEach((ray, index) => {
+        if (bypassedRays.has(index)) {
+            tally.skippedBypassed++;
+            return;
+        }
+        const cell = resolvedCellOf.get(index);
+        let base = [0, 0, 0];
+        if (cell !== undefined) {
+            const d = levelsOf(cell, direct);
+            const i = levelsOf(cell, indirect);
+            base = [0, 1, 2].map((channel) => d[channel] / Math.max(d[3], 1) + i[channel] / Math.max(i[3], 1));
+        }
+        const update = updateAdds.get(index) ?? [0, 0, 0];
+        if (updateAdds.has(index)) tally.updateMultibounceCellsAdds++;
+        const got = [0, 1, 2].map((channel) => state.radiance[index * 4 + channel]);
+        const residual = [0, 1, 2].map((channel) => got[channel] - base[channel] - update[channel]);
+        const scale = Math.max(...got, 1e-2);
+        const tolerance = updateAdds.has(index) || populateCellsTargets.has(index) ? 0.01 : 4 * HALF_TOLERANCE;
+        const nothing = Math.max(...residual.map(Math.abs)) / scale;
+        const lit = Math.max(...residual.map((value) => Math.abs(value - LIT_RADIANCE))) / scale;
+        let error = nothing;
+        if (populateCellsTargets.has(index)) {
+            error = Math.min(nothing, lit);
+            if (lit < nothing) tally.populateCellsLit++;
+            else tally.populateCellsNothing++;
+        }
+        tally.judged++;
+        tally.worst = Math.max(tally.worst, error);
+        if (error > tolerance) {
+            tally.off++;
+            if (tally.off <= 3) fail(`ray ${index} (${ray.surface}) reads ${got.map((value) => value.toFixed(4)).join(', ')}: its levels give ${base.map((value) => value.toFixed(4)).join(', ')}, UpdateMultibounceCells' addition ${update[0].toFixed(4)}${populateCellsTargets.has(index) ? `, PopulateCells' 0 or ${LIT_RADIANCE.toFixed(4)}` : ''}`);
+        }
+    });
+    if (tally.off > 0) fail(`${tally.off} of ${tally.judged} probe rays don't read their levels and the predicted additions`);
+    if (tally.populateCellsLit === 0) fail("PopulateCells' misdirected addition never fired with light: the check can't see it");
+    if (tally.updateMultibounceCellsAdds === 0) fail("UpdateMultibounceCells' misdirected addition never fired: the check can't see it");
+    return { failures, data: { firstBounceEntries: firstCount, secondBounceEntries: state.multibounceCell.length, populateCellsTargets: populateCellsTargets.size, ...tally } };
+}
+
+// ---- Section 12: emptied when a cell size changes ---------------------------------------------------
+
+async function checkClearOnChange(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`cleared on change: ${message}`);
+    };
+    const capacity = scenario.cache.capacity;
+    const settings = scenario.technique.settings;
+    const data: Record<string, unknown> = {};
+    const frameTiles = async (): Promise<{ live: number[]; touched: Set<number> }> => {
+        const state = await readFrameState(device, scenario);
+        return { live: Array.from(state.packedTiles), touched: new Set(Array.from(state.visibilityCell, (cell) => Math.floor(cell / capacity.numCellsPerTile))) };
+    };
+    // A frame with nothing changed: tiles touched in earlier frames but not this one stay live.
+    await runFrames(device, scenario, 1);
+    const steady = await frameTiles();
+    data.unchanged = { liveTiles: steady.live.length, touchedTiles: steady.touched.size };
+    if (!(steady.live.length > steady.touched.size)) fail(`with nothing changed ${steady.live.length} tiles are live and ${steady.touched.size} touched: the check can't tell an emptied cache`);
+    const changes: [string, () => void][] = [
+        ['hashGridCacheCellSize', () => (settings.hashGridCacheCellSize = 16)],
+        ['hashGridCacheMinCellSize', () => (settings.hashGridCacheMinCellSize = 0.2)],
+    ];
+    for (const [name, change] of changes) {
+        // A few frames at the setting, then the change and one frame: only that frame's tiles live.
+        await runFrames(device, scenario, 3);
+        change();
+        await runFrames(device, scenario, 1);
+        const after = await frameTiles();
+        const stale = after.live.filter((tile) => !after.touched.has(tile)).length;
+        data[name] = { liveTiles: after.live.length, touchedTiles: after.touched.size, staleTiles: stale };
+        if (stale > 0 || after.live.length !== after.touched.size) fail(`after ${name} changed, ${after.live.length} tiles are live, ${after.touched.size} touched and ${stale} left from before (Capsaicin empties the cache, gi1.cpp:1740-1745)`);
+    }
+    return { failures, data };
+}
+
 // ---- The page --------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -1555,6 +1714,8 @@ try {
     // Started with multibounce off; checkLag turns it on and runs its two frames.
     await run('multibounceLag', [FURNACE_SUN], { furnace: true }, 0, checkLag);
     await run('multibounceOff', [FURNACE_SUN], { furnace: true }, CONVERGENCE_FRAMES, checkMultibounceOff);
+    await run('cornerMisdirected', [sun(SUN_TRAVEL)], {}, CONVERGENCE_FRAMES, checkCornerMisdirected, MULTIBOUNCE);
+    await run('clearOnChange', [sun(SUN_TRAVEL)], {}, 10, checkClearOnChange);
 
     await drainDevice(device);
     reportGpuTest({
