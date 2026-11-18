@@ -10,7 +10,7 @@ The first release: real-time diffuse global illumination for WebGPU, with a thre
 
 - **`DDGIVolume`**, shaped like three's `LightProbeGrid`: give it a box and a probe count, add it to the scene, `await volume.start(renderer, scene)`, and GI updates itself inside `renderer.render`. No per-frame call.
 - **`createGIRenderer`** makes a `WebGPURenderer` on a device with the limits large scenes need.
-- **The drop-in composite:** `ddgi(scenePass, volume)` with the `giAlbedo` output adds GI once per pixel on three's post-processing pipeline, the same way as three's `ssgi()` and `ao()`, and works with `@pmndrs/upscaler` and three's GTAO.
+- **The drop-in composite:** `ddgi(scenePass, volume)` with the `giAlbedo` output adds GI once per pixel on three's post-processing pipeline, the same way as three's `ssgi()` and `ao()`, and works with `@pmndrs/upscaler`. three's GTAO on the GI term is there to opt in to (`occlusion`), off by default.
 - **Your scene as it is:** meshes, instanced, morphed and skinned meshes, three's materials and textures (compressed ones too), and point, spot and directional lights and the environment. The adapter notices added, moved, changed and removed objects and lights on its own.
 - **Quality presets:** `{ preset: 'low' | 'medium' | 'high' }`, and `recommendPreset` to pick one from the GPU.
 - **Saved bakes:** `saveBake` and `loadBake` store the probes, so a page can open with finished GI. A bake made for a different scene is refused or settles in a few frames.

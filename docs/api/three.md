@@ -53,14 +53,15 @@ renderer.setAnimationLoop(() => pipeline.render());
 
 - `velocity` in the MRT is three's own; the upscaler keeps it free of its jitter.
 - `rtt(…, { type: HalfFloatType, resolutionScale })` makes the composite a texture at the render resolution. Without it, `upscale()` would materialise it at display size. Keep `type`: an options object without it gives an 8-bit target, which clips HDR.
-- On the reduced pass, `ddgi()` runs three's GTAO on the GI term at half the render resolution by default (below).
-- Without the upscaler, `pipeline.outputNode = ddgi(scenePass, volume)` on a full-resolution pass works too, with GTAO opt-in (below).
+- `ddgi()` runs no occlusion on the GI term by default, on any pass (DECISIONS 2026-11-18). Scenes with small folds can opt in to three's GTAO; under the upscaler, `ddgi(scenePass, volume, { occlusion: { resolutionScale: 0.5 } })` is the setting measured below.
+- Without the upscaler, `pipeline.outputNode = ddgi(scenePass, volume)` on a full-resolution pass works too.
 
 **What it costs** (Sponza with its curtains, 2560 × 1440 output, RTX 3060 laptop, GPU-bound, the field frozen; T1.14):
 
 | Path | Showing GI | Sponza GI against Cycles (curtain pixels) |
 | --- | --- | --- |
-| Upscaler Performance, GTAO at half the render resolution (the default) | 0.73 ms | +6.6% (+15.7%) |
+| Upscaler Performance, no occlusion (the default) | 0.41 ms | +23% (+44%; 640 × 360 reference) |
+| Upscaler Performance, GTAO at half the render resolution (`occlusion: { resolutionScale: 0.5 }`) | 0.73 ms | +6.6% (+15.7%) |
 | Upscaler Quality, the same | 1.25 ms | +6.1% (+14.6%) |
 | No upscaler, no occlusion | 1.3–1.4 ms | +23% (+44%) |
 | No upscaler, GTAO at half resolution (`occlusion: { resolutionScale: 0.5 }`) | 3.2 ms | +5.8% (+13.6%) |
@@ -130,7 +131,7 @@ Other members:
 
 - `volume.recalibrate()` measures again how much probe work fits the budget, over the next frames. Use it after a big scene change.
 - `await volume.restart({ budget, warmUp, camera })` starts the probes over: it forgets the field and the calibration and runs the warm-up again, for after the scene changed a lot. `volume.isStarted` says whether `start` has finished.
-- `volume.threeGI` (budget, `markChanged`, timings) and `volume.platform` (stats, debug views) are there after `start`.
+- `volume.threeGI` (budget, `markChanged`, timings) and `volume.platform` (stats, debug views, `hitShadingSettings`) are there after `start`. `volume.platform.hitShadingSettings.sampleTextures = false` makes GI's rays see each texture's mean colour instead of the texel they hit, for comparisons (platform.md, "Materials and textures").
 - `volume.light` is the GI light (`ddgi()` reads it).
 - `await volume.exportLightProbeGrid()` gives a snapshot of the GI as three's `LightProbeGrid` ("Exporting a `LightProbeGrid`" below).
 - `volume.dispose()` removes the GI light and frees the platform.
@@ -179,14 +180,14 @@ The composite node for three's pipeline (see "Dense scenes" above). Built like t
 - It marks its pass through `scenePass.contextNode`, keeping any context you already set (GTAO's `builtinAOContext`, say). Set your own context before calling `ddgi()`.
 - **Which surfaces it lights:** opaque surfaces with Standard, Physical, Lambert or Phong materials. Physical materials with clearcoat, sheen, iridescence, transmission, dispersion or rough diffuse keep GI per fragment, and so do transparent surfaces and unlit ones.
 - **Transparent surfaces in front of composited ones.** The composited GI behind a transparent surface is evaluated at the transparent surface, because the pass's normal and depth are its own. Behind a 50%-opaque sphere in Cornell that reads about 19% too dark. Where that matters, draw transparent objects after the composite.
-- **Short-range occlusion on GI.** `ddgi()` can run three's own GTAO (`ao()`) on the pass's depth and normal, with a 1 m radius, and multiply the GI term by it, and only the GI term. Probes 1 m apart can't follow light that changes inside small folds: Sponza's curtains read +23% against Cycles without it.
-  - **The default follows the pass.** On a reduced pass (`scenePass.setResolutionScale` below 1, as under the upscaler), GTAO runs at half the pass's resolution. On a full-resolution pass there is no occlusion: GTAO is opt-in there, because it costs several times the composite (table above). The choice is made when the pipeline builds, so the pass's scale may be set before or after `ddgi()`.
-  - `occlusion: { radius, resolutionScale, samples }` sets it. It needs 16 samples (three's default): with 8, Sponza reads +16%.
+- **Short-range occlusion on GI, opt-in.** `ddgi()` can run three's own GTAO (`ao()`) on the pass's depth and normal, with a 1 m radius, and multiply the GI term by it, and only the GI term. Probes 1 m apart can't follow light that changes inside small folds: Sponza's curtains read +23% against Cycles without it.
+  - **The default is no occlusion, on any pass** (DECISIONS 2026-11-18). Until then a reduced pass got GTAO at half its resolution. With textured scenes it darkened the GI of scenes with little to occlude, against Cycles: the textured furnace about 9% dark with it (−0.9% without), the furnished room 14–17% (5–6% without), the UV board 3–7% (1.5–4% without). It helps Sponza: +8–12% with it, +22–26% without.
+  - `occlusion: { radius, resolutionScale, samples }` turns it on. Under the upscaler, `{ resolutionScale: 0.5 }` is the measured setting (table above); on a full-resolution pass it costs several times the composite. It needs 16 samples (three's default): with 8, Sponza reads +16%.
   - Its size follows the scene pass, not the canvas: a pass drawn smaller (`scenePass.setResolutionScale`, as under `@pmndrs/upscaler`) gets GTAO at its own size, and `resolutionScale: 0.5` is always half the pass's pixels.
-  - `occlusion: false` turns it off.
+  - `occlusion: false` is the same as leaving it out.
   - `occlusion: { source: gtaoNode }` uses a GTAO node your pipeline already makes from this pass, instead of a second one.
-  - If the pass already applies AO to its materials (`builtinAOContext`), `giAlbedo` already carries it, and the default is no second occlusion.
-  - `node.occlusionNode` is the composite's own GTAO node, for live changes (`radius.value`). With the default it is made at the build.
+  - If the pass already applies AO to its materials (`builtinAOContext`), `giAlbedo` already carries it: leave `occlusion` out, or GI gets AO twice.
+  - `node.occlusionNode` is the composite's own GTAO node, for live changes (`radius.value`). It is null when the composite makes none.
 - The fog of a fogged scene isn't applied to the composited GI.
 - The targets should stay half float: 8-bit `giAlbedo` and normal miss the match by about 10× on Sponza.
 - If the platform's shading module changes shape (another technique, say), set `pipeline.needsUpdate = true`.
@@ -603,7 +604,7 @@ Every name `@pmndrs/gi/three` exports, in one place. A unit test (`tools/docs/do
 | --- | --- |
 | `ddgi(scenePass, source, options?)` | The composite node for three's post-processing pipeline ("`ddgi(scenePass, volume, options?)`" above). |
 | `DDGICompositeNode` | The node `ddgi()` returns; `occlusionNode` is its own GTAO node. |
-| `DDGICompositeOptions` | Its one option, `occlusion`: GTAO settings, `false`, or `{ source }`. |
+| `DDGICompositeOptions` | Its one option, `occlusion`: GTAO settings, `false`, or `{ source }`. None by default. |
 | `CompositeGISource` | What `ddgi()` reads GI from: anything with the GI light as `light`, so a started `DDGIVolume` or a `ThreeGI`. |
 | `GIOcclusionSettings` | GTAO on the GI term: `radius`, `resolutionScale`, `samples`. |
 | `GIOcclusionSource` | An AO node your pipeline already makes from the same pass (three's GTAO node fits), passed as `occlusion: { source }`. |

@@ -26,7 +26,7 @@ import { GINotReadyError } from './contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from './contract/handles.ts';
 import type { Aabb, Mat4 } from './contract/math.ts';
 import type { FrameInput, FrameScreen } from './contract/frame.ts';
-import type { GIPlatform, GIPlatformOptions } from './contract/platform.ts';
+import type { GIPlatform, GIPlatformOptions, HostHitShadingSettings } from './contract/platform.ts';
 import type { QueryKind, SceneQueries } from './contract/queries.ts';
 import type {
     DeformedPositions,
@@ -401,6 +401,11 @@ export class GIPlatformImpl implements GIPlatform {
     get shading(): ShadingModule {
         if (!this.output) throw new Error('@pmndrs/gi: no output technique; call setOutput(technique) first');
         return this.output.shading;
+    }
+
+    get hitShadingSettings(): HostHitShadingSettings {
+        // The live object hit shading reads each frame, so a host's change lands at the next encode.
+        return this.shade.settings;
     }
 
     get stats(): GIStats {

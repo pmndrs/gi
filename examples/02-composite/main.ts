@@ -5,9 +5,11 @@
  * - The scene pass renders at the upscaler's render resolution (its
  *   Performance mode: half the display in each direction) and writes
  *   `giAlbedo`, the normal and three's `velocity` with `mrt()`.
- * - `ddgi()` adds GI there once per pixel, instead of once per fragment,
- *   with three's GTAO on the GI term at half that resolution (its default on
- *   a reduced pass).
+ * - `ddgi()` adds GI there once per pixel, instead of once per fragment.
+ *   It runs no occlusion on the GI term by default. Scenes with small folds
+ *   the probes can't follow (Sponza's curtains) can opt in to three's GTAO
+ *   at half that resolution: `ddgi(scenePass, volume, { occlusion: {
+ *   resolutionScale: 0.5 } })`.
  * - The upscaler brings the result to the display.
  *
  * Transparent objects keep GI per fragment. Something opaque seen through a

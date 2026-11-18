@@ -31,6 +31,7 @@
 
 import type { FrameInput, FrameScreen } from './frame';
 import type { SceneApi } from './scene';
+import type { HitShadingSettings } from './shade';
 import type { ShadingModule } from './shading-module';
 import type { GIStats } from './stats';
 import type { GITechnique } from './technique';
@@ -105,6 +106,16 @@ export interface GIPlatform {
     /** The output technique's shading module. Re-read `version` each frame. */
     readonly shading: ShadingModule;
     readonly stats: GIStats;
+    /**
+     * Hit shading's host-facing settings, live: set a field and the next
+     * frame uses it, with no recompile. `sampleTextures` (default true): ray
+     * hits read their materials' textures; false reads each texture's mean
+     * colour (its last mip) instead, the flat colours of before M4, for
+     * comparisons. Changing it logs no scene change, so the probes blend
+     * towards the new look over their usual updates; call `resetHistory()`
+     * to see it at once.
+     */
+    readonly hitShadingSettings: HostHitShadingSettings;
 
     /** Forget all accumulated history (a camera cut or a scene swap). */
     resetHistory(): void;
@@ -121,6 +132,14 @@ export interface GIPlatform {
     /** Free everything the platform allocated. The device and host resources are untouched. */
     dispose(): void;
 }
+
+/**
+ * The hit-shading settings a host may change, live (read every frame). Only
+ * `sampleTextures` for now (Dennis, DECISIONS 2026-11-18): the others in
+ * {@link HitShadingSettings} stay for techniques and the repository's tools
+ * until a host needs them.
+ */
+export type HostHitShadingSettings = Pick<HitShadingSettings, 'sampleTextures'>;
 
 /** Limits the platform would like for large scenes. Pass them to `requestDevice`. */
 export type RequiredLimits = Partial<Record<Exclude<keyof GPUSupportedLimits, '__brand'>, number>>;

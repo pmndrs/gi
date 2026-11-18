@@ -41,36 +41,38 @@
  * Fog: the composite adds GI after the material's fog, so a fogged scene
  * gets un-fogged GI. Neither test scene has fog.
  *
- * **Short-range occlusion on GI** (DECISIONS 2026-11-05, curtained Sponza,
- * option A): probes 1 m apart can't follow light that changes inside small
- * folds (Sponza's curtains read +23% against Cycles without it). The
- * composite can run three's own GTAO (`ao()`, GTAONode) on the pass's depth
- * and normal, with a 1 m radius, and multiply the GI term by it, and only
- * the GI term: direct light and the environment's light are untouched. Its
- * size follows the pass, and its `resolutionScale` is relative to the pass.
+ * **Short-range occlusion on GI, opt-in** (DECISIONS 2026-11-18, which
+ * supersedes 2026-11-06's default): probes 1 m apart can't follow light that
+ * changes inside small folds (Sponza's curtains read +23% against Cycles
+ * without it). The composite can run three's own GTAO (`ao()`, GTAONode) on
+ * the pass's depth and normal, with a 1 m radius, and multiply the GI term
+ * by it, and only the GI term: direct light and the environment's light are
+ * untouched. Its size follows the pass, and its `resolutionScale` is
+ * relative to the pass.
  *
  * **The intended pipeline is `@pmndrs/upscaler`** (DECISIONS 2026-11-06,
  * the T1.14 default path): the scene pass and the composite at the
  * upscaler's render resolution, the upscaler bringing the result to the
- * display. So the default occlusion depends on the pass:
- * - **a reduced pass** (`scenePass.setResolutionScale` below 1, as under
- *   the upscaler): GTAO at half the pass's resolution, 1 m, 16 samples.
- *   Measured with the upscaler's Performance preset at 2560 × 1440: 0.73 ms
- *   for showing GI on Sponza, which reads +6.6% against the HD Cycles
- *   reference (curtain pixels +15.7%), Cornell +0.2%;
- * - **a full-resolution pass** (no upscaler): no occlusion; GTAO is opt-in
- *   there (`occlusion: {}` full resolution, 8.0 ms on Sponza at 1440p;
- *   `{ resolutionScale: 0.5 }` 3.2 ms), because it would cost several times
- *   the composite (1.3 ms).
- * The choice is made when the node is made and again when the pipeline
- * builds it, so a pass scale set after `ddgi()` still counts.
+ * display.
  *
- * The option `occlusion` overrides it: settings for the composite's GTAO,
- * `false` for none, or an AO texture the pipeline already makes
+ * **By default there is no occlusion, on any pass.** Until 2026-11-18 a
+ * reduced (upscaled) pass got GTAO at half its resolution by default. With
+ * M4's textures that darkened the scenes with little to occlude (against
+ * Cycles: the textured furnace about 9% dark, −0.9% without; the furnished
+ * room 14-17% dark, 5-6% without) to help the one it was made for (Sponza
+ * +8-12% with it, +22-26% without, now a tuning-pass item). Hosts with
+ * fold-heavy scenes opt in. Under the upscaler the measured setting is
+ * `occlusion: { resolutionScale: 0.5 }`: 0.73 ms for showing GI on Sponza
+ * at 2560 × 1440 (Performance), against 0.41 ms without (RTX 3060 laptop,
+ * T1.14). On a full-resolution pass GTAO costs several times the
+ * composite's 1.3 ms (8.0 ms at full resolution, 3.2 ms at half).
+ *
+ * The option `occlusion`: settings for the composite's GTAO, `false` (the
+ * same as leaving it out), or an AO texture the pipeline already makes
  * (`{ source }`, a GTAONode on this pass's depth and normal) instead of
  * running a second GTAO. If the pass already applies AO to its materials (a
  * context with `getAO`, three's `builtinAOContext`), `giAlbedo` carries that
- * AO already, so the default is then no second occlusion.
+ * AO already, so adding the composite's occlusion as well darkens GI twice.
  */
 
 import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type Camera, type NodeBuilder, type PassNode, type TextureNode } from 'three/webgpu';
@@ -208,8 +210,6 @@ function configureWeightOutput(outputs: NonNullable<ReturnType<PassNode['getMRT'
 
 /** The GTAO radius on the GI term, metres (view space): DECISIONS 2026-11-05, curtained Sponza option A. */
 export const DEFAULT_GI_OCCLUSION_RADIUS = 1;
-/** The default GTAO's resolution against a reduced (upscaled) pass: DECISIONS 2026-11-06, the T1.14 default path. */
-const DEFAULT_GI_OCCLUSION_RESOLUTION = 0.5;
 
 /** The composite's own GTAO on the GI term. Anything left out keeps three's GTAO default, except the radius. */
 export interface GIOcclusionSettings {
@@ -231,9 +231,10 @@ export interface GIOcclusionSource {
 
 export interface DDGICompositeOptions {
     /**
-     * Short-range occlusion on the GI term (file comment). Settings for the
-     * composite's own GTAO (the default: a 1 m radius), `false` for none, or
-     * `{ source }` to use an AO texture the pipeline already makes.
+     * Short-range occlusion on the GI term (file comment). None by default
+     * (DECISIONS 2026-11-18). Settings for the composite's own GTAO (a 1 m
+     * radius unless set), `false` for none, or `{ source }` to use an AO
+     * texture the pipeline already makes.
      */
     readonly occlusion?: false | GIOcclusionSettings | { readonly source: GIOcclusionSource };
 }
@@ -271,23 +272,16 @@ export class DDGICompositeNode extends Node {
     readonly source: CompositeGISource;
     /**
      * The composite's own GTAO on the GI term, when it makes one: change its
-     * `radius.value` or `samples.value` live. Null when occlusion is off or
-     * comes from the pipeline (`occlusion: { source }`). With the default
-     * occlusion it is re-chosen at any build where the pass's resolution
-     * scale has crossed 1 since the last choice (the file comment).
+     * `radius.value` or `samples.value` live. Null when occlusion is off
+     * (the default) or comes from the pipeline (`occlusion: { source }`).
      */
     get occlusionNode(): GTAONode | null {
         return this.ownOcclusion;
     }
 
-    private ownOcclusion: GTAONode | null = null;
+    private readonly ownOcclusion: GTAONode | null = null;
     /** Where the occlusion is read from, or null for none. */
-    private occlusionSource: GIOcclusionSource | null = null;
-    /** The `occlusion` option as given (undefined: the default, which follows the pass). */
-    private readonly occlusionOption: DDGICompositeOptions['occlusion'];
-    /** The default's last choice: whether the pass was reduced. */
-    private defaultForReducedPass: boolean | null = null;
-    private explicitResolved = false;
+    private readonly occlusionSource: GIOcclusionSource | null = null;
     private moduleNodes: ShadingModuleNodes | null = null;
     private warnedStale = false;
     /** The pass context the mark was last checked on. */
@@ -300,14 +294,21 @@ export class DDGICompositeNode extends Node {
         super('vec4');
         this.scenePass = scenePass;
         this.source = source;
-        this.occlusionOption = options.occlusion;
-        const occlusion = options.occlusion;
-        this.resolveOcclusion();
+        // Leaving `occlusion` out is the same as `false` (the file comment).
+        const occlusion = options.occlusion ?? false;
+        if (occlusion !== false) {
+            if ('source' in occlusion) {
+                this.occlusionSource = occlusion.source;
+            } else {
+                this.ownOcclusion = makeOcclusion(scenePass, occlusion);
+                this.occlusionSource = this.ownOcclusion;
+            }
+        }
         // Each render of the pipeline's quad: the module's values and the light's settings.
         this.updateType = NodeUpdateType.RENDER;
         markCompositePass(scenePass as unknown as MarkablePass);
         this.markedContext = scenePass.contextNode;
-        if (occlusion !== undefined && occlusion !== false && 'source' in occlusion && passAppliesAO(scenePass)) {
+        if (occlusion !== false && 'source' in occlusion && passAppliesAO(scenePass)) {
             console.warn(
                 '@pmndrs/gi/three: ddgi() got an occlusion source, and its pass already applies AO to its materials (builtinAOContext), which giAlbedo carries: GI gets AO twice. Use one of them.',
             );
@@ -315,37 +316,6 @@ export class DDGICompositeNode extends Node {
         // Before the pass compiles, if its MRT is already set (the usual order); `setup` checks again.
         const outputs = scenePass.getMRT();
         if (outputs?.has(GI_ALBEDO_OUTPUT)) configureWeightOutput(outputs);
-    }
-
-    /**
-     * Makes the occlusion the option asks for, or the default for the pass
-     * as it is now (the file comment): GTAO at half resolution on a reduced
-     * pass, none on a full-resolution one. The default is re-chosen only if
-     * the pass's scale moved across 1 since.
-     */
-    private resolveOcclusion(): void {
-        const option = this.occlusionOption;
-        if (option !== undefined) {
-            // An explicit choice is made once.
-            if (this.explicitResolved) return;
-            this.explicitResolved = true;
-            if (option === false) return;
-            if ('source' in option) {
-                this.occlusionSource = option.source;
-            } else {
-                this.ownOcclusion = makeOcclusion(this.scenePass, option);
-                this.occlusionSource = this.ownOcclusion;
-            }
-            return;
-        }
-        const reduced = this.scenePass.getResolutionScale() < 1;
-        if (reduced === this.defaultForReducedPass) return;
-        this.defaultForReducedPass = reduced;
-        // The GTAO the previous choice made is no longer read: free its render target and material.
-        this.ownOcclusion?.dispose();
-        const occlusion = defaultOcclusion(this.scenePass);
-        this.ownOcclusion = occlusion === false ? null : makeOcclusion(this.scenePass, occlusion);
-        this.occlusionSource = this.ownOcclusion;
     }
 
     /** Merges the mark back into the pass's context if the context was replaced (the class comment). */
@@ -390,8 +360,6 @@ export class DDGICompositeNode extends Node {
             );
         }
         configureWeightOutput(outputs);
-        // The default occlusion follows the pass's scale as it is at the build (the file comment).
-        this.resolveOcclusion();
 
         const light = this.source.light;
         this.intensity.value = light.intensity;
@@ -453,18 +421,6 @@ export class DDGICompositeNode extends Node {
     }
 }
 
-/**
- * The default occlusion (file comment, DECISIONS 2026-11-06): on a reduced
- * (upscaled) pass, the composite's own GTAO at 1 m and half the pass's
- * resolution; on a full-resolution pass, none (opt-in). None either if the
- * pass already applies AO to its materials (a context with `getAO`), which
- * `giAlbedo` then carries.
- */
-function defaultOcclusion(scenePass: PassNode): false | GIOcclusionSettings {
-    if (passAppliesAO(scenePass)) return false;
-    return scenePass.getResolutionScale() < 1 ? { resolutionScale: DEFAULT_GI_OCCLUSION_RESOLUTION } : false;
-}
-
 /** Whether the pass's context applies AO to its materials (three's `builtinAOContext`), which `giAlbedo` then carries. */
 function passAppliesAO(scenePass: PassNode): boolean {
     const context = scenePass.contextNode;
@@ -513,7 +469,7 @@ function makeOcclusion(scenePass: PassNode, settings: GIOcclusionSettings): GTAO
  * `ssgi(...)` and `ao(...)`: the pass's colour plus `giAlbedo × E / π`
  * (file comment). `source` is the started `DDGIVolume` (or a `ThreeGI`): the
  * composite reads its GI light. Options: `occlusion` (GTAO on the GI term,
- * 1 m by default).
+ * off by default, a 1 m radius when on).
  */
 export function ddgi(scenePass: PassNode, source: CompositeGISource, options: DDGICompositeOptions = {}): DDGICompositeNode {
     return new DDGICompositeNode(scenePass, source, options);
