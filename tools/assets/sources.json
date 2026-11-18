@@ -225,7 +225,12 @@
         "sha256": "b8bb853884ab1566b3beb35666bd09882a4e0dc16661e4684e103792cf0229b9"
       },
       "extract": "zip",
-      "convert": {"tool": "blender", "blenderVersion": "4.5.0", "script": "tools/assets/convert/gltf-downsize-textures.py", "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]},
+      "convert": {
+        "tool": "blender",
+        "blenderVersion": "4.5.0",
+        "script": "tools/assets/convert/gltf-downsize-textures.py",
+        "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]
+      },
       "outputs": [
         {
           "path": "main_sponza/NewSponza_Main_glTF_003.gltf",
@@ -628,11 +633,7 @@
       "convert": {
         "tool": "blender",
         "script": "tools/assets/convert/gltf-downsize-textures.py",
-        "args": [
-          "pkg_a_curtains/NewSponza_Curtains_glTF.gltf",
-          "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
-          "1024"
-        ],
+        "args": ["pkg_a_curtains/NewSponza_Curtains_glTF.gltf", "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf", "1024"],
         "blenderVersion": "4.5.0"
       },
       "outputs": [
@@ -717,11 +718,7 @@
       "convert": {
         "tool": "blender",
         "script": "tools/assets/convert/gltf-downsize-textures.py",
-        "args": [
-          "pkg_b_ivy/NewSponza_IvyGrowth_glTF.gltf",
-          "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf",
-          "1024"
-        ],
+        "args": ["pkg_b_ivy/NewSponza_IvyGrowth_glTF.gltf", "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf", "1024"],
         "blenderVersion": "4.5.0"
       },
       "outputs": [
@@ -781,11 +778,7 @@
       "convert": {
         "tool": "blender",
         "script": "tools/assets/convert/gltf-downsize-textures.py",
-        "args": [
-          "pkg_c_trees/NewSponza_CypressTree_glTF.gltf",
-          "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf",
-          "1024"
-        ],
+        "args": ["pkg_c_trees/NewSponza_CypressTree_glTF.gltf", "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf", "1024"],
         "blenderVersion": "4.5.0"
       },
       "outputs": [
