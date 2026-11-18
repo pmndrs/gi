@@ -6,6 +6,7 @@
  *   pnpm assets:fetch --force         redo everything even if outputs look fine
  *   pnpm assets:fetch --verify-only   check what is on disk; change nothing
  *   pnpm assets:fetch --sources <p>   read a different sources file
+ *   pnpm assets:fetch --record-platform <id>   record this system's hashes (see step 5)
  *
  * Files land in assets/downloads/<id>/ (gitignored). For each asset:
  *   1. If every output exists and matches its sha256, do nothing.
@@ -20,12 +21,15 @@
  *      %SystemRoot%\System32\curl.exe. A file downloaded by hand and put at
  *      .cache/<sha256> is checked and used like a downloaded one.
  *   3. Unpack zips: `tar` (bsdtar, ships with Windows 10+) on Windows,
- *      PowerShell `Expand-Archive` if tar is missing, `unzip` elsewhere.
+ *      PowerShell `Expand-Archive` if tar is missing; /usr/bin/tar (bsdtar)
+ *      on macOS, whose `unzip` cannot write file names stored as UTF-8 (see
+ *      `extractZip`); `unzip` elsewhere.
  *      No npm dependency. The unpacked files are kept once in
  *      .cache/extracted/<sha256>/ and hard-linked into the asset folder, which
  *      then holds exactly the archive's files plus the downloads and outputs.
  *   4. Run the convert step, if any. Blender is found from the BLENDER
- *      environment variable, then PATH, then the default install folders, and
+ *      environment variable, then PATH, then the default install folders (on
+ *      macOS every Blender*.app in /Applications and ~/Applications), and
  *      must be the exact version in sources.json (like 4.5.0).
  *      The script runs as `blender --background --factory-startup --python
  *      <script> -- <args>` (factory settings: the user's add-ons can hang Blender)
@@ -44,6 +48,10 @@
  *   5. Check every output's sha256 (or, for .glb files Blender does not write
  *      the same way twice, their structure: see `AssetOutput.reproducible`),
  *      and that a .glb marked `dielectric` has no metal material.
+ *      The recorded numbers are Windows' (where the assets were first made).
+ *      The same conversion writes other bytes on macOS, so an output can carry
+ *      a `platforms` entry per system (like "darwin-arm64") that is checked
+ *      instead there; `--record-platform <id>` writes it from the files on disk.
  *
  * An asset with `"generated": { script, seed, args }` instead of `download` is
  * made by one of our own scripts (the wind tree): step 4 runs the script as a
@@ -109,11 +117,37 @@ export interface NodeConvert {
 
 export type AssetConvert = BlenderConvert | NodeConvert;
 
-/** `validateSources` guarantees `sha256` and `bytes`. */
+/**
+ * What one operating system and processor records for an output in place of
+ * the base fields of `AssetOutput`, when its conversion writes other bytes (see
+ * `AssetOutput.platforms`). The same fields, with the same meaning; the
+ * `reproducible`, `varyingAttributes` and `dielectric` settings stay the
+ * base's.
+ */
+export interface PlatformRecord {
+    sha256: string;
+    bytes: number;
+    /** With `reproducible: false` only, like the base fields of the same names. */
+    jsonSha256?: string;
+    binBytes?: number;
+    /** Its own record file, never the base's: like "tools/assets/glb-views/bistro-exterior.darwin-arm64.json". */
+    bufferViewHashes?: string;
+}
+
+/**
+ * `validateSources` guarantees `sha256` and `bytes`.
+ *
+ * The base fields (`sha256`, `bytes`, `jsonSha256`, `binBytes`,
+ * `bufferViewHashes`) were recorded on Windows (win32-x64), where the assets
+ * were first made. Another system whose conversions write other bytes has its
+ * own entry in `platforms`, which the checks use instead.
+ */
 export interface AssetOutput {
     /** Relative to assets/downloads/<id>/. */
     path: string;
+    /** Recorded on Windows; see `platforms` for other systems. */
     sha256: string;
+    /** Recorded on Windows; see `platforms` for other systems. */
     bytes: number;
     /**
      * Set to false when the converter is known not to write the same bits every
@@ -159,6 +193,17 @@ export interface AssetOutput {
      * Metallic, which made the whole Breakfast Room metal (T0.4 follow-up).
      */
     dielectric?: boolean;
+    /**
+     * Records for systems whose conversion writes other bytes than Windows
+     * did, keyed by `${process.platform}-${process.arch}` (see `platformKey`),
+     * like "darwin-arm64". On a system with an entry here, every check uses
+     * the entry's fields instead of the base ones; elsewhere the base (Windows)
+     * fields apply. Why: the same Blender version and the same Node script
+     * write other bytes on macOS than on Windows (each .gltf has LF line ends
+     * there, CRLF on Windows; some .glb vertex data differs too). Made by
+     * `--record-platform`, which only records outputs that fail the base check.
+     */
+    platforms?: Record<string, PlatformRecord>;
 }
 
 /**
@@ -234,6 +279,8 @@ export interface CliOptions {
     hash: string | null;
     /** Asset ids whose non-reproducible .glb outputs get their bufferView hashes (re)written, instead of fetching. */
     recordGlbViews: string[];
+    /** Asset ids whose outputs on disk get this system's `platforms` entry where they fail the base check, instead of fetching. */
+    recordPlatform: string[];
     /** Check every asset's existing outputs against sources.json; download and convert nothing. */
     verifyOnly: boolean;
     help: boolean;
@@ -334,6 +381,94 @@ export function isSafeRelativePath(path: string): boolean {
 export function downloadsOf(asset: Pick<AssetEntry, 'download'>): AssetDownload[] {
     if (asset.download === undefined) return [];
     return Array.isArray(asset.download) ? asset.download : [asset.download];
+}
+
+/** The key of this system in `AssetOutput.platforms`, like "darwin-arm64" or "win32-x64". */
+export function platformKey(platform: NodeJS.Platform = process.platform, arch: string = process.arch): string {
+    return `${platform}-${arch}`;
+}
+
+/** A `platforms` key: Node's platform and arch names joined by a dash. */
+const PLATFORM_KEY = /^[a-z0-9]+-[a-z0-9]+$/;
+
+/** The fields a platform record holds, by whether the output is checked whole or piece by piece. */
+const PLATFORM_FIELDS_WHOLE_FILE = ['sha256', 'bytes'] as const;
+const PLATFORM_FIELDS_PIECE_BY_PIECE = ['sha256', 'bytes', 'jsonSha256', 'binBytes', 'bufferViewHashes'] as const;
+
+/**
+ * The output as the checks see it on the system `platform` (a `platformKey`):
+ * its platform entry's fields over the base ones, or the base alone when that
+ * system has no entry or `platform` is null. The result has no `platforms`,
+ * so applying this twice changes nothing.
+ */
+export function outputForPlatform(output: AssetOutput, platform: string | null): AssetOutput {
+    const { platforms, ...base } = output;
+    const entry = platform === null ? undefined : platforms?.[platform];
+    return entry ? { ...base, ...entry } : base;
+}
+
+/** Where a platform's bufferView record goes: beside the base one, with the platform in its name. */
+export function platformViewsPath(baseViewsPath: string, platform: string): string {
+    return baseViewsPath.replace(/\.json$/, `.${platform}.json`);
+}
+
+/**
+ * Problems with one entry of an output's `platforms`, or an empty list. Each
+ * starts with the field it is about (".sha256: ..."), or ": " for the whole
+ * entry. `output` is the base entry, already checked.
+ */
+function platformRecordProblems(entry: unknown, output: Record<string, unknown>): string[] {
+    if (!isRecord(entry)) return [': must be an object with sha256 and bytes'];
+    const pieceByPiece = output.reproducible === false;
+    const allowed: readonly string[] = pieceByPiece ? PLATFORM_FIELDS_PIECE_BY_PIECE : PLATFORM_FIELDS_WHOLE_FILE;
+    const problems: string[] = [];
+    for (const field of Object.keys(entry)) {
+        if (!allowed.includes(field)) {
+            problems.push(`.${field}: not a platform field (${pieceByPiece ? 'with reproducible false these are' : 'these are'} ${allowed.join(', ')})`);
+        }
+    }
+    if (!(typeof entry.sha256 === 'string' && SHA256_HEX.test(entry.sha256))) problems.push('.sha256: required, 64 hex characters');
+    if (!(typeof entry.bytes === 'number' && Number.isInteger(entry.bytes) && entry.bytes > 0)) problems.push('.bytes: required, a positive whole number');
+    if (pieceByPiece) {
+        if (!(typeof entry.jsonSha256 === 'string' && SHA256_HEX.test(entry.jsonSha256))) {
+            problems.push('.jsonSha256: required with reproducible false, 64 hex characters');
+        }
+        if (!(typeof entry.binBytes === 'number' && Number.isInteger(entry.binBytes) && entry.binBytes > 0)) {
+            problems.push('.binBytes: required with reproducible false, a positive whole number');
+        }
+        const viewFile = entry.bufferViewHashes;
+        if (!(isNonEmptyString(viewFile) && isSafeRelativePath(viewFile) && viewFile.endsWith('.json'))) {
+            problems.push('.bufferViewHashes: required with reproducible false, a repo-relative .json path (made by --record-platform)');
+        } else if (viewFile === output.bufferViewHashes) {
+            // One file cannot hold two systems' hashes, and recording one system's would overwrite the other's.
+            problems.push('.bufferViewHashes: must be a file of its own, not the base record');
+        }
+    }
+    return problems;
+}
+
+/**
+ * sources.json as text, in the layout it is written by hand: two-space
+ * indents, and a list of plain values (like `"args": ["a.fbx", "a.glb"]`) on
+ * one line. `--record-platform` writes the file this way, so its diff shows
+ * only what it recorded.
+ */
+export function formatSourcesJson(value: unknown): string {
+    const format = (item: unknown, indent: string): string => {
+        const inner = `${indent}  `;
+        if (Array.isArray(item)) {
+            if (item.length === 0) return '[]';
+            if (item.every((element) => element === null || typeof element !== 'object')) return `[${item.map((element) => JSON.stringify(element)).join(', ')}]`;
+            return `[\n${item.map((element) => inner + format(element, inner)).join(',\n')}\n${indent}]`;
+        }
+        if (isRecord(item)) {
+            const entries = Object.entries(item).filter(([, field]) => field !== undefined);
+            if (entries.length === 0) return '{}';
+            return `{\n${entries.map(([key, field]) => `${inner}${JSON.stringify(key)}: ${format(field, inner)}`).join(',\n')}\n${indent}}`;
+        }
+        return JSON.stringify(item);
+    };
+    return `${format(value, '')}\n`;
 }
 
 /** Returns one readable line per problem; an empty list means the file is usable. */
@@ -476,6 +611,19 @@ export function validateSources(value: unknown): string[] {
                             errors.push(`${outputWhere}.dielectric: only supported for .glb files`);
                         }
                     }
+                    if (output.platforms !== undefined) {
+                        if (!isRecord(output.platforms) || Object.keys(output.platforms).length === 0) {
+                            errors.push(`${outputWhere}.platforms: must be an object of platform records, like { "darwin-arm64": { sha256, bytes } }, when present`);
+                        } else {
+                            for (const [key, entry] of Object.entries(output.platforms)) {
+                                if (!PLATFORM_KEY.test(key)) {
+                                    errors.push(`${outputWhere}.platforms: "${key}" is not a platform key; use \${process.platform}-\${process.arch}, like "darwin-arm64"`);
+                                    continue;
+                                }
+                                for (const problem of platformRecordProblems(entry, output)) errors.push(`${outputWhere}.platforms.${key}${problem}`);
+                            }
+                        }
+                    }
                 }
             });
         }
@@ -484,7 +632,7 @@ export function validateSources(value: unknown): string[] {
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
-    const options: CliOptions = { only: [], force: false, sourcesPath: null, hash: null, recordGlbViews: [], verifyOnly: false, help: false };
+    const options: CliOptions = { only: [], force: false, sourcesPath: null, hash: null, recordGlbViews: [], recordPlatform: [], verifyOnly: false, help: false };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         const takeValue = (): string => {
@@ -497,6 +645,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         else if (arg === '--sources') options.sourcesPath = takeValue();
         else if (arg === '--hash') options.hash = takeValue();
         else if (arg === '--record-glb-views') options.recordGlbViews.push(...takeValue().split(',').filter(Boolean));
+        else if (arg === '--record-platform') options.recordPlatform.push(...takeValue().split(',').filter(Boolean));
         else if (arg === '--verify-only') options.verifyOnly = true;
         else if (arg === '--help' || arg === '-h') options.help = true;
         else throw new Error(`Unknown argument "${arg}". Use --help to see the options.`);
@@ -608,13 +757,35 @@ async function readBlenderVersion(executable: string): Promise<string | null> {
 }
 
 /**
+ * The folders searched for `Blender*.app` bundles on macOS: the system-wide
+ * /Applications and the user's own ~/Applications. Blender's disk image only
+ * offers "Blender.app", so a second version has to be renamed (like
+ * "Blender-4.5.0.app") to sit beside the first; any other place is what the
+ * BLENDER variable is for.
+ */
+export function macApplicationFolders(env: NodeJS.ProcessEnv = process.env): string[] {
+    return env.HOME ? ['/Applications', join(env.HOME, 'Applications')] : ['/Applications'];
+}
+
+/** Names like "Blender.app" and "Blender-4.5.0.app" from a folder listing, newest version first ("Blender.app" says none, so it comes last). */
+export function sortBlenderApps(names: readonly string[]): string[] {
+    return sortBlenderFolders(names.filter((name) => /^blender.*\.app$/i.test(name)));
+}
+
+/** Where the executable sits inside a macOS Blender bundle. */
+const MAC_BLENDER_EXECUTABLE = join('Contents', 'MacOS', 'Blender');
+
+/**
  * Every Blender executable we can find, in the order to try them: the BLENDER
  * variable, then PATH, then the default install folders (all versions, newest
- * first). Only files that exist are returned.
+ * first). On macOS those are every `Blender*.app` in `macFolders`
+ * (/Applications and ~/Applications unless a test passes its own). Only files
+ * that exist are returned.
  */
 export async function blenderCandidates(
     env: NodeJS.ProcessEnv = process.env,
     platform: NodeJS.Platform = process.platform,
+    macFolders: readonly string[] = macApplicationFolders(env),
 ): Promise<string[]> {
     const found: string[] = [];
     const add = async (candidate: string): Promise<void> => {
@@ -629,7 +800,13 @@ export async function blenderCandidates(
     }
 
     if (platform === 'darwin') {
-        await add('/Applications/Blender.app/Contents/MacOS/Blender');
+        for (const folder of macFolders) {
+            try {
+                for (const app of sortBlenderApps(await readdir(folder))) await add(join(folder, app, MAC_BLENDER_EXECUTABLE));
+            } catch {
+                // No such folder (many Macs have no ~/Applications).
+            }
+        }
     } else if (platform === 'win32') {
         for (const programFiles of [env.ProgramFiles ?? 'C:\\Program Files', env['ProgramFiles(x86)']]) {
             if (!programFiles) continue;
@@ -662,11 +839,13 @@ export async function findBlender(
     options: {
         env?: NodeJS.ProcessEnv;
         platform?: NodeJS.Platform;
+        /** The folders to search for Blender*.app on macOS; see `macApplicationFolders`. */
+        macFolders?: readonly string[];
         readVersion?: (executable: string) => Promise<string | null>;
     } = {},
 ): Promise<BlenderChoice> {
     const readVersion = options.readVersion ?? readBlenderVersion;
-    const candidates = await blenderCandidates(options.env, options.platform);
+    const candidates = await blenderCandidates(options.env, options.platform, options.macFolders);
     const seen: string[] = [];
     for (const path of candidates) {
         const version = await readVersion(path);
@@ -1046,24 +1225,34 @@ function conversionCause(convert: AssetConvert | null | undefined): string {
     const likely = convert.tool === 'blender' ? `a different Blender version (this one needs ${convert.blenderVersion}) or a changed conversion script` : `a changed conversion script (${convert.script})`;
     return (
         `. This file is made by a conversion, so ${likely} is the likely cause. If the change is intended, re-record the hashes (--hash, and --record-glb-views for ` +
-        `.glb outputs marked reproducible false)`
+        `.glb outputs marked reproducible false). If only this operating system writes it differently, record its own hashes with --record-platform <id>`
     );
+}
+
+/** " (the darwin-arm64 record)" when the check used a platform entry, so a mismatch says which record it was compared with. */
+function recordLabel(output: AssetOutput, platform: string | null): string {
+    return platform !== null && output.platforms?.[platform] ? ` (the ${platform} record)` : '';
 }
 
 /**
  * Checks every output. Returns one line per problem, or an empty list when all
  * outputs are present and verified. `repoRoot` is where `bufferViewHashes`
- * paths start (tests pass their own folder).
+ * paths start (tests pass their own folder). `platform` picks the record to
+ * check against (see `AssetOutput.platforms`): this system's by default, and
+ * null for the base (Windows) record alone.
  */
 export async function checkOutputs(
     assetDirectory: string,
     outputs: readonly AssetOutput[],
     log: Log,
     convert?: AssetConvert | null,
-    options: { repoRoot?: string } = {},
+    options: { repoRoot?: string; platform?: string | null } = {},
 ): Promise<string[]> {
+    const platform = options.platform === undefined ? platformKey() : options.platform;
     const problems: string[] = [];
-    for (const output of outputs) {
+    for (const recorded of outputs) {
+        const output = outputForPlatform(recorded, platform);
+        const which = recordLabel(recorded, platform);
         const path = join(assetDirectory, output.path);
         if (!(await fileExists(path))) {
             problems.push(`missing: ${output.path}`);
@@ -1080,13 +1269,13 @@ export async function checkOutputs(
         }
         const size = (await stat(path)).size;
         if (size !== output.bytes) {
-            problems.push(`size differs: ${output.path} (expected ${output.bytes} bytes, got ${size})${conversionCause(convert)}`);
+            problems.push(`size differs: ${output.path} (expected ${output.bytes} bytes${which}, got ${size})${conversionCause(convert)}`);
             continue;
         }
         if (output.reproducible !== false) {
             const actual = await sha256OfFile(path);
             if (!sameHash(actual, output.sha256)) {
-                problems.push(`sha256 differs: ${output.path} (expected ${output.sha256}, got ${actual})${conversionCause(convert)}`);
+                problems.push(`sha256 differs: ${output.path} (expected ${output.sha256}${which}, got ${actual})${conversionCause(convert)}`);
             }
             continue;
         }
@@ -1102,7 +1291,7 @@ export async function checkOutputs(
         }
         const structural = checkGlbStructure(structure, output, record);
         if (structural.length > 0) {
-            problems.push(...structural.map((problem) => `${output.path}: ${problem}${conversionCause(convert)}`));
+            problems.push(...structural.map((problem) => `${output.path}${which}: ${problem}${conversionCause(convert)}`));
         } else if (!sameHash(structure.fileSha256, output.sha256)) {
             const pinned = record.bufferViews.filter((hash) => hash !== null).length;
             const varying = (output.varyingAttributes ?? []).join(', ') || 'nothing';
@@ -1375,7 +1564,29 @@ async function downloadWithFetch(download: AssetDownload, destination: string, t
     }
 }
 
-async function extractZip(archive: string, destination: string): Promise<void> {
+/** bsdtar, part of macOS. */
+const MAC_SYSTEM_TAR = '/usr/bin/tar';
+
+/**
+ * Unpacks every file of a zip into `destination`, with the tool that gets
+ * every file name right on this system (see the header, step 3).
+ */
+export async function extractZip(archive: string, destination: string): Promise<void> {
+    if (process.platform === 'darwin') {
+        // Not unzip: macOS's /usr/bin/unzip is Info-ZIP 6.0 built without Unicode support, so it ignores a zip's
+        // "name is UTF-8" flag and, for a file the zip says came from MS-DOS/Windows, decodes the name as a DOS code
+        // page. Intel's pkg_b_ivy1.zip has such a name ("Fortress-Kaštel-4K.hdr"); the decoded name is not valid
+        // UTF-8, APFS refuses to create it, and unzip reports "write error (disk full?)", exits 50 and stops there.
+        // bsdtar reads the flag and writes every name as stored, as it does on Windows.
+        let code: number;
+        try {
+            code = await run(MAC_SYSTEM_TAR, ['-xf', archive, '-C', destination]);
+        } catch {
+            throw new Error(`${MAC_SYSTEM_TAR} (bsdtar, part of macOS) could not be started, so ${archive} cannot be unpacked.`);
+        }
+        if (code !== 0) throw new Error(`tar exited with code ${code} while extracting ${archive}`);
+        return;
+    }
     if (process.platform === 'win32') {
         const systemTar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
         if (await fileExists(systemTar)) {
@@ -1859,7 +2070,7 @@ async function directoryExists(path: string): Promise<boolean> {
 /** Brings one asset up to date. Throws with a clear message on any failure. */
 export async function fetchAsset(
     asset: AssetEntry,
-    options: { force: boolean; downloadsDirectory?: string },
+    options: { force: boolean; downloadsDirectory?: string; platform?: string },
 ): Promise<'up-to-date' | 'fetched' | 'skipped'> {
     const log: Log = (message) => console.log(message);
     if (asset.skip) {
@@ -1870,8 +2081,11 @@ export async function fetchAsset(
     const assetDirectory = join(downloadsDirectory, asset.id);
     const cacheDirectory = join(downloadsDirectory, '.cache');
     await mkdir(assetDirectory, { recursive: true });
+    const platform = options.platform ?? platformKey();
+    // This system's record of each output, for the conversion guard: it waits for each output to reach its recorded size.
+    const outputs = asset.outputs.map((output) => outputForPlatform(output, platform));
 
-    if (!options.force && (await checkOutputs(assetDirectory, asset.outputs, () => undefined, asset.convert)).length === 0) {
+    if (!options.force && (await checkOutputs(assetDirectory, asset.outputs, () => undefined, asset.convert, { platform })).length === 0) {
         log(`${asset.id}: up to date`);
         return 'up-to-date';
     }
@@ -1885,14 +2099,14 @@ export async function fetchAsset(
 
     const inputs = downloads.map((download) => download.file);
     if (asset.extract === 'zip') {
-        const keep = new Set([...inputs, ...asset.outputs.map((output) => output.path)]);
+        const keep = new Set([...inputs, ...outputs.map((output) => output.path)]);
         inputs.push(...(await extractWithCache(downloads[0], join(assetDirectory, downloads[0].file), assetDirectory, cacheDirectory, keep, log)));
     }
     // A generated asset is its script run with its seed: the same conversion step, with no inputs.
-    const generating = asset.generated ? { ...asset, convert: generatedConvert(asset.generated) } : asset;
+    const generating = { ...asset, outputs, convert: asset.generated ? generatedConvert(asset.generated) : asset.convert };
     await runConvert(generating, assetDirectory, inputs);
 
-    const problems = await checkOutputs(assetDirectory, asset.outputs, log, generating.convert);
+    const problems = await checkOutputs(assetDirectory, asset.outputs, log, generating.convert, { platform });
     if (problems.length > 0) {
         throw new Error(`outputs are not right after fetching:\n    ${problems.join('\n    ')}`);
     }
@@ -1908,9 +2122,14 @@ const helpText = `Usage: pnpm assets:fetch [--only <id>[,<id>]] [--force] [--ver
        node tools/assets/fetch.ts --hash <file>              print the sha256 and size to put in sources.json
        node tools/assets/fetch.ts --record-glb-views <id>    write the bufferView hashes of the asset's
                                                              non-reproducible .glb outputs, from the files on disk
+       node tools/assets/fetch.ts --record-platform <id>[,<id>]
+                                                             record this system's own hashes (a "platforms"
+                                                             entry, like "darwin-arm64") for the outputs on disk
+                                                             that fail the base (Windows) record
 
 --verify-only checks the files already on disk against sources.json (sizes, hashes,
 and the pieces of non-reproducible .glb files) without downloading or converting anything.
+Every check uses this system's "platforms" entry where an output has one.
 
 Downloads and verifies the external test assets listed in tools/assets/sources.json
 into assets/downloads/<id>/. Assets that are already complete are skipped.`;
@@ -1923,7 +2142,9 @@ async function verifyOnly(assets: readonly AssetEntry[]): Promise<number> {
             console.log(`${asset.id}: skipped: ${asset.skipReason ?? 'no reason given'}`);
             continue;
         }
-        const problems = await checkOutputs(join(downloadsRoot, asset.id), asset.outputs, (message) => console.log(message), asset.convert);
+        // A generated asset's script is its conversion, so a mismatch is blamed on it like on any other.
+        const convert = asset.generated ? generatedConvert(asset.generated) : asset.convert;
+        const problems = await checkOutputs(join(downloadsRoot, asset.id), asset.outputs, (message) => console.log(message), convert);
         if (problems.length === 0) {
             console.log(`${asset.id}: OK, ${asset.outputs.length} output file(s) verified`);
         } else {
@@ -1939,12 +2160,13 @@ async function verifyOnly(assets: readonly AssetEntry[]): Promise<number> {
  * Writes the bufferView record of each non-reproducible .glb output of the
  * named assets, from the files on disk. The file's size, BIN length and JSON
  * chunk must already match sources.json: this records the data of a known
- * scene, it does not bless a new one.
+ * scene, it does not bless a new one. On a system with its own `platforms`
+ * entry, that entry's numbers and record file are the ones used.
  */
 async function recordGlbViews(assets: readonly AssetEntry[]): Promise<number> {
     let failures = 0;
     for (const asset of assets) {
-        const glbOutputs = asset.outputs.filter((output) => output.reproducible === false);
+        const glbOutputs = asset.outputs.filter((output) => output.reproducible === false).map((output) => outputForPlatform(output, platformKey()));
         if (glbOutputs.length === 0) console.log(`${asset.id}: has no output marked reproducible false; nothing to record`);
         for (const output of glbOutputs) {
             const path = join(downloadsRoot, asset.id, output.path);
@@ -1968,6 +2190,147 @@ async function recordGlbViews(assets: readonly AssetEntry[]): Promise<number> {
         }
     }
     return failures === 0 ? 0 : 1;
+}
+
+export interface PlatformRecording {
+    /** Outputs that got a new or changed platform entry. */
+    recorded: number;
+    /** Stale platform entries taken out, because the output now matches the base record. */
+    removed: number;
+    /** Outputs that could not be recorded (missing, metal in a dielectric scene, bad padding, unreadable). */
+    failures: number;
+}
+
+/** What differs between a .glb on this system and the base record: a line for the log, so the platform difference is on record. */
+async function describeGlbDifference(structure: GlbStructure, base: AssetOutput, repoRootPath: string): Promise<string> {
+    if (!sameHash(structure.jsonSha256, base.jsonSha256 ?? '')) return 'its JSON chunk (the scene description) differs from the base, so its bufferViews cannot be compared one by one';
+    if (structure.binBytes !== base.binBytes) return `its BIN chunk is ${structure.binBytes} bytes, the base ${base.binBytes}`;
+    let baseRecord: GlbViewRecord;
+    try {
+        baseRecord = await readGlbViewRecord(join(repoRootPath, base.bufferViewHashes ?? ''));
+    } catch {
+        return 'the base bufferView record cannot be read, so the views were not compared';
+    }
+    const differingUses = new Set<string>();
+    let differing = 0;
+    baseRecord.bufferViews.forEach((expected, index) => {
+        if (expected !== null && !sameHash(expected, structure.bufferViewSha256[index] ?? '')) {
+            differing++;
+            for (const use of structure.bufferViewUses[index] ?? []) differingUses.add(use);
+        }
+    });
+    return `same JSON chunk and BIN length as the base; ${differing} pinned bufferView(s) differ (used for ${[...differingUses].sort().join(', ') || 'nothing'})`;
+}
+
+/**
+ * Records this system's `platforms` entry for every output of `assets` that
+ * fails the base (Windows) check, from the files on disk, and writes the
+ * bufferView record of each such non-reproducible .glb to its own file
+ * (`platformViewsPath`). Outputs that pass the base check get no entry, and a
+ * stale entry of theirs is taken out. The assets' output objects are changed
+ * in place; the caller writes sources.json.
+ *
+ * Recording blesses the files on disk as this system's correct output, so it
+ * refuses what the check would never accept: a missing file, a `dielectric`
+ * scene with metal in it (`metalProblems`), and a .glb whose padding is not zero.
+ */
+export async function recordPlatformEntries(
+    assets: readonly AssetEntry[],
+    options: { downloadsDirectory: string; repoRoot: string; platform: string; log: (message: string) => void; warn: (message: string) => void },
+): Promise<PlatformRecording> {
+    const { platform, log, warn } = options;
+    const result: PlatformRecording = { recorded: 0, removed: 0, failures: 0 };
+    const fail = (message: string): void => {
+        warn(message);
+        result.failures++;
+    };
+    for (const asset of assets) {
+        if (asset.skip) {
+            log(`${asset.id}: skipped: ${asset.skipReason ?? 'no reason given'}`);
+            continue;
+        }
+        const assetDirectory = join(options.downloadsDirectory, asset.id);
+        for (const output of asset.outputs) {
+            const where = `${asset.id}: ${output.path}`;
+            const path = join(assetDirectory, output.path);
+            if (!(await fileExists(path))) {
+                fail(`${where} is missing; fetch or convert it first`);
+                continue;
+            }
+            try {
+                if (output.dielectric === true) {
+                    const metal = metalProblems((await readGlbJson(path)) as GltfJsonForMaterials);
+                    if (metal.length > 0) {
+                        fail(`${where}: not recorded, because this scene must have no metal: ${metal.join('; ')}`);
+                        continue;
+                    }
+                }
+                // Hashes only: the metal check above is done whatever the hashes say.
+                const base = { ...outputForPlatform(output, null), dielectric: false };
+                const baseProblems = await checkOutputs(assetDirectory, [base], () => undefined, null, { repoRoot: options.repoRoot, platform: null });
+                if (baseProblems.length === 0) {
+                    if (output.platforms?.[platform]) {
+                        const { [platform]: _stale, ...others } = output.platforms;
+                        if (Object.keys(others).length > 0) output.platforms = others;
+                        else delete output.platforms;
+                        result.removed++;
+                        log(`${where} matches the base record, so its ${platform} entry is no longer needed and was taken out`);
+                    }
+                    continue;
+                }
+
+                const entry: PlatformRecord = { sha256: await sha256OfFile(path), bytes: (await stat(path)).size };
+                let detail = 'the whole file is checked by its sha256';
+                if (output.reproducible === false) {
+                    const structure = await readGlbStructure(path);
+                    if (structure.nonZeroPaddingBytes > 0) {
+                        fail(`${where}: not recorded, because ${structure.nonZeroPaddingBytes} padding byte(s) are not zero, so the check would fail`);
+                        continue;
+                    }
+                    entry.jsonSha256 = structure.jsonSha256;
+                    entry.binBytes = structure.binBytes;
+                    entry.bufferViewHashes = platformViewsPath(output.bufferViewHashes ?? '', platform);
+                    const record = makeGlbViewRecord(asset.id, { ...base, ...entry }, structure);
+                    const recordPath = join(options.repoRoot, entry.bufferViewHashes);
+                    await mkdir(dirname(recordPath), { recursive: true });
+                    await writeFile(recordPath, formatGlbViewRecord(record));
+                    const pinned = record.bufferViews.filter((hash) => hash !== null).length;
+                    detail = `wrote ${entry.bufferViewHashes} (${pinned} of ${record.bufferViews.length} bufferViews pinned); ${await describeGlbDifference(structure, base, options.repoRoot)}`;
+                }
+                output.platforms = { ...output.platforms, [platform]: entry };
+                result.recorded++;
+                log(`${where}: recorded for ${platform}: ${entry.bytes} bytes (base ${output.bytes}), sha256 ${entry.sha256}; ${detail}`);
+            } catch (error) {
+                fail(`${where}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+    }
+    return result;
+}
+
+/** `--record-platform`: records this system's entries and writes sources.json back. Returns the exit code. */
+async function recordPlatform(sources: SourcesFile, ids: readonly string[], sourcesPath: string, originalText: string): Promise<number> {
+    const platform = platformKey();
+    const result = await recordPlatformEntries(selectAssets(sources.assets, ids), {
+        downloadsDirectory: downloadsRoot,
+        repoRoot,
+        platform,
+        log: (message) => console.log(message),
+        warn: (message) => console.error(message),
+    });
+    if (result.recorded > 0 || result.removed > 0) {
+        const problems = validateSources(sources);
+        if (problems.length > 0) throw new Error(`the recorded entries would make ${sourcesPath} invalid, so it was not written:\n  ${problems.join('\n  ')}`);
+        if (formatSourcesJson(JSON.parse(originalText)) !== originalText) {
+            console.log(`note: ${sourcesPath} was not in the usual layout; it is rewritten in it, so the diff is larger than the recorded entries`);
+        }
+        await writeFile(sourcesPath, formatSourcesJson(sources));
+        console.log(`\nwrote ${sourcesPath}: ${result.recorded} ${platform} entr${result.recorded === 1 ? 'y' : 'ies'} recorded, ${result.removed} taken out`);
+    } else {
+        console.log(`\nnothing to record for ${platform}; ${sourcesPath} is unchanged`);
+    }
+    if (result.failures > 0) console.error(`${result.failures} output(s) could not be recorded`);
+    return result.failures === 0 ? 0 : 1;
 }
 
 async function main(): Promise<number> {
@@ -2008,6 +2371,7 @@ async function main(): Promise<number> {
     }
 
     if (options.recordGlbViews.length > 0) return recordGlbViews(selectAssets(sources.assets, options.recordGlbViews));
+    if (options.recordPlatform.length > 0) return recordPlatform(sources, options.recordPlatform, sourcesPath, text);
     const selected = selectAssets(sources.assets, options.only);
     if (options.verifyOnly) return verifyOnly(selected);
     const failures: string[] = [];
