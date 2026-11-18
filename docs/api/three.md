@@ -283,6 +283,7 @@ The extra submit is needed because three r187 records into its own command encod
 | `objectsPerFrame`, `editChecksPerFrame`, `lightsPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
 | `updateMatrixWorld` | Update world matrices in every `update` (see below). Default: no. |
 | `updateOnRender` | Run `update` from the GI light's render-time update (see above). Default: no. Can be switched later. |
+| `jitter` | This frame's projection jitter as an NDC offset, read in every `update` and passed on as `FrameCamera.jitter`, for a scene pass drawn with a jittered camera (a temporal upscaler or TAA). Screen-space techniques rebuild positions from the depth with it; DDGI ignores it. Default: none. Can be set later (`threeGI.jitter`). With `@pmndrs/upscaler`: `() => jitterPixelsToNdc(upscaler.jitter, renderWidth, renderHeight)`, after `beginFrame`. |
 | `warn` | Where warnings go. Each message is shown once. |
 
 Other members:
@@ -612,6 +613,7 @@ Every name `@pmndrs/gi/three` exports, in one place. A unit test (`tools/docs/do
 | `ThreeGI` | The scene's link to a platform you built yourself: `update(camera)`, `budget`, `light`, `markChanged`, `setGroupWeight`, `setEnvironmentWeight`, `timings`, `report`, `dispose` ("`ThreeGI`" above). |
 | `ThreeGIOptions` | Its options (table above). |
 | `ThreeGITimings` | The CPU time of the last `update`, in three parts. |
+| `ThreeGIJitter`, `jitterPixelsToNdc(jitter, width, height)` | The `jitter` option's type (a function giving this frame's NDC offset, or null), and the conversion from a jitter in render pixels with y down (`@pmndrs/upscaler`'s `Upscaler.jitter`) to NDC: `(2x / width, −2y / height)`. |
 | `SceneSync` | The mirroring on its own, for hosts that call `gi.encode` themselves: `new SceneSync(gi.scene, { device })`, then `update(scene)` each frame, `markChanged`, `counts`, `report`, `dispose`. |
 | `SceneSyncOptions` | Its options: `device`, `renderer` (for GPU skinning), `warn`, `objectsPerFrame`, `editChecksPerFrame`, `lightsPerFrame`. |
 | `SyncFrameReport` | What the last update sent: objects created and destroyed, transforms, visibility, materials, meshes, lights, poses, and how many objects it looked at. |
