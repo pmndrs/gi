@@ -567,6 +567,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
 | RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | done (2026-11-10; Opus review failed on the ray offset, fixed; both GPUs; 1,024 MiB at default capacity; wiring moved to RC3.2; D22-D24) |
 | RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | active (implementer, 2026-11-10; beside RC2.2) |
 | RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | todo |
+| RC3.4 | Sky light in the cache's light choice (register D33's way back): the platform's sky as a light in `giDirectChooseLight` (its radiance map importance-sampled, with a shadow ray), shared with DDGI's `gi/direct`. Not a phase-3 gate: outdoor scenes (Bistro exterior) miss the sky light on cache hits until it lands | implementer | M | RC3.2 | todo |
 
 - **RC3.1 done-when.**
   - The descriptor, the bucket hash (pcg chain) and the checksum (xxHash chain, never 0) live in one WGSL function that every pass calls, ported from `hash_grid_cache.hlsl:96-192` with `src/math/hash.hlsl`. A CPU port of the same function gives the same bits on a fixed set of hits (unit test), and the GPU agrees with it (GPU test).
@@ -583,6 +584,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
     - `ResolveCells` picks the coarser mip while a cell has fewer than 16 samples.
   - Cornell, two-room and Sponza render in the viewer with no errors, NaN or negative pixels. Bucket overflow is measured on Sponza and Bistro exterior by counting, not timing; the count goes in PROGRESS.
 - **RC3.3 done-when.**
+  - The passes run where Capsaicin runs them (gi1.cpp:2363-2390, 2506-2516): `PopulateMultibounceCells` between `PopulateScreenProbesCells` and `GenerateReservoirs`, and `UpdateMultibounceCells` after `UpdateTiles`, before `ResolveCells`. `HashGridCache.encodeFrame` gets those two slots (RC3.2 records five passes in a row).
   - The multi-bounce passes are ported with their source lines cited, including the 0.7 discard, the forced-diffuse second vertex and the one-frame lag of the indirect accumulator.
   - Two-room's closed room is visibly lit by the second bounce against RC3.2's image: its mean luminance rises, and the contact sheet is in PROGRESS.
   - The furnace room (white, closed, constant emitter or sky) moves toward the multi-bounce value against single bounce; the expected direction and size are stated before the run.

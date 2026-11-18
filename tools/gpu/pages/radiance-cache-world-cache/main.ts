@@ -37,11 +37,33 @@
  *    in proportion to its brightness, so each sample lights one channel; the
  *    mean over every hit ray of red and of blue is within 2% of albedo / π ×
  *    the light's E on that surface, and green stays 0.
+ * 6. **The shadow ray, blocked** (the sun of section 1 and a level slab at
+ *    y = 1.5 between it and the corner, 40 frames): the slab shades the
+ *    floor for z in [0, 2] and the wall below 0.5 m. A cell covers a box
+ *    (a square of its tile across the ray's dominant axis, through the whole
+ *    tile along it; the tile's key bins the direction, so each axis its rays
+ *    can have as dominant gives a box), so a cell is judged only when every
+ *    floor and wall point in its boxes is on one side of the shadow's edge
+ *    (1 cm clear) and no part of the slab is in them: its mean is 0 in shadow and
+ *    albedo / π × E within 2% in the light, and so is every resolved ray
+ *    whose picked level's box is (the pick as section 3 checks it). A
+ *    bypassed ray (shorter than its cell) reads its own sample, judged by
+ *    its hit's side 1 cm from the edge. Every kind has cells or rays, so a
+ *    `giTraceAny` that never hit would light the shadowed ones and fail.
+ * 7. **UpdateTiles' blend weight** (section 1's sun for 40 frames, then one
+ *    frame at four times its intensity): every finest cell of every tile on
+ *    the update list holds what the CPU port of the blend
+ *    (`updateTilesAccumulate`) makes of its value before the frame and the
+ *    frame's samples (one per shadow ray into it, each the new radiance):
+ *    at the cap the mean moves 1/16 of the way, below it 1/count; a listed
+ *    cell with no sample blends in a zero, as Capsaicin's does. Within two
+ *    half steps; capped and uncapped cells must both be there.
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
  */
 
+import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
 import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
@@ -57,6 +79,7 @@ import {
     hashGridCacheCellSizeConstant,
     hashGridCacheFilteredRadiance,
     hashGridCacheGetCellSize,
+    updateTilesAccumulate,
     verticalFieldOfView,
     type CellValue,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
@@ -90,10 +113,21 @@ const HALF_TOLERANCE = 2 ** -10;
 const EMISSION: Vec3 = [3, 2, 1];
 const PATCH = { minX: -1, maxX: 1, minZ: 1.5, maxZ: 2.5, y: 0.002 } as const;
 
+/**
+ * Section 6's blocker: a level slab (one quad, facing up; the tracer hits
+ * both sides) between the corner and the sun. Its shadow along (0, -1, -1)
+ * covers the floor for z in [0, 2] and the wall below y = 0.5, for x in
+ * [-1, 2]; the camera sees all of it past the slab's near edge.
+ */
+const SLAB = { minX: -1, maxX: 2, minZ: 1, maxZ: 3.5, y: 1.5 } as const;
+
+/** Section 7: the sun's intensity for the one frame after convergence at SUN_INTENSITY. */
+const CHANGED_SUN_INTENSITY = 4 * SUN_INTENSITY;
+
 /** Cells per tile at each level, and where each level starts (Capsaicin's defaults: 64, 16, 4, 1). */
 const LEVEL_SIDES = [8, 4, 2, 1] as const;
 
-type Surface = 'floor' | 'wall' | 'patch' | 'other';
+type Surface = 'floor' | 'wall' | 'patch' | 'slab' | 'other';
 
 interface ProbeRay {
     readonly origin: Vec3;
@@ -107,6 +141,7 @@ interface ProbeRay {
 
 interface Scenario {
     readonly platform: GIPlatformImpl;
+    readonly lights: readonly LightHandle[];
     readonly technique: RadianceCacheTechnique;
     readonly cache: HashGridCache;
     readonly screen: PageScreen;
@@ -130,16 +165,28 @@ function quad(platform: GIPlatformImpl, label: string, corners: readonly Vec3[],
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
 }
 
-function describeCorner(platform: GIPlatformImpl, lights: readonly LightDescriptor[], withPatch: boolean): void {
+interface CornerExtras {
+    /** Section 4's emissive patch on the floor. */
+    readonly patch?: boolean;
+    /** Section 6's slab between the corner and the sun. */
+    readonly slab?: boolean;
+}
+
+function describeCorner(platform: GIPlatformImpl, lights: readonly LightDescriptor[], extras: CornerExtras): LightHandle[] {
     const half = 200;
     quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0], ALBEDO);
     quad(platform, 'wall', [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]], [0, 0, 1], ALBEDO);
-    if (withPatch) {
+    if (extras.patch) {
         const { minX, maxX, minZ, maxZ, y } = PATCH;
         quad(platform, 'emissive patch', [[minX, y, maxZ], [maxX, y, maxZ], [maxX, y, minZ], [minX, y, minZ]], [0, 1, 0], ALBEDO, EMISSION);
     }
-    for (const light of lights) platform.scene.createLight(light);
+    if (extras.slab) {
+        const { minX, maxX, minZ, maxZ, y } = SLAB;
+        quad(platform, 'slab', [[minX, y, maxZ], [maxX, y, maxZ], [maxX, y, minZ], [minX, y, minZ]], [0, 1, 0], ALBEDO);
+    }
+    const handles = lights.map((light) => platform.scene.createLight(light));
     platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+    return handles;
 }
 
 function sun(travel: Vec3, color: Vec3 = [1, 1, 1]): LightDescriptor {
@@ -150,12 +197,12 @@ function frameInput(): FrameInput {
     return { deltaTime: 1 / 60, budget: { units: 0 }, camera: FRAME_CAMERA };
 }
 
-async function startScenario(device: GPUDevice, name: string, lights: readonly LightDescriptor[], withPatch: boolean): Promise<Scenario> {
+async function startScenario(device: GPUDevice, name: string, lights: readonly LightDescriptor[], extras: CornerExtras): Promise<Scenario> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-world-cache ${name}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique());
     platform.setOutput(technique);
     await platform.prepare();
-    describeCorner(platform, lights, withPatch);
+    const lightHandles = describeCorner(platform, lights, extras);
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
         const encoder = device.createCommandEncoder({ label: `radiance-cache-world-cache ${name}` });
@@ -176,6 +223,7 @@ async function startScenario(device: GPUDevice, name: string, lights: readonly L
     if (!cache) throw new Error(`${name}: the technique has no world cache after prepare`);
     return {
         platform,
+        lights: lightHandles,
         technique,
         cache,
         screen,
@@ -232,6 +280,7 @@ interface FrameState {
 }
 
 function classify(hit: Vec3): Surface {
+    if (Math.abs(hit[1] - SLAB.y) < 1e-3 && hit[0] >= SLAB.minX - 1e-3 && hit[0] <= SLAB.maxX + 1e-3 && hit[2] >= SLAB.minZ - 1e-3 && hit[2] <= SLAB.maxZ + 1e-3) return 'slab';
     if (hit[1] > 0.001 && hit[1] < 0.004 && hit[0] >= PATCH.minX - 1e-3 && hit[0] <= PATCH.maxX + 1e-3 && hit[2] >= PATCH.minZ - 1e-3 && hit[2] <= PATCH.maxZ + 1e-3) return 'patch';
     if (Math.abs(hit[1]) < 1e-3) return 'floor';
     if (Math.abs(hit[2]) < 1e-3) return 'wall';
@@ -583,6 +632,351 @@ async function checkTwoSuns(device: GPUDevice, scenario: Scenario): Promise<Chec
     return { failures, data: { hits, meanRedOverExpected: redRatio, meanBlueOverExpected: blueRatio, meanGreen: greenMean } };
 }
 
+// ---- Section 6: the shadow ray, blocked ---------------------------------------------------------
+
+/**
+ * Where a floor or wall point's ray toward the sun (along -SUN_TRAVEL, (0, 1, 1)) crosses the
+ * slab's plane, and how far inside the slab's rectangle that is (negative outside). The
+ * crossing moves with the point one for one along x and along the surface's other axis, so the
+ * distance is also how far the point is from its shadow's edge on its own surface.
+ */
+function slabShadowMargin(point: Vec3): number {
+    const rise = SLAB.y - point[1];
+    if (rise <= 0) return -Infinity; // at or above the slab: nothing between it and the sun
+    const x = point[0];
+    const z = point[2] + rise;
+    const insideX = Math.min(x - SLAB.minX, SLAB.maxX - x);
+    const insideZ = Math.min(z - SLAB.minZ, SLAB.maxZ - z);
+    if (insideX > 0 && insideZ > 0) return Math.min(insideX, insideZ);
+    return -Math.hypot(Math.min(insideX, 0), Math.min(insideZ, 0));
+}
+
+interface Box {
+    readonly lo: Vec3;
+    readonly hi: Vec3;
+}
+
+/** The two axes across a dominant axis, in `HashGridCache_GetDesc`'s order. */
+const ACROSS: readonly (readonly [number, number])[] = [
+    [1, 2],
+    [0, 2],
+    [0, 1],
+];
+
+/** A cell as `HashGridCache_GetDesc` keys it: its tile's corner and cell size, its 2D offset (the GPU's), and the dominant axes the tile's rays can have. */
+interface CellKey {
+    /** The tile's corner; two along an axis where the hit is on a tile's edge (the GPU's f32 hit may be on either side). */
+    readonly tileLos: readonly Vec3[];
+    readonly cellSize: number;
+    readonly offset: readonly [number, number];
+    readonly axes: readonly number[];
+}
+
+/**
+ * The hit's cell. The tile is a cube of 8 cells a side at the hit's cell size; the cell is a
+ * square of it across the ray's dominant axis, running through the whole tile along that axis.
+ * The tile's key holds the direction only binned (5 bins a component), so other rays of the
+ * same tile may have another dominant axis and put the same 2D offset across that one: every
+ * axis a direction in the bins can have as its largest is kept. The offset is the GPU's
+ * (`offset`, from the cell index).
+ */
+function cellKey(hit: Vec3, direction: Vec3, offset: readonly [number, number], constants: { cellSize: number; minCellSize: number }): CellKey {
+    const cellSize = hashGridCacheGetCellSize(hit, CAMERA.position, constants);
+    const tileSize = cellSize * LEVEL_SIDES[0];
+    const corners = hit.map((value) => {
+        const scaled = value / tileSize;
+        const floor = Math.floor(scaled);
+        const options = scaled - floor < 1e-4 ? [floor - 1, floor] : floor + 1 - scaled < 1e-4 ? [floor, floor + 1] : [floor];
+        return options.map((option) => option * tileSize);
+    });
+    const tileLos: Vec3[] = [];
+    for (const x of corners[0]) for (const y of corners[1]) for (const z of corners[2]) tileLos.push([x, y, z]);
+    // The bin of each component (floor(0.5 + (0.5 c + 0.5) x 4)) and the |c| it allows.
+    const ranges = direction.map((component) => {
+        const bin = Math.floor(0.5 + (0.5 * component + 0.5) * 4);
+        const low = Math.max(-1, (bin - 2.5) / 2);
+        const high = Math.min(1, (bin - 1.5) / 2);
+        return low >= 0 ? [low, high] : high <= 0 ? [-high, -low] : [0, Math.max(-low, high)];
+    });
+    const axes = [0, 1, 2].filter((axis) => [0, 1, 2].every((other) => other === axis || ranges[axis][1] >= ranges[other][0]));
+    return { tileLos, cellSize, offset, axes };
+}
+
+/** The boxes a cell (or its coarser cell at `level`) can cover, one per possible dominant axis. */
+function cellBoxes(key: CellKey, level: number): Box[] {
+    const tileSize = key.cellSize * LEVEL_SIDES[0];
+    const side = 2 ** level;
+    return key.tileLos.flatMap((tileLo) =>
+        key.axes.map((dominant) => {
+            const lo = [...tileLo] as [number, number, number];
+            const hi = lo.map((value) => value + tileSize) as [number, number, number];
+            ACROSS[dominant].forEach((axis, index) => {
+                lo[axis] += Math.floor(key.offset[index] / side) * side * key.cellSize;
+                hi[axis] = lo[axis] + side * key.cellSize;
+            });
+            return { lo, hi };
+        }),
+    );
+}
+
+type BoxLight = 'shadowed' | 'lit' | 'edge' | 'slab' | 'empty';
+
+/** One verdict for several boxes: shadowed or lit only when every box that holds a surface is. */
+function boxesLight(boxes: readonly Box[]): BoxLight {
+    const lights = boxes.map(boxLight).filter((light) => light !== 'empty');
+    if (lights.length === 0) return 'empty';
+    if (lights.includes('slab')) return 'slab';
+    if (lights.every((light) => light === 'shadowed')) return 'shadowed';
+    if (lights.every((light) => light === 'lit')) return 'lit';
+    return 'edge';
+}
+
+/**
+ * Whether every floor and wall point a probe ray can hit inside the box is in the slab's shadow
+ * (1 cm in at least) or out of it (1 cm out), sampled on a 17 × 17 grid of each piece; a box
+ * that holds part of the slab is left out (which side its rays hit isn't known here).
+ */
+function boxLight(box: Box): BoxLight {
+    const { lo, hi } = box;
+    const near = (low: number, high: number, value: number): boolean => low - 1e-3 <= value && value <= high + 1e-3;
+    if (near(lo[1], hi[1], SLAB.y) && hi[0] > SLAB.minX && lo[0] < SLAB.maxX && hi[2] > SLAB.minZ && lo[2] < SLAB.maxZ) return 'slab';
+    const pieces: ((u: number, v: number) => Vec3)[] = [];
+    const span = (low: number, high: number, min: number, max: number): [number, number] | null => {
+        const from = Math.max(low, min);
+        const to = Math.min(high, max);
+        return from <= to ? [from, to] : null;
+    };
+    if (near(lo[1], hi[1], 0)) {
+        const x = span(lo[0], hi[0], -200, 200);
+        const z = span(lo[2], hi[2], 0, 200); // the floor in front of the wall
+        if (x && z) pieces.push((u, v) => [x[0] + u * (x[1] - x[0]), 0, z[0] + v * (z[1] - z[0])]);
+    }
+    if (near(lo[2], hi[2], 0)) {
+        const x = span(lo[0], hi[0], -20, 20);
+        const y = span(lo[1], hi[1], 0, 10);
+        if (x && y) pieces.push((u, v) => [x[0] + u * (x[1] - x[0]), y[0] + v * (y[1] - y[0]), 0]);
+    }
+    if (pieces.length === 0) return 'empty';
+    let least = Infinity;
+    let most = -Infinity;
+    const steps = 16;
+    for (const piece of pieces) {
+        for (let i = 0; i <= steps; i++) {
+            for (let j = 0; j <= steps; j++) {
+                const margin = slabShadowMargin(piece(i / steps, j / steps));
+                least = Math.min(least, margin);
+                most = Math.max(most, margin);
+            }
+        }
+    }
+    if (least > 0.01) return 'shadowed';
+    if (most < -0.01) return 'lit';
+    return 'edge';
+}
+
+interface Tally {
+    rays: number;
+    off: number;
+    worst: number;
+}
+
+function newTally(): Tally {
+    return { rays: 0, off: 0, worst: 0 };
+}
+
+async function checkShadow(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`shadow: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const capacity = scenario.cache.capacity;
+    const constants = cellSizeConstants();
+    const counts: Record<BoxLight, number> = { shadowed: 0, lit: 0, edge: 0, slab: 0, empty: 0 };
+    // Expected readings: 0 in shadow (every sample is 0), albedo / pi x E in the light.
+    const judge = (tally: Tally, values: readonly number[], shadowed: boolean, describe: () => string): void => {
+        tally.rays++;
+        const error = shadowed ? Math.max(...values) / LIT_RADIANCE : Math.max(...values.map((value) => relativeError(value, LIT_RADIANCE)));
+        tally.worst = Math.max(tally.worst, error);
+        if (shadowed ? error > 1e-3 : error > TOLERANCE) {
+            tally.off++;
+            if (tally.off <= 2) fail(`${describe()} reads ${values.map((value) => value.toFixed(4)).join(', ')}, expected ${shadowed ? 0 : LIT_RADIANCE.toFixed(4)}`);
+        }
+    };
+
+    // The cells: each finest cell hit this frame, whose whole box is on one side of the edge.
+    const hitsByCell = new Map<number, number[]>();
+    state.visibilityCell.forEach((cell, visibility) => {
+        const list = hitsByCell.get(cell) ?? [];
+        list.push(state.visibilityQuery[visibility]);
+        hitsByCell.set(cell, list);
+    });
+    const tiles = [...new Set(Array.from(hitsByCell.keys(), (cell) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const slotOfTile = new Map(tiles.map((tile, slot) => [tile, slot]));
+    const values = await readTiles(device, scenario.cache, tiles);
+    const cells = { shadowed: newTally(), lit: newTally() };
+    let cellSizeDisagreements = 0;
+    for (const [cell, rays] of hitsByCell) {
+        const { tileIndex, cellOffset } = hashGridCacheCellOffsetMip0(cell, capacity);
+        const keys = rays.map((ray) => cellKey(state.rays[ray].hit, state.rays[ray].direction, [cellOffset[0], cellOffset[1]], constants));
+        // Every hit's boxes: the cell holds samples from all of them. A hit whose cell size the
+        // CPU makes another (a distance on a level's edge) can't place the GPU's offset: left out.
+        if (keys.some((key) => key.cellSize !== keys[0].cellSize)) {
+            cellSizeDisagreements++;
+            continue;
+        }
+        const light = boxesLight(keys.flatMap((key) => cellBoxes(key, 0)));
+        counts[light]++;
+        if (light !== 'shadowed' && light !== 'lit') continue;
+        const value = cellValue(values, capacity, slotOfTile.get(tileIndex) ?? 0, hashGridCacheCellIndex(cellOffset, tileIndex, 0, capacity) - tileIndex * capacity.numCellsPerTile);
+        if (!(value[3] > 0)) continue;
+        judge(cells[light], [0, 1, 2].map((channel) => value[channel] / value[3]), light === 'shadowed', () => `cell ${cell} (${light}, ${value[3]} samples)`);
+    }
+
+    // The rays: a resolved ray reads the level ResolveCells picks (the CPU's pick from the cells
+    // as read back, as section 3 checks), so its box is that level's; a bypassed ray reads its
+    // own sample, so only its hit's own side counts.
+    const rays = { cachedShadowed: newTally(), cachedLit: newTally(), bypassedShadowed: newTally(), bypassedLit: newTally() };
+    let raysOnTheEdge = 0;
+    let slabHits = 0;
+    for (const entry of state.resolve) {
+        const visibility = entry & ~BYPASS_CACHE_BIT;
+        const index = state.visibilityQuery[visibility];
+        const ray = state.rays[index];
+        if (ray.surface === 'slab') {
+            slabHits++;
+            continue;
+        }
+        const rgb = [0, 1, 2].map((channel) => state.radiance[index * 4 + channel]);
+        const describe = (side: string): (() => string) => () => `ray ${index} (${ray.surface}, ${side})`;
+        if ((entry & BYPASS_CACHE_BIT) !== 0) {
+            const margin = slabShadowMargin(ray.hit);
+            if (Math.abs(margin) < 0.01) {
+                raysOnTheEdge++;
+                continue;
+            }
+            judge(margin > 0 ? rays.bypassedShadowed : rays.bypassedLit, rgb, margin > 0, describe(`bypassed, ${margin > 0 ? 'in shadow' : 'lit'}`));
+            continue;
+        }
+        const cell = state.visibilityCell[visibility];
+        const { tileIndex, cellOffset } = hashGridCacheCellOffsetMip0(cell, capacity);
+        const slot = slotOfTile.get(tileIndex) ?? 0;
+        const levels = [0, 1, 2, 3].map((level) =>
+            capacity.sizeTileMip[level] > 0 ? cellValue(values, capacity, slot, hashGridCacheCellIndex(cellOffset, tileIndex, level, capacity) - tileIndex * capacity.numCellsPerTile) : null,
+        );
+        const picked = hashGridCacheFilteredRadiance(levels, MAX_SAMPLE_COUNT);
+        const light = boxesLight(cellBoxes(cellKey(ray.hit, ray.direction, [cellOffset[0], cellOffset[1]], constants), picked.level));
+        if (light !== 'shadowed' && light !== 'lit') {
+            raysOnTheEdge++;
+            continue;
+        }
+        judge(light === 'shadowed' ? rays.cachedShadowed : rays.cachedLit, rgb, light === 'shadowed', describe(`resolved at level ${picked.level}, ${light}`));
+    }
+
+    const tallies = { shadowedCells: cells.shadowed, litCells: cells.lit, ...rays };
+    for (const [name, tally] of Object.entries(tallies)) {
+        if (tally.rays === 0) fail(`nothing to check for ${name}: move the slab`);
+        if (tally.off > 0) fail(`${tally.off} of ${tally.rays} ${name} are off`);
+    }
+    const overflow = state.counters[HASH_GRID_COUNTER.bucketOverflowCount];
+    if (overflow !== 0) fail(`${overflow} inserts refused`);
+    return { failures, data: { ...tallies, cellBoxes: counts, cellSizeDisagreements, raysOnTheEdge, slabHits, slab: SLAB } };
+}
+
+// ---- Section 7: UpdateTiles' blend weight ---------------------------------------------------------
+
+/** The tiles' finest-level cells as `[rgb × count, count]`, by tile. */
+function finestCells(values: Float32Array, capacity: HashGridCacheCapacity, tiles: readonly number[]): Map<number, CellValue[]> {
+    const cells = new Map<number, CellValue[]>();
+    tiles.forEach((tile, slot) => {
+        cells.set(
+            tile,
+            Array.from({ length: capacity.numCellsPerTileMip[0] }, (_, cell) => cellValue(values, capacity, slot, cell)),
+        );
+    });
+    return cells;
+}
+
+async function checkBlend(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`blend: ${message}`);
+    };
+    const capacity = scenario.cache.capacity;
+    // The cells converged at SUN_INTENSITY: every sample of a lit cell is the same, so its mean is L1.
+    const before = await readFrameState(device, scenario);
+    const tiles = Array.from(before.packedTiles);
+    const previous = finestCells(await readTiles(device, scenario.cache, tiles), capacity, tiles);
+
+    // One frame with the sun four times as bright: each new sample is L2 = 4 L1.
+    scenario.platform.scene.updateLight(scenario.lights[0], { intensity: CHANGED_SUN_INTENSITY });
+    await runFrames(device, scenario, 1);
+    const state = await readFrameState(device, scenario);
+    const after = finestCells(await readTiles(device, scenario.cache, tiles), capacity, tiles);
+
+    // This frame's samples per cell: one per shadow ray (PopulateCells adds a count of 1 for
+    // each, lit or not), each L2 quantised to 1/1000 as HashGridCache_QuantizeRadiance does.
+    const samples = new Map<number, number>();
+    for (const entry of state.visibilityRay) {
+        const cell = state.visibilityCell[entry & ~BYPASS_CACHE_BIT];
+        samples.set(cell, (samples.get(cell) ?? 0) + 1);
+    }
+    const changedRadiance = (ALBEDO / Math.PI) * CHANGED_SUN_INTENSITY * Math.SQRT1_2;
+    const quantizedSample = Math.round(1000 * changedRadiance) / 1000;
+
+    const kinds: Record<'capped' | 'uncapped' | 'noSample', Tally> = {
+        // At the cap before and after: the mean moves (L2 - L1) / 16.
+        capped: { rays: 0, off: 0, worst: 0 },
+        // Below the cap after: the weight is 1 / (count before + new samples).
+        uncapped: { rays: 0, off: 0, worst: 0 },
+        // On the update list with no sample this frame: Capsaicin blends in a zero sample.
+        noSample: { rays: 0, off: 0, worst: 0 },
+    };
+    const updated = new Set(state.updateTiles);
+    let tilesChecked = 0;
+    for (const tile of tiles) {
+        const was = previous.get(tile);
+        const now = after.get(tile);
+        if (!updated.has(tile) || !was || !now) continue;
+        tilesChecked++;
+        for (let cell = 0; cell < capacity.numCellsPerTileMip[0]; cell++) {
+            const old = was[cell];
+            if (!(old[3] > 0)) continue;
+            const count = samples.get(tile * capacity.numCellsPerTile + cell) ?? 0;
+            const sum = quantizedSample * count;
+            const expected = updateTilesAccumulate(old, [sum, sum, sum, count], MAX_SAMPLE_COUNT);
+            const got = now[cell];
+            const kind = count === 0 ? kinds.noSample : old[3] >= MAX_SAMPLE_COUNT ? kinds.capped : kinds.uncapped;
+            kind.rays++;
+            // rgb x count and the count, each stored as a half: within a half step or two.
+            const error = Math.max(...[0, 1, 2, 3].map((channel) => Math.abs(got[channel] - expected[channel]) / Math.max(Math.abs(expected[channel]), 1e-3)));
+            kind.worst = Math.max(kind.worst, error);
+            if (error > 2 * HALF_TOLERANCE) {
+                kind.off++;
+                if (kind.off <= 2) {
+                    const shown = (value: readonly number[]): string => value.map((channel) => channel.toFixed(4)).join(', ');
+                    fail(`tile ${tile} cell ${cell} (${old[3]} samples before, ${count} new) holds ${shown(got)}, UpdateTiles gives ${shown(expected)}`);
+                }
+            }
+        }
+    }
+    for (const [name, kind] of Object.entries(kinds)) {
+        if (kind.off > 0) fail(`${kind.off} of ${kind.rays} ${name} cells differ from UpdateTiles' blend`);
+    }
+    if (kinds.capped.rays === 0) fail('no capped cell got a sample: the 1/16 weight is unchecked');
+    if (kinds.uncapped.rays === 0) fail('no cell below the cap got a sample: the 1/count weight is unchecked');
+    return {
+        failures,
+        data: {
+            convergedRadiance: LIT_RADIANCE,
+            newSampleRadiance: quantizedSample,
+            cappedMeanExpected: LIT_RADIANCE + (quantizedSample - LIT_RADIANCE) / MAX_SAMPLE_COUNT,
+            tilesChecked,
+            cellsByKind: kinds,
+        },
+    };
+}
+
 // ---- The page --------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -597,8 +991,8 @@ try {
 
     const failures: string[] = [];
     const data: Record<string, unknown> = {};
-    const run = async (name: string, lights: readonly LightDescriptor[], withPatch: boolean, frames: number, check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>): Promise<void> => {
-        const scenario = await startScenario(device, name, lights, withPatch);
+    const run = async (name: string, lights: readonly LightDescriptor[], extras: CornerExtras, frames: number, check: (device: GPUDevice, scenario: Scenario) => Promise<Checks>): Promise<void> => {
+        const scenario = await startScenario(device, name, lights, extras);
         try {
             await runFrames(device, scenario, frames);
             const checks = await check(device, scenario);
@@ -610,10 +1004,13 @@ try {
         }
     };
 
-    await run('litPlane', [sun(SUN_TRAVEL)], false, CONVERGENCE_FRAMES, checkLitPlane);
-    await run('resolve', [{ type: 'point', position: [0, 1.5, 2], range: 0, color: [1, 1, 1], intensity: 10, label: 'point' }], false, 1, checkResolve);
-    await run('emissive', [sun(SUN_TRAVEL)], true, 1, checkEmissive);
-    await run('twoSuns', [sun(SUN_TRAVEL, [1, 0, 0]), sun(BLUE_SUN_TRAVEL, [0, 0, 1])], false, CONVERGENCE_FRAMES, checkTwoSuns);
+    await run('litPlane', [sun(SUN_TRAVEL)], {}, CONVERGENCE_FRAMES, checkLitPlane);
+    await run('resolve', [{ type: 'point', position: [0, 1.5, 2], range: 0, color: [1, 1, 1], intensity: 10, label: 'point' }], {}, 1, checkResolve);
+    await run('emissive', [sun(SUN_TRAVEL)], { patch: true }, 1, checkEmissive);
+    await run('twoSuns', [sun(SUN_TRAVEL, [1, 0, 0]), sun(BLUE_SUN_TRAVEL, [0, 0, 1])], {}, CONVERGENCE_FRAMES, checkTwoSuns);
+    await run('shadow', [sun(SUN_TRAVEL)], { slab: true }, CONVERGENCE_FRAMES, checkShadow);
+    // Converged at SUN_INTENSITY by the run; checkBlend changes the sun and runs one more frame.
+    await run('blend', [sun(SUN_TRAVEL)], {}, CONVERGENCE_FRAMES, checkBlend);
 
     await drainDevice(device);
     reportGpuTest({

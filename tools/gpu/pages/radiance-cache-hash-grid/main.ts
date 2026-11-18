@@ -34,6 +34,10 @@
  * 8. **Find stops at the first empty slot** (Capsaicin's behaviour, kept):
  *    with slot 0's tile purged, the tile in slot 1 isn't found, and
  *    inserting it again claims slot 0.
+ * 9. **Halves as f32tof16 makes them** (register D31): `HashGridCache_PackHalf2`
+ *    gives the nearest half on random values and exact ties (to the even
+ *    one, both parities and signs, normal and subnormal), and clamps past
+ *    65,504; the CPU's `floatToHalfBits` is the reference.
  *
  * Correctness only, nothing timed (DECISIONS 2026-11-09).
  * `pnpm test:gpu --filter radiance-cache-hash-grid --gpu nvidia` (or intel).
@@ -67,6 +71,7 @@ import {
     type WorldCacheFrame,
     type WorldCacheProbeRays,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { floatToHalfBits } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { COUNTER, createProbeRayReader, createTestIo, createTestKernels, HIT_WORDS, PROBE_RAY_READ_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';
@@ -693,6 +698,32 @@ try {
         assert(again[1] === firstSlot && again[2] === 1, `inserting it again took tile ${again[1]} (new ${again[2]}); Capsaicin's insert claims the empty slot 0`);
         data.findStopsAtEmptySlot = { purgedSlot: 0, keptSlot: 1, reinsertedSlot: again[1] - firstSlot };
         log('find stops at the first empty slot: slot 0 purged, slot 1\'s tile not found, re-inserted into slot 0 (Capsaicin\'s behaviour)');
+    }
+
+    // ---- 9. Halves rounded to nearest, ties to even, clamped (register D31) ----
+    {
+        const step = 2 ** -10;
+        const values: number[] = [
+            // Ties: halfway between two halves; the even one wins (the old rule kept the truncated one).
+            1 + step / 2, 1 + 3 * step / 2, -(1 + step / 2), -(1 + 3 * step / 2), 1000.25, 1000.75, 0.5 + step / 4, 3 * 2 ** -25, -(5 * 2 ** -25),
+            // Exact halves, and the clamp.
+            0, 1, -2, 65504, 70000, -1e9, 65520,
+        ];
+        const random = seeded(91);
+        while (values.length < HASH_INPUTS) values.push((random() - 0.5) * 2 ** (random() * 40 - 24));
+        const floats = new Float32Array(values);
+        runKernel('packHalves', new Uint32Array(floats.buffer), floats.length / 2);
+        const packed = await results(floats.length / 2);
+        const clampHalf = (value: number): number => Math.min(Math.max(value, -65504), 65504);
+        const mismatches: string[] = [];
+        for (let index = 0; index < floats.length; index++) {
+            const gpu = (packed[index >> 1] >>> ((index & 1) * 16)) & 0xffff;
+            const expected = floatToHalfBits(clampHalf(floats[index]));
+            if (gpu !== expected) mismatches.push(`${floats[index]}: GPU 0x${gpu.toString(16)}, f32tof16 0x${expected.toString(16)}`);
+        }
+        data.packHalves = { values: floats.length, ties: 9, mismatches: mismatches.length };
+        assert(mismatches.length === 0, `${mismatches.length} of ${floats.length} values pack to another half than f32tof16's: ${mismatches.slice(0, 4).join(' | ')}`);
+        log(`halves: ${floats.length} values (9 exact ties, the clamp) pack as f32tof16 does, ties to even`);
     }
 
     rayBuffer.destroy();
