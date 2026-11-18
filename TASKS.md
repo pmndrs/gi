@@ -563,6 +563,12 @@ Status: **todo**. Dennis's picks on the close-out page (2026-11-18): these five 
 
 M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN.md#later-milestones-outline).
 
+### Follow-ups after the M3-M5 sign-off (2026-11-19)
+
+- **`giRadiance`, DDGI's rough-only fallback** (Dennis, 2026-11-19: "yeah it can wait. just note it somewhere as a follow up"). Moved out of v1 (DECISIONS 2026-11-18). Comes with the three adapter's blend with environment specular, since the fallback is only right at roughness 1. Goes with the reflections work after v1.
+- **Rename the workspace from `ddgi` to `gi`** (folders and private package names: `packages/ddgi`, `packages/ddgi-core`, `@pmndrs/ddgi-core`, ...; DECISIONS 2026-11-10). Waits on the radiance-cache branch merging, since it works inside those folders. Doesn't block a release: the published name is already `@pmndrs/gi`.
+- **The old repo** `DennisSmolek/webgpu-ddgi`: Dennis picked "archive" (2026-11-18). A README pointing to pmndrs/gi first, if he wants one, then he archives it.
+
 ### From the Mac move and the coverage pass (2026-11-10)
 
 - **The door and cabinet against Cycles renders of their end states** (from T3.9): CPU or Metal Cycles through `tools/reference/cycles/run.ts`, in parts under 15 minutes. Needs the references copied from the NAS.
@@ -571,7 +577,6 @@ M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN
 - **Small leftover from T5.4** (the rest done in T5.8): the hello example draws cut-outs solid and glass opaque (GI sees both right; only its picture is simple).
 - **GI behind glass in the composite** (Dennis's pick, "later", 2026-11-18): three's glass pixels carry no GI albedo, so the composite shows no GI through glass; the per-fragment path is fine. When a host needs the composite with glass.
 - **Timing on the target GPUs** (Dennis's pick, "later", 2026-11-18: "defer timing runs for another time"): the RTX 3060 and the M5 Pro back to the M1/M2 time targets, after the tuning pass.
-- **`giRadiance`, DDGI's rough-only fallback**, moved out of v1 (DECISIONS 2026-11-18): with the three adapter's environment-specular blend.
 - **Re-run `trace-oracle`, `trace-materials` and `trace-bench-quick` on the RTX and the Intel** (now TU.2) after the Metal shared-edge fix (2026-11-10, `giEdgeFunction` in `platform/trace/wgsl.ts`: corners ordered so FMA fusing in Dawn's relaxed Metal math can't open shared edges; 2,696 and 1,809 slips to 0 on the M5 Pro). It should give the same bits where nothing fuses; the cost is a few compares and selects per edge, not measured clean.
 - **From T5.6 and T5.7 (2026-11-10):** `04-moving-objects` showed 34.6 ms of GI GPU time once (2.0 ms the next run), not looked into; on two-room, starting from a saved bake (0.5-2.2 s) was no faster than warming up (0.6-2.6 s), so the bake's start-up win is for big scenes and wasn't shown on one; upgrade vitest to 4.1.12+ and typescript-eslint to clear GitHub's dev-only security alerts (none ship in the package); `test:release` not yet run on Windows.
 - ~~**Asset hashes are Windows-only**~~ done 2026-11-18 (`assets-mac`: per-platform records, Blender*.app search, bsdtar unpack; `--verify-only` passes all 10 on the M5 Pro). Was: on the Mac every Blender conversion and the generated wind tree come out with other hashes. The `.gltf` files differ by exactly their line count (CRLF on Windows), and Bistro's `.glb`, the courtyard tree's normals and the wind tree by small binary amounts (not yet looked at). `pnpm assets:fetch` reports them failed, though they load. Normalise line endings in the convert step and record per-platform hashes, or check the GLB's views as `--record-glb-views` already does.
