@@ -21,6 +21,27 @@ Rules:
 
 ---
 
+## 2026-11-19 · Windows RTX: tracer re-check and M4's remaining accuracy runs · measurer
+Did: worktree `webgpu-ddgi-win-m34`, branch `m34-win` at e6d0d21 (no code changes). RTX 3060 Laptop (nvidia, ampere), headless Chrome 157.0.8103.79, each command under `bench-lock run --no-cool-wait`. Correctness only; timings not judged.
+**Tracer after the Metal shared-edge fix:** `trace-oracle` PASS (75.8 s; 0 mismatches, 0 slipped rays in all 8 variants, 2M shared-edge rays each), `trace-materials` PASS (14.3 s), `trace-bench-quick` PASS (4.6 s; all four tracers agree). No pre-fix RTX numbers in PROGRESS beyond the standing "0 slipped", which still holds.
+**M4 accuracy** (`node tools/gpu/pages/m4-textured-accuracy/run.ts --gpu nvidia --scenes ...`, GTAO on the GI term, Bistro with three's textures capped at 1024; rows in `bench/results/m4-textured-accuracy.csv`; table filled in `docs/milestones/M3-M4.md`). Recompiles 0 on every scene.
+| scene | camera | mean error | FLIP 8x8 | block err | ref noise px | store MB | probes |
+|---|---|---|---|---|---|---|---|
+| bistro-exterior | across-the-street | +2.20% | 0.263 | 17.0% | 9.6% | 48.3 | 28952 |
+| bistro-exterior | street | -3.81% | 0.282 | 23.0% | 11.2% | 48.3 | 28952 |
+| bistro-interior | bar | -9.47% | 0.310 | 20.3% | 29.2% | 25.0 | 19200 |
+| bistro-interior | dining-room | -9.16% | 0.283 | 17.8% | 32.3% | 25.0 | 19200 |
+| courtyard-tree | from-the-gateway | -4.29% | 0.097 | 5.9% | 3.4% | 2.0 | 4840 |
+| courtyard-tree | from-the-south-east | -5.52% | 0.098 | 6.0% | n/m | 2.0 | 4840 |
+| courtyard-tree | under-the-tree | -4.65% | 0.130 | 4.9% | n/m | 2.0 | 4840 |
+| alpha-checker | lit-room | -6.16% | 0.103 | 8.7% | 4.0% | 0.7 | 1071 |
+| alpha-checker | dark-room | -2.35% | 0.260 | 27.9% | n/m | 0.7 | 1071 |
+| alpha-checker | dark-room-floor | +3.64% | 0.251 | 28.2% | n/m | 0.7 | 1071 |
+| sponza-full | colonnade-from-the-floor | -30.42% | 0.703 | 66.7% | 50.3% | 19.7 | 19425 |
+Bistro side street: GI's mean is -3.8% against Cycles (inside the +-10% bar); in the side-by-side both are equally dark, so GI is not too dark there. FLIP 0.28 is detail, not level.
+Flagged: sponza-full is -30.4% (FLIP 0.70), out of the bar; cause not investigated. Bistro interior sits near the bar. FLIP is over 0.15 on both Bistros and the dark alpha-checker views. Thermal verdict INVALID (62% throttled samples); no timing used. A lock held by another process ("intel t1 oracle+quick", pid 65268) was waited on, not touched.
+Not done: the GTAO on/off A/B (skipped on Dennis's word; the Mac turned GTAO off by default), FLIP summary of the older scenes, the door and cabinet end states.
+
 ## 2026-11-18 · handoff from pmndrs/pathtracer: tracing for Split Radiance Cascades · pathtracer lead (opus)
 Did: nothing in this repo except this note. pmndrs/pathtracer main (commit 63134b5, pushed) now has interval tracing in `@pmndrs/raytracer` for a Split RC technique here: inline WGSL `rtClosestInterval(origin, dir, t0, t1, mask)` (enable with `rtModuleWgsl(caps, { intervals: true })`), and a batched `RtIntervalTracer` (ray sources `rays` and `probes`; outputs `hit`, `distance`, `visible`, `shaded`). Design and API: `docs/design/split-rc-tracing.md` in the pathtracer repo; read it first.
 Verified (in pathtracer, Apple M5 Pro, headless Chrome 157): intervals are half-open and exact on the f32 `t`: `(t0, t1]` by default (the paper's convention), `[t0, t1)` with `convention: 'closed-low'`. 1.03 million interval and boundary rays against the CPU walk: 0 mismatches. One ray traced through every cascade gives the same answer as the unbounded ray (75,264 cells, 0 differ).
