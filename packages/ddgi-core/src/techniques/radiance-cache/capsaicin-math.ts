@@ -367,3 +367,140 @@ export function integrateHemisphereSH(radiance: (direction: Direction) => number
     }
     return sum;
 }
+
+// ---- InterpolateScreenProbes on the CPU (RC2.2 review) ------------------------------------------
+
+/** `pcgHash` (math/hash.hlsl:33-39), as `rcPcgHash` (wgsl/capsaicin.ts), in u32 arithmetic. */
+export function pcgHash(value: number): number {
+    const state = (Math.imul(value >>> 0, 747796405) + 2891336453) >>> 0;
+    const word = Math.imul(((state >>> ((state >>> 28) + 4)) ^ state) >>> 0, 277803737) >>> 0;
+    return ((word >>> 22) ^ word) >>> 0;
+}
+
+/** Capsaicin's `Random` (random_number_generator.hlsl:30-86) as `RcRandom`, started as `rcMakeRandom` does (register D18). */
+export class CpuRandom {
+    private state: number;
+
+    constructor(seed: number, index: number) {
+        const increment = ((index << 1) | 1) >>> 0;
+        this.state = (Math.imul((pcgHash(seed) + increment) >>> 0, 747796405) + increment) >>> 0;
+    }
+
+    randInt(): number {
+        const state = this.state;
+        this.state = (Math.imul(state, 747796405) + 2891336453) >>> 0;
+        const word = Math.imul(((state >>> ((state >>> 28) + 4)) ^ state) >>> 0, 277803737) >>> 0;
+        return ((word >>> 22) ^ word) >>> 0;
+    }
+
+    rand(): number {
+        return (this.randInt() >>> 8) / 16777216;
+    }
+
+    rand2(): [number, number] {
+        const first = this.rand();
+        return [first, this.rand()];
+    }
+}
+
+/** What {@link interpolateScreenProbes} reads: the frame, the host's screen buffers and the probes, as accessors. */
+export interface InterpolationInputs {
+    readonly width: number;
+    readonly height: number;
+    /** `RcFrame.frameIndex`: the interpolation's jitter is drawn from it. */
+    readonly frameIndex: number;
+    /** Capsaicin's `cell_size` per unit distance (screen-irradiance.ts, `screenProbeCellSize`). */
+    readonly cellSize: number;
+    readonly eye: Direction;
+    /** The camera's forward axis: linear depth is the distance along it. */
+    readonly viewForward: Direction;
+    readonly probeMaskMipCount: number;
+    isSky(x: number, y: number): boolean;
+    /** The position the host's depth gives at a pixel. */
+    worldPosition(x: number, y: number): Direction;
+    /** The pixel's unit normal. */
+    normal(x: number, y: number): Direction;
+    /** The probe mask's `level` at a texel (a packed seed, or {@link INVALID_ID}). */
+    probeMask(level: number, x: number, y: number): number;
+    /** The irradiance probe tile `(tileX, tileY)`'s SH gives along `normal`, never negative ({@link shIrradiance}, ao 1). */
+    probeIrradiance(tileX: number, tileY: number, normal: Direction): number;
+}
+
+const dot3 = (a: Direction, b: Direction): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const sub3 = (a: Direction, b: Direction): Direction => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+/**
+ * `InterpolateScreenProbes` (gi1.comp:1514-1625, the `#ifndef HAS_OCCLUSION`
+ * branch) for one pixel, as `wgsl/screen-irradiance.ts` runs it: the jitter
+ * from the PCG (register D27), `FindClosestProbe` up the mask's mips, the
+ * three neighbours by offset, the plane, depth and normal weights to the 8th
+ * power, the backup when all are 0. Returns E (one channel) and the
+ * denoiser hint (0 on the backup), or null for a sky pixel.
+ */
+export function interpolateScreenProbes(inputs: InterpolationInputs, x: number, y: number): { irradiance: number; hint: number; probes: number[]; weights: number[] } | null {
+    if (inputs.isSky(x, y)) return null;
+    const normal = inputs.normal(x, y);
+    const worldPos = inputs.worldPosition(x, y);
+    const cellSize = Math.hypot(...sub3(worldPos, inputs.eye)) * inputs.cellSize;
+
+    const random = new CpuRandom(x + y * inputs.width, inputs.frameIndex);
+    const s = random.rand2();
+    const jitter = s.map((value) => Math.trunc((2 * value - 1) * PROBE_SPAWN_TILE_SIZE));
+    const newPos = [Math.min(Math.max(x + jitter[0], 0), inputs.width - 1), Math.min(Math.max(y + jitter[1], 0), inputs.height - 1)];
+    const newWorldPos = inputs.worldPosition(newPos[0], newPos[1]);
+    const pos = Math.abs(dot3(sub3(newWorldPos, worldPos), normal)) < 0.5 * cellSize ? newPos : [x, y];
+
+    const maskSize = [Math.ceil(inputs.width / PROBE_SIZE), Math.ceil(inputs.height / PROBE_SIZE)];
+    const findClosest = (offset: readonly [number, number] | null): number => {
+        let dims = [...maskSize];
+        let tile = [Math.min(Math.floor(pos[0] / PROBE_SIZE), dims[0] - 1), Math.min(Math.floor(pos[1] / PROBE_SIZE), dims[1] - 1)];
+        for (let level = 0; level < inputs.probeMaskMipCount; level++) {
+            let loc = tile;
+            if (offset) {
+                loc = [tile[0] + offset[0], tile[1] + offset[1]];
+                if (loc[0] < 0 || loc[1] < 0 || loc[0] >= dims[0] || loc[1] >= dims[1]) break;
+            }
+            const probe = inputs.probeMask(level, loc[0], loc[1]);
+            if (probe !== INVALID_ID) return probe;
+            dims = [Math.max(dims[0] >> 1, 1), Math.max(dims[1] >> 1, 1)];
+            tile = [Math.min(tile[0] >> 1, dims[0] - 1), Math.min(tile[1] >> 1, dims[1] - 1)];
+        }
+        return INVALID_ID;
+    };
+
+    const probes = [findClosest(null), INVALID_ID, INVALID_ID, INVALID_ID];
+    if (probes[0] === INVALID_ID) return { irradiance: 0, hint: 1, probes, weights: [0, 0, 0, 0] };
+    const seed = unpackSeed(probes[0]);
+    const offset: [number, number] = [pos[0] < seed[0] ? -1 : 1, pos[1] < seed[1] ? -1 : 1];
+    probes[1] = findClosest([offset[0], 0]);
+    probes[2] = findClosest([0, offset[1]]);
+    probes[3] = findClosest(offset);
+    if (probes[1] === probes[0]) probes[1] = INVALID_ID;
+    if (probes[2] === probes[1] || probes[2] === probes[0]) probes[2] = INVALID_ID;
+    if (probes[3] === probes[2] || probes[3] === probes[1] || probes[3] === probes[0]) probes[3] = INVALID_ID;
+
+    const linearDepth = dot3(sub3(worldPos, inputs.eye), inputs.viewForward);
+    let weights = probes.map((probe) => {
+        if (probe === INVALID_ID) return 0;
+        const [px, py] = unpackSeed(probe);
+        const probePos = inputs.worldPosition(px, py);
+        if (Math.abs(dot3(sub3(probePos, worldPos), normal)) > cellSize) return 0;
+        let w = Math.min(Math.max(1 - Math.abs(dot3(sub3(probePos, inputs.eye), inputs.viewForward) - linearDepth) / linearDepth, 0), 1);
+        w *= Math.max(dot3(normal, inputs.normal(px, py)), 0);
+        return w ** 8;
+    });
+    let hint = 1;
+    if (weights.every((w) => w === 0)) {
+        weights = probes.map((probe, index) => (index === 0 || probe !== INVALID_ID ? 1 : 0));
+        hint = 0;
+    }
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    weights = weights.map((w) => w / total);
+    let irradiance = 0;
+    probes.forEach((probe, index) => {
+        if (!(weights[index] > 0)) return;
+        const [px, py] = unpackSeed(probe);
+        irradiance += weights[index] * inputs.probeIrradiance(Math.floor(px / PROBE_SIZE), Math.floor(py / PROBE_SIZE), normal);
+    });
+    return { irradiance, hint, probes, weights };
+}

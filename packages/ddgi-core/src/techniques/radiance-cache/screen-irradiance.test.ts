@@ -23,8 +23,13 @@ import {
     shGetCoefficientsClampedCosineCone,
     shIrradiance,
     type Direction,
+    CpuRandom,
+    interpolateScreenProbes,
+    INVALID_ID,
+    type InterpolationInputs,
 } from './capsaicin-math.ts';
 import { screenProbeCellSize, viewForward } from './screen-irradiance.ts';
+import { PROBE_SIZE } from './settings.ts';
 import { DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL } from './wgsl/debug.ts';
 import { FRAME_UNIFORM_BYTES, FRAME_UNIFORM_OFFSETS, FRAME_WGSL } from './wgsl/screen-probes.ts';
 import { INTERPOLATE_WGSL, SCREEN_PROBES_CONSTANTS_BYTES, SCREEN_PROBES_CONSTANTS_OFFSETS, SH_CELL_SOLID_ANGLE as WGSL_SH_CELL_SOLID_ANGLE, SH_CELL_SUBSAMPLES as WGSL_SH_CELL_SUBSAMPLES } from './wgsl/screen-irradiance.ts';
@@ -254,5 +259,97 @@ describe('the camera the screen stage reads', () => {
         expectDirection(viewForward({ view }), [-Math.sin(angle), 0, -Math.cos(angle)]);
         // gi1.cpp:1839-1843 at 1280 x 720: tan(fovY x 8 x max(1/720, 720/1280^2)).
         expect(screenProbeCellSize({ projection }, 1280, 720)).toBeCloseTo(Math.tan((1 * 8) / 720), 9);
+    });
+});
+
+describe('InterpolateScreenProbes on the CPU (the GPU page compares the kernel with it)', () => {
+    // A 64 x 32 screen of a wall at z = 0 facing the camera at z = 10: pixel (x, y) is at (x, -y, 0) / 10.
+    const width = 64;
+    const height = 32;
+    const tiles = [width / PROBE_SIZE, height / PROBE_SIZE];
+    const mipCount = Math.floor(Math.log2(Math.max(tiles[0], tiles[1]))) + 1;
+    const seedAt = (tileX: number, tileY: number): number => ((tileX * PROBE_SIZE + 3) << 16) | (tileY * PROBE_SIZE + 4);
+    function inputs(options: { probeTiles: Array<[number, number]>; offPlane?: Set<number> }): InterpolationInputs {
+        // Level 0 from the probe tiles, then FilterProbeMask's rule.
+        const levels: Uint32Array[] = [];
+        let size = [...tiles];
+        levels.push(new Uint32Array(size[0] * size[1]).fill(INVALID_ID));
+        for (const [tx, ty] of options.probeTiles) levels[0][ty * size[0] + tx] = seedAt(tx, ty);
+        const sizes = [size];
+        for (let level = 1; level < mipCount; level++) {
+            const next = [Math.max(size[0] >> 1, 1), Math.max(size[1] >> 1, 1)];
+            const texels = new Uint32Array(next[0] * next[1]).fill(INVALID_ID);
+            for (let y = 0; y < next[1]; y++) {
+                for (let x = 0; x < next[0]; x++) {
+                    for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+                        const cx = 2 * x + dx;
+                        const cy = 2 * y + dy;
+                        if (cx < size[0] && cy < size[1] && levels[level - 1][cy * size[0] + cx] !== INVALID_ID) {
+                            texels[y * next[0] + x] = levels[level - 1][cy * size[0] + cx];
+                            break;
+                        }
+                    }
+                }
+            }
+            levels.push(texels);
+            sizes.push(next);
+            size = next;
+        }
+        const offPlane = options.offPlane ?? new Set<number>();
+        return {
+            width,
+            height,
+            frameIndex: 7,
+            cellSize: 0.01,
+            eye: [3.2, -1.6, 10],
+            viewForward: [0, 0, -1],
+            probeMaskMipCount: mipCount,
+            isSky: () => false,
+            // A probe's seed moved off the wall by a metre when its tile is in 'offPlane'.
+            worldPosition: (x, y) => [x / 10, -y / 10, offPlane.has(Math.floor(y / PROBE_SIZE) * tiles[0] + Math.floor(x / PROBE_SIZE)) && x % PROBE_SIZE === 3 && y % PROBE_SIZE === 4 ? 1 : 0],
+            normal: () => [0, 0, 1],
+            probeMask: (level, x, y) => levels[level][y * sizes[level][0] + x],
+            probeIrradiance: (tileX, tileY) => 1 + tileX + 10 * tileY,
+        };
+    }
+
+    it('mixes up to four probes with weights summing to 1, each probe its own value', () => {
+        const all: Array<[number, number]> = [];
+        for (let y = 0; y < tiles[1]; y++) for (let x = 0; x < tiles[0]; x++) all.push([x, y]);
+        const result = interpolateScreenProbes(inputs({ probeTiles: all }), 20, 12);
+        expect(result).not.toBeNull();
+        expect(result!.hint).toBe(1);
+        expect(result!.weights.reduce((sum, w) => sum + w, 0)).toBeCloseTo(1, 12);
+        const values = result!.probes.filter((probe) => probe !== INVALID_ID).map((probe) => 1 + Math.floor((probe >>> 16) / PROBE_SIZE) + 10 * Math.floor((probe & 0xffff) / PROBE_SIZE));
+        expect(result!.irradiance).toBeGreaterThanOrEqual(Math.min(...values) - 1e-12);
+        expect(result!.irradiance).toBeLessThanOrEqual(Math.max(...values) + 1e-12);
+        expect(new Set(result!.probes).size).toBe(4);
+    });
+
+    it('gives a probe off the pixel plane no weight, and takes the backup when every probe is off it', () => {
+        const probeTiles: Array<[number, number]> = [];
+        for (let y = 0; y < tiles[1]; y++) for (let x = 0; x < tiles[0]; x++) probeTiles.push([x, y]);
+        // One of the neighbours the pixel mixes, moved off the wall.
+        const onPlane = interpolateScreenProbes(inputs({ probeTiles }), 20, 12)!;
+        const neighbour = onPlane.probes.find((probe, index) => index > 0 && probe !== INVALID_ID)!;
+        const neighbourTile = Math.floor((neighbour & 0xffff) / PROBE_SIZE) * tiles[0] + Math.floor((neighbour >>> 16) / PROBE_SIZE);
+        expect(onPlane.weights[onPlane.probes.indexOf(neighbour)]).toBeGreaterThan(0);
+        const someOff = interpolateScreenProbes(inputs({ probeTiles, offPlane: new Set([neighbourTile]) }), 20, 12)!;
+        const offIndex = someOff.probes.indexOf(neighbour);
+        expect(offIndex).toBeGreaterThanOrEqual(0);
+        expect(someOff.weights[offIndex]).toBe(0);
+        expect(someOff.hint).toBe(1);
+        const allOff = interpolateScreenProbes(inputs({ probeTiles, offPlane: new Set(probeTiles.map(([x, y]) => y * tiles[0] + x)) }), 20, 12)!;
+        expect(allOff.hint).toBe(0);
+        const used = allOff.probes.filter((probe) => probe !== INVALID_ID).length;
+        for (const [index, w] of allOff.weights.entries()) expect(w).toBeCloseTo(allOff.probes[index] === INVALID_ID ? 0 : 1 / used, 12);
+    });
+
+    it("draws the jitter from Capsaicin's PCG as rcMakeRandom starts it (D18): the same numbers on every call", () => {
+        const a = new CpuRandom(1234, 5).rand2();
+        const b = new CpuRandom(1234, 5).rand2();
+        expect(a).toEqual(b);
+        expect(new CpuRandom(1234, 6).rand2()).not.toEqual(a);
+        for (const value of a) expect(value >= 0 && value < 1).toBe(true);
     });
 });

@@ -17,7 +17,16 @@
  *    written transposed in its tile, or read so by the projection, moves the
  *    z-band coefficients by about 30% of the largest (the CPU's own figure
  *    for a transposed probe is reported).
- * 3. On both: the mask's mip chain holds, at every level, a probe of its
+ * 3. **The interpolation's mix** (RC2.2 review): a 1 m step and a wall at
+ *    the back under the varying sky, so neighbouring probes hold different
+ *    SH (by normal, by the sky the step and wall hide, and by each probe's
+ *    one random ray per cell). Every pixel's interpolated E against the CPU
+ *    port of `InterpolateScreenProbes` (capsaicin-math.ts: the same jitter,
+ *    neighbour search, plane, depth and normal weights, backup) run on the
+ *    GPU's own depth, normals, mask mips and SH; the denoiser hint must agree
+ *    too. The CPU's nearest-probe-only figure is reported, to show a wrong
+ *    mix would fail.
+ * 4. On all: the mask's mip chain holds, at every level, a probe of its
  *    2 × 2 children when any has one (`FilterProbeMask`); the irradiance has
  *    no negative, infinite or NaN value.
  *
@@ -32,7 +41,19 @@ import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/con
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { equirectUvToDirection } from '../../../../packages/ddgi-core/src/platform/sky/equirect.ts';
-import { INVALID_ID, integrateHemisphereSH, projectProbe, probeCellDirection, shIrradiance, unpackSeed, type Direction } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
+import {
+    INVALID_ID,
+    integrateHemisphereSH,
+    interpolateScreenProbes,
+    projectProbe,
+    probeCellDirection,
+    shIrradiance,
+    unpackSeed,
+    type Direction,
+    type InterpolationInputs,
+} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { screenProbeCellSize, viewForward } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
@@ -62,6 +83,14 @@ const SH_MEAN_TOLERANCE = 0.025;
 const SH_PROBE_P95_TOLERANCE = 0.06;
 /** The varying sky's interpolated E against the CPU's E from the reference SH: mean and 95th percentile. */
 const VARYING_E_TOLERANCE = 0.02;
+/** Section 3: a pixel's E against the CPU's, relative to the larger of the CPU's E and 1% of the mean. */
+const MIX_TOLERANCE = 0.01;
+/**
+ * Section 3: pixels allowed past {@link MIX_TOLERANCE}. The GPU's f32
+ * positions and the CPU's f64 can decide the jitter's plane test or a probe's
+ * plane test differently right at the threshold.
+ */
+const MIX_OUTLIER_FRACTION = 0.005;
 /** Equirect image of the varying sky the page hands the platform (it bakes its own 256 × 128 map from it). */
 const SKY_IMAGE = { width: 512, height: 256 } as const;
 /** The floor's normal: every probe's frame. */
@@ -79,8 +108,39 @@ function frameInput(): FrameInput {
     return { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(CAMERA, WIDTH, HEIGHT) };
 }
 
-/** A 400 m floor at y = 0 under `environment`, no lights; frames until the trees are built, then one more. */
-async function runFloor(device: GPUDevice, name: string, environment: Parameters<GIPlatformImpl['scene']['setEnvironment']>[0]): Promise<ImageRun> {
+/** Quads as triangle lists: four corners each, in order around the quad, and the quad's normal. */
+function quadsMesh(quads: ReadonlyArray<{ corners: readonly Direction[]; normal: Direction }>): { positions: Float32Array; normals: Float32Array; indices: Uint32Array } {
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    for (const quad of quads) {
+        const base = positions.length / 3;
+        for (const corner of quad.corners) {
+            positions.push(...corner);
+            normals.push(...quad.normal);
+        }
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    return { positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices) };
+}
+
+/**
+ * Section 3's step and corner: a box 1 m high on the floor in front of the
+ * camera and a 6 m wall 25 m away, so probes differ by normal and by what
+ * they see (the box and wall hide part of the sky), and the pixel plane,
+ * depth and normal weights all decide something.
+ */
+const STEP_AND_WALL = quadsMesh([
+    { corners: [[-2, 1, -6], [1, 1, -6], [1, 1, -9], [-2, 1, -9]], normal: [0, 1, 0] },
+    { corners: [[-2, 0, -6], [1, 0, -6], [1, 1, -6], [-2, 1, -6]], normal: [0, 0, 1] },
+    { corners: [[1, 0, -6], [1, 0, -9], [1, 1, -9], [1, 1, -6]], normal: [1, 0, 0] },
+    { corners: [[-2, 0, -9], [-2, 0, -6], [-2, 1, -6], [-2, 1, -9]], normal: [-1, 0, 0] },
+    { corners: [[1, 0, -9], [-2, 0, -9], [-2, 1, -9], [1, 1, -9]], normal: [0, 0, -1] },
+    { corners: [[-200, 0, -25], [200, 0, -25], [200, 6, -25], [-200, 6, -25]], normal: [0, 0, 1] },
+]);
+
+/** A 400 m floor at y = 0 under `environment`, no lights (with `withStep`, also section 3's box and wall); frames until the trees are built, then one more. */
+async function runFloor(device: GPUDevice, name: string, environment: Parameters<GIPlatformImpl['scene']['setEnvironment']>[0], withStep = false): Promise<ImageRun> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-image ${name}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique());
     platform.setOutput(technique);
@@ -95,6 +155,10 @@ async function runFloor(device: GPUDevice, name: string, environment: Parameters
     });
     const material = scene.createMaterial({ albedo: [0.5, 0.5, 0.5], label: 'floor' });
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'floor' });
+    if (withStep) {
+        const stepMesh = scene.createMesh({ ...STEP_AND_WALL, label: 'step and wall' });
+        scene.createInstance({ mesh: stepMesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'step and wall' });
+    }
     scene.setEnvironment(environment);
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
@@ -243,6 +307,114 @@ async function checkMaskMips(device: GPUDevice, run: ImageRun, fail: (message: s
     return { levels: probeMaskMipCount, mismatches };
 }
 
+/**
+ * Section 3: the GPU's interpolated E at every surface pixel against the CPU
+ * port of `InterpolateScreenProbes` on the GPU's own inputs.
+ */
+async function checkInterpolation(device: GPUDevice, run: ImageRun, fail: (message: string) => void): Promise<Record<string, unknown>> {
+    const probes = run.technique.probes;
+    if (!probes) throw new Error('no probes after encodeScreen');
+    const { probeCount, probeMaskMipCount } = probes.layout;
+    const readback = await readRun(device, run);
+    const depth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
+    const normals = halves(await readTexture(device, run.screen.screen.normal, 8, WIDTH, HEIGHT));
+    const levels: Array<{ width: number; texels: Uint32Array }> = [];
+    for (let level = 0; level < probeMaskMipCount; level++) {
+        const size = [Math.max(1, probeCount[0] >> level), Math.max(1, probeCount[1] >> level)];
+        levels.push({ width: size[0], texels: new Uint32Array((await readTexture(device, probes.probeMask, 4, size[0], size[1], level)).buffer) });
+    }
+    const camera = frameCamera(CAMERA, WIDTH, HEIGHT);
+    const inverse = cameraRelativeInverseViewProjection(camera);
+    const eye = camera.position;
+    const worldPosition = (x: number, y: number): Direction => {
+        const ndc = [(2 * (x + 0.5)) / WIDTH - 1, 2 * (1 - (y + 0.5) / HEIGHT) - 1, depth[y * WIDTH + x], 1];
+        const h = [0, 1, 2, 3].map((row) => inverse[row] * ndc[0] + inverse[4 + row] * ndc[1] + inverse[8 + row] * ndc[2] + inverse[12 + row] * ndc[3]);
+        return [eye[0] + h[0] / h[3], eye[1] + h[1] / h[3], eye[2] + h[2] / h[3]];
+    };
+    const normal = (x: number, y: number): Direction => {
+        const index = (y * WIDTH + x) * 4;
+        const length = Math.hypot(normals[index], normals[index + 1], normals[index + 2]);
+        return [normals[index] / length, normals[index + 1] / length, normals[index + 2] / length];
+    };
+    const coefficientsByTile = new Map<number, number[]>();
+    const inputs: InterpolationInputs = {
+        width: WIDTH,
+        height: HEIGHT,
+        frameIndex: probes.frameIndex,
+        cellSize: screenProbeCellSize(camera, WIDTH, HEIGHT),
+        eye: [eye[0], eye[1], eye[2]],
+        viewForward: viewForward(camera),
+        probeMaskMipCount,
+        isSky: (x, y) => readback.isSky(y * WIDTH + x),
+        worldPosition,
+        normal,
+        probeMask: (level, x, y) => levels[level].texels[y * levels[level].width + x],
+        probeIrradiance: (tileX, tileY, direction) => {
+            const key = tileY * probeCount[0] + tileX;
+            let coefficients = coefficientsByTile.get(key);
+            if (!coefficients) {
+                coefficients = probeCoefficients(readback, ((tileX * PROBE_SIZE) << 16) | (tileY * PROBE_SIZE));
+                coefficientsByTile.set(key, coefficients);
+            }
+            return shIrradiance(coefficients, direction);
+        },
+    };
+    let surfacePixels = 0;
+    let gpuSum = 0;
+    let hintMismatches = 0;
+    let backupPixels = 0;
+    let mixedPixels = 0;
+    const cpuValues: Array<{ pixel: number; cpu: number; nearest: number }> = [];
+    for (let y = 0; y < HEIGHT; y++) {
+        for (let x = 0; x < WIDTH; x++) {
+            const pixel = y * WIDTH + x;
+            const result = interpolateScreenProbes(inputs, x, y);
+            if (!result) continue;
+            surfacePixels++;
+            const gpu = readback.irradiance.subarray(pixel * 4, pixel * 4 + 4);
+            gpuSum += (gpu[0] + gpu[1] + gpu[2]) / 3;
+            if (gpu[3] !== result.hint) hintMismatches++;
+            if (result.hint === 0) backupPixels++;
+            if (result.weights.filter((w) => w > 0).length > 1) mixedPixels++;
+            const [sx, sy] = unpackSeed(result.probes[0]);
+            const nearest = result.probes[0] === INVALID_ID ? 0 : inputs.probeIrradiance(Math.floor(sx / PROBE_SIZE), Math.floor(sy / PROBE_SIZE), normal(x, y));
+            cpuValues.push({ pixel, cpu: result.irradiance, nearest });
+        }
+    }
+    const meanE = gpuSum / Math.max(surfacePixels, 1);
+    const errors: number[] = [];
+    const nearestOnly: number[] = [];
+    for (const { pixel, cpu, nearest } of cpuValues) {
+        const gpu = (readback.irradiance[pixel * 4] + readback.irradiance[pixel * 4 + 1] + readback.irradiance[pixel * 4 + 2]) / 3;
+        const scale = Math.max(cpu, 0.01 * meanE);
+        errors.push(Math.abs(gpu - cpu) / scale);
+        nearestOnly.push(Math.abs(nearest - cpu) / scale);
+    }
+    const outliers = errors.filter((error) => error > MIX_TOLERANCE).length;
+    const outlierFraction = outliers / Math.max(surfacePixels, 1);
+    const nearestOnlyFraction = nearestOnly.filter((error) => error > MIX_TOLERANCE).length / Math.max(surfacePixels, 1);
+    if (surfacePixels < (WIDTH * HEIGHT) / 2) fail(`interpolation: only ${surfacePixels} surface pixels`);
+    if (!(outlierFraction <= MIX_OUTLIER_FRACTION)) {
+        fail(`interpolation: ${outliers} of ${surfacePixels} pixels (${(outlierFraction * 100).toFixed(2)}%) differ from the CPU's InterpolateScreenProbes by more than ${MIX_TOLERANCE * 100}%`);
+    }
+    if (!(hintMismatches <= MIX_OUTLIER_FRACTION * surfacePixels)) fail(`interpolation: the denoiser hint differs from the CPU's on ${hintMismatches} pixels`);
+    // The check must be able to fail: the nearest probe alone has to miss on many pixels.
+    if (!(nearestOnlyFraction >= 20 * MIX_OUTLIER_FRACTION)) {
+        fail(`interpolation: the scene does not test the mix (the nearest probe alone is off on only ${(nearestOnlyFraction * 100).toFixed(2)}% of pixels)`);
+    }
+    return {
+        surfacePixels,
+        meanE,
+        meanError: errors.reduce((sum, value) => sum + value, 0) / Math.max(errors.length, 1),
+        p99Error: percentile(errors, 0.99),
+        outliers,
+        hintMismatches,
+        backupPixels,
+        mixedPixels,
+        nearestOnlyOffFraction: nearestOnlyFraction,
+    };
+}
+
 /** Draws one of the technique's debug views into a canvas on the page, for the runner's screenshot. */
 async function showDebugView(device: GPUDevice, run: ImageRun, view: RadianceCacheDebugViewId, exposure: number, caption: string, column: HTMLElement): Promise<void> {
     const target = device.createTexture({ size: [WIDTH, HEIGHT], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
@@ -382,6 +554,17 @@ try {
     } finally {
         varying.dispose();
         skyTexture.destroy();
+        await device.queue.onSubmittedWorkDone();
+    }
+
+    // 3. The interpolation's mix on a step and a wall: every pixel against the CPU port.
+    const stepSky = varyingSkyTexture(device);
+    const step = await runFloor(device, 'step', { type: 'texture', texture: stepSky, layout: 'equirect' }, true);
+    try {
+        data.interpolation = await checkInterpolation(device, step, fail);
+    } finally {
+        step.dispose();
+        stepSky.destroy();
         await device.queue.onSubmittedWorkDone();
     }
 

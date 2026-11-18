@@ -1,4 +1,4 @@
 {
-    "description": "RC2.2: the radiance cache image passes on a floor under a constant sky (the Lambert check: E = pi L within 1%, mean and p95 per pixel) and a direction-varying sky (each probe SH against the integral, E against the CPU), the probe mask mips; the varying sky atlas, mask and SH views drawn for the screenshot. Correctness only.",
+    "description": "RC2.2: the radiance cache image passes on a floor under a constant sky (the Lambert check: E = pi L within 1%, mean and p95 per pixel) and a direction-varying sky (each probe SH against the integral, E against the CPU), the interpolation's mix on a step and a wall against the CPU port of InterpolateScreenProbes, the probe mask mips; the varying sky atlas, mask and SH views drawn for the screenshot. Correctness only.",
     "timeoutMs": 240000
 }
