@@ -23,6 +23,11 @@
  * (some light arrives); the screen stage ran once per picture; no device
  * error (the harness). The sheet shows frame 60.
  *
+ * And per pixel, at frame 60: the radiance cache's picture minus its pass's
+ * own colour (GI off) equals `giAlbedo × E / π` with E the irradiance image's
+ * texel at the same pixel, so a flipped or offset `screenUV`, a lost π or a
+ * wrong weight fails (RC2.2 review).
+ *
  * The contact sheet the runner's screenshot captures: per scene, DDGI, the
  * radiance cache, the radiance cache's E / π (what a white surface would
  * reflect) and its SH debug view, at the same exposure (from DDGI's mean).
@@ -52,6 +57,12 @@ const PROBES_PER_FRAME = 4096;
 const WARM_FRAMES = 3;
 /** The radiance cache's frames at which its picture and irradiance are scanned; the last is the sheet's. */
 const SCAN_FRAMES = [1, 30, 60] as const;
+/** The composite check: |(picture − pass colour) − giAlbedo × E / π| within this share of the expected value... */
+const COMPOSITE_RELATIVE_TOLERANCE = 1e-3;
+/** ...plus this share of the picture's value (f32 sums of half-float inputs). */
+const COMPOSITE_PICTURE_TOLERANCE = 1e-4;
+/** Pixels allowed past it (edge texels whose filtered sample differs). */
+const COMPOSITE_OUTLIER_FRACTION = 0.001;
 /** Contact sheet thumbnails, CSS pixels. */
 const THUMBNAIL_WIDTH = 300;
 /** The sheet's exposure puts DDGI's mean surface luminance here before tone mapping. */
@@ -71,6 +82,8 @@ interface SceneResult {
     readonly backupHints: number;
     readonly screenStages: number;
     readonly probes: number;
+    /** The per-pixel composite check: pixels compared, those past the tolerance, the largest error relative to the expected GI. */
+    readonly composite: { pixels: number; outliers: number; worstRelative: number; meanGi: number };
     /** NaN or infinite, and negative, values per scanned frame: picture, then irradiance. */
     readonly scans: readonly { frame: number; meanIrradiance: number; pictureNonFinite: number; pictureNegative: number; irradianceNonFinite: number; irradianceNegative: number }[];
 }
@@ -182,6 +195,36 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
 
         // Surfaces, from the radiance cache's pass as it last drew (no new frame).
         const surfaces = await reader.read(surfaceNode, false);
+        // The same pass's own colour (GI off) and giAlbedo, as it last drew.
+        const passColor = await reader.read(rcPass.getTextureNode('output') as unknown as Node, false);
+        const passAlbedo = await reader.read(rcPass.getTextureNode(GI_ALBEDO_OUTPUT) as unknown as Node, false);
+        let compositePixels = 0;
+        let compositeOutliers = 0;
+        let worstRelative = 0;
+        let giSum = 0;
+        for (let pixel = 0; pixel < SIZE.width * SIZE.height; pixel++) {
+            if (surfaces[pixel * 4] < 0.5) continue;
+            const weightSum = passAlbedo[pixel * 4] + passAlbedo[pixel * 4 + 1] + passAlbedo[pixel * 4 + 2];
+            if (!(weightSum > 0)) continue;
+            compositePixels++;
+            let bad = false;
+            for (let channel = 0; channel < 3; channel++) {
+                const index = pixel * 4 + channel;
+                const expected = (passAlbedo[index] * irradiance[index]) / Math.PI;
+                const added = picture[index] - passColor[index];
+                const error = Math.abs(added - expected);
+                giSum += expected;
+                if (error > COMPOSITE_RELATIVE_TOLERANCE * expected + COMPOSITE_PICTURE_TOLERANCE * Math.abs(picture[index]) + 1e-6) bad = true;
+                if (expected > 1e-4) worstRelative = Math.max(worstRelative, error / expected);
+            }
+            if (bad) compositeOutliers++;
+        }
+        const compositeCheck = { pixels: compositePixels, outliers: compositeOutliers, worstRelative, meanGi: giSum / Math.max(3 * compositePixels, 1) };
+        assert(compositePixels > (SIZE.width * SIZE.height) / 4, `${sceneId}: only ${compositePixels} pixels for the composite check`);
+        assert(
+            compositeOutliers <= COMPOSITE_OUTLIER_FRACTION * compositePixels,
+            `${sceneId}: on ${compositeOutliers} of ${compositePixels} pixels the picture minus the pass colour isn't giAlbedo x E / pi of the same pixel`,
+        );
 
         let pictureNonFinite = 0;
         let pictureNegative = 0;
@@ -258,6 +301,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             screenStages,
             probes: probeCount,
             scans,
+            composite: compositeCheck,
         };
     } finally {
         reader.dispose();
