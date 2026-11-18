@@ -1295,10 +1295,10 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
             result.worst = Math.max(result.worst, error);
             if (error > TOLERANCE) {
                 result.off++;
-                if (result.off <= 3) fail(`cell ${cell} holds a ${name} mean of ${(value[0] / value[3]).toFixed(4)} over ${value[3]} samples, expected ${expected.toFixed(4)}`);
+                if (result.off <= 3) fail(`cell ${cell}'s ${name} value is a mean of ${(value[0] / value[3]).toFixed(4)} over ${value[3]} samples, expected ${expected.toFixed(4)}`);
             }
         }
-        if (result.cells === 0) fail(`no cell has a ${name} sample`);
+        if (result.cells === 0) fail(`no cell has ${name} samples`);
         if (result.off > 0) fail(`${result.off} of ${result.cells} cells' ${name} means are more than 2% off`);
         return result;
     };
