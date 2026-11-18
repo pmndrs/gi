@@ -36,6 +36,7 @@ THE SOFTWARE.
  */
 
 import type { Vec3 } from '../../../platform/contract/math.ts';
+import { halfBitsToFloat } from '../capsaicin-math.ts';
 import type { HashGridCacheCapacity } from './capacity.ts';
 
 const f32 = Math.fround;
@@ -270,6 +271,31 @@ export function updateTilesAccumulate(stored: CellValue, newSamples: CellValue, 
     const newRadiance = newSamples.map((value) => f32(value / newScale));
     const blended = radiance[3] <= 0 ? newRadiance : radiance.map((value, channel) => f32(value + f32(f32(newRadiance[channel] - value) * f32(1 / sampleCount))));
     return [f32(blended[0] * sampleCount), f32(blended[1] * sampleCount), f32(blended[2] * sampleCount), f32(blended[3] * sampleCount)];
+}
+
+/**
+ * `HashGridCache_RoundHalfBits` (ours, register D31): the half nearest
+ * `value`, a tie to the even one as `f32tof16` rounds, from the half `bits`
+ * that `pack2x16float` gave for it (either neighbour: WGSL leaves the
+ * rounding open, and our GPUs truncate). `value` is in the half range (the
+ * WGSL clamps it first). Step for step as the WGSL, in f32.
+ */
+export function hashGridCacheRoundHalfBits(value: number, bits: number): number {
+    const magnitude = Math.abs(f32(value));
+    const packedMagnitude = Math.abs(halfBitsToFloat(bits));
+    if (magnitude === packedMagnitude) return bits;
+    let lower = bits;
+    let upper = bits + 1;
+    if (packedMagnitude > magnitude) {
+        lower = bits - 1;
+        upper = bits;
+    } else if ((bits & 0x7fff) >= 0x7bff) {
+        return bits;
+    }
+    const below = f32(magnitude - Math.abs(halfBitsToFloat(lower)));
+    const above = f32(Math.abs(halfBitsToFloat(upper)) - magnitude);
+    const upperIsEven = (upper & 1) === 0;
+    return above < below || (above === below && upperIsEven) ? upper : lower;
 }
 
 /**

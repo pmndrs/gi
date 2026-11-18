@@ -38,6 +38,7 @@ import {
 import { hashGridCacheCellSizeConstant, verticalFieldOfView } from './hash-grid-cpu.ts';
 import {
     generateReservoirsWgsl,
+    checkHashGridRayListLimits,
     hashGridCacheRayListLayout,
     POPULATION_ENTRY_POINT,
     POPULATION_WORKGROUP_SIZE,
@@ -431,6 +432,8 @@ export class HashGridCache implements WorldCache {
         this.releaseRayData();
         const { device } = prepared;
         const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells);
+        // The lists grow with the screen: a device that can't bind them gets GILimitError before anything is made (D14).
+        checkHashGridRayListLimits(layout, device.limits);
         const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
         device.queue.writeBuffer(
             prepared.rayListsUniform,

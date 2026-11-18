@@ -65,9 +65,9 @@ import type { WgslModule } from './wgsl';
  * // The random numbers gi/direct uses for a ray of a ray scratch (see `direct`).
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f
  *
- * // One light per hit, its shadow ray traced by the caller (a technique that
- * // draws a light in one pass and traces it in a later one, as Capsaicin's
- * // GI-1 does; RC3.2). The candidates and their weights are those
+ * // One light per hit, its shadow ray traced by the caller (for a technique
+ * // that chooses a light in one pass and traces its shadow ray later). The
+ * // candidates and their weights are those
  * // giDirectIrradiance uses (directional lights, then every point and spot
  * // light or the light grid's picks for the hit's cell; weight = luminance of
  * // the unshadowed irradiance x share). One is drawn with probability

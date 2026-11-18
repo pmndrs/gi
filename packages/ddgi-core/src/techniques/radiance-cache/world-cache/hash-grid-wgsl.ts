@@ -509,27 +509,42 @@ fn HashGridCache_RecoverRadiance(quantized_radiance: vec4u) -> vec4f {
 const HASHGRIDCACHE_LARGEST_HALF: f32 = 65504.0;
 
 // Two floats as halves, as HLSL's f32tof16 makes them (register D31): rounded to the nearest
-// half (pack2x16float truncates on both our GPUs, NOTES, and UpdateTiles re-packs every value
-// each frame, where truncation would pull a cell's running mean down by up to 16 half steps),
-// and clamped to the largest finite half (beyond it pack2x16float is indeterminate in WGSL,
-// where f32tof16 gives infinity).
+// half, ties to even (pack2x16float truncates on both our GPUs, NOTES, and UpdateTiles re-packs
+// every value each frame, where truncation would pull a cell's running mean down by up to 16
+// half steps), and clamped to the largest finite half (beyond it pack2x16float is indeterminate
+// in WGSL, where f32tof16 gives infinity).
 fn HashGridCache_PackHalf2(value: vec2f) -> u32 {
     let clamped = clamp(value, vec2f(-HASHGRIDCACHE_LARGEST_HALF), vec2f(HASHGRIDCACHE_LARGEST_HALF));
     let packed = pack2x16float(clamped);
     return HashGridCache_RoundHalfBits(clamped.x, packed & 0xffffu) | (HashGridCache_RoundHalfBits(clamped.y, packed >> 16u) << 16u);
 }
 
-// The half 'bits' pack2x16float gave for 'value', or the next half away from zero when that one
-// is nearer (ties keep 'bits').
+// The half nearest 'value' (within the half range), a tie going to the even one as f32tof16's
+// does, worked out from the half 'bits' pack2x16float gave for it. WGSL lets that be either
+// neighbour, so the pair around 'value' is taken from whichever side 'bits' landed on. Halves
+// are sign and magnitude: one step up in the bits is one step away from zero. The distances
+// are exact in f32 wherever a tie can happen (each is a difference of two floats within a
+// factor of two, or of a float and zero).
 fn HashGridCache_RoundHalfBits(value: f32, bits: u32) -> u32 {
     let magnitude = abs(value);
     let packed_magnitude = abs(unpack2x16float(bits).x);
-    // Already the nearer one (or above), or the largest finite half: nothing further out to take.
-    if (!(magnitude > packed_magnitude) || (bits & 0x7fffu) >= 0x7bffu) {
+    if (magnitude == packed_magnitude) {
         return bits;
     }
-    let next_magnitude = abs(unpack2x16float(bits + 1u).x);
-    return select(bits, bits + 1u, next_magnitude - magnitude < magnitude - packed_magnitude);
+    var lower = bits;
+    var upper = bits + 1u;
+    if (packed_magnitude > magnitude) {
+        // Rounded away from zero: the pair is the half below and this one.
+        lower = bits - 1u;
+        upper = bits;
+    } else if ((bits & 0x7fffu) >= 0x7bffu) {
+        // The largest finite half, and 'value' was clamped to it: nothing further out to take.
+        return bits;
+    }
+    let below = magnitude - abs(unpack2x16float(lower).x);
+    let above = abs(unpack2x16float(upper).x) - magnitude;
+    let upper_is_even = (upper & 1u) == 0u;
+    return select(lower, upper, above < below || (above == below && upper_is_even));
 }
 
 // Packs the radiance for storing inside the hash grid (:355-359): rgb and a sample count as halves

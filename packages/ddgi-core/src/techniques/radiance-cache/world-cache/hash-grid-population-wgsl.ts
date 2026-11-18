@@ -60,6 +60,7 @@ THE SOFTWARE.
  * one packed buffer (register D6) at the word offsets of `HashGridCacheRayLists`.
  */
 
+import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import type { HashGridCacheBufferLayout } from './capacity.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
@@ -169,6 +170,20 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         reservoirBuffer,
         bytes: Math.max(words, 1) * 4,
     };
+}
+
+/**
+ * Throws `GILimitError` naming the limit the per-ray lists pass. They are one
+ * buffer bound whole as one storage binding, so it must fit both the binding
+ * limit and the buffer limit. It grows with the screen (15 words per probe
+ * ray: 14 MB at 1280 × 720, 124 MB at 3840 × 2160, just under WebGPU's
+ * default 128 MiB binding), so a larger screen or a device with smaller
+ * limits can't bind it where the cache itself fits (register D14's rule:
+ * name the limit, no fallback).
+ */
+export function checkHashGridRayListLimits(layout: HashGridCacheRayListLayout, limits: Pick<GPUSupportedLimits, 'maxStorageBufferBindingSize' | 'maxBufferSize'>): void {
+    if (layout.bytes > limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', layout.bytes, limits.maxStorageBufferBindingSize);
+    if (layout.bytes > limits.maxBufferSize) throw new GILimitError('maxBufferSize', layout.bytes, limits.maxBufferSize);
 }
 
 /** The ray-data group's declarations, and Capsaicin's screen-probe helper the population passes call. */

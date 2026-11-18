@@ -10,6 +10,7 @@ import {
     hashGridCacheFilteredRadiance,
     hashGridCacheGetCellSize,
     hashGridCacheGetDesc,
+    hashGridCacheRoundHalfBits,
     hashGridCacheTileAge,
     pcgHash,
     updateTilesAccumulate,
@@ -17,7 +18,8 @@ import {
     xxHash,
     type HashGridCacheDescConstants,
 } from './hash-grid-cpu.ts';
-import { hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup } from './hash-grid-population-wgsl.ts';
+import { checkHashGridRayListLimits, hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup } from './hash-grid-population-wgsl.ts';
+import { floatToHalfBits, halfBitsToFloat } from '../capsaicin-math.ts';
 import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import type { WorldCacheContext } from './world-cache.ts';
 
@@ -360,6 +362,23 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
     it('holds at most one update entry per cell', () => {
         expect(hashGridCacheRayListLayout(1000, 100).visibilityCellBuffer).toBe(100);
     });
+
+    it('throws GILimitError naming the limit the lists pass (register D14)', () => {
+        // 3840 x 2160: 240 x 135 spawn tiles of 64 rays, 124 MB of lists.
+        const layout = hashGridCacheRayListLayout(240 * 135 * 64, 22282240);
+        expect(layout.bytes).toBe(15 * 240 * 135 * 64 * 4);
+        const defaults = { maxStorageBufferBindingSize: 134217728, maxBufferSize: 268435456 };
+        expect(() => checkHashGridRayListLimits(layout, defaults)).not.toThrow();
+        const small = { maxStorageBufferBindingSize: 64 * 2 ** 20, maxBufferSize: 268435456 };
+        expect(() => checkHashGridRayListLimits(layout, small)).toThrow(GILimitError);
+        try {
+            checkHashGridRayListLimits(layout, small);
+        } catch (error) {
+            expect((error as GILimitError).limit).toBe('maxStorageBufferBindingSize');
+            expect((error as GILimitError).needed).toBe(layout.bytes);
+        }
+        expect(() => checkHashGridRayListLimits(layout, { maxStorageBufferBindingSize: 2 ** 31, maxBufferSize: 64 * 2 ** 20 })).toThrow(/maxBufferSize/);
+    });
 });
 
 describe('UpdateTiles workgroups (gi1.comp:2116-2140)', () => {
@@ -368,5 +387,50 @@ describe('UpdateTiles workgroups (gi1.comp:2116-2140)', () => {
         expect(updateTilesPerWorkgroup(4)).toBe(4);
         expect(updateTilesPerWorkgroup(1)).toBe(64);
         expect(() => updateTilesPerWorkgroup(3)).toThrow(RangeError);
+    });
+});
+
+describe('HashGridCache_RoundHalfBits (register D31)', () => {
+    /** The half below or at `value` (what a truncating pack2x16float gives) and the one above. */
+    function neighbours(value: number): { truncated: number; roundedUp: number } {
+        const nearest = floatToHalfBits(value);
+        const truncated = Math.abs(halfBitsToFloat(nearest)) > Math.abs(Math.fround(value)) ? nearest - 1 : nearest;
+        const roundedUp = Math.abs(halfBitsToFloat(truncated)) < Math.abs(Math.fround(value)) ? truncated + 1 : truncated;
+        return { truncated, roundedUp };
+    }
+
+    it('rounds an exact tie to the even half, as f32tof16 does, from either neighbour', () => {
+        // 1 + 2^-11 lies halfway between 0x3c00 (even) and 0x3c01; 1 + 3 x 2^-11 between 0x3c01 and 0x3c02 (even).
+        for (const [value, expected] of [
+            [1 + 2 ** -11, 0x3c00],
+            [1 + 3 * 2 ** -11, 0x3c02],
+            [-(1 + 2 ** -11), 0xbc00],
+            [-(1 + 3 * 2 ** -11), 0xbc02],
+            [1000 + 0.25, 0x63d0], // 1000 is 0x63d0, the next half 1000.5: a tie to the even 1000
+            [3 * 2 ** -25, 0x0002], // between the subnormals 1 and 2 (x 2^-24): to 2
+        ] as const) {
+            const { truncated, roundedUp } = neighbours(value);
+            expect(truncated).not.toBe(roundedUp);
+            expect(hashGridCacheRoundHalfBits(value, truncated)).toBe(expected);
+            expect(hashGridCacheRoundHalfBits(value, roundedUp)).toBe(expected);
+            expect(floatToHalfBits(value)).toBe(expected);
+        }
+    });
+
+    it('gives the nearest half away from a tie, and keeps exact halves and the largest one', () => {
+        const random = (() => {
+            let state = 12345;
+            return () => ((state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 2 ** 32);
+        })();
+        for (let index = 0; index < 5000; index++) {
+            const value = Math.fround((random() - 0.5) * 2 ** (random() * 40 - 24));
+            if (Math.abs(value) > 65504) continue;
+            const { truncated, roundedUp } = neighbours(value);
+            expect(hashGridCacheRoundHalfBits(value, truncated)).toBe(floatToHalfBits(value));
+            expect(hashGridCacheRoundHalfBits(value, roundedUp)).toBe(floatToHalfBits(value));
+        }
+        expect(hashGridCacheRoundHalfBits(1, 0x3c00)).toBe(0x3c00);
+        expect(hashGridCacheRoundHalfBits(65504, 0x7bff)).toBe(0x7bff);
+        expect(hashGridCacheRoundHalfBits(65503, 0x7bfe)).toBe(0x7bff);
     });
 });

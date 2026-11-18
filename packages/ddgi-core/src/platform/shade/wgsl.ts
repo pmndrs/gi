@@ -568,10 +568,9 @@ fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> b
 
 // ---- One light per hit, its shadow ray traced by the caller ------------------------------
 //
-// For a technique that draws one light for a hit in one pass and traces its
-// shadow ray in a later one, as Capsaicin's GI-1 does (a light reservoir per
-// hit in GenerateReservoirs, its shadow ray in PopulateCells; the radiance
-// cache, RC3.2). The candidates are those giDirectIrradiance weighs (the
+// For a technique that chooses a light for a hit in one pass and traces its
+// shadow ray later (it keeps the choice per hit between the two passes). The
+// candidates are those giDirectIrradiance weighs (the
 // directional lights; then every point and spot light, or with the light grid
 // the R picks of the hit's cell), each weighed the same way: the luminance of
 // its unshadowed irradiance at the surface times its share. One candidate is
