@@ -627,7 +627,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
 | --- | --- | --- | --- | --- | --- |
 | RC3.1 | The hash grid: one shared WGSL function for the cell descriptor and both hashes; CAS insert into 16-slot buckets, find, decay stamps and `PurgeTiles`; buffers packed at Capsaicin's default capacity; the `WorldCache` interface with the hash grid behind it | implementer | M | RC2.1 | done (2026-11-10; Opus review failed on the ray offset, fixed; both GPUs; 1,024 MiB at default capacity; wiring moved to RC3.2; D22-D24) |
 | RC3.2 | Population and resolve: probe-ray hits insert cells (`PopulateScreenProbes`' cache half), `GenerateReservoirs` (a light per hit through the platform light grid, D4, with the bypass rules), `PopulateCells` (shadow ray, quantised accumulation), `UpdateTiles` (temporal accumulation and the tile mips), `ResolveCells` (filtered lookup into the probe rays); phase 2's staging retired | implementer | M | RC3.1, RC2.2 | done (2026-11-19; Opus review: merge after fixes, all 8 fixed; RTX 3060; the NaN scan runs in a GPU page, the viewer image check moves to RC2.2, see PROGRESS) |
-| RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | todo |
+| RC3.3 | GI-1.2 multi-bounce: `PopulateMultibounceCells`, `GenerateMultibounceReservoirs`, `UpdateMultibounceCells` and the indirect value array | implementer | M | RC3.2 | review (2026-11-19; branch `rc3-3`; RTX 3060; furnace sections in `radiance-cache-world-cache`, five mutations caught; D34, D35; three Capsaicin behaviours for Dennis, see PROGRESS) |
 | RC3.4 | Sky light in the cache's light choice (register D33's way back): the platform's sky as a light in `giDirectChooseLight` (its radiance map importance-sampled, with a shadow ray), shared with DDGI's `gi/direct`. Not a phase-3 gate: outdoor scenes (Bistro exterior) miss the sky light on cache hits until it lands | implementer | M | RC3.2 | todo |
 
 - **RC3.1 done-when.**
@@ -651,6 +651,7 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
   - Two-room's closed room is visibly lit by the second bounce against RC3.2's image: its mean luminance rises, and the contact sheet is in PROGRESS.
   - The furnace room (white, closed, constant emitter or sky) moves toward the multi-bounce value against single bounce; the expected direction and size are stated before the run.
   - Cornell's indirect light against the Cycles reference is reported (single and multi-bounce), as information.
+  *Amended (RC3.3, 2026-11-19):* the viewer's technique entry and the composite are on RC2.2's unmerged branch, so on `rc3-3` the two-room check is the mean probe-ray radiance after 60 frames, on and off (`radiance-cache-scenes`), and the furnace is a GPU page section (`radiance-cache-world-cache` 8-10, its expected values written in the page before the run). The two-room contact sheet and Cornell against Cycles come with RC2.2's merge; Cornell has no punctual light, so with register D21 its cache, multibounce included, holds no light yet.
 
 ### radiance-cache phase 4: temporal quality, faithful
 
