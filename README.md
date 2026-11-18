@@ -65,6 +65,10 @@ Where to go next:
 
 The examples run from this repository: `pnpm install`, then `pnpm examples`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
+## Split Radiance Cascades experiment
+
+Run `pnpm examples` and open the [lamp gallery](http://localhost:5203/11-radiance-cascades/) to compare direct and bounced light along a repeatable architectural rail. The branch includes a GPU interval-tracing fixture and a paired ray-budget benchmark. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
+
 ## Browser support
 
 GI runs on WebGPU only; there is no WebGL fallback.
