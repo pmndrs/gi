@@ -106,7 +106,7 @@ export interface ScreenProbeLayout {
 /** The layout for a `width` × `height` screen. */
 export function screenProbeLayout(width: number, height: number): ScreenProbeLayout {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) {
-        throw new RangeError(`@pmndrs/ddgi: the radiance cache needs a screen of at least 1 × 1 whole pixels, got ${width} × ${height}`);
+        throw new RangeError(`@pmndrs/gi: the radiance cache needs a screen of at least 1 × 1 whole pixels, got ${width} × ${height}`);
     }
     const probeCount: [number, number] = [Math.ceil(width / PROBE_SIZE), Math.ceil(height / PROBE_SIZE)];
     const maxProbeSpawnCount = Math.ceil(width / PROBE_SPAWN_TILE_SIZE) * Math.ceil(height / PROBE_SPAWN_TILE_SIZE);

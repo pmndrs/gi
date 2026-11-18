@@ -309,7 +309,7 @@ function imagePixels(image: DrawableImage): CubeFacePixels<Uint8ClampedArray> {
     const height = (image as HTMLImageElement).naturalHeight || image.height;
     const canvas = new OffscreenCanvas(width, height);
     const context = canvas.getContext('2d');
-    if (!context) throw new Error('@pmndrs/ddgi: no 2D canvas to read an environment image with');
+    if (!context) throw new Error('@pmndrs/gi: no 2D canvas to read an environment image with');
     context.drawImage(image as CanvasImageSource, 0, 0);
     return { data: context.getImageData(0, 0, width, height).data, width, height };
 }

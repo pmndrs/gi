@@ -13,19 +13,32 @@
  * - `ev`, `tone` exposure in stops and the tone mapper; without `ev` the scene's own default (manifest `exposureEv`)
  * - `nav`        `orbit` or `fly`
  * - `upscale`    an upscaler quality preset; absent means off
- * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default 2)
+ * - `preset`     DDGI's quality preset, `low` or `medium` (absent: `high`, the defaults); it sets the
+ *                rays per probe, the tile sizes and the texture store, and the budget when the link
+ *                has no `budget`. Changing it starts DDGI over
+ * - `budget`     DDGI's GPU milliseconds per frame for probe updates (default: the preset's, 2 for `high`)
+ * - `warmup`     `0`: DDGI starts without its warm-up, so the probes fill in live from black (for
+ *                watching a saved bake load: the panel's "Load probes from a file")
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
- * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`, or a screen input
+ * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`, `gi-albedo`, or a screen input
  *                (RC1.1): `screen-depth`, `screen-normal`, `screen-velocity`, `screen-albedo`, `screen-instance`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
  * - `atlasev`    extra exposure for the irradiance atlas, in stops
  * - `change`     DDGI's change-per-frame view, full colour at this many percent (`0.25`, `1` or `4`)
+ * - `gitextures` `0`: GI's rays read every texture as its average colour (default on, M4's T4.4)
  * - `groups`     DDGI light groups with a layer each: `2` or `4` (absent: off)
  * - `tod`        time of day on, at `hour,day` (sun time 0 to 24, day of the year 1 to 365); it also
  *                turns DDGI's sun layer on
- * - `motion`     a light motion of the scene (`light-sweep`, `light-step`) playing
+ * - `motion`     a motion of the scene playing (`light-sweep`, `light-step`, `door-swing`, `fly-through`...)
+ * - `scenario`   one of the viewer's moving-geometry scenarios (`scenarios.ts`); a link with only
+ *                `scenario` opens its scene, camera view and motion
+ * - `follow`     `camera`: DDGI adds a finer volume of probes that follows the camera (T3.6)
+ * - `wind`       the wind strength for a swaying tree, in percent of the strongest (default 60)
+ * - `textures`   how model textures are kept on the GPU: `uncompressed`, or `compressed`; absent is
+ *                `all-compressed` (BC7/BC5 for every texture; GI reads the compressed mips since M4's
+ *                T4.3; scene/compress-textures.ts). Read when the scene loads
  * - `reach`      metres of reach for many shadowless lights with no range (`sponza-candles`' candles),
  *                so three can cull them; `0` keeps them unranged (exact and very slow). Read when the
  *                scene loads (render/scene-lighting.ts)
@@ -37,15 +50,25 @@
 
 import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
+import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
+import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
+
+/**
+ * The wind slider's start, a share of the strongest wind (`MAX_WIND_REACH_M`,
+ * lighting/motion-drivers.ts): 0.6, a tree crown that moves about 0.9 m at a
+ * full sway. Here, not in the motion player, so this file stays free of engine
+ * imports; the player reads it from here.
+ */
+export const DEFAULT_WIND_STRENGTH = 0.6;
 
 /** Exposure range in stops, for links and the slider: the same range a manifest's default may use. */
 export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
 
 export type GiChoice = 'off' | 'on' | 'only';
 
-/** DDGI's screen debug views by their link names (ids in `techniques/ddgi-technique.ts`). */
-export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'screen-depth' | 'screen-normal' | 'screen-velocity' | 'screen-albedo' | 'screen-instance';
-export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'screen-depth', 'screen-normal', 'screen-velocity', 'screen-albedo', 'screen-instance'];
+/** DDGI's screen debug views by their link names (`techniques/ddgi-technique.ts`; `gi-albedo` is the viewer's own, the `screen-*` views are the screen inputs, RC1.1). */
+export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'gi-albedo' | 'screen-depth' | 'screen-normal' | 'screen-velocity' | 'screen-albedo' | 'screen-instance';
+export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'gi-albedo', 'screen-depth', 'screen-normal', 'screen-velocity', 'screen-albedo', 'screen-instance'];
 
 export type ProbeColorName = 'state' | 'history';
 export type AtlasName = 'irradiance' | 'distance';
@@ -82,7 +105,11 @@ export interface ViewerUrlState {
     tone: string;
     nav: 'orbit' | 'fly';
     upscale: UpscaleQuality | null;
+    /** DDGI's quality preset (`ddgiPreset`); `high` is the defaults. */
+    preset: DDGIPresetName;
     budgetMs: number;
+    /** DDGI warms its probes up before showing them (`warmup=0` in a link turns it off). */
+    warmUp: boolean;
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
@@ -91,14 +118,24 @@ export interface ViewerUrlState {
     atlasEv: number;
     /** The change-per-frame view's full-colour change, in percent; null is off. */
     change: ChangeFullScalePercent | null;
+    /** GI's rays read material textures (`gitextures=0` in a link turns them off; `textures` is T3.12's compression choice). */
+    giTextures: boolean;
     /** DDGI's light groups: 0 (off), 2 or 4. */
     lightGroups: 0 | 2 | 4;
     /** Time of day, when on: the hour (sun time) and the day of the year. */
     timeOfDay: { hour: number; dayOfYear: number } | null;
-    /** The light motion playing (a manifest motion id), or null. */
+    /** The motion playing (a manifest motion id), or null. */
     motion: string | null;
+    /** The moving-geometry scenario chosen in the panel (an id from `scenarios.ts`), or null. */
+    scenario: string | null;
+    /** DDGI's camera-following volume (`follow=camera`). */
+    followCamera: boolean;
+    /** The wind strength, 0 to 1 (the link writes percent). */
+    windStrength: number;
     /** Reach in metres for many unranged shadowless lights (render/scene-lighting.ts); null is the viewer's default. */
     lightReach: number | null;
+    /** How model textures are kept on the GPU (scene/compress-textures.ts). */
+    textures: TextureCompression;
     /** Scene settings by name (`candles=4096`), as written; the scene's manifest says which it reads. */
     sceneSettings: Record<string, string>;
 }
@@ -115,7 +152,9 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     tone: 'aces',
     nav: 'orbit',
     upscale: null,
+    preset: 'high',
     budgetMs: DEFAULT_BUDGET_MS,
+    warmUp: true,
     probes: false,
     probeColor: 'state',
     debug: null,
@@ -123,15 +162,51 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     atlasFill: false,
     atlasEv: 0,
     change: null,
+    giTextures: true,
     lightGroups: 0,
     timeOfDay: null,
     motion: null,
+    scenario: null,
+    followCamera: false,
+    windStrength: DEFAULT_WIND_STRENGTH,
     lightReach: null,
+    textures: 'all-compressed',
     sceneSettings: {},
 };
 
 /** The link's own names; any other name is a scene setting. */
-const URL_KEYS = new Set(['scene', 'camera', 'cam', 'technique', 'gi', 'wipe', 'split', 'ev', 'tone', 'nav', 'upscale', 'budget', 'probes', 'debug', 'probecolor', 'atlas', 'atlasfill', 'atlasev', 'change', 'groups', 'tod', 'motion', 'reach']);
+const URL_KEYS = new Set([
+    'scene',
+    'camera',
+    'cam',
+    'technique',
+    'gi',
+    'wipe',
+    'split',
+    'ev',
+    'tone',
+    'nav',
+    'upscale',
+    'preset',
+    'budget',
+    'warmup',
+    'probes',
+    'debug',
+    'probecolor',
+    'atlas',
+    'atlasfill',
+    'atlasev',
+    'change',
+    'gitextures',
+    'groups',
+    'tod',
+    'motion',
+    'scenario',
+    'follow',
+    'wind',
+    'reach',
+    'textures',
+]);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
 const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
@@ -145,6 +220,11 @@ function finiteNumber(text: string | null): number | null {
     if (text === null || text.trim() === '') return null;
     const value = Number(text);
     return Number.isFinite(value) ? value : null;
+}
+
+/** A quality preset's budget in GPU milliseconds: what the budget slider moves to when the preset is picked. */
+export function presetBudgetMs(preset: DDGIPresetName): number {
+    return ddgiPreset(preset).budget.gpuMs;
 }
 
 /** Reads a query string. Unknown or malformed values fall back to the defaults. */
@@ -182,8 +262,13 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (params.get('nav') === 'fly') state.nav = 'fly';
     state.upscale = UPSCALE_QUALITIES.find((quality) => quality === params.get('upscale')) ?? null;
 
+    const preset = params.get('preset');
+    if (isDDGIPresetName(preset)) state.preset = preset;
+    // Without a budget of its own, the link's budget is the preset's.
+    state.budgetMs = presetBudgetMs(state.preset);
     const budget = finiteNumber(params.get('budget'));
     if (budget !== null) state.budgetMs = Math.min(MAX_BUDGET_MS, Math.max(MIN_BUDGET_MS, budget));
+    state.warmUp = params.get('warmup') !== '0';
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
     if (params.get('probecolor') === 'history') state.probeColor = 'history';
@@ -194,6 +279,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     if (atlasEv !== null) state.atlasEv = Math.min(MAX_ATLAS_EV, Math.max(-MAX_ATLAS_EV, Math.round(atlasEv / ATLAS_EV_STEP) * ATLAS_EV_STEP));
     const change = finiteNumber(params.get('change'));
     state.change = CHANGE_FULL_SCALE_PERCENTS.find((percent) => percent === change) ?? null;
+    state.giTextures = params.get('gitextures') !== '0';
     const groups = finiteNumber(params.get('groups'));
     if (groups === 2 || groups === 4) state.lightGroups = groups;
     const timeOfDay = params.get('tod')?.split(',').map(Number);
@@ -202,8 +288,14 @@ export function parseUrlState(search: string): ViewerUrlState {
     }
     const motion = params.get('motion');
     if (motion && /^[a-z0-9-]+$/.test(motion)) state.motion = motion;
+    const scenario = params.get('scenario');
+    if (scenario && /^[a-z0-9-]+$/.test(scenario)) state.scenario = scenario;
+    state.followCamera = params.get('follow') === 'camera';
+    const wind = finiteNumber(params.get('wind'));
+    if (wind !== null) state.windStrength = Math.min(1, Math.max(0, wind / 100));
     const reach = finiteNumber(params.get('reach'));
     if (reach !== null && reach >= 0) state.lightReach = reach;
+    state.textures = TEXTURE_COMPRESSIONS.find((mode) => mode === params.get('textures')) ?? state.textures;
     return state;
 }
 
@@ -223,7 +315,9 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.tone !== DEFAULT_URL_STATE.tone) params.set('tone', state.tone);
     if (state.nav !== 'orbit') params.set('nav', state.nav);
     if (state.upscale) params.set('upscale', state.upscale);
-    if (state.budgetMs !== DEFAULT_BUDGET_MS) params.set('budget', String(state.budgetMs));
+    if (state.preset !== DEFAULT_URL_STATE.preset) params.set('preset', state.preset);
+    if (state.budgetMs !== presetBudgetMs(state.preset)) params.set('budget', String(state.budgetMs));
+    if (!state.warmUp) params.set('warmup', '0');
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);
@@ -231,10 +325,15 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.atlasFill) params.set('atlasfill', '1');
     if (state.atlasEv !== DEFAULT_URL_STATE.atlasEv) params.set('atlasev', String(state.atlasEv));
     if (state.change !== null) params.set('change', String(state.change));
+    if (!state.giTextures) params.set('gitextures', '0');
     if (state.lightGroups !== 0) params.set('groups', String(state.lightGroups));
     if (state.timeOfDay) params.set('tod', `${state.timeOfDay.hour.toFixed(2)},${state.timeOfDay.dayOfYear}`);
     if (state.motion) params.set('motion', state.motion);
+    if (state.scenario) params.set('scenario', state.scenario);
+    if (state.followCamera) params.set('follow', 'camera');
+    if (state.windStrength !== DEFAULT_URL_STATE.windStrength) params.set('wind', String(Math.round(state.windStrength * 100)));
     if (state.lightReach !== null) params.set('reach', String(state.lightReach));
+    if (state.textures !== DEFAULT_URL_STATE.textures) params.set('textures', state.textures);
     for (const [name, value] of Object.entries(state.sceneSettings)) if (!URL_KEYS.has(name)) params.set(name, value);
     return params.toString();
 }

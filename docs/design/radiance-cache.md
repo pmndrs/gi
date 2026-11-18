@@ -6,7 +6,7 @@ Based on AMD GI-1.0/1.2. The reference is AMD Capsaicin v1.3 (`914b915`, MIT), w
 
 ## What it is
 
-The second technique on the platform, next to DDGI, at `packages/ddgi-core/src/techniques/radiance-cache/`, published as `@pmndrs/ddgi/radiance-cache`.
+The second technique on the platform, next to DDGI, at `packages/ddgi-core/src/techniques/radiance-cache/`. Not published yet: since the merge with `main` (2026-11-19) the package is `@pmndrs/gi`, and the technique stays out of it until it is validated (three.js-only rule); a `@pmndrs/gi/radiance-cache` subpath, on the pattern of DECISIONS 2026-11-10, is Dennis's call. Pages and tests import it by path.
 
 - **Screen cache:** one 8x8 hemi-octahedral probe per 16x16 screen tile, placed on visible surfaces, filled over several frames and reused by reprojection. Detail where the camera looks, quick reaction to change.
 - **World cache:** a spatial hash grid of outgoing radiance at ray hits, cells sized by camera distance, freed when unused. Probe rays end in it. A second layer of cells carries the next bounce.
@@ -129,7 +129,7 @@ Capsaicin's defaults allocate about 1 GiB for the hash cache (2^14 buckets × 16
 ## Where the code goes
 
 - **Branch:** `radiance-cache`, cut from `m2`. Platform changes are made as separate commits (one per phase-1 row, each on its own branch `rc1-<row>` merged into `radiance-cache`) so each can merge to the main line on its own and M3/M4 agents can use them.
-- **Technique:** `packages/ddgi-core/src/techniques/radiance-cache/`, importing only `platform/contract` (RC1.2 enforces it). Import path `@pmndrs/ddgi/radiance-cache` until the package-split decision (DECISIONS: revisit when a second technique ships).
+- **Technique:** `packages/ddgi-core/src/techniques/radiance-cache/`, importing only `platform/contract` (RC1.2 enforces it). Not in the published package yet (above); when it is, the path is `@pmndrs/gi/radiance-cache` (DECISIONS 2026-11-10), until the package-split decision (DECISIONS: revisit when a second technique ships).
 - **Adapter:** screen-input wiring and a composite node in `packages/ddgi-three`, following the additive composite (`albedo/π × E` before tone mapping).
 - **Denoisers and upscaling:** contributed to `pmndrs/denoiser` and `pmndrs/upscaler` and used through their public APIs.
 

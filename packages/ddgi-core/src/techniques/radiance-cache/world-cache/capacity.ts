@@ -96,7 +96,7 @@ export interface HashGridCacheCapacity {
 /** Throws a RangeError unless `value` is a whole number in [min, max]. */
 function checkWhole(name: string, value: number, min: number, max: number): void {
     if (!Number.isInteger(value) || value < min || value > max) {
-        throw new RangeError(`@pmndrs/ddgi: the world cache's ${name} must be a whole number from ${min} to ${max}, got ${value}`);
+        throw new RangeError(`@pmndrs/gi: the world cache's ${name} must be a whole number from ${min} to ${max}, got ${value}`);
     }
 }
 
@@ -122,7 +122,7 @@ export function hashGridCacheCapacity(options: Pick<HashGridCacheOptions, 'hashG
     const numTiles = numTilesPerBucket * numBuckets;
     const numCells = numCellsPerTile * numTiles;
     // Cell indices are u32 on the GPU, and the scratch holds four words per cell.
-    if (numCells * 4 * 2 > 0xffffffff) throw new RangeError(`@pmndrs/ddgi: the world cache's ${numCells} cells are too many to index with 32 bits`);
+    if (numCells * 4 * 2 > 0xffffffff) throw new RangeError(`@pmndrs/gi: the world cache's ${numCells} cells are too many to index with 32 bits`);
     return { numBuckets, numTilesPerBucket, sizeTileMip, numCellsPerTileMip, numCellsPerTile, firstCellOffsetTileMip, numTiles, numCells };
 }
 

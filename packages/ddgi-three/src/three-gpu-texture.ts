@@ -28,7 +28,7 @@ export const PINNED_THREE_REVISION = '187';
 export function checkThreeRevision(revision: string): void {
     if (revision !== PINNED_THREE_REVISION) {
         throw new Error(
-            `@pmndrs/ddgi/three: the screen inputs read three's render targets through its WebGPU backend, which was checked on three r${PINNED_THREE_REVISION}; ` +
+            `@pmndrs/gi/three: the screen inputs read three's render targets through its WebGPU backend, which was checked on three r${PINNED_THREE_REVISION}; ` +
                 `this is r${revision}. See packages/ddgi-three/src/three-gpu-texture.ts for what to check before allowing it.`,
         );
     }
@@ -62,10 +62,10 @@ export function threeGpuTexture(renderer: RendererWithBackend, texture: Texture,
     checkThreeRevision(revision);
     const backend = renderer.backend as Partial<BackendShape> | null | undefined;
     if (!backend || backend.isWebGPUBackend !== true || typeof backend.get !== 'function') {
-        throw new Error("@pmndrs/ddgi/three: the screen inputs need three's WebGPU backend (WebGPURenderer on a WebGPU device, not its WebGL 2 fallback)");
+        throw new Error("@pmndrs/gi/three: the screen inputs need three's WebGPU backend (WebGPURenderer on a WebGPU device, not its WebGL 2 fallback)");
     }
     const stored = backend.get(texture).texture;
     if (stored === undefined) return null;
-    if (!isGpuTexture(stored)) throw new Error(`@pmndrs/ddgi/three: three r${revision}'s backend data for texture '${texture.name}' isn't a GPUTexture; see three-gpu-texture.ts`);
+    if (!isGpuTexture(stored)) throw new Error(`@pmndrs/gi/three: three r${revision}'s backend data for texture '${texture.name}' isn't a GPUTexture; see three-gpu-texture.ts`);
     return stored;
 }

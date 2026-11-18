@@ -31,7 +31,16 @@
           "jsonSha256": "8a01b68c6adf6c8b854e1deabc14f8a37369bb31bfa0de5a9cff1b5764a2f800",
           "binBytes": 265074580,
           "bufferViewHashes": "tools/assets/glb-views/bistro-exterior.json",
-          "varyingAttributes": ["TANGENT"]
+          "varyingAttributes": ["TANGENT"],
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "e21eb0a4ee1478d0dcd301cef993fd951b1bda355a78b470e3305ca8ac95b8c5",
+              "bytes": 267018224,
+              "jsonSha256": "97b2341076533cf0bf479d783c8d247bc1abe64602e59d9e96d22dbe23465345",
+              "binBytes": 265070996,
+              "bufferViewHashes": "tools/assets/glb-views/bistro-exterior.darwin-arm64.json"
+            }
+          }
         }
       ]
     },
@@ -66,7 +75,16 @@
           "jsonSha256": "f9949e7e5d91f40cabeae1a8337d3808f0e84bd53d70a3c71a5887e15f33b57e",
           "binBytes": 77979452,
           "bufferViewHashes": "tools/assets/glb-views/bistro-interior.json",
-          "varyingAttributes": ["TANGENT"]
+          "varyingAttributes": ["TANGENT"],
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "eaca41c8fd4cd458dc7b63ef697479c6739b04130045937723bc910deecb6017",
+              "bytes": 80170136,
+              "jsonSha256": "c549c652b629914719e153d384b0280828ebd467a3c6d35dc1ac747c2cd06205",
+              "binBytes": 77919156,
+              "bufferViewHashes": "tools/assets/glb-views/bistro-interior.darwin-arm64.json"
+            }
+          }
         }
       ]
     },
@@ -200,7 +218,16 @@
           "jsonSha256": "363a576c3de047fdc277b19c47aa85783e13b76216af8b30a3f26091f04c220e",
           "binBytes": 151563012,
           "bufferViewHashes": "tools/assets/glb-views/courtyard-tree.json",
-          "varyingAttributes": ["TANGENT"]
+          "varyingAttributes": ["TANGENT"],
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "4740ca1f8d35877baf5f7b4c6ef3175dab76d6e7df1b86de162aa3c42c6c7bf3",
+              "bytes": 151569160,
+              "jsonSha256": "363a576c3de047fdc277b19c47aa85783e13b76216af8b30a3f26091f04c220e",
+              "binBytes": 151563012,
+              "bufferViewHashes": "tools/assets/glb-views/courtyard-tree.darwin-arm64.json"
+            }
+          }
         }
       ]
     },
@@ -225,7 +252,12 @@
         "sha256": "b8bb853884ab1566b3beb35666bd09882a4e0dc16661e4684e103792cf0229b9"
       },
       "extract": "zip",
-      "convert": {"tool": "blender", "blenderVersion": "4.5.0", "script": "tools/assets/convert/gltf-downsize-textures.py", "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]},
+      "convert": {
+        "tool": "blender",
+        "blenderVersion": "4.5.0",
+        "script": "tools/assets/convert/gltf-downsize-textures.py",
+        "args": ["main_sponza/NewSponza_Main_glTF_003.gltf", "main_sponza_1k/NewSponza_Main_1k.gltf", "1024"]
+      },
       "outputs": [
         {
           "path": "main_sponza/NewSponza_Main_glTF_003.gltf",
@@ -240,7 +272,13 @@
         {
           "path": "main_sponza_1k/NewSponza_Main_1k.gltf",
           "sha256": "d5f974f1270d7f9d512fda4f6eeb6550ae6861bf7d50c442eab7495b1b494e30",
-          "bytes": 693664
+          "bytes": 693664,
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "005aa1b66d7d1f01cd96d1e0903e0964a1f0ac2aebd142edc91ce0e5daf8395c",
+              "bytes": 661402
+            }
+          }
         },
         {
           "path": "main_sponza_1k/textures/arch_stone_wall_01_BaseColor.png",
@@ -628,11 +666,7 @@
       "convert": {
         "tool": "blender",
         "script": "tools/assets/convert/gltf-downsize-textures.py",
-        "args": [
-          "pkg_a_curtains/NewSponza_Curtains_glTF.gltf",
-          "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
-          "1024"
-        ],
+        "args": ["pkg_a_curtains/NewSponza_Curtains_glTF.gltf", "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf", "1024"],
         "blenderVersion": "4.5.0"
       },
       "outputs": [
@@ -649,7 +683,13 @@
         {
           "path": "pkg_a_curtains_1k/NewSponza_Curtains_1k.gltf",
           "sha256": "19f03dcbd8afb3e46a6d9bba65211584b854a6aeb4c978376b45f1ed3c316bbb",
-          "bytes": 65491
+          "bytes": 65491,
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "01d4ab7f1a9f6c5a4263f18adf75d00f482aa496bb83b7d849f4a44d71f51dd9",
+              "bytes": 62386
+            }
+          }
         },
         {
           "path": "pkg_a_curtains_1k/textures/curtain_fabric_Normal.png",
@@ -717,11 +757,7 @@
       "convert": {
         "tool": "blender",
         "script": "tools/assets/convert/gltf-downsize-textures.py",
-        "args": [
-          "pkg_b_ivy/NewSponza_IvyGrowth_glTF.gltf",
-          "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf",
-          "1024"
-        ],
+        "args": ["pkg_b_ivy/NewSponza_IvyGrowth_glTF.gltf", "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf", "1024"],
         "blenderVersion": "4.5.0"
       },
       "outputs": [
@@ -738,7 +774,13 @@
         {
           "path": "pkg_b_ivy_1k/NewSponza_IvyGrowth_1k.gltf",
           "sha256": "943cc9d0b58168bb7a30b3fbb25ce83093c5fe6fecf866ffbb6494c2f23bb7c6",
-          "bytes": 6057
+          "bytes": 6057,
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "794d93de4c08602e7bdb4a4f7f37b591bade312d5250ea36c1cfb0f94986a344",
+              "bytes": 5754
+            }
+          }
         },
         {
           "path": "pkg_b_ivy_1k/textures/IvyLeaf_Normal.png",
@@ -781,11 +823,7 @@
       "convert": {
         "tool": "blender",
         "script": "tools/assets/convert/gltf-downsize-textures.py",
-        "args": [
-          "pkg_c_trees/NewSponza_CypressTree_glTF.gltf",
-          "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf",
-          "1024"
-        ],
+        "args": ["pkg_c_trees/NewSponza_CypressTree_glTF.gltf", "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf", "1024"],
         "blenderVersion": "4.5.0"
       },
       "outputs": [
@@ -802,7 +840,13 @@
         {
           "path": "pkg_c_trees_1k/NewSponza_CypressTree_1k.gltf",
           "sha256": "5d2582cbac40a7d0b1910a60e32df6ec4ac5981fd92ee5bd77e96a4471e2f889",
-          "bytes": 11284
+          "bytes": 11284,
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "39c68b5d8a28185a9f18d125d7feb1427ecc5a4778a32ff7d1d8aa408c25d1b3",
+              "bytes": 10724
+            }
+          }
         },
         {
           "path": "pkg_c_trees_1k/textures/Bark_Normal.png",
@@ -886,6 +930,36 @@
       "redistributable": false,
       "skip": true,
       "skipReason": "Model files are under the \"Cryengine Limited License Agreement\" (Models/Sponza/LICENSE.md in the Khronos repo), not CC-BY. The CRYENGINE terms (cryengine.com/ce-terms, Sec. 2.1.4) allow use in \"Games in object code form only\", and the Marketplace copy needs an \"Assets Terms\" checkbox. Not similarly permissive, so not downloaded."
+    },
+    {
+      "id": "wind-tree",
+      "title": "Wind tree (generated)",
+      "author": "webgpu-ddgi (generated by tools/assets/convert/wind-tree.ts)",
+      "sourceUrl": "tools/assets/convert/wind-tree.ts",
+      "license": "MIT",
+      "attribution": "Generated, MIT, tools/assets/convert/wind-tree.ts. About 10 m tall, 50,474 triangles; trunk, branch and leaf-card meshes, wind weight in COLOR_0 alpha.",
+      "redistributable": true,
+      "generated": {
+        "script": "tools/assets/convert/wind-tree.ts",
+        "seed": 20261109,
+        "args": ["{dir}/wind-tree.glb"]
+      },
+      "extract": null,
+      "convert": null,
+      "outputs": [
+        {
+          "path": "wind-tree.glb",
+          "sha256": "78408cf59334b2b3d15247aa79363210b8b387c64ac932f3c2c82affc7ede7af",
+          "bytes": 4041216,
+          "dielectric": true,
+          "platforms": {
+            "darwin-arm64": {
+              "sha256": "51caa5fabd3b122bf6f077a9edc95c8996db75b29faf6b474b9403e98d5b0c9a",
+              "bytes": 4041216
+            }
+          }
+        }
+      ]
     }
   ]
 }

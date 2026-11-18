@@ -4,8 +4,10 @@
  *
  *   pnpm scenes:export
  *
- * The native harness (T0.6) and Blender (T0.7) read these files. Scenes with
- * model parts are skipped: their geometry comes from `pnpm assets:fetch`.
+ * The native harness (T0.6) and Blender (T0.7) read these files. A scene
+ * with both procedural and model parts (`courtyard-tree`) gets a file of its
+ * procedural parts only, which Blender loads beside the downloaded models;
+ * scenes with no procedural part are skipped (`pnpm assets:fetch` has them).
  */
 
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
@@ -49,12 +51,12 @@ async function main(): Promise<void> {
     const manifests = await loadManifests();
     let written = 0;
     for (const manifest of manifests) {
-        if (!isProceduralOnly(manifest)) {
-            console.log(`skip   ${manifest.id} (has downloaded model parts)`);
+        if (!manifest.parts.some((part) => part.kind === 'procedural')) {
+            console.log(`skip   ${manifest.id} (downloaded model parts only)`);
             continue;
         }
         const path = await exportManifest(manifest);
-        console.log(`wrote  ${manifest.id} -> ${path}`);
+        console.log(`wrote  ${manifest.id} -> ${path}${isProceduralOnly(manifest) ? '' : ' (its procedural parts; the models come from assets:fetch)'}`);
         written++;
     }
     console.log(`${written} procedural scene(s) exported to ${generatedDirectory}`);

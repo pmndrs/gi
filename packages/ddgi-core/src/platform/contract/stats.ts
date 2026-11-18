@@ -17,6 +17,12 @@ export interface PassTiming {
 export interface MemoryReport {
     readonly sceneCopy: number;
     readonly acceleration: number;
+    /**
+     * The texture store (M4): 0.33 MB per texture (a 256² layer with mips,
+     * the array grown in doubles), plus build buffers and staging copies in
+     * the frames that make layers.
+     */
+    readonly textures: number;
     /** Per technique id. */
     readonly techniques: Readonly<Record<string, number>>;
     readonly total: number;

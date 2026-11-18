@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ShadingParameter } from '../../platform/contract/shading-module.ts';
 import { DDGITechnique } from './ddgi-technique.ts';
-import { DDGI_SHADING_PARAMETER_NAMES, DDGIShadingModule, type DDGIShadingSource } from './shading.ts';
+import { DDGI_SHADING_PARAMETER_NAMES, DDGIShadingModule, type DDGIFieldTextures, type DDGIShadingSource } from './shading.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 
 /** A stand-in GPUTexture: the module only hands it on. */
@@ -9,10 +9,9 @@ function fakeTexture(label: string): GPUTexture {
     return { label } as GPUTexture;
 }
 
-function fakeSource(): DDGIShadingSource & { parameters: Float32Array; textures: { irradiance: GPUTexture; distance: GPUTexture; probeData: GPUTexture } } {
-    const parameters = Float32Array.from({ length: 16 }, (_, index) => index + 1);
-    const textures = { irradiance: fakeTexture('irradiance'), distance: fakeTexture('distance'), probeData: fakeTexture('probe data') };
-    return { parameters, textures, fieldTextures: () => textures, sampleParameters: () => parameters };
+function fakeSource(): DDGIShadingSource & { textures: DDGIFieldTextures } {
+    const textures = { irradiance: fakeTexture('irradiance'), distance: fakeTexture('distance'), probeData: fakeTexture('probe data'), volumeTable: fakeTexture('volume table') };
+    return { textures, fieldTextures: () => textures };
 }
 
 /** The contract's rule for now (docs/api/platform.md, walk-through gap 1). */
@@ -23,10 +22,13 @@ describe('the DDGI shading module', () => {
     const shading = new DDGIShadingModule(source);
     const textures = shading.parameters.filter((parameter): parameter is Extract<ShadingParameter, { kind: 'texture' }> => parameter.kind === 'texture');
 
-    it('takes textures, samplers and vec4f uniforms only, at most 6 textures', () => {
+    it('takes textures and samplers only, at most 6 textures: the three atlases and the volume table', () => {
         expect(textures.length).toBeLessThanOrEqual(MAX_TEXTURES);
-        expect(shading.parameters.map((parameter) => parameter.kind)).toEqual(['texture', 'sampler', 'texture', 'sampler', 'texture', 'vec4f', 'vec4f', 'vec4f', 'vec4f']);
-        for (const texture of textures) expect(texture.dimension).toBe('2d-array');
+        expect(shading.parameters.map((parameter) => parameter.kind)).toEqual(['texture', 'sampler', 'texture', 'sampler', 'texture', 'texture']);
+        expect(textures.map((texture) => texture.dimension)).toEqual(['2d-array', '2d-array', '2d-array', '2d']);
+        // rgba32float, read with textureLoad: it must not ask for a filtering binding.
+        expect(textures[3].name).toBe(DDGI_SHADING_PARAMETER_NAMES.volumeTable);
+        expect(textures[3].sampleType).toBe('unfilterable-float');
     });
 
     it('names each sampler after its filterable texture', () => {
@@ -55,24 +57,17 @@ describe('the DDGI shading module', () => {
         expect(names).toEqual(['position', 'normal', 'viewDirection', 'screenUV', ...shading.parameters.map((parameter) => parameter.name)]);
     });
 
-    it('hands out the current textures and the sampling parameters', () => {
-        expect(textures.map((texture) => texture.texture().label)).toEqual(['irradiance', 'distance', 'probe data']);
-        const uniforms = shading.parameters.filter((parameter) => parameter.kind === 'vec4f');
-        expect(uniforms.map((uniform) => [...uniform.value()])).toEqual([
-            [1, 2, 3, 4],
-            [5, 6, 7, 8],
-            [9, 10, 11, 12],
-            [13, 14, 15, 16],
-        ]);
-        // The same array each time, updated in place.
-        expect(uniforms[0].value()).toBe(uniforms[0].value());
-        const target = new Float32Array(16);
+    it('hands out the current textures, and has no uniforms to write', () => {
+        expect(textures.map((texture) => texture.texture().label)).toEqual(['irradiance', 'distance', 'probe data', 'volume table']);
+        expect(shading.parameters.filter((parameter) => parameter.kind === 'vec4f')).toEqual([]);
+        // Nothing to write, so even an empty target is fine.
+        const target = new Float32Array(4).fill(7);
         shading.writeUniforms(target);
-        expect([...target]).toEqual([...source.parameters]);
-        expect(() => shading.writeUniforms(new Float32Array(8))).toThrow(RangeError);
+        expect([...target]).toEqual([7, 7, 7, 7]);
+        shading.writeUniforms(new Float32Array(0));
     });
 
-    it('writes globals with bindings from 0 in parameter order, then one uniform buffer, and parameterless wrappers', () => {
+    it('writes globals with bindings from 0 in parameter order, no uniform buffer, and parameterless wrappers', () => {
         const globals = shading.globalsCode(2);
         expect(globals.startsWith(shading.code)).toBe(true);
         const n = DDGI_SHADING_PARAMETER_NAMES;
@@ -81,15 +76,17 @@ describe('the DDGI shading module', () => {
         expect(globals).toContain(`@group(2) @binding(2) var ${n.distance}: texture_2d_array<f32>;`);
         expect(globals).toContain(`@group(2) @binding(3) var ${n.distanceSampler}: sampler;`);
         expect(globals).toContain(`@group(2) @binding(4) var ${n.probeData}: texture_2d_array<f32>;`);
-        expect(globals).toMatch(/@group\(2\) @binding\(5\) var<uniform> giShadingUniforms: GiShadingUniforms;/);
+        expect(globals).toContain(`@group(2) @binding(5) var ${n.volumeTable}: texture_2d<f32>;`);
+        // WGSL has no empty structs: with no vec4f parameters there is no uniform buffer.
+        expect(globals).not.toMatch(/var<uniform>/);
         expect(globals).toMatch(/fn giIrradianceAt\(position: vec3f, normal: vec3f, viewDirection: vec3f, screenUV: vec2f\) -> vec3f/);
         expect(globals).toMatch(/fn giCoverageAt\(position: vec3f, normal: vec3f\) -> f32/);
         expect(globals).toMatch(/fn giDebugColorAt\(position: vec3f, normal: vec3f, view: u32\) -> vec3f/);
         expect(globals).not.toContain('var<storage');
     });
 
-    it('keeps its version: nothing in M1 changes the code or the parameters', () => {
-        expect(shading.version).toBe(1);
+    it('is version 2: the volume table replaced the volume uniforms (M3, several volumes)', () => {
+        expect(shading.version).toBe(2);
     });
 });
 
@@ -109,6 +106,5 @@ describe('the DDGI technique and its shading module', () => {
     it('says plainly that textures exist only after prepare', () => {
         const texture = technique.shading.parameters.find((parameter) => parameter.kind === 'texture');
         expect(texture && texture.kind === 'texture' ? () => texture.texture() : null).toThrow(/after prepare/);
-        expect(() => technique.shading.writeUniforms(new Float32Array(16))).toThrow(/after prepare/);
     });
 });

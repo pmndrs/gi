@@ -39,6 +39,34 @@
                 { "t": 3, "position": [3.4, 1.8, 2.0] },
                 { "t": 6, "position": [0.8, 1.8, 2.0] }
             ]
+        },
+        {
+            "id": "door-swing",
+            "label": "The door swings shut in 1 s, stays shut 5 s, and opens again",
+            "target": "object:door-panel",
+            "interpolation": "smooth",
+            "loop": true,
+            "pivot": [4.08, 0, 1.546],
+            "keyframes": [
+                { "t": 0, "rotationDeg": [0, -90, 0] },
+                { "t": 3, "rotationDeg": [0, -90, 0] },
+                { "t": 4, "rotationDeg": [0, 0, 0] },
+                { "t": 9, "rotationDeg": [0, 0, 0] },
+                { "t": 10, "rotationDeg": [0, -90, 0] }
+            ]
+        },
+        {
+            "id": "door-step",
+            "label": "The door jumps shut, then open, every 5 s",
+            "target": "object:door-panel",
+            "interpolation": "step",
+            "loop": true,
+            "pivot": [4.08, 0, 1.546],
+            "keyframes": [
+                { "t": 0, "rotationDeg": [0, -90, 0] },
+                { "t": 5, "rotationDeg": [0, 0, 0] },
+                { "t": 10, "rotationDeg": [0, -90, 0] }
+            ]
         }
     ],
     "environment": { "type": "none" },

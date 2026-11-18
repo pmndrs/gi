@@ -183,8 +183,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
     async prepare(): Promise<void> {
         const context = this.context;
-        if (!context) throw new Error('@pmndrs/ddgi: attach the radiance cache (gi.addTechnique) before prepare');
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this radiance cache was disposed');
+        if (!context) throw new Error('@pmndrs/gi: attach the radiance cache (gi.addTechnique) before prepare');
+        if (this.disposed) throw new Error('@pmndrs/gi: this radiance cache was disposed');
         const device = context.device;
 
         // gi/direct first: the populate kernel includes its side of the ray scratch.
@@ -263,7 +263,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     encodeScreen(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame): void {
         const context = this.context;
         const prepared = this.prepared;
-        if (!context || !prepared) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        if (!context || !prepared) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         const screen = frame.screen;
         const resources = this.resourcesFor(context, prepared, screen);
         const groups = this.inputGroupsFor(context.device, prepared, resources, screen);
@@ -326,9 +326,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const context = this.context;
         const prepared = this.prepared;
         const resources = this.screenResources;
-        if (!context || !prepared || !resources) throw new Error('@pmndrs/ddgi: the radiance cache has no probes to show before its first encodeScreen');
+        if (!context || !prepared || !resources) throw new Error('@pmndrs/gi: the radiance cache has no probes to show before its first encodeScreen');
         const { width, height } = resources.layout;
-        if (target.width < width || target.height < height) throw new RangeError(`@pmndrs/ddgi: the debug view needs a target of at least ${width} × ${height}`);
+        if (target.width < width || target.height < height) throw new RangeError(`@pmndrs/gi: the debug view needs a target of at least ${width} × ${height}`);
         const words = new ArrayBuffer(DEBUG_UNIFORM_BYTES);
         new Uint32Array(words, 0, 3).set([width, height, view]);
         new Float32Array(words, 12, 1)[0] = exposure;
@@ -533,7 +533,7 @@ function mipChainTexels(width: number, height: number, levels: number): number {
 
 function checkScreenTexture(texture: GPUTexture, name: string): void {
     if ((texture.usage & TEXTURE_USAGE.textureBinding) === 0) {
-        throw new Error(`@pmndrs/ddgi: the radiance cache reads FrameScreen.${name} in compute, so it needs TEXTURE_BINDING usage`);
+        throw new Error(`@pmndrs/gi: the radiance cache reads FrameScreen.${name} in compute, so it needs TEXTURE_BINDING usage`);
     }
 }
 

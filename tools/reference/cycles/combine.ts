@@ -25,6 +25,7 @@
  * Two parts also give the reference's noise: `noise.ts` compares them.
  */
 
+import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -166,6 +167,11 @@ async function main(): Promise<void> {
         combined.denoiseCheck = part.denoiseCheck;
         combined.shot.render.denoised = { ...part.shot.render.denoised, file: name, fromPart: denoisedFrom, samplesPerPixel: samplesEach };
     }
+    // The parts' checksums describe the parts; the combined reference gets its own (run.ts writes them for a single render).
+    const written = combined.denoisedFile ? [...files, combined.denoisedFile as string] : files;
+    combined.outputSha256 = Object.fromEntries(
+        await Promise.all(written.map(async (name) => [name, createHash('sha256').update(await readFile(join(directory, name))).digest('hex')] as const)),
+    );
     await writeFile(join(directory, `${prefix}.json`), JSON.stringify(combined, null, 2));
     console.log(`wrote ${files.join(', ')} and ${prefix}.json: ${parts.length} parts × ${samplesEach} samples = ${combined.samplesPerPixel} (seeds ${seeds.join(', ')})`);
 }

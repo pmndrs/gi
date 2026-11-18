@@ -1,0 +1,26 @@
+{
+    "id": "uv-board",
+    "title": "UV board in the sun",
+    "description": "Eight panels on a wall, each sampling its own orientation texture a different way (repeat, mirror, clamp, offset, rotation, the second uv set, mixed wrap, all at once), lit by the sun and the sky so their colours bounce onto the ground: it checks uv mapping at GI ray hits.",
+    "tags": ["exterior", "textured", "uv-mapping"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        { "kind": "procedural", "builder": "uv-board" }
+    ],
+    "cameras": [
+        { "name": "front", "position": [0, 1.8, 6.2], "target": [0, 1.6, 0], "fovYDeg": 50 },
+        { "name": "ground-bounce", "position": [3.4, 1.5, 4.6], "target": [-0.5, 0.3, 0.6], "fovYDeg": 60 },
+        { "name": "top-row-close", "position": [-1.5, 2.3, 2.6], "target": [-1.5, 2.2, 0], "fovYDeg": 60 }
+    ],
+    "lights": [
+        { "type": "directional", "label": "sun", "color": [1, 0.95, 0.85], "intensity": 3, "direction": [-0.35, -0.75, -0.56] }
+    ],
+    "environment": { "type": "procedural", "sunDirection": [0.35, 0.75, 0.56], "turbidity": 3, "intensity": 1 },
+    "volume": { "center": [0, 1.6, 2.0], "size": [12.4, 3.6, 10.4], "probeSpacing": 0.5 },
+    "nativeCapable": true,
+    "referenceCube": { "position": [2.2, 0.5, 2.5] },
+    "credits": [
+        { "asset": null, "license": "MIT", "attribution": "MIT, this repo." }
+    ]
+}

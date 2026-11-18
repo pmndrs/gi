@@ -1,0 +1,4 @@
+{
+    "description": "T5.1: each quality preset (low, medium, high) on Cornell and two-room: probes, memory, rays per frame, the update's GPU time and the test view's mean against high's, recorded (not gated); recompiles stay 0 within each preset.",
+    "timeoutMs": 600000
+}

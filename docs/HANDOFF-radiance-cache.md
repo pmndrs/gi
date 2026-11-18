@@ -8,6 +8,8 @@ The `radiance-cache` technique ports AMD's two-level radiance cache: GI-1.0, as 
 
 ## Branches (all pushed to origin)
 
+The repository moved from `DennisSmolek/webgpu-ddgi` to `pmndrs/gi` on 2026-11-10 (DECISIONS 2026-11-10); `origin` is `pmndrs/gi` and every branch below lives there. On 2026-11-19 `main` (M3-M5, the `@pmndrs/gi` package and its layer checks) was merged into the track on branch `rc-main-merge` (PROGRESS, same date); cut new RC branches from it, or from `radiance-cache` once it is merged there. The technique is not in the published package: no `/radiance-cache` subpath until Dennis decides.
+
 | Branch | State |
 |---|---|
 | `radiance-cache` | The track's main line, cut from `m2`. Merged: RC1.1 to RC1.5 (phase 1), RC2.1 (screen probes), RC3.1 (hash grid and the `WorldCache` interface). Lint and typecheck passed at the last merge. |

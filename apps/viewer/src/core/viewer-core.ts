@@ -150,7 +150,8 @@ export class ViewerCore {
     /** Throws away the old scene and its techniques, loads `manifest`, and shows its first technique. */
     async loadScene(manifest: SceneManifest, report: (progress: LoadProgress) => void, options: LoadSceneOptions & ViewerLightingOptions = {}): Promise<LoadedScene> {
         this.unloadScene();
-        const loaded = await loadScene(manifest, report, options);
+        // Texture compression encodes on three's device, the viewer's.
+        const loaded = await loadScene(manifest, report, { ...options, device: this.device });
         this.loaded = loaded;
         // Many shadowless lights with no range (sponza-candles) get a reach, so three can cull them per cluster (scene-lighting.ts).
         limitClusteredLightReach(loaded.directLights, options.clusteredLightReachMetres ?? DEFAULT_CLUSTERED_LIGHT_REACH_M);
@@ -203,6 +204,7 @@ export class ViewerCore {
             case 'cycles': {
                 const reference = new ReferenceImageTechnique(context);
                 reference.setBookmark(this.referenceBookmark);
+                reference.setGiTextures(this.ddgiSettings.giTextures);
                 return reference;
             }
             case 'none':
@@ -242,13 +244,25 @@ export class ViewerCore {
     }
 
     /**
+     * The settings the next scene's DDGI starts with (`loadScene` makes it), so a
+     * scene opened with the camera-following volume (a link, a scenario) starts
+     * with it instead of starting a second DDGI once it is up. The running DDGI,
+     * about to be unloaded with its scene, is left alone.
+     */
+    setDdgiSettingsForNextScene(settings: DdgiViewerSettings): void {
+        this.ddgiSettings = { ...settings };
+    }
+
+    /**
      * Applies to DDGI now if it exists, and to the one created later. Display settings and
-     * weights recompile nothing. Light groups and the sun layer shape DDGI's layers, which
-     * are made when it starts: changing them starts a new DDGI (a new warm-up), the same as
-     * reloading the scene with them.
+     * weights recompile nothing. Light groups, the sun layer and the camera-following
+     * volume shape DDGI's layers and volumes, which are made when it starts: changing them
+     * starts a new DDGI (a new warm-up), the same as reloading the scene with them.
      */
     configureDdgi(settings: DdgiViewerSettings): void {
         this.ddgiSettings = { ...settings };
+        // The reference follows GI's textures switch (textured or untextured render).
+        this.reference?.setGiTextures(settings.giTextures);
         const ddgi = this.ddgi;
         if (ddgi && ddgi.layerKey !== layerKey(settings)) {
             const environment = ddgi.environment;

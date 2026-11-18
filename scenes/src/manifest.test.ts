@@ -269,8 +269,9 @@ describe('the manifests in scenes/manifests', async () => {
     // throws a readable message on the first invalid manifest.
     const manifests = await loadManifests();
 
-    it('includes the six procedural scenes and the downloaded-model scenes', () => {
+    it('includes the procedural scenes and the downloaded-model scenes', () => {
         const expected = [
+            'alpha-checker',
             'bistro-exterior',
             'bistro-interior',
             'cabinet-row',
@@ -278,14 +279,18 @@ describe('the manifests in scenes/manifests', async () => {
             'cornell-box',
             'cornell-box-point',
             'courtyard-tree',
+            'courtyard-wind-tree',
             'furnace-room',
             'furnished-room',
+            'glass-wall',
             'open-ground',
             'sponza',
             'sponza-candles',
             'sponza-full',
+            'textured-furnace',
             'thin-wall',
             'two-room',
+            'uv-board',
         ];
         expect(manifests.map((m) => m.id).sort()).toEqual(expected);
     });

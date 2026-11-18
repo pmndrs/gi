@@ -1,0 +1,33 @@
+/* The look every example page shares: the canvas fills the window, a short
+   note on what to look at sits top left, the stats line bottom left. */
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0d10;
+    color: #cfd8e3;
+    font: 13px/1.5 system-ui, sans-serif;
+}
+canvas {
+    display: block;
+}
+.info {
+    position: fixed;
+    top: 56px;
+    left: 12px;
+    max-width: 340px;
+    padding: 8px 12px;
+    background: rgba(8, 10, 14, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+}
+.info p {
+    margin: 0 0 6px;
+}
+.info p:last-child {
+    margin-bottom: 0;
+}
+.info code {
+    color: #ffc878;
+}

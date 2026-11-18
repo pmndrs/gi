@@ -111,7 +111,7 @@ export class HashGridCache implements WorldCache {
      */
     get packedTiles(): { readonly count: GpuWord; readonly firstWord: number } {
         const { buffers, layout } = this.require();
-        if (this.lastFramePingPong === null) throw new Error('@pmndrs/ddgi: the world cache has no packed tile list before its first encodeFrame');
+        if (this.lastFramePingPong === null) throw new Error('@pmndrs/gi: the world cache has no packed tile list before its first encodeFrame');
         const first = this.lastFramePingPong === 0;
         const countWord = first ? HASH_GRID_COUNTER.packedTileCount0 : HASH_GRID_COUNTER.packedTileCount1;
         return {
@@ -180,7 +180,7 @@ export class HashGridCache implements WorldCache {
         const outOfMemory = await device.popErrorScope();
         if (outOfMemory) {
             for (const buffer of Object.values(buffers)) buffer.destroy();
-            throw new Error(`@pmndrs/ddgi: the GPU ran out of memory making the world cache's ${layout.totalBytes} bytes: ${outOfMemory.message}`);
+            throw new Error(`@pmndrs/gi: the GPU ran out of memory making the world cache's ${layout.totalBytes} bytes: ${outOfMemory.message}`);
         }
 
         const ownGroups = [{ label: 'radiance-cache/hash-grid group', entries: HASH_GRID_CACHE_GROUP_ENTRIES }];
@@ -313,7 +313,7 @@ export class HashGridCache implements WorldCache {
     }
 
     private require(): Prepared {
-        if (!this.prepared) throw new Error('@pmndrs/ddgi: the world cache is used before prepare()');
+        if (!this.prepared) throw new Error('@pmndrs/gi: the world cache is used before prepare()');
         return this.prepared;
     }
 }

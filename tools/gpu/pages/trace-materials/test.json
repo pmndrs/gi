@@ -1,0 +1,4 @@
+{
+    "description": "T4.2: materials in the walk through the platform against the CPU reference (>= 99.9% of certain rays agree): glass pane in a wall mesh, single-sided quad, per-instance see-through, a checker-cutout wall, a cutout quad through uv set 1, a uv transform and mirror wrap, and a stochastic quad at alpha 0.25 (pass share within 1 point of the hash twin over 100k rays); on tinybvh and GPU first trees; run-time edits rewrite the flags only when the walk sees them, with 0 recompiles; any-hit cost of flagged rays noted.",
+    "timeoutMs": 900000
+}

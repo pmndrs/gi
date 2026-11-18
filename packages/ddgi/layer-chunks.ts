@@ -1,0 +1,40 @@
+// The build's chunks, one per layer of the library, shared by the JS build
+// (vite.config.ts) and the type build (rollup.dts.config.mjs).
+//
+// Every module lands in exactly one chunk, so a class is one class whichever
+// subpath it is imported from (`instanceof` holds across subpaths). Cutting the
+// chunks by layer keeps each subpath's download to its own layers:
+//
+//   platform  the engine-free GI platform and the bundled tree builders
+//             (packages/ddgi-core/src/platform, packages/bvh); `/core` loads
+//             only this one
+//   ddgi      the DDGI technique (packages/ddgi-core/src/techniques/ddgi);
+//             `/ddgi` loads it and the platform
+//   three     the three.js adapter (packages/ddgi-three); `.` and `/three` load
+//             all three
+//
+// The chunk names say which layer a file holds, so scripts/verify-artifacts.mjs
+// and tools/release/verify-packed.ts can check that `/core` reaches no `ddgi`
+// or `three` chunk, and `/ddgi` no `three` chunk.
+
+/** Chunk names by layer, in the order the layers build on each other. */
+export const LAYER_CHUNKS = ['platform', 'ddgi', 'three'] as const;
+
+export type Layer = (typeof LAYER_CHUNKS)[number];
+
+/** The layers each public entry may load: an entry below a layer must never reach its code. */
+export const ENTRY_LAYERS: Record<string, readonly Layer[]> = {
+    core: ['platform'],
+    ddgi: ['platform', 'ddgi'],
+    three: ['platform', 'ddgi', 'three'],
+    index: ['platform', 'ddgi', 'three'],
+};
+
+/** Rollup's `manualChunks`: the layer chunk a module belongs to, or undefined for the entries and helpers. */
+export function layerChunk(id: string): Layer | undefined {
+    const path = id.replaceAll('\\', '/');
+    if (path.includes('/packages/ddgi-three/src/')) return 'three';
+    if (path.includes('/packages/ddgi-core/src/techniques/ddgi/')) return 'ddgi';
+    if (path.includes('/packages/ddgi-core/src/platform/') || path.includes('/packages/bvh/')) return 'platform';
+    return undefined;
+}

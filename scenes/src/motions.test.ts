@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { extractGltfGeometry, parseGlb } from '../../tools/gpu/pages/trace-bench/gltf-geometry';
 import { loadManifests } from './export';
-import { BUILT_IN_MOTIONS, motionState, STEP_SECONDS, SWEEP_SPEED, validateManifest, type ManifestMotion, type SceneManifest, type Vec3 } from './manifest';
+import { BUILT_IN_MOTIONS, motionState, motionTarget, STEP_SECONDS, SWEEP_SPEED, validateManifest, type ManifestMotion, type SceneManifest, type Vec3 } from './manifest';
 import { modelTransformMatrix } from './model-bounds';
 import { buildProcedural } from './procedural';
 
@@ -93,6 +93,63 @@ describe('the motions format', () => {
         expect(motionState(step, 6.5).position).toEqual([0, 1, 0]);
         // A motion that doesn't loop stays at its last keyframe.
         expect(motionState({ ...glide, loop: false }, 100).position).toEqual([0, 1, 0]);
+    });
+});
+
+describe('object and camera motions, and props (T3.8)', () => {
+    const door: ManifestMotion = {
+        id: 'door-swing',
+        label: 'door',
+        target: 'object:door-panel',
+        interpolation: 'smooth',
+        loop: true,
+        pivot: [1, 0, 1],
+        keyframes: [
+            { t: 0, rotationDeg: [0, -90, 0] },
+            { t: 2, rotationDeg: [0, 0, 0] },
+            { t: 4, rotationDeg: [0, -90, 0] },
+        ],
+    };
+    const flight: ManifestMotion = {
+        id: 'fly-through',
+        label: 'flight',
+        target: 'camera',
+        loop: true,
+        keyframes: [
+            { t: 0, position: [0, 2, 0], target: [10, 2, 0] },
+            { t: 2, position: [10, 2, 0], target: [20, 2, 0] },
+        ],
+    };
+    const prop = { name: 'cabinet', shape: 'box', size: [0.5, 0.8, 0.9], position: [1, 0.4, 1], color: [0.4, 0.2, 0.1] };
+
+    it('accepts a door, a sway, a slide, a flight and a prop', () => {
+        const sway: ManifestMotion = { id: 'wind', label: 'wind', target: 'object:tree', interpolation: 'smooth', loop: true, keyframes: [{ t: 0, sway: 0 }, { t: 1, sway: 1 }, { t: 2, sway: -0.5 }] };
+        const slide: ManifestMotion = { id: 'slide', label: 'slide', target: 'object:cabinet', loop: true, keyframes: [{ t: 0, position: [0, 0, 0] }, { t: 1, position: [0, 0, 1] }] };
+        expect(validateManifest({ ...withLamp([door, sway, slide, flight]), props: [prop] }).errors).toEqual([]);
+    });
+
+    it('names what is wrong', () => {
+        const errors = (motions: unknown, props?: unknown) => validateManifest({ ...withLamp(motions), ...(props ? { props } : {}) }).errors.join('\n');
+        expect(errors([{ ...door, target: 'object:' }])).toContain('"object:<name>"');
+        expect(errors([{ ...door, keyframes: [{ t: 0, intensity: 1 }, { t: 1, intensity: 2 }] }])).toContain('not a keyframe field for this target');
+        expect(errors([{ ...door, keyframes: [{ t: 0, sway: 0 }, { t: 1, sway: 2 }] }])).toContain('from -1 to 1');
+        expect(errors([{ ...flight, keyframes: [{ t: 0, position: [0, 0, 0] }, { t: 1, position: [1, 0, 0] }] }])).toContain('sets both position and target');
+        expect(errors([{ ...flight, pivot: [0, 0, 0] }])).toContain('only an object motion turns about a pivot');
+        // Lights keep to what the native harness plays.
+        expect(errors([{ ...sweep([1, 1, 1], [2, 1, 1], 1), interpolation: 'smooth' }])).toContain('for a light');
+        expect(errors([], [{ ...prop, size: [0, 1, 1] }])).toContain('greater than 0');
+        expect(errors([], [prop, prop])).toContain('"cabinet" is used twice');
+        expect(errors([], [{ ...prop, shape: 'sphere' }])).toContain('must be "box"');
+    });
+
+    it('plays them: smooth eases in and out, turns and camera targets interpolate', () => {
+        // Halfway in time is halfway in angle; a quarter of the way in time is smoothstep(0.25) = 0.15625 of the turn.
+        expect(motionState(door, 1).rotationDeg![1]).toBeCloseTo(-45, 9);
+        expect(motionState(door, 0.5).rotationDeg![1]).toBeCloseTo(-90 + 90 * 0.15625, 9);
+        expect(motionState(flight, 1)).toEqual({ position: [5, 2, 0], target: [15, 2, 0] });
+        expect(motionTarget(door)).toEqual({ kind: 'object', name: 'door-panel' });
+        expect(motionTarget(flight)).toEqual({ kind: 'camera', name: '' });
+        expect(motionTarget({ target: 'nothing' })).toBeNull();
     });
 });
 
@@ -199,9 +256,13 @@ describe('the built-in motions of each scene with a lamp (m2-lights.md §7)', as
     const lit = manifests.filter((manifest) => manifest.lights.some((light) => light.type !== 'directional'));
 
     it('are in every scene with a lamp, and only there', () => {
-        expect(lit.map((manifest) => manifest.id).sort()).toEqual(['bistro-interior', 'cabinet-row', 'closed-door', 'cornell-box-point', 'furnished-room', 'sponza', 'thin-wall', 'two-room']);
+        expect(lit.map((manifest) => manifest.id).sort()).toEqual(['alpha-checker', 'bistro-interior', 'cabinet-row', 'closed-door', 'cornell-box-point', 'furnished-room', 'glass-wall', 'sponza', 'thin-wall', 'two-room']);
         for (const manifest of manifests) {
-            const ids = (manifest.motions ?? []).map((motion) => motion.id).sort();
+            // Object and camera motions (M3's scenarios) are checked below.
+            const ids = (manifest.motions ?? [])
+                .filter((motion) => motionTarget(motion)?.kind === 'light')
+                .map((motion) => motion.id)
+                .sort();
             expect(ids, manifest.id).toEqual(lit.includes(manifest) ? [BUILT_IN_MOTIONS.step, BUILT_IN_MOTIONS.sweep] : []);
         }
     });
@@ -244,4 +305,73 @@ describe('the built-in motions of each scene with a lamp (m2-lights.md §7)', as
             });
         });
     }
+});
+
+describe("the M3 scenarios' motions (T3.8, m3-moving.md §8)", async () => {
+    const manifests = await loadManifests();
+    const byId = (id: string) => manifests.find((manifest) => manifest.id === id)!;
+    const motion = (scene: string, id: string) => byId(scene).motions!.find((candidate) => candidate.id === id)!;
+
+    it('every object and camera motion loops and ends where it began, so looping never jumps', () => {
+        for (const manifest of manifests) {
+            for (const candidate of manifest.motions ?? []) {
+                if (motionTarget(candidate)?.kind === 'light') continue;
+                expect(candidate.loop, `${manifest.id} ${candidate.id}`).toBe(true);
+                const frames = candidate.keyframes;
+                expect({ ...frames[frames.length - 1], t: 0 }, `${manifest.id} ${candidate.id}`).toEqual({ ...frames[0], t: 0 });
+            }
+        }
+    });
+
+    it('each object scenario has a gliding motion and a step version for the meter', () => {
+        const pairs: Array<[string, string, string]> = [
+            ['furnished-room', 'cabinet-slide', 'cabinet-step'],
+            ['closed-door', 'door-swing', 'door-step'],
+            ['cabinet-row', 'cabinet-door-swing', 'cabinet-door-step'],
+            ['courtyard-wind-tree', 'wind-gusts', 'wind-lean'],
+        ];
+        for (const [scene, glide, step] of pairs) {
+            expect(motion(scene, glide).interpolation, `${scene} ${glide}`).toBe('smooth');
+            expect(motion(scene, step).interpolation, `${scene} ${step}`).toBe('step');
+            expect(motion(scene, step).target).toBe(motion(scene, glide).target);
+        }
+        // The furnished room's cabinet is a prop: it exists only for its motions.
+        expect(byId('furnished-room').props?.map((prop) => prop.name)).toEqual(['cabinet']);
+    });
+
+    it("the door turns about its hinge: the doorway's lit-side z0 edge, as ddgi-door-swing turns it", () => {
+        const swing = motion('closed-door', 'door-swing');
+        const built = buildProcedural('closed-door');
+        const panel = built.instances.find((instance) => instance.name === 'door-panel')!.transform;
+        // A unit box scaled and placed: its min corner is the centre minus half the size.
+        expect(swing.pivot![0]).toBeCloseTo(panel[12] - panel[0] / 2, 3);
+        expect(swing.pivot![2]).toBeCloseTo(panel[14] - panel[10] / 2, 3);
+        expect(swing.keyframes[0].rotationDeg).toEqual([0, -90, 0]);
+    });
+
+    it('the fly-through runs at 5 m/s from the street bookmark and back, stopping only to turn round', () => {
+        const frames = motion('bistro-exterior', 'fly-through').keyframes;
+        let flown = 0;
+        for (let index = 1; index < frames.length; index++) {
+            const metres = pathLength([frames[index - 1].position!, frames[index].position!]);
+            flown += metres;
+            // Every step either flies at 5 m/s or stands still (the hold at the start, the turns round at each end).
+            if (metres > 0) expect(metres / (frames[index].t - frames[index - 1].t), `step ${index}`).toBeCloseTo(5, 2);
+        }
+        expect(flown).toBeCloseTo(2 * 66.3, 0);
+        expect(frames[0].position).toEqual(byId('bistro-exterior').cameras[0].position);
+        // The look target never comes within 5 m of the camera, so the view never flips while turning round.
+        for (let time = 0; time <= frames[frames.length - 1].t; time += 0.05) {
+            const state = motionState(motion('bistro-exterior', 'fly-through'), time);
+            expect(pathLength([state.position!, state.target!]), `${time.toFixed(2)} s`).toBeGreaterThan(5);
+        }
+    });
+
+    it.skipIf(!modelsPresent(byId('bistro-exterior')))(`the fly-through keeps the camera ${CLEARANCE_M} m clear of every surface`, { timeout: 300_000 }, () => {
+        const triangles = sceneTriangles(byId('bistro-exterior'))!;
+        const frames = motion('bistro-exterior', 'fly-through').keyframes;
+        for (let index = 1; index < frames.length; index++) {
+            expect(clearPath(triangles, frames[index - 1].position!, frames[index].position!), `leg ${index}`).toBe(true);
+        }
+    });
 });

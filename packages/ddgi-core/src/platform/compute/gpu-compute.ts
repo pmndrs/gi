@@ -100,8 +100,8 @@ function scanLayoutEntries(variant: ScanVariant): GPUBindGroupLayoutEntry[] {
 }
 
 function checkStorageBuffer(buffer: GPUBuffer, bytes: number, what: string, label: string): void {
-    if ((buffer.usage & BUFFER_USAGE.storage) === 0) throw new Error(`@pmndrs/ddgi: ${label}: ${what} needs STORAGE usage`);
-    if (buffer.size < bytes) throw new RangeError(`@pmndrs/ddgi: ${label}: ${what} holds ${buffer.size} bytes, the capacity needs ${bytes}`);
+    if ((buffer.usage & BUFFER_USAGE.storage) === 0) throw new Error(`@pmndrs/gi: ${label}: ${what} needs STORAGE usage`);
+    if (buffer.size < bytes) throw new RangeError(`@pmndrs/gi: ${label}: ${what} holds ${buffer.size} bytes, the capacity needs ${bytes}`);
 }
 
 export class PlatformGpuCompute implements GpuComputeUtilities {
@@ -118,7 +118,7 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
         this.label = options.label ?? 'gi';
         const hasSubgroups = device.features.has('subgroups');
         this.reduction = options.reduction ?? (hasSubgroups ? 'subgroups' : 'workgroup');
-        if (this.reduction === 'subgroups' && !hasSubgroups) throw new Error('@pmndrs/ddgi: the GPU utilities were asked for subgroups on a device without the "subgroups" feature');
+        if (this.reduction === 'subgroups' && !hasSubgroups) throw new Error('@pmndrs/gi: the GPU utilities were asked for subgroups on a device without the "subgroups" feature');
     }
 
     async createPrefixScan(options: PrefixScanOptions): Promise<GpuPrefixScan> {
@@ -174,8 +174,8 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
 
     async createIndirectArgs(options: IndirectArgsOptions): Promise<GpuIndirectArgs> {
         const { count, itemsPerWorkgroup, label } = options;
-        if (!Number.isInteger(itemsPerWorkgroup) || itemsPerWorkgroup < 1) throw new RangeError(`@pmndrs/ddgi: ${label}: itemsPerWorkgroup must be a whole number of at least 1, got ${itemsPerWorkgroup}`);
-        if (!Number.isInteger(count.offset) || count.offset % WORD_BYTES !== 0 || count.offset < 0) throw new RangeError(`@pmndrs/ddgi: ${label}: the count's offset must be a multiple of 4, got ${count.offset}`);
+        if (!Number.isInteger(itemsPerWorkgroup) || itemsPerWorkgroup < 1) throw new RangeError(`@pmndrs/gi: ${label}: itemsPerWorkgroup must be a whole number of at least 1, got ${itemsPerWorkgroup}`);
+        if (!Number.isInteger(count.offset) || count.offset % WORD_BYTES !== 0 || count.offset < 0) throw new RangeError(`@pmndrs/gi: ${label}: the count's offset must be a multiple of 4, got ${count.offset}`);
         checkStorageBuffer(count.buffer, count.offset + WORD_BYTES, 'the count', label);
         const kernel = await this.writerKernelFor();
         return new IndirectArgsWriter(this.device, kernel, options);
@@ -183,7 +183,7 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
 
     /** At least one item, and no more than one storage binding holds. */
     private checkCapacity(capacity: number, label: string): void {
-        if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError(`@pmndrs/ddgi: ${label}: capacity must be a whole number of at least 1, got ${capacity}`);
+        if (!Number.isInteger(capacity) || capacity < 1) throw new RangeError(`@pmndrs/gi: ${label}: capacity must be a whole number of at least 1, got ${capacity}`);
         const available = this.device.limits.maxStorageBufferBindingSize;
         if (capacity * WORD_BYTES > available) throw new GILimitError('maxStorageBufferBindingSize', capacity * WORD_BYTES, available);
     }
@@ -312,7 +312,7 @@ class ScanRun {
     }
 
     encode(pass: GPUComputePassEncoder, count: number): void {
-        if (!Number.isInteger(count) || count < 0 || count > this.capacity) throw new RangeError(`@pmndrs/ddgi: a scan of capacity ${this.capacity} was asked for ${count} items`);
+        if (!Number.isInteger(count) || count < 0 || count > this.capacity) throw new RangeError(`@pmndrs/gi: a scan of capacity ${this.capacity} was asked for ${count} items`);
         const slot = this.slotFor(count);
         const { pipelines } = this.kernels;
         if (count === 0) {

@@ -235,7 +235,7 @@ export class ScreenInputsView {
      */
     encode(encoder: GPUCommandEncoder, screen: FrameScreen, channel: ScreenChannel): GPUTexture {
         const source = screen[channel];
-        if (!source) throw new Error(`@pmndrs/ddgi: the screen has no '${channel}' channel to show`);
+        if (!source) throw new Error(`@pmndrs/gi: the screen has no '${channel}' channel to show`);
         const kind = sourceKind(channel, source);
         const kernel = this.kernelFor(channel, kind);
         const target = this.targetFor(screen.width, screen.height);

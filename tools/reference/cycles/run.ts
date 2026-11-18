@@ -3,7 +3,7 @@
  *
  *   node tools/reference/cycles/run.ts --scene cornell-box [--camera 1 | --from-shot <cycles.json>] --samples 4096
  *        [--width 1920] [--height 1080] [--seed 0] [--name-suffix -seed1]
- *        [--device gpu|cpu] [--threads N] [--materials-json <GI material table>]
+ *        [--device gpu|cpu] [--threads N] [--materials-json <GI material table> | --textured]
  *        [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise]
  *   node tools/reference/cycles/run.ts --calibrate     known-answer checks of the unit conversions
  *
@@ -14,7 +14,10 @@
  * (gi-composite.ts). A failed check stops with exit code 1 and writes no GI
  * image. With `--materials-json` (render.py: every material gets the table's
  * constant GI albedo and emission) the files are cycles-untextured-* and the
- * log's tool column says `cycles-untextured`.
+ * log's tool column says `cycles-untextured`; with `--textured` (the glTF's own
+ * materials as M4's GI sees them, render.py) they are cycles-textured-* and
+ * `cycles-textured`. When the images are written, their sha256s go into the
+ * json as `outputSha256`, beside render.py's record of the source files.
  *
  * Every render stores its camera, size, display settings, scene hashes,
  * commit and render settings as `shot` in its json (render.py; README
@@ -32,6 +35,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,7 +79,7 @@ async function main(): Promise<void> {
     const forwarded = process.argv.slice(2);
     const calibrate = forwarded.includes('--calibrate');
     if (forwarded.length === 0 || forwarded.includes('--help')) {
-        console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1 | --from-shot cycles.json] --samples N [--width 1920] [--height 1080] [--seed N] [--name-suffix S] [--device gpu|cpu] [--threads N] [--materials-json file] [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise] [--exposure-ev N] [--tone-mapping aces]');
+        console.log('usage: node tools/reference/cycles/run.ts --scene <id> [--camera 1 | --from-shot cycles.json] --samples N [--width 1920] [--height 1080] [--seed N] [--name-suffix S] [--device gpu|cpu] [--threads N] [--materials-json file | --textured] [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise] [--exposure-ev N] [--tone-mapping aces]');
         process.exit(forwarded.length === 0 ? 1 : 0);
     }
     // render.py's default is the GPU (OptiX); `--device cpu` and `--device=cpu` both mean the CPU.
@@ -148,19 +152,32 @@ async function main(): Promise<void> {
     }
     await appendFile(
         renderLog,
-        `${meta.finishedAt},${meta.giMaterials ? 'cycles-untextured' : 'cycles'},${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
+        `${meta.finishedAt},${logToolName(meta)},${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
     );
     meta.files.push(await writeGiImage(meta.outDir, meta.giComposite));
+    const metaPath = join(meta.outDir, meta.jsonFile);
+    const stored = JSON.parse(await readFile(metaPath, 'utf8'));
     if (meta.denoisedFile) {
         // The viewing copy's bias against the raw image it was made from, stored with the render.
         meta.denoiseCheck = await checkDenoised(meta.outDir, meta.files[0], meta.denoisedFile);
-        const metaPath = join(meta.outDir, meta.jsonFile);
-        const stored = JSON.parse(await readFile(metaPath, 'utf8'));
         stored.denoiseCheck = meta.denoiseCheck;
         stored.shot.render.denoised.check = meta.denoiseCheck;
-        await writeFile(metaPath, JSON.stringify(stored, null, 2));
     }
+    // Every image this render wrote, with its checksum, so a copy or a later reader can tell it is the same file.
+    stored.files = meta.files;
+    stored.outputSha256 = Object.fromEntries(await Promise.all(meta.files.map(async (file: string) => [file, await fileSha256(join(meta.outDir, file))])));
+    await writeFile(metaPath, JSON.stringify(stored, null, 2));
     console.log(`done: ${meta.files.join(', ')} in ${meta.renderSeconds} s (${meta.samplesPerPixel} samples, ${meta.width}x${meta.height}, ${meta.device})`);
+}
+
+/** The render log's tool column: which material mode made the render (render.py's `mode`). */
+function logToolName(meta: { mode?: string; giMaterials?: unknown }): string {
+    if (meta.mode === 'textured') return 'cycles-textured';
+    return meta.giMaterials ? 'cycles-untextured' : 'cycles';
+}
+
+async function fileSha256(path: string): Promise<string> {
+    return createHash('sha256').update(await readFile(path)).digest('hex');
 }
 
 /**
