@@ -16,7 +16,8 @@
  *    turn. It must report GI frames and a non-black GI mean on
  *    `window.ddgiExample` (examples/shared/status.ts; the hello example's
  *    own `window.helloState`, opened with `?view=gi` so its canvas shows GI
- *    alone), and its canvas must not be black. Any console error, failed
+ *    alone). The Split RC example reports its completed draws and presents
+ *    the indirect-only image for the same check. Any console error, failed
  *    load or WebGPU error fails the page (the runner sees the iframes' logs).
  * 3. **Presets:** 07's panel is switched to low, medium and high in turn;
  *    each must start again and light the probes.
@@ -30,6 +31,7 @@
 
 import { reportGpuTest, summarizeAdapter } from '../../client.ts';
 import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES, type AdapterSummary } from '../../contract.ts';
+import { imageMean, waitForRailControl } from '../rc-rail/frame.ts';
 
 /** The built site may be at most this big (docs/design/m5-release.md). */
 const MAX_SITE_BYTES = 50 * 2 ** 20;
@@ -247,9 +249,27 @@ async function runExample(url: string, thumbnails: Array<{ name: string; thumbna
     const { expectText, act } = options;
     const name = url.slice(siteRoot.length) || 'index';
     const isHello = name.startsWith('webgpu/hello');
+    const isRail = name.startsWith('11-radiance-cascades/');
     const started = performance.now();
-    const frame = await openFrame(isHello ? `${url}?view=gi` : url);
+    const frame = await openFrame(isHello ? `${url}?view=gi` : isRail ? `${url}?verify=1` : url);
     try {
+        if (isRail) {
+            const control = await waitForRailControl(frame);
+            const capture = await control.render({ frames: MIN_GI_FRAMES, view: 'indirect', cue: 'blue', camera: 'receiver', advance: false });
+            const canvasLuminance = imageMean(capture).luma;
+            if (capture.renderedFrames < MIN_GI_FRAMES || !(canvasLuminance > MIN_CANVAS_LUMINANCE)) {
+                throw new Error(`${name}: ${capture.renderedFrames} RC frames, indirect canvas mean ${canvasLuminance}`);
+            }
+            const copy = document.createElement('canvas');
+            copy.width = capture.width;
+            copy.height = capture.height;
+            const context = copy.getContext('2d')!;
+            const pixels = context.createImageData(copy.width, copy.height);
+            pixels.data.set(capture.pixels);
+            context.putImageData(pixels, 0, 0);
+            thumbnails.push({ name, thumbnail: copy.toDataURL('image/png') });
+            return { seconds: Number(((performance.now() - started) / 1000).toFixed(1)), frames: capture.renderedFrames, giMean: null, canvasLuminance, note: 'Split RC indirect-only' };
+        }
         const frameWindow = frame.contentWindow as Window & { ddgiExample?: ExampleStatus; helloState?: HelloState };
         let frames: number;
         let giMean: number | null = null;

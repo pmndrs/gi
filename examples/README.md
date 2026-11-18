@@ -24,6 +24,7 @@ The library is read straight from `packages/` (aliased as `@pmndrs/gi`, `/core`,
 | 08 | **Saved bake** (`08-saved-bake`) | The first visit warms up and saves the probes (`volume.saveBake()`) into IndexedDB; a reload starts from them (`start(..., { bake })`), with no warm-up. |
 | 09 | **Export to LightProbeGrid** (`09-lightprobegrid`) | `volume.exportLightProbeGrid()`, three's own `LightProbeGrid` as a static fallback, wiped against live GI by the mouse; download it as JSON. |
 | 10 | **Debug views** (`10-debug`) | The probes where they sit and in their state's colour, the screen debug views (GI only, coverage, probe states; `?view=`), and the irradiance atlas, drawn in three from the technique's debug outputs (`10-debug/debug-views.ts`). |
+| 11 | **Split Radiance Cascades** ([camera rail](11-radiance-cascades/)) | A procedural passage with changing emission, a repeatable camera route and direct, indirect and composite views. The example owns its Three.js reference solver. |
 
 ## No engine
 

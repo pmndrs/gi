@@ -596,3 +596,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **The platform hands 0 units to a technique that says `warmingUp` at the frame's start,** so the frame in which a warm-up ends updates nothing. DDGI's loaded-field wait reports `warmingUp` only while the trees are building, so its first frame with trees already updates. Source: T5.2.
 - **The engine-free test view traces its primary rays through the platform's trees,** so it reads 0 until a frame after `rays.whenBuilt()` has placed them (as `createDdgiScene` does). Source: T5.2.
 - **JavaScript hashing: a method call a word ran 10 ns a word, one inlined loop on locals 1.9 ns** (Node 24 on the M5 Pro, two 32-bit multiply-rotate lanes, 48 MB). Source: T5.2, `ContentHasher.words`.
+
+
+## Split Radiance Cascades
+
+The S5 solver snapshots opaque triangles in world space at `setScene`. Camera motion and changes to existing lights or materials can share that snapshot. Rigid motion requires updating the geometry seen by both the closest-hit and shadow paths. The [project spec](radiance-cascades/SPEC.md) describes the interval-tracer boundary.

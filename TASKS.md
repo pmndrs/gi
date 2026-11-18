@@ -559,6 +559,12 @@ Status: **todo**. Dennis's picks on the close-out page (2026-11-18): these five 
 - A flaky `tools/assets/fetch.test.ts` under load.
 - Nested finer DDGI volumes around thin cloth (Sponza's curtains: 0.25 m around them measured +5.5% offline, about 40k probes, 60 MB, about 1 ms of update): the quality route behind M1's GTAO fix (DECISIONS 2026-11-05).
 
+## Split Radiance Cascades
+
+| Task | Status | Scope |
+| --- | --- | --- |
+| SRC.1 | review | [Reference solver, architectural rail and interval consumer](docs/radiance-cascades/SPEC.md). [Follow-on work](docs/radiance-cascades/PLAN.md) covers the shared tracer, moving geometry and reconstruction. |
+
 ## Later
 
 M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN.md#later-milestones-outline).

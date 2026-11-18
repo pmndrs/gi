@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Radiance cascades · The lamp gallery</title>
+    <link rel="icon" href="data:," />
+    <style>
+        :root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; color: #f0e9de; background: #141312; }
+        * { box-sizing: border-box; }
+        body { margin: 0; }
+        canvas { display: block; width: 100vw; height: 100dvh; }
+        #panel { position: fixed; top: 1rem; left: 1rem; z-index: 1; max-width: min(21rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid #ffffff31; border-radius: .45rem; background: #191919ea; box-shadow: 0 6px 24px #0005; }
+        summary { cursor: pointer; padding: .7rem 1rem; font-weight: 650; }
+        #controls { padding: 0 1rem 1rem; }
+        p { margin: .1rem 0 .9rem; color: #c3beb6; }
+        label, .row { display: flex; align-items: center; justify-content: space-between; gap: .4rem; margin: .4rem 0; }
+        select, button { color: #f8f5f0; background: #343230; border: 1px solid #65615a; border-radius: .25rem; padding: .32rem .5rem; font: inherit; }
+        select { width: 10.4rem; }
+        button { cursor: pointer; }
+        button:hover, select:hover { background: #47433e; }
+        button:disabled { opacity: .5; }
+        .row { justify-content: flex-start; margin-top: .7rem; }
+        output { display: block; font: .83rem/1.6 ui-monospace, monospace; white-space: pre-line; color: #ede0cb; }
+        #status { margin-top: .7rem; }
+        :focus-visible { outline: 2px solid #ffd084; outline-offset: 2px; }
+    </style>
+</head>
+<body>
+    <details id="panel" open>
+        <summary>The lamp gallery</summary>
+        <div id="controls">
+            <p>Follow the light from recessed amber and blue panels onto the limestone vault. Inspect the sculpture to watch the colour change from a fixed seat.</p>
+            <label>View <select id="view"><option value="lit">Lit</option><option value="indirect">Indirect only</option><option value="direct">Direct only</option></select></label>
+            <label>Camera <select id="camera"><option value="rail">Gallery rail</option><option value="receiver">Inspect sculpture</option></select></label>
+            <label>Emitters <select id="cue"><option value="sequence">Scripted sequence</option><option value="amber">Amber only</option><option value="blue">Blue only</option><option value="off">Both off</option></select></label>
+            <div class="row"><button id="play" disabled>Pause</button><button id="step" disabled>Step</button><button id="replay" disabled title="Restart from frame zero with fresh probe history">Replay</button></div>
+            <output id="status" role="status">Starting WebGPU…</output>
+            <output id="metrics" aria-live="off"></output>
+        </div>
+    </details>
+    <script type="module" src="./main.ts"></script>
+</body>
+</html>
