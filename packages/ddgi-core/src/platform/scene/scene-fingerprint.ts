@@ -189,6 +189,18 @@ export function meshContentHash(descriptor: MeshDescriptor): string {
 
 /** A texture's content hash (textures part; the file comment says what each kind of source contributes). */
 export function textureContentHash(source: TextureSource, srgb: boolean): string {
+    try {
+        return readableTextureHash(source, srgb);
+    } catch {
+        // A source that can't be read (a transferred-away buffer, a getter that
+        // throws) must not throw out of createTexture: its build fails it alone,
+        // as for any bad source. Such a texture never lands, so its hash only
+        // has to be stable.
+        return new ContentHasher().word(srgb ? 1 : 0).string('unreadable').digest();
+    }
+}
+
+function readableTextureHash(source: TextureSource, srgb: boolean): string {
     const hasher = new ContentHasher();
     hasher.word(srgb ? 1 : 0);
     const compressed = source as CompressedPixelData;

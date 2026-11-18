@@ -143,6 +143,20 @@ describe('content hashing', () => {
         expect(new ContentHasher().words(words).digest()).not.toEqual(new ContentHasher().words(new Uint32Array([1, 3, 2])).digest());
     });
 
+    it("hashes a texture source it can't read instead of throwing", () => {
+        const transferred = new Uint8Array(16);
+        structuredClone(transferred.buffer, { transfer: [transferred.buffer] });
+        const throwing = {
+            get width(): number {
+                throw new Error('this source throws when read');
+            },
+            height: 2,
+            data: new Uint8Array(16),
+        };
+        expect(textureContentHash({ data: transferred, width: 2, height: 2 }, true)).toMatch(/^[0-9a-f]{16}$/);
+        expect(textureContentHash(throwing as never, true)).toMatch(/^[0-9a-f]{16}$/);
+    });
+
     it('hashes an unaligned byte view the same as an aligned copy', () => {
         const backing = new Uint8Array(19).map((_, index) => index * 7);
         const unaligned = backing.subarray(1, 18);
