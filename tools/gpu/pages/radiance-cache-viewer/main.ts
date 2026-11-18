@@ -12,7 +12,12 @@
  *   (the interpolated irradiance E, which the composite adds as
  *   `giAlbedo × E / π`) and its probe atlas hold no NaN, infinite or negative
  *   value after frames 1, 30 and 60 (RC3.2's deferred check, through the
- *   viewer's own path: the world cache lights the probe rays since RC3.2).
+ *   viewer's own path: the world cache lights the probe rays since RC3.2);
+ * - per pixel, on one more frame drawn by hand (the viewer's loop stopped so
+ *   every readback is that frame's): the technique's GI picture minus its
+ *   scene pass's own colour equals `giAlbedo × E / π` with E the irradiance
+ *   image's texel at the same pixel (RC2.2 review: a flipped or offset
+ *   `screenUV` fails).
  *
  * The page ends on the last scene's radiance cache, GI on, for the runner's
  * screenshot. The composited picture's values are checked by the adapter
@@ -27,6 +32,10 @@
 
 import { reportGpuTest, summarizeAdapterInfo } from '../../client.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
+import { HdrReader } from '../three-composite-shared/composite-check.ts';
+import { isBackgroundDepth, uv, vec4 } from 'three/tsl';
+import type { Node, WebGPURenderer } from 'three/webgpu';
+import { GI_ALBEDO_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { ViewerCore, type ViewLayout } from '../../../../apps/viewer/src/core/viewer-core.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
@@ -89,6 +98,56 @@ async function scanHalves(device: GPUDevice, texture: GPUTexture): Promise<{ non
     return { nonFinite, negative, meanRgb: sum / ((values.length / 4) * 3) };
 }
 
+/** The composite check's tolerances: a share of the expected GI, a share of the picture (f32 sums of half inputs), and the pixels allowed past them. */
+const COMPOSITE_RELATIVE_TOLERANCE = 1e-3;
+const COMPOSITE_PICTURE_TOLERANCE = 1e-4;
+const COMPOSITE_OUTLIER_FRACTION = 0.001;
+
+/**
+ * One frame drawn by hand with the viewer's loop stopped: the technique's GI
+ * picture, its pass's colour and giAlbedo, and the irradiance image, all of
+ * that frame; then per pixel, picture − pass colour against giAlbedo × E / π.
+ */
+async function checkComposite(core: ViewerCore, technique: RadianceCacheViewerTechnique): Promise<{ pixels: number; outliers: number; worstRelative: number }> {
+    const nodes = technique.giNodes;
+    const probes = () => technique.radianceCache?.probes ?? null;
+    if (!nodes || !probes()) throw new Error('the radiance cache has no GI pipeline to check');
+    const renderer = core.renderer as unknown as WebGPURenderer;
+    const loop = (core as unknown as { tick(time: number): void }).tick.bind(core);
+    renderer.setAnimationLoop(null);
+    const reader = new HdrReader(renderer, WIDTH, HEIGHT);
+    try {
+        technique.renderBeforePipeline();
+        const picture = await reader.read(nodes.output, true);
+        const passColor = await reader.read(nodes.scenePass.getTextureNode('output') as unknown as Node, false);
+        const albedo = await reader.read(nodes.scenePass.getTextureNode(GI_ALBEDO_OUTPUT) as unknown as Node, false);
+        const surfaceNode = vec4(isBackgroundDepth(nodes.scenePass.getTextureNode('depth').sample(uv()).r).select(0, 1), 0, 0, 1) as unknown as Node;
+        const surfaces = await reader.read(surfaceNode, false);
+        const irradiance = halves(await readTexture(core.device, probes()!.irradiance, 8, WIDTH, HEIGHT));
+        let pixels = 0;
+        let outliers = 0;
+        let worstRelative = 0;
+        for (let pixel = 0; pixel < WIDTH * HEIGHT; pixel++) {
+            if (surfaces[pixel * 4] < 0.5) continue;
+            if (!(albedo[pixel * 4] + albedo[pixel * 4 + 1] + albedo[pixel * 4 + 2] > 0)) continue;
+            pixels++;
+            let bad = false;
+            for (let channel = 0; channel < 3; channel++) {
+                const index = pixel * 4 + channel;
+                const expected = (albedo[index] * irradiance[index]) / Math.PI;
+                const error = Math.abs(picture[index] - passColor[index] - expected);
+                if (error > COMPOSITE_RELATIVE_TOLERANCE * expected + COMPOSITE_PICTURE_TOLERANCE * Math.abs(picture[index]) + 1e-6) bad = true;
+                if (expected > 1e-4) worstRelative = Math.max(worstRelative, error / expected);
+            }
+            if (bad) outliers++;
+        }
+        return { pixels, outliers, worstRelative };
+    } finally {
+        reader.dispose();
+        renderer.setAnimationLoop(loop);
+    }
+}
+
 const failures: string[] = [];
 const data: Record<string, unknown> = {};
 let core: ViewerCore | null = null;
@@ -145,6 +204,12 @@ try {
             if (!(irradiance.meanRgb > 0)) failures.push(`${sceneId} frame ${frame}: no irradiance anywhere`);
         }
 
+        const composite = await checkComposite(core, technique);
+        if (!(composite.pixels > (WIDTH * HEIGHT) / 4)) failures.push(`${sceneId}: only ${composite.pixels} pixels for the composite check`);
+        if (composite.outliers > COMPOSITE_OUTLIER_FRACTION * composite.pixels) {
+            failures.push(`${sceneId}: on ${composite.outliers} of ${composite.pixels} pixels the picture minus the pass colour isn't giAlbedo x E / pi of the same pixel`);
+        }
+
         const views: string[] = [];
         for (const mode of ['on', 'only', 'off', 'on'] as GiMode[]) {
             core.setLayout({ giMode: mode });
@@ -165,7 +230,7 @@ try {
         if (newErrors.length > 0) failures.push(`${sceneId}: device errors: ${newErrors.slice(0, 3).join(' | ')}`);
         if (technique.failed) failures.push(`${sceneId}: the radiance cache failed: ${technique.failed}`);
         const status = core.statusLines();
-        data[sceneId] = { views, scans, status, gpuErrors: newErrors.length };
+        data[sceneId] = { views, scans, composite, status, gpuErrors: newErrors.length };
         log(`${sceneId}: ${status.join(' / ')}`);
         if (sceneId !== SCENES[SCENES.length - 1]) {
             core.unloadScene();

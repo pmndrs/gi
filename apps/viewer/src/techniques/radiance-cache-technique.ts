@@ -179,6 +179,12 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         return this.failure;
     }
 
+    /** The GI pipeline's scene pass and composite once started (for checks that read them back), or null. */
+    get giNodes(): { readonly scenePass: PassNode; readonly output: Node } | null {
+        const graph = this.giGraph;
+        return graph ? { scenePass: graph.scenePass, output: graph.output } : null;
+    }
+
     /** The core technique once started (its probes and irradiance, for checks and readbacks), or null. */
     get radianceCache(): RadianceCacheTechnique | null {
         return this.technique;
