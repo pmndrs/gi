@@ -220,7 +220,10 @@ export interface DDGISettings {
     viewBias: number | 'auto';
     /** Rays stop here, metres. `Infinity` lets a miss see the sky. */
     maxRayDistance: number;
-    /** Scale on bounce light. 1 is physical; native RTXGI uses 0.95, set it only to match native. */
+    /**
+     * Scale on bounce light. 1 is physical. Native RTXGI has no such scale: its sample caps
+     * the bounce albedo at 0.9 instead (`bounceAlbedoCap`), so leave this at 1 to match native.
+     */
     bounceEnergy: number;
     /** Move probes out of geometry (T1.5b). */
     relocation: boolean;

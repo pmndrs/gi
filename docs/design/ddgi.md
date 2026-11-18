@@ -432,7 +432,7 @@ interface DDGISettings {
     normalBias: number | 'auto';     // auto = 0.1 × min spacing
     viewBias: number | 'auto';
     maxRayDistance: number;          // Infinity
-    bounceEnergy: number;            // 1.0. Native RTXGI dims bounces (0.95); set it only to match native
+    bounceEnergy: number;            // 1.0. Native RTXGI has no such scale (its sample caps bounce albedo at 0.9)
     relocation: boolean;             // true
     minFrontFaceDistance: number | 'auto'; // auto = 0.02 × min spacing (T1.5b; was 0.1)
     classification: boolean;         // true
@@ -440,7 +440,7 @@ interface DDGISettings {
 }
 ```
 
-`bounceEnergy` defaults to 1, not 0.95: with 0.95 the furnace room settles 4.8% low (0.25 / (1 − 0.95 × 0.5) = 0.476 instead of 0.5), which would fail its 2% check. Light groups (one layer per group) are M2; the kernel takes a `groupMask` now and passes all bits.
+`bounceEnergy` defaults to 1 (corrected 2026-11-18: native RTXGI has no 0.95 bounce scale; its sample caps the bounce albedo at 0.9, which is `bounceAlbedoCap`, docs/divergence.md §6). At 0.95 the furnace room would settle 4.8% low (0.25 / (1 − 0.95 × 0.5) = 0.476 instead of 0.5), which would fail its 2% check. Light groups (one layer per group) are M2; the kernel takes a `groupMask` now and passes all bits.
 
 ## Debug data and counters
 
