@@ -21,6 +21,23 @@ Rules:
 
 ---
 
+## 2026-11-19 (later) · Windows RTX: M4 accuracy without GTAO, and sponza-full's -30% · measurer
+Did: worktree `webgpu-ddgi-win-m34`, `m34-win` at f183fb7 (GTAO off by default), `run.ts --gpu nvidia --no-occlusion` over all 10 scenes under `bench-lock run --no-cool-wait`; no code changes. Thermal verdict INVALID (42% throttled), no timing used. Rows added to `bench/results/m4-textured-accuracy.csv` (setting "no GTAO"), full table in `docs/milestones/M3-M4.md`.
+| scene | cameras | mean error without GTAO | FLIP 8x8 |
+|---|---|---|---|
+| textured-furnace | corner / opposite / overview | -0.86 / -1.14 / -0.48% | 0.029 / 0.028 / 0.022 |
+| uv-board | front / ground / top-row | -3.51 / -3.81 / -1.53% | 0.046 / 0.053 / 0.052 |
+| alpha-checker | lit / dark / dark-floor | +2.25 / +7.71 / +10.78% | 0.051 / 0.204 / 0.204 |
+| glass-wall | lit / dark / dark-floor | -0.31 / -26.66 / -31.37% | 0.101 / 0.168 / 0.173 |
+| sponza | colonnade / gallery | +25.46 / +21.77% | 0.366 / 0.394 |
+| furnished-room | corner / window | -6.10 / -5.39% | 0.085 / 0.088 |
+| courtyard-tree | gateway / SE / under | -1.45 / -2.71 / -2.57% | 0.083 / 0.083 / 0.110 |
+| bistro-exterior | across / street | +10.40 / +4.41% | 0.278 / 0.301 |
+| bistro-interior | bar / dining | -1.71 / +0.71% | 0.301 / 0.261 |
+| sponza-full | colonnade | -16.21% | 0.722 |
+Out of the +-10% bar without GTAO: Sponza, alpha-checker dark floor (+10.8%), Bistro across-the-street (+10.4%), glass-wall dark views (the known composite gap), sponza-full.
+**sponza-full verdict (looked, not fixed):** not reference noise. The reference's 8x8 block noise is 6.9%, its top 1% of pixels hold 7.8% of its light (no firefly bias), and the error is colour-systematic. Per channel, ours/reference (no GTAO) is R 0.85, G 0.62, B 1.47: the reference is green (lit leaves), ours is blue-shifted. By image third the ratio is 0.52 left, 0.34 centre (where the cypress foliage fills the view), 1.22 right. With GTAO the mean was -30%, so GTAO had hidden part of it. This points at the foliage materials: the cypress leaves are BLEND (stochastic) in our walk, so the sky comes through leaf gaps and the green bounce from leaves is weaker than in the reference, where the leaf is a solid green surface or differently alpha'd. Whether the reference or our alpha handling is the odd one out needs a check of how the Cycles materials treat the cypress alpha (its json lists 46 metallic-folded materials, IvyLeaf among them); a spot to start is a `--no-cutouts` variant of the page or the cypress-only comparison. Not our GI field in general: the same field is within 3% on courtyard-tree, which has stochastic foliage too.
+
 ## 2026-11-19 · Windows Intel UHD: tracer re-check, M3's checks, `low` preset, textured furnace · measurer
 Did: worktree `webgpu-ddgi-win-m34`, branch `m34-win` from e6d0d21, no library changes. Intel UHD (vendor intel, architecture gen-12lp), headless Chrome 157.0.8103.79, each command under `bench-lock run --no-cool-wait`, at most 2 pages a command, `trace-materials` and `ddgi-leak`'s re-run alone. Correctness gates only; no timings judged. Rows in `bench/results/checks.csv`. New page `tools/gpu/pages/ddgi-low-warmup` (manual, a measurement, not a gate).
 
