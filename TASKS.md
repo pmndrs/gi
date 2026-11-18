@@ -593,7 +593,7 @@ The port reads AMD's source directly: Capsaicin v1.3 at (on the Windows laptop) 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | RC2.1 | Technique skeleton and screen probes: spawn (16×16 tiles, Halton jitter), compact, sample (64 rays, one per hemi-octahedral cell), trace, light hits directly, blend into the probe atlas; debug views of the atlas and the mask | implementer | M | RC1.1, RC1.3 | done (2026-11-10; Opus review passed with notes; both GPUs; the sky check amended to Capsaicin backup rule; viewer entry moved to RC2.2; D16-D21) |
-| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | active (implementer, 2026-11-10) |
+| RC2.2 | First image: the probe mask mips, SH projection, interpolation per pixel, the shading module by `screenUV`, the three composite and the viewer's technique entry; the Lambert check | implementer | M | RC2.1 | review (2026-11-19; `radiance-cache` with RC3.2 merged in; RTX 3060 and Intel UHD; register D25-D29, D25 a lead decision; the viewer NaN check RC3.2 deferred passes on three scenes; see PROGRESS) |
 
 - **RC2.1 done-when.**
   - `packages/ddgi-core/src/techniques/radiance-cache/` exists, importing only `platform/contract` (the RC1.2 rule), declaring the screen channels it needs, with its settings as Capsaicin's defaults (`gi1.h` `RenderOptions`, `probe_size` 8, `QuarterSpp`), each named and cited.
