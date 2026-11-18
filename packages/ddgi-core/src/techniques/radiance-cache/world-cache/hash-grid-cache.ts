@@ -397,11 +397,9 @@ export class HashGridCache implements WorldCache {
         const rayData = this.rayDataFor(prepared, rays);
         this.writeConstants(prepared, frame);
 
-        // The probe-ray count where the insert pass's indirect arguments read it.
-        encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.tileWords, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
-
         // gi1_use_multibounce changed: Capsaicin empties the cache (needs_hash_grid_clear,
         // gi1.cpp:1740-1745) and remakes its indirect buffers, the scratch cleared (gi1.cpp:535-546).
+        // Before the count below: emptying the cache zeroes the tile words it is copied into.
         const useMultibounce = this.options.useMultibounce;
         if (this.lastUseMultibounce !== null && this.lastUseMultibounce !== useMultibounce) {
             this.reset(encoder);
@@ -410,6 +408,9 @@ export class HashGridCache implements WorldCache {
             encoder.clearBuffer(prepared.buffers.updateScratch, indirectStart, scratch.bytes - indirectStart);
         }
         this.lastUseMultibounce = useMultibounce;
+
+        // The probe-ray count where the insert pass's indirect arguments read it.
+        encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.tileWords, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
 
         const purge = this.beginPass(encoder, prepared, 'PurgeRadianceCache');
         prepared.purgeArgs[this.bufferPingPong].encode(purge);

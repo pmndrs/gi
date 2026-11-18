@@ -1,7 +1,13 @@
 /**
  * RC3.2: no NaN, infinite or negative values in the radiance cache's output
  * on `cornell-box`, `two-room` and `sponza` (with curtains), each at
- * 1280 × 720 from its first bookmark, the camera still, for 60 frames.
+ * 1280 × 720 from its first bookmark, the camera still, for 60 frames, with
+ * Capsaicin's default GI-1.2 multibounce on. RC3.3 adds the cells' indirect
+ * values to the scan, and runs `cornell-box` and `two-room` again with
+ * multibounce off: the mean probe-ray radiance after frame 60 must be higher
+ * with it on in `two-room` (its closed room is lit by the second bounce; the
+ * done-when's contact sheet needs the viewer, RC2.2), and is reported for
+ * `cornell-box`.
  *
  * On this branch the technique's output is the probe atlas (the screen
  * cache's image passes, interpolation included, and the viewer's technique
@@ -12,7 +18,7 @@
  *   bypassed rays' own samples, in `rays.radiance`);
  * - every texel of the probe atlas (`BlendScreenProbes`' output);
  * - every cell of every live tile of the world cache, all four levels
- *   (rgb × count and the count).
+ *   (rgb × count and the count), direct and indirect values.
  *
  * Each must be finite and at least 0. Device errors fail the page too. The
  * mean probe radiance is reported, as information.
@@ -29,6 +35,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
@@ -121,21 +128,23 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
     const liveTiles = new Uint32Array(await readRange(device, packed.count.buffer, packed.count.offset, 4))[0];
     const tiles = new Uint32Array(await readRange(device, cache.buffers.tileWords, packed.firstWord * 4, liveTiles * 4));
     const tileBytes = cache.capacity.numCellsPerTile * 8;
-    const valueBase = cache.layout.cellValues.valueBuffer * 8;
     let cellBad = 0;
     let firstCell: string | null = null;
-    // In batches, so the staging buffer stays small on a scene with many tiles.
-    const batch = 4096;
-    for (let start = 0; start < tiles.length; start += batch) {
-        const slice = tiles.subarray(start, Math.min(tiles.length, start + batch));
-        const staging = device.createBuffer({ label: 'radiance-cache-scenes tiles', size: Math.max(4, slice.length * tileBytes), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
-        const encoder = device.createCommandEncoder();
-        slice.forEach((tile, index) => encoder.copyBufferToBuffer(cache.buffers.cellValues, valueBase + tile * tileBytes, staging, index * tileBytes, tileBytes));
-        device.queue.submit([encoder.finish()]);
-        const cells = badHalves(new Uint16Array(await readRange(device, staging, 0, slice.length * tileBytes)), () => true);
-        staging.destroy();
-        cellBad += cells.bad;
-        firstCell ??= cells.first;
+    // The direct values, then the indirect ones (GI-1.2's second bounce, RC3.3).
+    for (const valueBase of [cache.layout.cellValues.valueBuffer * 8, cache.layout.cellValues.valueIndirectBuffer * 8]) {
+        // In batches, so the staging buffer stays small on a scene with many tiles.
+        const batch = 4096;
+        for (let start = 0; start < tiles.length; start += batch) {
+            const slice = tiles.subarray(start, Math.min(tiles.length, start + batch));
+            const staging = device.createBuffer({ label: 'radiance-cache-scenes tiles', size: Math.max(4, slice.length * tileBytes), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+            const encoder = device.createCommandEncoder();
+            slice.forEach((tile, index) => encoder.copyBufferToBuffer(cache.buffers.cellValues, valueBase + tile * tileBytes, staging, index * tileBytes, tileBytes));
+            device.queue.submit([encoder.finish()]);
+            const cells = badHalves(new Uint16Array(await readRange(device, staging, 0, slice.length * tileBytes)), () => true);
+            staging.destroy();
+            cellBad += cells.bad;
+            firstCell ??= cells.first;
+        }
     }
 
     return {
@@ -165,12 +174,12 @@ async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manif
     return () => sync.update(loaded.scene);
 }
 
-async function scanScene(device: GPUDevice, id: string, loader: 'manifest' | 'viewer'): Promise<Scan[]> {
+async function scanScene(device: GPUDevice, id: string, loader: 'manifest' | 'viewer', settings: Partial<RadianceCacheSettings> = {}): Promise<Scan[]> {
     const manifest = loadManifest(id);
     const bookmark = manifest.cameras[0];
     const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-scenes ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
     platform.setOutput(technique);
     await platform.prepare();
     let beforeFrame = (): void => {};
@@ -218,8 +227,17 @@ try {
     deviceErrors = watchDevice(device);
     const scenes: Record<string, Scan[]> = {};
     const failures: string[] = [];
-    for (const [id, loader] of [['cornell-box', 'manifest'], ['two-room', 'manifest'], ['sponza', 'viewer']] as const) {
-        const scans = await scanScene(device, id, loader);
+    // Capsaicin's defaults (multibounce on), then cornell-box and two-room with multibounce off.
+    const runs = [
+        ['cornell-box', 'manifest', true],
+        ['two-room', 'manifest', true],
+        ['sponza', 'viewer', true],
+        ['cornell-box', 'manifest', false],
+        ['two-room', 'manifest', false],
+    ] as const;
+    for (const [scene, loader, useMultibounce] of runs) {
+        const id = useMultibounce ? scene : `${scene} (multibounce off)`;
+        const scans = await scanScene(device, scene, loader, { useMultibounce });
         scenes[id] = scans;
         for (const result of scans) {
             const bad = result.rayValuesBad + result.atlasValuesBad + result.cellValuesBad;
@@ -227,11 +245,20 @@ try {
             if (result.probeRays === 0 || result.liveTiles === 0) failures.push(`${id} after frame ${result.frame}: ${result.probeRays} probe rays and ${result.liveTiles} live tiles; nothing to scan`);
         }
     }
+    // The second bounce lights two-room's closed room: the mean probe radiance after frame 60 rises with it.
+    const lastMean = (id: string): number => scenes[id]?.[scenes[id].length - 1]?.meanRayRadiance ?? 0;
+    const multibounceGain = {
+        'two-room': lastMean('two-room') / Math.max(lastMean('two-room (multibounce off)'), 1e-9),
+        'cornell-box': lastMean('cornell-box') / Math.max(lastMean('cornell-box (multibounce off)'), 1e-9),
+    };
+    if (!(lastMean('two-room') > lastMean('two-room (multibounce off)'))) {
+        failures.push(`two-room's mean probe radiance after frame 60 is ${lastMean('two-room')} with multibounce and ${lastMean('two-room (multibounce off)')} without: the second bounce should raise it`);
+    }
     await drainDevice(device);
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, scenes },
+        data: { width: WIDTH, height: HEIGHT, multibounceGain, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
