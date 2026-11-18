@@ -68,13 +68,20 @@ async function runArm(stride: number) {
             assert(m.gpuComputeMs.length === measuredFrames, `received ${m.gpuComputeMs.length}/${measuredFrames} distinct RC GPU timestamps`);
         }
         const receiver = await rail.render({ frame: 0, frames: receiverFrames, advance: false, camera: 'receiver', view: 'indirect', cue: 'blue' });
+        // A bright average can hide black cells when the probe pools fill. Read counters
+        // outside the timed window, after the same receiver exposure in both arms.
+        const { occupancy } = await rail.render({ frames: 1, advance: false, occupancy: true });
+        assert(occupancy && occupancy.capacities.length === 4 && occupancy.peakProbes.length === 4,
+            'missing cascade occupancy');
+        assert(occupancy.peakProbes.every((n, i) => n > 0 && n < occupancy.capacities[i]),
+            `receiver probe pool saturated or empty: ${occupancy.peakProbes} / ${occupancy.capacities}`);
         const receiverMean = imageMean(receiver, true);
         assert(receiverMean.luma > 2 / 255, 'the fixed receiver has no usable indirect signal');
         return {
             receiver, stats: {
                 stride, renderWidth: m.renderWidth, renderHeight: m.renderHeight, timestampSupported: m.timestampSupported,
                 gpuComputeMs: distribution(m.gpuComputeMs), frameIntervalMs: distribution(m.frameIntervalsMs),
-                probeBytes: m.probeBytes, hitScratchBytes: m.hitScratchBytes, receiverMean,
+                probeBytes: m.probeBytes, hitScratchBytes: m.hitScratchBytes, occupancy, receiverMean,
             },
         };
     } finally {
@@ -93,7 +100,11 @@ const data = {
 try {
     const gpuAdapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
     if (gpuAdapter) adapter = summarizeAdapter(gpuAdapter);
+    // On thermally limited hardware each pair can run under its own cool-start lock.
+    const onlyPair = import.meta.env.VITE_RC_BUDGET_PAIR;
+    assert(onlyPair === undefined || ['1', '2', '3'].includes(onlyPair), 'VITE_RC_BUDGET_PAIR must be 1, 2 or 3');
     for (const [pair, order] of [[2, 1], [1, 2], [2, 1]].entries()) {
+        if (onlyPair !== undefined && Number(onlyPair) !== pair + 1) continue;
         const arms = new Map<number, Awaited<ReturnType<typeof runArm>>>();
         for (const stride of order) {
             progress.textContent = `Pair ${pair + 1} / 3 · ray stride ${stride}`;
@@ -104,7 +115,7 @@ try {
         const sparseMs = sparse.stats.gpuComputeMs.median;
         const denseMs = dense.stats.gpuComputeMs.median;
         pairs.push({
-            order, stride2: sparse.stats, stride1: dense.stats,
+            pair: pair + 1, order, stride2: sparse.stats, stride1: dense.stats,
             medianComputeSavingMs: sparseMs !== null && denseMs !== null ? denseMs - sparseMs : null,
             receiverErrorVsStride1: receiverError(sparse.receiver, dense.receiver),
         });

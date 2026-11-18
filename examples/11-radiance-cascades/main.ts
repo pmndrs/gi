@@ -11,6 +11,7 @@ interface VerifyOptions {
     cue?: LampCue;
     view?: View;
     measure?: boolean;
+    occupancy?: boolean;
 }
 
 const params = new URLSearchParams(location.search);
@@ -60,8 +61,8 @@ async function start() {
     const world = makePassage();
     const stride = params.get('stride') === '1' ? 1 : 2;
     const options = {
-        spacing: 0.05, levelDistance: 1.5, levels: 10, maxProbes: 4096,
-        blendingRadius: 2, orientations: true, rayStride: stride, secondary: true,
+        spacing: 0.10, levelDistance: 1.5, levels: 10, maxProbes: 4096,
+        blendingRadius: 2, orientations: false, rayStride: stride, secondary: true,
         qualityDecay: 0.94, quality: 1, adaptiveLOD: false, adaptiveQuality: false, velocity: false,
     };
     const rc = new RealtimeRadianceCascades(options);
@@ -171,6 +172,7 @@ async function start() {
                 if (measured && request.frames > 120) throw new RangeError('timestamp windows are limited to 120 frames');
                 const frameIntervalsMs: number[] = [];
                 const queryIds: string[] = [];
+                const peakProbes = rc.capacities.map(() => 0);
                 let previousTick: number | null = null;
                 if (measured) {
                     // Start with empty pools, including queries queued during asynchronous warm-up reads.
@@ -189,6 +191,10 @@ async function start() {
                         if (uid !== null) queryIds.push(uid);
                     }
                     if (i === request.frames - 1) ctx.drawImage(renderer.domElement, 0, 0, 64, 36);
+                    if (request.occupancy) {
+                        const counts = await rc.readStats(renderer);
+                        for (let n = 0; n < counts.length; n++) peakProbes[n] = Math.max(peakProbes[n], counts[n]);
+                    }
                 }
                 const gpuComputeMs: number[] = [];
                 if (measured) {
@@ -204,6 +210,7 @@ async function start() {
                 hud();
                 return {
                     pixels: ctx.getImageData(0, 0, 64, 36).data, width: 64, height: 36, frame, renderedFrames, computeMs,
+                    occupancy: request.occupancy ? { peakProbes, capacities: rc.capacities, probeBytes: rc.memory } : undefined,
                     measurement: measured ? {
                         frameIntervalsMs, gpuComputeMs, timestampSupported: timing, renderWidth: width, renderHeight: height,
                         stride, probeBytes: rc.memory, hitScratchBytes: rc.hitScratchBytes,

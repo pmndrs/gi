@@ -61,19 +61,21 @@ async function captureRail(cdp: CdpClient, out: string): Promise<void> {
         { camera: 'receiver', cue: 'blue', view: 'direct', frame: 0, frames: 1 },
     ];
     for (const shot of shots) {
-        const options = JSON.stringify({ ...shot, advance: false });
+        const options = JSON.stringify({ ...shot, advance: false, occupancy: true });
         const capture = await cdp.send<{
-            result: { value: number };
+            result: { value: { renderedFrames: number; occupancy: { peakProbes: number[]; capacities: number[]; probeBytes: number } } };
             exceptionDetails?: { text: string; exception?: { description?: string } };
         }>('Runtime.evaluate', {
-            expression: `window.__rcRailVerify.render(${options}).then(capture => capture.renderedFrames)`,
+            expression: `window.__rcRailVerify.render(${options}).then(({renderedFrames, occupancy}) => ({renderedFrames, occupancy}))`,
             awaitPromise: true,
             returnByValue: true,
         }, READY_TIMEOUT_MS);
         if (capture.exceptionDetails) throw new Error(capture.exceptionDetails.exception?.description ?? capture.exceptionDetails.text);
         const file = join(out, `11-radiance-cascades-${shot.camera}-${shot.cue}-${shot.view}.png`);
         await saveScreenshot(cdp, file);
-        console.log(`Split RC: ${capture.result.value} completed draws, ${shot.camera} pose ${shot.frame} -> ${file}`);
+        const { renderedFrames, occupancy } = capture.result.value;
+        const slots = occupancy.peakProbes.map((count, n) => `${count}/${occupancy.capacities[n]}`).join(', ');
+        console.log(`Split RC: ${renderedFrames} completed draws, ${shot.camera} pose ${shot.frame}, peak probes [${slots}], ${occupancy.probeBytes} probe bytes -> ${file}`);
     }
 }
 

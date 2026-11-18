@@ -6,6 +6,7 @@ export interface RailCapture {
     frame: number;
     renderedFrames: number;
     computeMs: number | null;
+    occupancy?: { peakProbes: number[]; capacities: number[]; probeBytes: number };
     measurement?: {
         frameIntervalsMs: number[];
         gpuComputeMs: number[];
@@ -27,6 +28,7 @@ export interface RailControl {
         frame?: number;
         advance?: boolean;
         measure?: boolean;
+        occupancy?: boolean;
     }): Promise<RailCapture>;
 }
 
