@@ -1,4 +1,6 @@
 // GI platform: shared scene, resource and pass contracts that techniques build on.
+// Published as `@pmndrs/gi/core`, which holds no technique: nothing here imports
+// ../techniques (lint enforces it).
 // The contract (T0.11), GPU timing and the platform object (T1.3).
 // The scene copy (./scene, T1.2) and the tracer's internals (./trace: builders,
 // buffers, the batch kernel, the CPU walk) are deliberately not exported here:

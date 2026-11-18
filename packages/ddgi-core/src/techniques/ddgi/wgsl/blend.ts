@@ -72,7 +72,13 @@
  *   it active. The scratch's tiles-written word tells `ddgi/write` that both
  *   have tiles to copy;
  * - a probe that comes back on keeps the updates it was owed, so its two
- *   warming updates come at priority.
+ *   warming updates come at priority;
+ * - woken air probes (T3.4, §5.3): a probe `ddgi/mark` woke near a receiver
+ *   or a moved or posed object (its `wakeUntil` is still ahead) isn't switched off
+ *   for "no surface nearby"; one that was off comes back on through state 3
+ *   like any other, so it too is used only after 2 blended updates. The
+ *   first update after the wake ran out clears it, and classification works
+ *   as before.
  *
  * Light groups (T2.5, light-groups.ts; m2-lights.md §5): with several
  * irradiance layers, each ray has a result per layer, and phase C blends
@@ -152,7 +158,7 @@ export const KEY_FIRST_UPDATE_SHARE = 0.8;
  * at most 8 of the 23 mantissa bits so the distance stays precise.
  */
 export const KEY_INDEX_BITS = Math.ceil(Math.log2(FIXED_RAYS));
-if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/ddgi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
+if (KEY_INDEX_BITS > 8) throw new Error(`@pmndrs/gi: ${FIXED_RAYS} fixed rays need ${KEY_INDEX_BITS} key bits; phase B's keys allow 8`);
 const KEY_INDEX_MASK = (1 << KEY_INDEX_BITS) - 1;
 import { MAX_IRRADIANCE_LAYERS } from '../light-groups.ts';
 import { DDGI_COMMON_WGSL } from './common.ts';
@@ -219,7 +225,7 @@ fn ddgiReduceFixedRay(ray: DdgiFixedRayResult) {
 export function blendKernelWgsl(shape: BlendKernelShape): string {
     const { irradianceTexels, distanceTexels, scratch, reduction } = shape;
     const sunLayer = shape.sunLayer ?? -1;
-    if (sunLayer >= scratch.irradianceLayers) throw new RangeError(`@pmndrs/ddgi: the sun layer is ${sunLayer}, but the blend has ${scratch.irradianceLayers} layer(s)`);
+    if (sunLayer >= scratch.irradianceLayers) throw new RangeError(`@pmndrs/gi: the sun layer is ${sunLayer}, but the blend has ${scratch.irradianceLayers} layer(s)`);
     // The probe's mean over every layer: the sun layer weighed by the sun's light, the others as they are.
     const meanSum =
         sunLayer >= 0
@@ -242,7 +248,7 @@ export function blendKernelWgsl(shape: BlendKernelShape): string {
     // Every layer's texel estimates and old values sit in workgroup memory beside the rays' directions (the file comment).
     if (scratch.irradianceLayers > MAX_IRRADIANCE_LAYERS) {
         throw new Error(
-            `@pmndrs/ddgi: ddgi/blend keeps at most ${MAX_IRRADIANCE_LAYERS} irradiance layers in its 16 KB of workgroup memory, got ${scratch.irradianceLayers} (light-groups.ts, MAX_IRRADIANCE_LAYERS)`,
+            `@pmndrs/gi: ddgi/blend keeps at most ${MAX_IRRADIANCE_LAYERS} irradiance layers in its 16 KB of workgroup memory, got ${scratch.irradianceLayers} (light-groups.ts, MAX_IRRADIANCE_LAYERS)`,
         );
     }
     // An enable directive must come before everything else in the module.
@@ -474,16 +480,16 @@ fn ddgiTexelDirection(texel: vec2u, texels: u32) -> vec3f {
     return ddgiOctDecode((vec2f(texel) + 0.5) / f32(texels) * 2.0 - 1.0);
 }
 
-// Atlas texel of interior texel 'texel' of a probe's tile (the layer is probe.y).
+// Atlas texel of interior texel 'texel' of a probe's tile (the array layer is ddgiProbeLayer(probe)).
 fn ddgiAtlasTexel(probe: vec3i, texel: vec2u, texels: u32) -> vec2i {
     let border = i32(DDGI_TILE_BORDER);
     return probe.xz * (i32(texels) + 2 * border) + border + vec2i(texel);
 }
 
-// The same in irradiance layer 'layer': its tiles are 'layer' probe grids to
-// the right in the layered atlas (light-groups.ts).
+// The same in irradiance layer 'layer': its tiles are 'layer' atlas widths of
+// tiles to the right in the layered atlas (light-groups.ts).
 fn ddgiIrradianceAtlasTexel(probe: vec3i, texel: vec2u, layer: u32) -> vec2i {
-    let shifted = probe + vec3i(i32(layer) * i32(ddgiProbeCount().x), 0, 0);
+    let shifted = probe + vec3i(i32(layer) * ddgiAtlasTilesAcross(), 0, 0);
     return ddgiAtlasTexel(shifted, texel, DDGI_IRRADIANCE_TEXELS);
 }
 
@@ -501,12 +507,13 @@ fn ddgiRayResult(slot: u32, rayIndex: u32, layer: u32) -> u32 {
 // ---- Phase B: classification and relocation ----
 
 // Whether a probe may sit at this offset (in spacings): inside its own cell
-// (so the grid lookup stays valid) and inside the volume's box of probes.
+// (so the grid lookup stays valid) and inside the volume's box of probes
+// (its window, for a camera-following volume: measured in window probes).
 // Why the box: a probe in an outer wall would otherwise often leave through
 // the wall's outer face, the nearest one, and end up outside the room,
 // where the room's own outside keeps it "near a surface" and active.
 fn ddgiOffsetAllowed(probe: vec3i, offset: vec3f) -> bool {
-    let position = vec3f(probe) + offset;
+    let position = vec3f(ddgiWindowProbe(ddgiUniformVolume(), probe)) + offset;
     let lastProbe = vec3f(ddgiProbeCount() - 1u);
     return all(abs(offset) <= vec3f(DDGI_MAX_OFFSET)) && all(position >= vec3f(0.0)) && all(position <= lastProbe);
 }
@@ -546,8 +553,16 @@ struct DdgiProbeDecision {
     state: u32,
 }
 
-// Thread 0's verdict from the reductions (design: "Phase B").
-fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
+// Whether a probe is awake (T3.4, m3-moving.md §5.3): ddgi/mark woke it near
+// a receiver or a moved or posed object, and WAKE_FRAMES haven't passed since.
+// Frames compare modulo 2^32, as the frame counter wraps; 0 is "not awake".
+fn ddgiAwake(wakeUntil: u32) -> bool {
+    return wakeUntil != 0u && bitcast<i32>(wakeUntil - ddgi.frame) > 0;
+}
+
+// Thread 0's verdict from the reductions (design: "Phase B"). 'awake': the
+// probe was woken (ddgiAwake), so "no surface nearby" doesn't switch it off.
+fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32, awake: bool) -> DdgiProbeDecision {
     let spacing = ddgiUniformVolume().spacing;
     let minFrontFace = ddgi.minFrontFaceDistance;
     let backFaces = atomicLoad(&ddgiBackFaceCount);
@@ -605,8 +620,10 @@ fn ddgiDecide(probe: vec3i, offset: vec3f, state: u32) -> DdgiProbeDecision {
         // Inside geometry, after relocation had its chance: if it moved, the
         // next update looks again from the new place.
         newState = DDGI_STATE_OFF_INSIDE_GEOMETRY;
-    } else if (ddgi.classification != 0u && atomicLoad(&ddgiFrontFacesInReach) == 0u) {
+    } else if (ddgi.classification != 0u && atomicLoad(&ddgiFrontFacesInReach) == 0u && !awake) {
         // No surface within reach: the probe helps no surface's interpolation.
+        // Unless it is awake: a receiver or a moved object in mid-air needs it
+        // (m3-moving.md §5.3). An awake probe that was off comes back on below.
         newState = DDGI_STATE_OFF_NO_SURFACE_NEARBY;
     } else if (ddgiIsOff(state)) {
         // Coming back on: it traced only its fixed rays this time, so it is
@@ -629,7 +646,7 @@ struct DdgiProbeHistory {
     scheduleAndFlags: u32,   // flags in the low 8 bits (DDGI_FLAG_*); the frame it was last scheduled above
     meanRedGreen: u32,       // its mean irradiance, r and g as half floats
     meanBlueNoise: u32,      // b, and its noise, as half floats
-    wakeUntil: u32,          // M3
+    wakeUntil: u32,          // woken air probes (T3.4): awake until this frame; 0 when not woken
     keysReceived: u32,       // a fine probe awaiting a change: the key neighbours that passed it theirs (low 8 bits), their weight (high half)
     changeClock: u32,        // the volume's change clock at its last blended update
     keyDeltaSlot: u32,       // a key whose latest update passed its change: the update-list slot of its key-delta entry
@@ -915,7 +932,7 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: 
         moments += weight * vec2f(distance, distance * distance);
         weightSum += weight;
     }
-    let old = textureLoad(ddgiDistanceAtlas, ddgiAtlasTexel(probe, texel, DDGI_DISTANCE_TEXELS), probe.y, 0).xy;
+    let old = textureLoad(ddgiDistanceAtlas, ddgiAtlasTexel(probe, texel, DDGI_DISTANCE_TEXELS), ddgiProbeLayer(probe), 0).xy;
     // A texel no ray came near this update keeps its old value.
     let estimate = select(old, moments / weightSum, weightSum > 1.0e-6);
     let blendedValue = mix(estimate, old, hysteresis);
@@ -1001,21 +1018,25 @@ fn ddgiFeedbackFires(relativeDeviation: f32, noise: f32, blendedBefore: u32) -> 
 // neighbours at half of it. In a buffer of its own: the blend never writes
 // another probe's history (each workgroup owns only its own probe).
 // Non-negative floats order like their bits, so atomicMax keeps the largest.
+// Neighbours are found in window probes (a camera-following volume's wrap
+// around its slots) and must be inside the window.
 fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
     atomicMax(&ddgiFeedbackRequests[probeIndex], bitcast<u32>(urgency));
     let counts = vec3i(ddgiProbeCount());
+    let windowProbe = ddgiWindowProbe(ddgiUniformVolume(), probe);
     let neighbourUrgency = bitcast<u32>(urgency * DDGI_FEEDBACK_NEIGHBOUR_SHARE);
     for (var face = 0u; face < 6u; face++) {
-        var neighbour = probe;
-        neighbour[face % 3u] += select(1, -1, face >= 3u);
-        if (any(neighbour < vec3i(0)) || any(neighbour >= counts)) {
+        var step = vec3i(0);
+        step[face % 3u] = select(1, -1, face >= 3u);
+        let windowNeighbour = windowProbe + step;
+        if (any(windowNeighbour < vec3i(0)) || any(windowNeighbour >= counts)) {
             continue;
         }
-        if (ddgiReadProbeData(ddgiProbeData, neighbour).state != DDGI_STATE_ACTIVE) {
+        let neighbour = ddgiNeighbourSlot(probe, step);
+        if (ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), neighbour).state != DDGI_STATE_ACTIVE) {
             continue;
         }
-        let neighbourIndex = u32(neighbour.x) + u32(counts.x) * (u32(neighbour.z) + u32(counts.z) * u32(neighbour.y));
-        atomicMax(&ddgiFeedbackRequests[neighbourIndex], neighbourUrgency);
+        atomicMax(&ddgiFeedbackRequests[ddgiProbeIndex(neighbour)], neighbourUrgency);
     }
 }
 
@@ -1026,9 +1047,11 @@ fn ddgiRequestFeedback(probeIndex: u32, probe: vec3i, urgency: f32) {
 // pile up and owe it again every frame. Coming back on (new state 3, after
 // a change freed it, m3-moving.md §5.2), it keeps what it was owed, so its
 // two warming updates come at once. Either way it starts warming again.
-fn ddgiForgetPromises(probeIndex: u32, newState: u32) {
+// A wake that has run out is cleared ('awake', ddgiAwake).
+fn ddgiForgetPromises(probeIndex: u32, newState: u32, awake: bool) {
     var history = ddgiProbeHistory[probeIndex];
     history.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_WARMED_ONCE;
+    history.wakeUntil = select(0u, history.wakeUntil, awake);
     if (newState != DDGI_STATE_NOT_UPDATED_YET) {
         history.updates = history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT);
         history.urgency = 0.0;
@@ -1074,7 +1097,7 @@ fn ddgiBlend(
     }
     let probeIndex = ddgiUpdateList[slot];
     let probe = ddgiProbeCoordinates(probeIndex, ddgiProbeCount());
-    let probeData = ddgiReadProbeData(ddgiProbeData, probe);
+    let probeData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     let state = probeData.state;
     let tracedRays = ddgiTracedRays(state);
     let blendedRays = ddgi.raysPerProbe - DDGI_FIXED_RAYS;
@@ -1116,7 +1139,9 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
     }
     workgroupBarrier();
     if (thread == 0u) {
-        let decision = ddgiDecide(probe, probeData.offset, state);
+        // Woken near a receiver or a moved object (ddgi/mark, T3.4): kept on whatever its rays find around it.
+        let awake = ddgiAwake(ddgiProbeHistory[probeIndex].wakeUntil);
+        let decision = ddgiDecide(probe, probeData.offset, state, awake);
         // Phase C runs for probes that traced all their rays and stay active.
         // (The write kernel copies the tiles exactly when the new state is active.)
         let blendThisUpdate = decision.state == DDGI_STATE_ACTIVE && !ddgiIsOff(state);
@@ -1125,7 +1150,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         ddgiChangedNow = 0u;
         // The previous update's big-change verdict (layer 0's alpha), read once here:
         // phase C blends every layer's texels with it at once.
-        ddgiFastHysteresis = select(0u, 1u, textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, vec2u(0u), 0u), probe.y, 0).a > 0.5);
+        ddgiFastHysteresis = select(0u, 1u, textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, vec2u(0u), 0u), ddgiProbeLayer(probe), 0).a > 0.5);
         var newState = decision.state;
         if (blendThisUpdate) {
             // One workgroup per probe in the list, and a probe is listed at
@@ -1140,6 +1165,8 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
             ddgiNextHistory.moverMask = atomicLoad(&ddgiMoverHits);
+            // A wake that has run out is cleared, so the stored frame never comes round again as the counter wraps.
+            ddgiNextHistory.wakeUntil = select(0u, history.wakeUntil, awake);
             ddgiUpdateKind = step.kind;
             if (step.kind == DDGI_UPDATE_HELD) {
                 // Its record without the owed updates; nothing else of it changes (ddgiWriteHistory is skipped).
@@ -1159,7 +1186,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
                 atomicAdd(&ddgiCensus[DDGI_CENSUS_KEY_CHANGES_PASSED_TOTAL], 1u);
             }
         } else {
-            ddgiForgetPromises(probeIndex, decision.state);
+            ddgiForgetPromises(probeIndex, decision.state, awake);
         }
         // Offsets and states are small exact values in half floats; no rounding noise wanted.
         let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_PROBE_DATA;
@@ -1186,7 +1213,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
             let texelIndex = item % DDGI_IRRADIANCE_TEXEL_COUNT;
             let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
             ddgiTexelEstimate[item] = vec4f(ddgiEstimateIrradianceTexel(slot, layer, texelIndex, blendedRays), 0.0);
-            ddgiTexelOld[item] = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, texel, layer), probe.y, 0);
+            ddgiTexelOld[item] = textureLoad(ddgiIrradianceAtlas, ddgiIrradianceAtlasTexel(probe, texel, layer), ddgiProbeLayer(probe), 0);
         } else {
             ddgiBlendDistanceTexel(slot, probeIndex, probe, item - layerTexels, blendedRays, hysteresis);
         }

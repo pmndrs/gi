@@ -40,6 +40,17 @@
  * drift of the image mean from the first to the last 10 frames (a check that
  * the scene was converged).
  *
+ * Stochastic surfaces (M4, T4.5): the test view's own primary rays pass a
+ * blended surface (glTF BLEND, Sponza's cypresses) at random, with a seed
+ * that changes every frame, so a pixel there sees the leaf in one frame and
+ * the wall behind it in the next. That is the test view's noise, not the
+ * probes' (three draws those surfaces alpha-blended, the same every frame).
+ * So a pair leaves out the pixels whose primary hit moved between its two
+ * frames (the position image differs), and reports their share
+ * (`primary_changed_share`) and the numbers with them kept
+ * (`rel_change_mean_all`, `rel_change_p95_all`). In an opaque or cut-out
+ * scene no primary hit moves and the numbers are the same as before.
+ *
  * Frame sequences for looking at (`VITE_DDGI_FLICKER_IMAGES=1`): from each
  * setting, IMAGE_SEQUENCES runs of IMAGE_SEQUENCE_FRAMES consecutive frames as
  * PNG (same exposure within a scene: the converged mean maps to 0.25, then
@@ -147,17 +158,35 @@ function round(value: number, significant = 5): number {
 }
 
 interface Comparison {
-    /** Mean over surface pixels of the per-pixel relative change. */
+    /** Mean over the surface pixels whose primary hit stayed put of the per-pixel relative change. */
     readonly mean: number;
     readonly p95: number;
+    /** The same over every surface pixel, those whose primary hit moved (a stochastic surface) included. */
+    readonly meanAll: number;
+    readonly p95All: number;
+    /** Share of the surface pixels whose primary hit moved between the two frames. */
+    readonly primaryChangedShare: number;
     /** |mean(t) - mean(t-1)| / mean(t-1) over the whole image. */
     readonly imageMeanChange: number;
     readonly surfaceShare: number;
     readonly surfaceMean: number;
 }
 
+/** One test-view frame: the GI image and the primary hits' positions (rgb per pixel). */
+interface FlickerFrame {
+    readonly indirect: Float32Array;
+    readonly position: Float32Array;
+}
+
+function primaryHitMoved(previous: FlickerFrame, current: FlickerFrame, pixel: number): boolean {
+    const offset = pixel * 3;
+    return previous.position[offset] !== current.position[offset] || previous.position[offset + 1] !== current.position[offset + 1] || previous.position[offset + 2] !== current.position[offset + 2];
+}
+
 /** One frame pair, as defined in the file comment. `surface` marks the pixels whose primary ray hit something. */
-function compare(previous: Float32Array, current: Float32Array, surface: Uint8Array): Comparison {
+function compare(previousFrame: FlickerFrame, currentFrame: FlickerFrame, surface: Uint8Array): Comparison {
+    const previous = previousFrame.indirect;
+    const current = currentFrame.indirect;
     const pixels = surface.length;
     let surfaceCount = 0;
     let surfaceSum = 0;
@@ -167,20 +196,30 @@ function compare(previous: Float32Array, current: Float32Array, surface: Uint8Ar
         surfaceSum += current[pixel * 3] + current[pixel * 3 + 1] + current[pixel * 3 + 2];
     }
     const surfaceMean = surfaceSum / (3 * surfaceCount);
-    const changes = new Float32Array(surfaceCount);
-    let next = 0;
+    const changesAll = new Float32Array(surfaceCount);
+    const changesSteady = new Float32Array(surfaceCount);
+    let nextAll = 0;
+    let nextSteady = 0;
     for (let pixel = 0; pixel < pixels; pixel++) {
         if (!surface[pixel]) continue;
         const change = (Math.abs(current[pixel * 3] - previous[pixel * 3]) + Math.abs(current[pixel * 3 + 1] - previous[pixel * 3 + 1]) + Math.abs(current[pixel * 3 + 2] - previous[pixel * 3 + 2])) / 3;
-        changes[next++] = change / surfaceMean;
+        changesAll[nextAll++] = change / surfaceMean;
+        if (!primaryHitMoved(previousFrame, currentFrame, pixel)) changesSteady[nextSteady++] = change / surfaceMean;
     }
-    let sum = 0;
-    for (const change of changes) sum += change;
-    changes.sort();
+    const steady = changesSteady.subarray(0, nextSteady);
+    let sumAll = 0;
+    for (const change of changesAll) sumAll += change;
+    let sumSteady = 0;
+    for (const change of steady) sumSteady += change;
+    changesAll.sort();
+    steady.sort();
     const previousMean = imageMean(previous);
     return {
-        mean: sum / surfaceCount,
-        p95: percentile(changes, 0.95),
+        mean: sumSteady / steady.length,
+        p95: percentile(steady, 0.95),
+        meanAll: sumAll / surfaceCount,
+        p95All: percentile(changesAll, 0.95),
+        primaryChangedShare: 1 - steady.length / surfaceCount,
         imageMeanChange: Math.abs(imageMean(current) - previousMean) / previousMean,
         surfaceShare: surfaceCount / pixels,
         surfaceMean,
@@ -253,10 +292,10 @@ async function measureSetting(
             if (index % 8 === 7) await scene.device.queue.onSubmittedWorkDone();
         }
     }
-    const renderFrame = async (): Promise<Float32Array> => {
+    const renderFrame = async (): Promise<FlickerFrame> => {
         scene.frame(budget, FRAME_SECONDS);
-        const { indirect } = await view.render(field, bookmark, WIDTH, HEIGHT);
-        return indirect;
+        const { indirect, position } = await view.render(field, bookmark, WIDTH, HEIGHT);
+        return { indirect, position };
     };
     // Settling needs no images; the GPU is waited for every few frames so the page never sits in one long task.
     const settle = afterWarmup ? 0 : settleFrames(mode);
@@ -282,17 +321,19 @@ async function measureSetting(
         const current = await renderFrame();
         probesPerFrame.push(scene.ddgi.counters[PROBES_UPDATED] ?? 0);
         if (!surface) {
-            // The same pixels hit a surface in every frame (nothing moves); the first frame decides.
+            // The same pixels hit a surface in every frame (nothing moves; a stochastic surface's pixels
+            // are left out per pair, see `compare`); the first frame decides.
             surface = new Uint8Array(WIDTH * HEIGHT);
-            for (let pixel = 0; pixel < surface.length; pixel++) surface[pixel] = current[pixel * 3] + current[pixel * 3 + 1] + current[pixel * 3 + 2] > 0 ? 1 : 0;
+            const gi = current.indirect;
+            for (let pixel = 0; pixel < surface.length; pixel++) surface[pixel] = gi[pixel * 3] + gi[pixel * 3 + 1] + gi[pixel * 3 + 2] > 0 ? 1 : 0;
             assert(surface.some((value) => value === 1), 'the test view is black');
         }
         let nonFinite = 0;
-        for (const value of current) if (!Number.isFinite(value)) nonFinite++;
+        for (const value of current.indirect) if (!Number.isFinite(value)) nonFinite++;
         assert(nonFinite === 0, `${nonFinite} non-finite GI values at measured frame ${index}`);
         comparisons.push(compare(previous, current, surface));
-        imageMeans.push(imageMean(current));
-        if (sequenceFrames.has(index)) kept.set(index, current);
+        imageMeans.push(imageMean(current.indirect));
+        if (sequenceFrames.has(index)) kept.set(index, current.indirect);
         previous = current;
     }
 
@@ -311,6 +352,10 @@ async function measureSetting(
         rel_change_mean_sd: round(standardDeviation(perFrameMean)),
         rel_change_p95_sd: round(standardDeviation(perFrameP95)),
         rel_change_p95_max: round(Math.max(...perFrameP95)),
+        // With the pixels whose primary hit moved (stochastic surfaces in the test view's own rays) kept.
+        rel_change_mean_all: round(mean(comparisons.map((comparison) => comparison.meanAll))),
+        rel_change_p95_all: round(mean(comparisons.map((comparison) => comparison.p95All))),
+        primary_changed_share: round(mean(comparisons.map((comparison) => comparison.primaryChangedShare))),
         image_mean_change: round(mean(comparisons.map((comparison) => comparison.imageMeanChange))),
         image_mean_drift: round(driftLast / driftFirst - 1),
         surface_share: round(comparisons[0].surfaceShare),
@@ -325,6 +370,7 @@ async function measureSetting(
     };
     log(
         `${scene.manifest.id} ${mode.name} ${budgetText}: mean ${(result.rel_change_mean * 100).toFixed(3)}%, p95 ${(result.rel_change_p95 * 100).toFixed(3)}% per pixel; ` +
+            `primary hit moved on ${(result.primary_changed_share * 100).toFixed(2)}% of surface pixels (with them: mean ${(result.rel_change_mean_all * 100).toFixed(3)}%, p95 ${(result.rel_change_p95_all * 100).toFixed(3)}%); ` +
             `image mean moves ${(result.image_mean_change * 100).toFixed(4)}% a frame, drift ${(result.image_mean_drift * 100).toFixed(3)}%; ${result.probes_per_frame_mean} probes a frame (${(result.probes_share_per_frame * 100).toFixed(2)}% of ${scene.probeCount})`,
     );
 

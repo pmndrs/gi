@@ -62,6 +62,8 @@ export class ReferenceImageTechnique implements GiTechnique {
     readonly outputNode: Node;
 
     private giMode: GiMode = 'on';
+    /** Whether GI reads textures (the viewer's switch): picks the textured or the untextured render. */
+    private giTextures = true;
     private bookmarkIndex = 0;
     private readonly images = new Map<string, ImageState>();
     private readonly placeholder = new DataTexture(new Float32Array(4), 1, 1, RGBAFormat, FloatType);
@@ -97,7 +99,7 @@ export class ReferenceImageTechnique implements GiTechnique {
     }
 
     private get key(): string {
-        return `${this.bookmark.name}/${this.kind}`;
+        return `${this.bookmark.name}/${this.kind}/${this.giTextures ? 'textured' : 'untextured'}`;
     }
 
     private get current(): ImageState {
@@ -120,6 +122,13 @@ export class ReferenceImageTechnique implements GiTechnique {
         this.loadCurrent();
     }
 
+    /** Follows the GI textures switch: off prefers an untextured render where there is one. */
+    setGiTextures(on: boolean): void {
+        if (on === this.giTextures) return;
+        this.giTextures = on;
+        this.loadCurrent();
+    }
+
     private loadCurrent(): void {
         const key = this.key;
         const state = this.images.get(key);
@@ -130,7 +139,7 @@ export class ReferenceImageTechnique implements GiTechnique {
         this.images.set(key, { status: 'loading' });
         this.show({ status: 'loading' });
         const { manifest } = this.context.loaded;
-        void this.load(manifest.id, this.bookmark.name, this.kind).then((loaded) => {
+        void this.load(manifest.id, this.bookmark.name, this.kind, this.giTextures).then((loaded) => {
             // The scene was closed while the file loaded.
             if (this.disposed) {
                 if (loaded.status === 'loaded') loaded.texture.dispose();
@@ -141,9 +150,9 @@ export class ReferenceImageTechnique implements GiTechnique {
         });
     }
 
-    private async load(sceneId: string, cameraName: string, kind: ReferenceKind): Promise<ImageState> {
+    private async load(sceneId: string, cameraName: string, kind: ReferenceKind, giTextures: boolean): Promise<ImageState> {
         try {
-            const found = await findReference(sceneId, cameraName, kind);
+            const found = await findReference(sceneId, cameraName, kind, giTextures);
             if (!found) return { status: 'missing' };
             const shot = found.info?.shot;
             const loader = new EXRLoader();
@@ -242,9 +251,16 @@ export class ReferenceImageTechnique implements GiTechnique {
                 return `The Cycles reference for ${view} could not be read: ${state.message}`;
             case 'loaded': {
                 const { info, denoised } = state.found;
+                // Only the renders that differ from the plain one say so: a plain render of an untextured scene is just the reference.
+                const materials =
+                    state.found.materials === 'textured'
+                        ? ', textured as GI reads materials (cutouts, blending, metals, glass)'
+                        : state.found.materials === 'untextured'
+                          ? ', untextured (each material its mean colour, as GI with its textures off)'
+                          : '';
                 const details = info
-                    ? `, ${info.width} x ${info.height}, ${info.samplesPerPixel.toLocaleString('en')} samples per pixel${denoised ? ', denoised for viewing' : ''}, rendered ${info.finishedAt.slice(0, 10)}`
-                    : '';
+                    ? `${materials}, ${info.width} x ${info.height}, ${info.samplesPerPixel.toLocaleString('en')} samples per pixel${denoised ? ', denoised for viewing' : ''}, rendered ${info.finishedAt.slice(0, 10)}`
+                    : materials;
                 const provenance = state.provenance
                     ? state.provenance.lines
                     : ['It was rendered before cameras were stored with references (low resolution, no stored camera): render it again.'];

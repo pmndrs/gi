@@ -19,12 +19,12 @@
         "types": ["@webgpu/types", "vite/client"],
         "baseUrl": ".",
         "paths": {
-            "@pmndrs/ddgi": ["packages/ddgi/src/index.ts"],
-            "@pmndrs/ddgi/core": ["packages/ddgi/src/core.ts"],
-            "@pmndrs/ddgi/three": ["packages/ddgi/src/three.ts"],
-            "@pmndrs/ddgi/radiance-cache": ["packages/ddgi/src/radiance-cache.ts"]
+            "@pmndrs/gi": ["packages/ddgi/src/index.ts"],
+            "@pmndrs/gi/core": ["packages/ddgi/src/core.ts"],
+            "@pmndrs/gi/ddgi": ["packages/ddgi/src/ddgi.ts"],
+            "@pmndrs/gi/three": ["packages/ddgi/src/three.ts"]
         }
     },
-    "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples/webgpu/*/src", "examples/three/src", "scenes/src", "scenes/check", "tools"],
-    "exclude": ["node_modules", "dist", ".claude", "tools/emsdk"]
+    "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples", "scenes/src", "scenes/check", "tools"],
+    "exclude": ["node_modules", "dist", "examples/dist", ".claude", "tools/emsdk"]
 }

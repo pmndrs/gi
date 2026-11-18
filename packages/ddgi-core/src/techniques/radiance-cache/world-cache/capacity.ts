@@ -17,14 +17,16 @@
  * fixed offsets, one per element type and use:
  *
  * - **tile words** (`u32`, atomics): the cache's counters, then per tile the
- *   hash (checksum) slot, the decay stamp and the two ping-pong packed tile
- *   lists. A few MiB.
+ *   hash (checksum) slot, the decay stamp, the two ping-pong packed tile
+ *   lists and the frame it was last put on the update list (register D32).
+ *   A few MiB.
  * - **cell values** (`vec2u`): `ValueBuffer` then `ValueIndirectBuffer`.
  * - **update scratch** (`u32`, atomics): `UpdateCellValueBuffer` then
  *   `UpdateCellValueIndirectBuffer`, four words per cell each.
  *
  * The per-ray lists Capsaicin sizes from the screen (visibility, query and
- * resolve lists, `gi1.cpp:640-695`) come with population in RC3.2.
+ * resolve lists, `gi1.cpp:637-695`) are in a fourth buffer, made for the
+ * screen's probe-ray count (`hash-grid-population-wgsl.ts`).
  */
 
 import { GILimitError } from '../../../platform/contract/errors.ts';
@@ -54,6 +56,12 @@ export interface HashGridCacheOptions {
     hashGridCacheDiscardMultibounceRayProbability: number;
     /** `gi1_hash_grid_cache_max_multibounce_sample_count` (gi1.h:65, default 16): the same cap for the indirect values. */
     hashGridCacheMaxMultibounceSampleCount: number;
+    /**
+     * `gi1_use_direct_lighting` (gi1.h:53, default true), GI-1's own option,
+     * which `GenerateReservoirs` reads: with it, a hit on an emissive front
+     * face gives the probe ray its emission and bypasses the cache.
+     */
+    useDirectLighting: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:58-65). */
@@ -66,6 +74,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheMaxSampleCount: 16,
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
+    useDirectLighting: true,
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */
@@ -96,7 +105,7 @@ export interface HashGridCacheCapacity {
 /** Throws a RangeError unless `value` is a whole number in [min, max]. */
 function checkWhole(name: string, value: number, min: number, max: number): void {
     if (!Number.isInteger(value) || value < min || value > max) {
-        throw new RangeError(`@pmndrs/ddgi: the world cache's ${name} must be a whole number from ${min} to ${max}, got ${value}`);
+        throw new RangeError(`@pmndrs/gi: the world cache's ${name} must be a whole number from ${min} to ${max}, got ${value}`);
     }
 }
 
@@ -122,7 +131,7 @@ export function hashGridCacheCapacity(options: Pick<HashGridCacheOptions, 'hashG
     const numTiles = numTilesPerBucket * numBuckets;
     const numCells = numCellsPerTile * numTiles;
     // Cell indices are u32 on the GPU, and the scratch holds four words per cell.
-    if (numCells * 4 * 2 > 0xffffffff) throw new RangeError(`@pmndrs/ddgi: the world cache's ${numCells} cells are too many to index with 32 bits`);
+    if (numCells * 4 * 2 > 0xffffffff) throw new RangeError(`@pmndrs/gi: the world cache's ${numCells} cells are too many to index with 32 bits`);
     return { numBuckets, numTilesPerBucket, sizeTileMip, numCellsPerTileMip, numCellsPerTile, firstCellOffsetTileMip, numTiles, numCells };
 }
 
@@ -161,6 +170,12 @@ export const HASH_GRID_COUNTER = {
      * on, cleared with the others each frame (register D23).
      */
     bucketOverflowCount: 7,
+    /**
+     * The frame's probe-ray count, copied from the screen cache's buffer at
+     * the start of the cache's work, where the indirect arguments of the
+     * insert pass (made once, at `prepare`) can read it.
+     */
+    probeRayCount: 8,
 } as const;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
@@ -171,6 +186,8 @@ export interface HashGridCacheBufferLayout {
         readonly decayTileBuffer: number;
         readonly packedTileIndexBuffer0: number;
         readonly packedTileIndexBuffer1: number;
+        /** Ours (register D32): per tile, the frame (plus one) it was last put on the update list. */
+        readonly updateListedTileBuffer: number;
         readonly bytes: number;
     };
     /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells`. */
@@ -200,12 +217,13 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): Hash
     const decayTileBuffer = hashBuffer + numTiles;
     const packedTileIndexBuffer0 = decayTileBuffer + numTiles;
     const packedTileIndexBuffer1 = packedTileIndexBuffer0 + numTiles;
-    const tileWordsBytes = (packedTileIndexBuffer1 + numTiles) * WORD_BYTES;
+    const updateListedTileBuffer = packedTileIndexBuffer1 + numTiles;
+    const tileWordsBytes = (updateListedTileBuffer + numTiles) * WORD_BYTES;
     const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
     const scratchWordsPerArray = UPDATE_SCRATCH_WORDS_PER_CELL * numCells;
     const updateScratchBytes = 2 * scratchWordsPerArray * WORD_BYTES;
     return {
-        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, bytes: tileWordsBytes },
+        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, bytes: tileWordsBytes },
         cellValues: { valueBuffer: 0, valueIndirectBuffer: numCells, bytes: cellValuesBytes },
         updateScratch: { updateCellValueBuffer: 0, updateCellValueIndirectBuffer: scratchWordsPerArray, bytes: updateScratchBytes },
         totalBytes: tileWordsBytes + cellValuesBytes + updateScratchBytes,

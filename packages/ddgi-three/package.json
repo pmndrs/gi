@@ -2,7 +2,7 @@
     "name": "@pmndrs/ddgi-three",
     "version": "0.0.0",
     "private": true,
-    "description": "three.js WebGPURenderer adapter for @pmndrs/ddgi. Bundled into the published package; never published on its own.",
+    "description": "three.js WebGPURenderer adapter for @pmndrs/gi. Bundled into the published package; never published on its own.",
     "license": "MIT",
     "type": "module",
     "sideEffects": false,

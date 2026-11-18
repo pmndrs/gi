@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>02 · GI composite with the upscaler</title>
+        <link rel="icon" href="data:," />
+        <link rel="stylesheet" href="../shared/page.css" />
+    </head>
+    <body>
+        <div class="info">
+            <p>The same scene through three's post-processing pipeline: <code>ddgi()</code> adds GI once per pixel, and <code>@pmndrs/upscaler</code> renders at half resolution and upscales.</p>
+            <p>This is the fast path for scenes with many small triangles.</p>
+        </div>
+        <script type="module" src="./main.ts"></script>
+    </body>
+</html>

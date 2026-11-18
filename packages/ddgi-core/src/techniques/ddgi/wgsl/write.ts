@@ -98,8 +98,8 @@ fn ddgiStoreIrradianceTile(probe: vec3i, base: u32, thread: u32) {
         let rg = unpack2x16float(ddgiScratch[word]);
         // b, and in alpha the blend's big-change verdict for the probe's next update.
         let blueAndChange = unpack2x16float(ddgiScratch[word + 1u]);
-        let tile = vec2i(probe.x + i32(layer * ddgiProbeCount().x), probe.z);
-        textureStore(ddgiIrradianceOut, tile * i32(irradianceTile) + vec2i(tileTexel), probe.y, vec4f(rg, blueAndChange));
+        let tile = vec2i(probe.x + i32(layer) * ddgiAtlasTilesAcross(), probe.z);
+        textureStore(ddgiIrradianceOut, tile * i32(irradianceTile) + vec2i(tileTexel), ddgiProbeLayer(probe), vec4f(rg, blueAndChange));
     }
 }
 
@@ -123,9 +123,11 @@ fn ${WRITE_ENTRY_POINTS.all}(
     let offset = vec3f(offsetXy, offsetZAndState.x);
     let state = u32(round(offsetZAndState.y));
     if (thread == 0u) {
-        textureStore(ddgiProbeDataOut, probe.xz, probe.y, vec4f(offset, f32(state)));
+        textureStore(ddgiProbeDataOut, probe.xz, ddgiProbeLayer(probe), vec4f(offset, f32(state)));
+        // The points view lists every volume's probes one after another, this volume's from probeBase on.
+        let pointIndex = ddgi.probeBase + probeIndex;
         let pointsWidth = textureDimensions(ddgiPointsOut).x;
-        textureStore(ddgiPointsOut, vec2u(probeIndex % pointsWidth, probeIndex / pointsWidth), vec4f(ddgiProbePosition(probe, offset), f32(state)));
+        textureStore(ddgiPointsOut, vec2u(pointIndex % pointsWidth, pointIndex / pointsWidth), vec4f(ddgiProbePosition(probe, offset), f32(state)));
     }
     // The blend says whether it wrote this probe's tiles: it did for every
     // probe it blended, active afterwards or still warming in state 3 after
@@ -144,7 +146,7 @@ fn ${WRITE_ENTRY_POINTS.all}(
         let source = ddgiBorderSource(tileTexel, DDGI_DISTANCE_TEXELS);
         let moments = unpack2x16float(ddgiScratch[slotBase + DDGI_SCRATCH_DISTANCE + source.y * DDGI_DISTANCE_TEXELS + source.x]);
         // rg16float keeps xy; the rgba16float fallback ignores zw.
-        textureStore(ddgiDistanceOut, probe.xz * i32(distanceTile) + vec2i(tileTexel), probe.y, vec4f(moments, 0.0, 0.0));
+        textureStore(ddgiDistanceOut, probe.xz * i32(distanceTile) + vec2i(tileTexel), ddgiProbeLayer(probe), vec4f(moments, 0.0, 0.0));
     }
 }
 

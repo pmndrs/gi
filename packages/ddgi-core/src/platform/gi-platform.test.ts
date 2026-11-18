@@ -231,8 +231,15 @@ describe('device requirements', () => {
         ({ limits, features: new Set(features) }) as unknown as GPUAdapter;
 
     it("requiredLimits asks for the adapter's own maximums, never more", () => {
+        // The texture store wants every layer the adapter allows (M4): one per texture.
         // The colour-attachment bytes too: a scene pass writing the screen inputs needs more than WebGPU's default 32 (RC1.1).
-        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10, maxColorAttachmentBytesPerSample: 128 };
+        const storage = {
+            maxStorageBufferBindingSize: 2147483644,
+            maxBufferSize: 2147483648,
+            maxStorageBuffersPerShaderStage: 10,
+            maxTextureArrayLayers: 2048,
+            maxColorAttachmentBytesPerSample: 128,
+        };
         const compute = { maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024 };
         // Compute limits: what the kernels need, not the adapter's maximum.
         expect(requiredLimits(adapter({ ...storage, ...compute }, []))).toEqual({ ...storage, ...KERNEL_COMPUTE_LIMITS });
@@ -274,6 +281,8 @@ describe('device requirements', () => {
 
     it('optionalFeatures requests only what the adapter has', () => {
         expect(optionalFeatures(adapter({}, ['timestamp-query', 'subgroups', 'shader-f16']))).toEqual(['subgroups', 'timestamp-query']);
+        // The compression families the texture store reads (CompressedPixelData), where present.
+        expect(optionalFeatures(adapter({}, ['texture-compression-bc', 'texture-compression-astc']))).toEqual(['texture-compression-bc', 'texture-compression-astc']);
         expect(optionalFeatures(adapter({}, []))).toEqual([]);
     });
 
@@ -398,6 +407,15 @@ describe('the rays backend over the scene copy', () => {
 });
 
 describe('the platform object', () => {
+    it("gives hosts hit shading's live sampleTextures setting, on by default (DECISIONS 2026-11-18)", () => {
+        const platform = new GIPlatformImpl(createPlatformGpu().device);
+        expect(platform.hitShadingSettings.sampleTextures).toBe(true);
+        // The same object hit shading reads each frame, so the host's change is what the next encode writes.
+        platform.hitShadingSettings.sampleTextures = false;
+        expect(platform.shade.settings.sampleTextures).toBe(false);
+        platform.dispose();
+    });
+
     it('refuses to encode before prepare, and after the device is lost', async () => {
         const gpu = createPlatformGpu();
         const platform = new GIPlatformImpl(gpu.device);

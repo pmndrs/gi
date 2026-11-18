@@ -31,10 +31,16 @@ export interface Comparison {
     readonly tError?: number;
 }
 
-export function compareClosest(actual: TracedHit | null, expected: ReferenceHit | null, ray: TraceRay): Comparison {
+/**
+ * `expectedMissAmbiguous`: the reference missed, but a surface it passed was
+ * within a texel of an alpha edge or stochastic (`traceClosestReferenceWithMiss`),
+ * so a hit there is acceptable.
+ */
+export function compareClosest(actual: TracedHit | null, expected: ReferenceHit | null, ray: TraceRay, expectedMissAmbiguous = false): Comparison {
     const actualHit = actual !== null && actual.hit;
     if (!actualHit && expected === null) return { verdict: 'match' };
 
+    if (actualHit && expected === null && expectedMissAmbiguous) return { verdict: 'ambiguous', reason: 'tracer hit a surface the reference passed at an alpha edge or stochastically' };
     if (actualHit && expected === null) {
         const margin = Math.min(actual.u, actual.v, 1 - actual.u - actual.v);
         const slack = REFERENCE_TOLERANCE * Math.max(1, actual.t);

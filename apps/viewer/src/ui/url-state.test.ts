@@ -18,6 +18,19 @@ describe('url state', () => {
         });
     });
 
+    it('reads the quality preset, whose budget is the default budget', () => {
+        expect(parseUrlState('').preset).toBe('high');
+        const low = parseUrlState('?preset=low');
+        expect(low).toMatchObject({ preset: 'low', budgetMs: 1 });
+        expect(serializeUrlState(low)).toBe('preset=low');
+        // A budget of its own wins, and is written only when it isn't the preset's.
+        const lowFaster = parseUrlState('?preset=low&budget=3');
+        expect(lowFaster.budgetMs).toBe(3);
+        expect(parseUrlState(serializeUrlState(lowFaster))).toEqual(lowFaster);
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, budgetMs: 2 })).toBe('');
+        expect(parseUrlState('?preset=ultra').preset).toBe('high');
+    });
+
     it('falls back to defaults for nonsense', () => {
         const state = parseUrlState('?technique=banana&gi=maybe&wipe=lpg,lpg&split=abc&ev=999&upscale=ludicrous&cam=1,2,3&budget=-4&debug=nope&probes=yes');
         expect(state.technique).toBe('ddgi');
@@ -41,6 +54,14 @@ describe('url state', () => {
         expect(serializeUrlState({ ...DEFAULT_URL_STATE, ev: 0 })).toBe('ev=0');
     });
 
+    it('reads warmup=0 (DDGI starts without its warm-up) and round-trips it', () => {
+        expect(parseUrlState('').warmUp).toBe(true);
+        const state = parseUrlState('?scene=sponza&warmup=0');
+        expect(state.warmUp).toBe(false);
+        expect(serializeUrlState(state)).toBe('scene=sponza&warmup=0');
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+    });
+
     it("reads DDGI's debug views and round-trips them", () => {
         const state = parseUrlState('?probes=1&probecolor=history&atlas=irradiance&atlasfill=1&atlasev=2.5&change=0.25&gi=only');
         expect(state).toMatchObject({ probes: true, probeColor: 'history', atlas: 'irradiance', atlasFill: true, atlasEv: 2.5, change: 0.25, gi: 'only' });
@@ -55,6 +76,15 @@ describe('url state', () => {
         expect(parseUrlState('?atlasev=-2.2').atlasEv).toBe(-2);
     });
 
+    it("reads the GI albedo view and the textures switch (T4.4), and round-trips them", () => {
+        const state = parseUrlState('?debug=gi-albedo&gitextures=0');
+        expect(state).toMatchObject({ debug: 'gi-albedo', giTextures: false });
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // Textures are on unless a link says 0, and on is not written.
+        expect(parseUrlState('?gitextures=1').giTextures).toBe(true);
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, giTextures: true })).toBe('');
+    });
+
     it('round-trips a state and keeps the default link empty', () => {
         expect(serializeUrlState(DEFAULT_URL_STATE)).toBe('');
         const state = parseUrlState('?scene=sponza&camera=1&wipe=lpg,vxgi&split=0.4');
@@ -67,6 +97,17 @@ describe('url state', () => {
         expect(state.gi).toBe('only');
         expect(serializeUrlState(state)).toContain('candles=4096');
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+    });
+
+    it('reads and writes the texture compression (T3.12): all-compressed by default since M4, the other modes by name', () => {
+        expect(parseUrlState('?scene=bistro-exterior').textures).toBe('all-compressed');
+        expect(parseUrlState('?textures=uncompressed').textures).toBe('uncompressed');
+        expect(parseUrlState('?textures=compressed').textures).toBe('compressed');
+        expect(parseUrlState('?textures=zip').textures).toBe('all-compressed');
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, scene: 'sponza' })).toBe('scene=sponza');
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, textures: 'uncompressed' })).toBe('textures=uncompressed');
+        // Not taken for a scene setting.
+        expect(parseUrlState('?textures=uncompressed').sceneSettings).toEqual({});
     });
 
     it('reads the light settings (T2.8): light groups, time of day, a motion, the reach of many candles', () => {
@@ -84,5 +125,24 @@ describe('url state', () => {
         const link = serializeUrlState(state);
         expect(link).toContain('cam=1%2C2%2C3%2C4%2C5%2C6%2C60');
         expect(link).not.toContain('camera=');
+    });
+
+    it('reads and writes the moving-geometry scenario, the camera-following volume and the wind (T3.8)', () => {
+        const state = parseUrlState('?scenario=fly-through&follow=camera&wind=80&motion=fly-through');
+        expect(state).toMatchObject({ scenario: 'fly-through', followCamera: true, windStrength: 0.8, motion: 'fly-through' });
+        // Scenario names aren't scene settings.
+        expect(state.sceneSettings).toEqual({});
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // Defaults stay out of the link; nonsense falls back.
+        expect(serializeUrlState(DEFAULT_URL_STATE)).toBe('');
+        expect(parseUrlState('?follow=yes&wind=500&scenario=Not%20One')).toMatchObject({ followCamera: false, windStrength: 1, scenario: null });
+    });
+
+    it("keeps M3's scenario keys and M4's texture keys side by side (the m34 merge)", () => {
+        const state = parseUrlState('?scenario=fly-through&follow=camera&wind=30&gitextures=0&textures=uncompressed');
+        expect(state).toMatchObject({ scenario: 'fly-through', followCamera: true, windStrength: 0.3, giTextures: false, textures: 'uncompressed', sceneSettings: {} });
+        expect(parseUrlState(serializeUrlState(state))).toEqual(state);
+        // A scenario link alone keeps M4's defaults: GI reads textures, every texture compressed.
+        expect(parseUrlState('?scenario=wind-tree')).toMatchObject({ giTextures: true, textures: 'all-compressed' });
     });
 });

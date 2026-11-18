@@ -1,14 +1,15 @@
 /**
  * The radiance cache: a faithful WebGPU port of AMD's GI-1.0/1.2 as Capsaicin
- * v1.3 builds it (docs/design/radiance-cache.md). This is phase 2: the screen
- * probes, traced and blended into the probe atlas every frame (RC2.1), then
+ * v1.3 builds it (docs/design/radiance-cache.md). The screen probes,
+ * traced and blended into the probe atlas every frame (RC2.1), then
  * projected to SH and interpolated per pixel into irradiance the shading
  * module reads by screen position (RC2.2, screen-irradiance.ts), with their
- * debug views. The world cache is phase 3; history is phase 4.
+ * debug views. The world cache (phase 3, RC3.2) lights the probe rays' hits;
+ * history is phase 4.
  *
  * Per frame, in `encodeScreen` (after the host's `encode` and its depth and
  * normal pass), the passes Capsaicin runs for the screen probes
- * (`GI1::render`, gi1.cpp:2250-2542), as far as phase 2 has them:
+ * (`GI1::render`, gi1.cpp:2250-2542), as far as phases 2 and 3 have them:
  *
  * 1. `ClearCounters` (gi1.comp:163), and `ClearProbeMask` (gi1.comp:243), which
  *    stands in for reprojection's clearing until phase 4;
@@ -16,11 +17,14 @@
  *    (Capsaicin's `gfxCommandScanSum`, gi1.cpp:2305) and `CompactScreenProbes`
  *    (gi1.comp:581), dispatched indirectly on the kept count;
  * 3. `SampleScreenProbes` (gi1.comp:646) and `PopulateScreenProbesMain`
- *    (gi1.comp:1160), then the platform's `gi/direct` for the hits' direct
- *    light (phase 2's staging of Capsaicin's cache-bypass path);
- * 4. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas and the mask;
- * 5. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
- *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts.
+ *    (gi1.comp:1160);
+ * 4. the world cache (`world-cache/`, RC3.2): Capsaicin's hash grid inserts
+ *    the hits' cells, lights one light sample per hit, updates its tiles and
+ *    resolves its radiance into the probe rays (gi1.cpp:2238-2253 and
+ *    2335-2528, here after the trace: `encodeWorldCache`);
+ * 5. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas and the mask;
+ * 6. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
+ *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts (RC2.2).
  *
  * Capsaicin dispatches the per-ray passes over every possible ray
  * (`max_ray_count`, gi1.cpp:2323-2542) with an early return past the probe
@@ -43,9 +47,10 @@ import { cameraRelativeInverseViewProjection } from './camera.ts';
 import { ScreenIrradiance } from './screen-irradiance.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
+import { HashGridCache } from './world-cache/hash-grid-cache.ts';
+import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
 import {
-    ALL_LIGHT_GROUPS,
     BLEND_GROUP,
     BLEND_WGSL,
     CLEAR_COUNTERS_GROUP,
@@ -191,6 +196,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
     private context: TechniqueContext | null = null;
     private prepared: Prepared | null = null;
+    /** Capsaicin's hash grid behind the world-cache slot (RC3.2), made in `prepare`. */
+    private cache: HashGridCache | null = null;
+    /** `resetHistory` empties the cache at the next `encodeScreen` (it has no encoder of its own). */
+    private worldCacheResetPending = false;
     private screenResources: ScreenResources | null = null;
     private inputGroups: ScreenInputGroups | null = null;
     /** SH projection and per-pixel interpolation (RC2.2): made in `prepare`. */
@@ -209,11 +218,15 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
     async prepare(): Promise<void> {
         const context = this.context;
-        if (!context) throw new Error('@pmndrs/ddgi: attach the radiance cache (gi.addTechnique) before prepare');
-        if (this.disposed) throw new Error('@pmndrs/ddgi: this radiance cache was disposed');
+        if (!context) throw new Error('@pmndrs/gi: attach the radiance cache (gi.addTechnique) before prepare');
+        if (this.disposed) throw new Error('@pmndrs/gi: this radiance cache was disposed');
         const device = context.device;
 
-        // gi/direct first: the populate kernel includes its side of the ray scratch.
+        // The world cache first: a device that can't hold it gets GILimitError before anything else is made.
+        const cache = await this.prepareWorldCache(context);
+
+        // gi/direct first: the populate kernel includes its side of the ray scratch (the probe
+        // rays' radiance slots; since RC3.2 nothing goes on its work list).
         await context.shade.direct.prepare();
         const workList = context.shade.direct.defaultWorkList;
         const kernel = (label: string, code: string, entryPoint: string, group: GPUBindGroupLayoutDescriptor, modules: readonly WgslModule[] = []) =>
@@ -255,6 +268,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.releaseScreen();
         this.releasePrepared();
         this.irradiance = irradiance;
+        this.cache = cache;
         this.prepared = {
             kernels,
             spawnTileCapacity,
@@ -291,7 +305,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     encodeScreen(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame): void {
         const context = this.context;
         const prepared = this.prepared;
-        if (!context || !prepared) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        if (!context || !prepared) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         const screen = frame.screen;
         const resources = this.resourcesFor(context, prepared, screen);
         const groups = this.inputGroupsFor(context.device, prepared, resources, screen);
@@ -334,23 +348,25 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         tracePass.setBindGroup(1, groups.populate);
         dispatchSplit(tracePass, layout.maxRayCount / WORKGROUP_SIZE.populate, maxPerDimension);
         tracePass.end();
-        context.shade.direct.encode(encoder, resources.rayScratch, { frame: frame.frame, groupMask: ALL_LIGHT_GROUPS, owner: TECHNIQUE_ID, timer });
 
-        // 4: the rays into the probe atlas and the mask.
+        // 4: the world cache lights the rays' hits.
+        this.encodeWorldCache(encoder, frame, resources);
+
+        // 5: the rays into the probe atlas and the mask.
         const blendPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/blend`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/blend`) });
         kernels.blend.bind(blendPass);
         blendPass.setBindGroup(1, groups.blend);
         dispatchSplit(blendPass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
         blendPass.end();
 
-        // 5: the mask's mips, the SH and the irradiance per pixel (RC2.2).
+        // 6: the mask's mips, the SH and the irradiance per pixel (RC2.2).
         this.encodeIrradiance(encoder, frame, prepared, resources);
     }
 
     /** The passes after the blend (screen-irradiance.ts), on this frame's probes and screen. */
     private encodeIrradiance(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): void {
         const irradiance = this.irradiance;
-        if (!irradiance) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        if (!irradiance) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         irradiance.encode(
             encoder,
             {
@@ -369,7 +385,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /** What the shading module binds: the latest frame's textures, or 1 × 1 placeholders before the first. */
     private shadingTextures(): { irradiance: GPUTexture; probeAtlas: GPUTexture; probeMask: GPUTexture; probeSH: GPUTexture } {
         const irradiance = this.irradiance;
-        if (!irradiance) throw new Error('@pmndrs/ddgi: the radiance cache has no shading textures before prepare');
+        if (!irradiance) throw new Error('@pmndrs/gi: the radiance cache has no shading textures before prepare');
         const placeholders = irradiance.placeholders;
         return {
             irradiance: irradiance.irradiance ?? placeholders.irradiance,
@@ -391,9 +407,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const resources = this.screenResources;
         const inputs = this.inputGroups;
         const probeSH = this.irradiance?.probeSH;
-        if (!context || !prepared || !resources || !inputs || !probeSH) throw new Error('@pmndrs/ddgi: the radiance cache has no probes to show before its first encodeScreen');
+        if (!context || !prepared || !resources || !inputs || !probeSH) throw new Error('@pmndrs/gi: the radiance cache has no probes to show before its first encodeScreen');
         const { width, height } = resources.layout;
-        if (target.width < width || target.height < height) throw new RangeError(`@pmndrs/ddgi: the debug view needs a target of at least ${width} × ${height}`);
+        if (target.width < width || target.height < height) throw new RangeError(`@pmndrs/gi: the debug view needs a target of at least ${width} × ${height}`);
         const words = new ArrayBuffer(DEBUG_UNIFORM_BYTES);
         const uints = new Uint32Array(words);
         const offsets = DEBUG_UNIFORM_OFFSETS;
@@ -443,26 +459,77 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         };
     }
 
-    get counters(): Readonly<Record<string, number>> {
-        const layout = this.screenResources?.layout;
-        if (!layout) return {};
-        // What the CPU knows without a readback: the spawned count stays on the GPU.
-        return { 'spawn tiles': layout.maxProbeSpawnCount, 'probe rays at most': layout.maxRayCount };
+    /** The world cache (Capsaicin's hash grid) once prepared, for tests and debug views; null before `prepare`. */
+    get worldCache(): HashGridCache | null {
+        return this.cache;
     }
 
+    get counters(): Readonly<Record<string, number>> {
+        const layout = this.screenResources?.layout;
+        // What the CPU knows without a readback: the spawned count stays on the GPU. The world
+        // cache adds its capacity and memory (its per-frame counts stay on the GPU too).
+        const screen: Record<string, number> = layout ? { 'spawn tiles': layout.maxProbeSpawnCount, 'probe rays at most': layout.maxRayCount } : {};
+        return { ...screen, ...worldCacheCounters(this.cache) };
+    }
+
+    /** GPU bytes: the screen probes' buffers and the world cache's (about 1 GiB at Capsaicin's default capacity). */
     get memoryBytes(): number {
         const prepared = this.prepared;
         if (!prepared) return 0;
-        return prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + (this.screenResources?.bytes ?? 0) + (this.irradiance?.memoryBytes ?? 0);
+        const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + (this.screenResources?.bytes ?? 0);
+        const screenIrradiance = this.irradiance?.memoryBytes ?? 0;
+        return screenProbes + screenIrradiance + (this.cache?.memoryBytes ?? 0);
     }
 
-    /** Phase 2 keeps nothing between frames: every probe is traced afresh. */
-    resetHistory(): void {}
+    /**
+     * Forgets the world cache's cells (at the next `encodeScreen`). The
+     * screen probes keep nothing between frames until phase 4.
+     */
+    resetHistory(): void {
+        this.worldCacheResetPending = true;
+    }
 
     dispose(): void {
         this.releaseScreen();
         this.releasePrepared();
+        this.cache?.dispose();
+        this.cache = null;
         this.disposed = true;
+    }
+
+    /**
+     * Makes the world cache at the technique's settings (they carry the hash
+     * grid's options under the same names) and prepares it: Capsaicin's
+     * default capacity, about 1 GiB, or `GILimitError` naming the limit on a
+     * device that can't hold it (register D14).
+     */
+    private async prepareWorldCache(context: TechniqueContext): Promise<HashGridCache> {
+        const cache = this.cache ?? new HashGridCache(this.settings);
+        await cache.prepare(context);
+        this.worldCacheResetPending = false;
+        return cache;
+    }
+
+    /**
+     * The world cache's work for this frame, after the probe rays are traced
+     * and before they are blended: the slot's `encodeFrame` with the rays and
+     * their radiance slots (docs/design/radiance-cache.md, "The world-cache
+     * interface"), and first, after `resetHistory`, its `reset`.
+     */
+    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources): void {
+        const cache: WorldCache | null = this.cache;
+        if (!cache) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
+        if (this.worldCacheResetPending) {
+            cache.reset(encoder);
+            this.worldCacheResetPending = false;
+        }
+        const rays: WorldCacheProbeRays = {
+            buffer: resources.probeRays,
+            count: { buffer: resources.probeRays, offset: 0 },
+            capacity: resources.layout.maxRayCount,
+            radiance: resources.rayScratch.rayResults,
+        };
+        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height }, rays);
     }
 
     private resourcesFor(context: TechniqueContext, prepared: Prepared, screen: FrameScreen): ScreenResources {
@@ -492,8 +559,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             size: PROBE_RAYS_HEADER_BYTES + layout.maxRayCount * PROBE_RAY_BYTES,
             usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc,
         });
-        // Every ray may hit a surface that needs direct light, so the work list has room for all of them.
-        const rayScratch = context.shade.direct.createScratch({ label: `${TECHNIQUE_ID} probe rays`, rays: layout.maxRayCount, workItems: layout.maxRayCount });
+        // The rays' radiance slots. Nothing goes on gi/direct's work list since RC3.2 (the world
+        // cache lights the hits), so it has no room.
+        const rayScratch = context.shade.direct.createScratch({ label: `${TECHNIQUE_ID} probe rays`, rays: layout.maxRayCount, workItems: 0 });
         const maskBytes = mipChainTexels(layout.probeCount[0], layout.probeCount[1], layout.probeMaskMipCount) * WORD_BYTES;
         const resources: ScreenResources = {
             layout,
@@ -617,7 +685,7 @@ function mipChainTexels(width: number, height: number, levels: number): number {
 
 function checkScreenTexture(texture: GPUTexture, name: string): void {
     if ((texture.usage & TEXTURE_USAGE.textureBinding) === 0) {
-        throw new Error(`@pmndrs/ddgi: the radiance cache reads FrameScreen.${name} in compute, so it needs TEXTURE_BINDING usage`);
+        throw new Error(`@pmndrs/gi: the radiance cache reads FrameScreen.${name} in compute, so it needs TEXTURE_BINDING usage`);
     }
 }
 
@@ -625,4 +693,12 @@ function checkScreenTexture(texture: GPUTexture, name: string): void {
 function screenTextureView(texture: GPUTexture): GPUTextureView {
     const isDepth = texture.format.startsWith('depth');
     return texture.createView({ aspect: isDepth ? 'depth-only' : 'all', baseMipLevel: 0, mipLevelCount: 1 });
+}
+
+/** The world cache's figures for the technique's counters, each prefixed so they read apart from the screen probes'. */
+function worldCacheCounters(cache: WorldCache | null): Record<string, number> {
+    const counters: Record<string, number> = {};
+    if (!cache) return counters;
+    for (const [name, value] of Object.entries(cache.stats)) counters[`world cache ${name}`] = value;
+    return counters;
 }

@@ -186,7 +186,7 @@ let customBlendingWarned = false;
 function warnCustomBlendingOnce(material: Material): void {
     if (customBlendingWarned) return;
     customBlendingWarned = true;
-    console.warn(`@pmndrs/ddgi/three: material "${material.name || material.type}" uses CustomBlending; the screen inputs can't promise it leaves their channels unchanged, so it may overwrite the opaque surface's normal, albedo, velocity and instance id.`);
+    console.warn(`@pmndrs/gi/three: material "${material.name || material.type}" uses CustomBlending; the screen inputs can't promise it leaves their channels unchanged, so it may overwrite the opaque surface's normal, albedo, velocity and instance id.`);
 }
 
 /**
@@ -261,7 +261,7 @@ export class InstanceIdTable {
             }
             const ids = instances.map((instance) => gi.scene.instanceIndex(instance) + 1);
             for (const id of ids) {
-                if (id > MAX_ENCODED_INSTANCE_ID) throw new Error(`@pmndrs/ddgi/three: the screen inputs encode instance ids in 24 bits; instance index ${id - 1} is past it`);
+                if (id > MAX_ENCODED_INSTANCE_ID) throw new Error(`@pmndrs/gi/three: the screen inputs encode instance ids in 24 bits; instance index ${id - 1} is past it`);
             }
             writes.push({ start: run.start, ids });
         }
@@ -424,7 +424,7 @@ export class ScreenInputsNode extends Node {
      */
     view(channel: ScreenChannel): Node {
         if (channel !== 'depth' && channel !== 'normal' && !this.channels[channel]) {
-            throw new Error(`@pmndrs/ddgi/three: this pass doesn't render the '${channel}' screen channel; ask for it with screenInputs(pass, gi, { channels: { ${channel}: true } })`);
+            throw new Error(`@pmndrs/gi/three: this pass doesn't render the '${channel}' screen channel; ask for it with screenInputs(pass, gi, { channels: { ${channel}: true } })`);
         }
         this.debugChannel = channel;
         let textureNode = this.debugNodes.get(channel);
@@ -594,7 +594,7 @@ export class ScreenInputsNode extends Node {
     private warnOnce(message: string): void {
         if (this.warned.has(message)) return;
         this.warned.add(message);
-        console.warn(`@pmndrs/ddgi/three: ${message}`);
+        console.warn(`@pmndrs/gi/three: ${message}`);
     }
 }
 

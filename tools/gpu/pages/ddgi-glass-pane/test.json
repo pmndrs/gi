@@ -1,0 +1,4 @@
+{
+    "description": "T4.2 done-when 2: the thin-wall scene with a windowed partition mesh (wall slot 0, pane slot 1); DDGI with the pane see-through and opaque; dark-side floor irradiance against the lit side reported (no exact bar; fails only if see-through is not brighter).",
+    "timeoutMs": 900000
+}

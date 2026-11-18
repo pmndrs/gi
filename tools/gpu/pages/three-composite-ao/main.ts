@@ -209,8 +209,10 @@ async function loadAoScene(context: ThreePageContext, width: number, height: num
 /**
  * Every material becomes a Lambert material with the constant the GI
  * platform received, so three's indirect-diffuse weight is exactly the GI
- * albedo (the reference's materials, no specular share). See-through meshes,
- * which the adapter left out of GI and the reference removed, are hidden.
+ * albedo (the reference's materials, no specular share). See-through meshes
+ * (every material `blocksLight: false`), which the M1 reference removed, are
+ * hidden. Since T4.3 GI samples textures and the table is colour ×
+ * (1 − metalness) only, so it no longer matches GI's albedo exactly.
  */
 function useLambertGiTable(scene: LoadedAoScene): { replaced: number; hidden: number } {
     const replacements = new Map<Material, MeshLambertMaterial>();
@@ -220,7 +222,9 @@ function useLambertGiTable(scene: LoadedAoScene): { replaced: number; hidden: nu
         if (existing) return existing;
         const descriptor = scene.threeGI.sync.sentMaterial(source);
         if (!descriptor) return source;
-        const albedo = descriptor.albedo ?? [1, 1, 1];
+        // Since T4.3 the adapter sends metalness apart (the platform applies it): fold it here, as the platform does without a map.
+        const diffuse = 1 - (descriptor.metalness ?? 0);
+        const albedo = (descriptor.albedo ?? [1, 1, 1]).map((channel) => channel * diffuse);
         const emissive = descriptor.emissive ?? [0, 0, 0];
         const intensity = descriptor.emissiveIntensity ?? 1;
         const material = new MeshLambertMaterial({ name: `${source.name} (GI table, Lambert)`, side: source.side });
@@ -233,7 +237,8 @@ function useLambertGiTable(scene: LoadedAoScene): { replaced: number; hidden: nu
     scene.loaded.content.traverse((object) => {
         const mesh = object as Mesh;
         if (!mesh.isMesh) return;
-        if (scene.threeGI.sync.sentSeeThrough(mesh) === true) {
+        const meshMaterials: Material[] = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        if (meshMaterials.every((material) => scene.threeGI.sync.sentMaterial(material)?.blocksLight === false)) {
             mesh.visible = false;
             hidden++;
             return;

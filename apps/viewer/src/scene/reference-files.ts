@@ -116,38 +116,69 @@ async function exists(url: string): Promise<boolean> {
 
 export interface FoundReference {
     imageUrl: string;
-    /** The file shown, e.g. `cycles-full-denoised.exr`. */
+    /** The file shown, e.g. `cycles-textured-full-denoised.exr`. */
     fileName: string;
+    /** Which render it is (render.py's prefixes; see `ReferenceMaterials`). */
+    materials: ReferenceMaterials;
     /** True when the file is the denoised viewing copy (render.py `--denoise`). */
     denoised: boolean;
     info: ReferenceInfo | null;
 }
 
 /**
- * Files to try for each kind, best first. The full image prefers the
- * denoised viewing copy when there is one: it is for looking at, and the raw
- * image stays on disk for accuracy numbers.
+ * Files to try for each kind, best first, after the render's prefix. The
+ * full image prefers the denoised viewing copy when there is one: it is for
+ * looking at, and the raw image stays on disk for accuracy numbers.
  */
 const FILES: Record<ReferenceKind, readonly string[]> = {
-    full: ['cycles-full-denoised.exr', 'cycles-full.exr'],
-    gi: ['cycles-gi.exr', 'cycles-indirect.exr'],
+    full: ['full-denoised.exr', 'full.exr'],
+    gi: ['gi.exr', 'indirect.exr'],
 };
 
-/** The reference image of one camera view, or null when it hasn't been rendered (or this copy of the viewer can't reach it). */
-export async function findReference(sceneId: string, cameraName: string, kind: ReferenceKind): Promise<FoundReference | null> {
+/**
+ * The render a reference is:
+ * - `textured` (`cycles-textured-*`, render.py `--textured`): the glTF's own
+ *   materials as M4's GI reads them;
+ * - `untextured` (`cycles-untextured-*`): one constant colour per material,
+ *   each texture's mean, which is what GI reads with its textures off;
+ * - `plain` (`cycles-*`): the scene's materials as they come (textures kept,
+ *   metals at their full colour, glass opaque); for scenes without textures,
+ *   metals or glass, the same as the others.
+ */
+export type ReferenceMaterials = 'textured' | 'untextured' | 'plain';
+
+/**
+ * Render prefixes, best first. With GI reading textures (the default since
+ * M4) a textured render is the match, then the plain one. With GI's textures
+ * off, an untextured render is the match where one exists, then the plain one.
+ */
+function prefixes(giTextures: boolean): readonly { prefix: string; materials: ReferenceMaterials }[] {
+    const first = giTextures ? { prefix: 'cycles-textured', materials: 'textured' as const } : { prefix: 'cycles-untextured', materials: 'untextured' as const };
+    return [first, { prefix: 'cycles', materials: 'plain' }];
+}
+
+/**
+ * The reference image of one camera view, or null when it hasn't been rendered (or this copy of the viewer can't reach it).
+ * `giTextures` is whether GI reads textures (the viewer's switch): it picks which render matches.
+ */
+export async function findReference(sceneId: string, cameraName: string, kind: ReferenceKind, giTextures = true): Promise<FoundReference | null> {
     for (const folder of candidateFolders(sceneId, cameraName)) {
-        for (const fileName of FILES[kind]) {
-            const imageUrl = `${folder}/${fileName}`;
-            if (!(await exists(imageUrl))) continue;
-            let info: ReferenceInfo | null = null;
-            try {
-                const response = await fetch(`${folder}/cycles.json`);
-                if (response.ok) info = (await response.json()) as ReferenceInfo;
-            } catch {
-                // The settings file is a nice-to-have for the status line; the image is what matters.
+        for (const { prefix, materials } of prefixes(giTextures)) {
+            for (const suffix of FILES[kind]) {
+                const fileName = `${prefix}-${suffix}`;
+                const imageUrl = `${folder}/${fileName}`;
+                if (!(await exists(imageUrl))) continue;
+                let info: ReferenceInfo | null = null;
+                try {
+                    // Each render's settings sit beside its images: cycles-textured.json, cycles.json.
+                    const response = await fetch(`${folder}/${prefix}.json`);
+                    if (response.ok) info = (await response.json()) as ReferenceInfo;
+                } catch {
+                    // The settings file is a nice-to-have for the status line; the image is what matters.
+                }
+                if (info?.shot && info.shot.format !== SHOT_FORMAT) info.shot = undefined;
+                return { imageUrl, fileName, materials, denoised: fileName.includes('denoised'), info };
             }
-            if (info?.shot && info.shot.format !== SHOT_FORMAT) info.shot = undefined;
-            return { imageUrl, fileName, denoised: fileName.includes('denoised'), info };
         }
     }
     return null;
@@ -228,9 +259,9 @@ export async function shotProvenance(shot: ReferenceShot): Promise<ShotProvenanc
 
 /**
  * The command that renders a missing reference, as `tools/reference/README.md` gives it:
- * HD on the GPU (OptiX) with a denoised viewing copy. 1024 samples is a quick look
+ * HD on the GPU (OptiX), textured as M4's GI reads materials, with a denoised viewing copy. 1024 samples is a quick look
  * (Cornell about a minute); the README lists what the accuracy references use.
  */
 export function renderCommand(manifest: Pick<SceneManifest, 'id'>, bookmarkNumber: number): string {
-    return `node tools/reference/cycles/run.ts --scene ${manifest.id} --camera ${bookmarkNumber} --samples 1024 --denoise`;
+    return `node tools/reference/cycles/run.ts --scene ${manifest.id} --camera ${bookmarkNumber} --samples 1024 --textured --denoise`;
 }

@@ -4,27 +4,67 @@ import {
     BufferGeometry,
     ClampToEdgeWrapping,
     Color,
+    CompressedTexture,
     DataTexture,
     DirectionalLight,
     DoubleSide,
+    FloatType,
     FrontSide,
     InterleavedBuffer,
     InterleavedBufferAttribute,
     MeshBasicMaterial,
     MeshLambertMaterial,
+    MeshPhongMaterial,
     MeshPhysicalMaterial,
     MeshStandardMaterial,
+    MeshToonMaterial,
     MirroredRepeatWrapping,
+    NoColorSpace,
     PointLight,
+    RED_GREEN_RGTC2_Format,
+    RGBA_ASTC_4x4_Format,
+    RGBA_BPTC_Format,
+    RGBA_ETC2_EAC_Format,
+    RGBA_S3TC_DXT1_Format,
+    RGBA_S3TC_DXT5_Format,
+    RGB_BPTC_UNSIGNED_Format,
+    RGB_ETC2_Format,
+    RawShaderMaterial,
+    RenderTarget,
     RepeatWrapping,
+    ShaderMaterial,
+    ShadowMaterial,
     SpotLight,
     SRGBColorSpace,
     Texture,
+    type CompressedPixelFormat,
+    type Material,
 } from 'three';
+import {
+    MeshBasicNodeMaterial,
+    MeshLambertNodeMaterial,
+    MeshPhongNodeMaterial,
+    MeshPhysicalNodeMaterial,
+    MeshStandardNodeMaterial,
+    MeshToonNodeMaterial,
+} from 'three/webgpu';
+import { color as colorNode } from 'three/tsl';
 import { describe, expect, it } from 'vitest';
-import type { TextureHandle } from '@pmndrs/ddgi-core';
-import { diffuseAverage, textureAverage } from './texture-average.ts';
-import { sameUvMapping, giAlbedo, LIGHT_NUMBER_COUNT, lightDescriptor, materialDescriptor, MaterialSnapshot, meshDescriptor, readFloatAttribute, readLightNumbers, uvMapping } from './convert.ts';
+import type { CompressedPixelData, MaterialDescriptor, PixelData, TextureHandle } from '@pmndrs/ddgi-core';
+import {
+    CUSTOM_SHADING_ALBEDO,
+    LIGHT_NUMBER_COUNT,
+    lightDescriptor,
+    materialDescriptor,
+    MaterialSnapshot,
+    meshDescriptor,
+    readFloatAttribute,
+    readLightNumbers,
+    textureDescriptor,
+    unreadableTextureReason,
+    usesUvChannel1,
+    uvMapping,
+} from './convert.ts';
 
 const HANDLE = 7 as TextureHandle;
 const noTextures = () => undefined;
@@ -35,213 +75,440 @@ function expectClose(actual: readonly number[] | undefined, expected: readonly n
     actual!.forEach((value, index) => expect(value).toBeCloseTo(expected[index], digits));
 }
 
-describe('metalness is folded into GI albedo', () => {
-    it('scales the base colour by 1 - metalness', () => {
-        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.8, 0.6, 0.4), metalness: 0.25 });
-        expectClose(giAlbedo(material), [0.6, 0.45, 0.3]);
-        expectClose(materialDescriptor(material, noTextures).albedo, [0.6, 0.45, 0.3]);
+/** A 2 × 2 8-bit RGBA texture, as a loaded glTF texture would be oriented (no `flipY`). */
+function dataTexture(): DataTexture {
+    const texture = new DataTexture(new Uint8Array(2 * 2 * 4).fill(255), 2, 2);
+    texture.flipY = false;
+    return texture;
+}
+
+/** Hands out one handle per texture, so a test can tell which texture went where. */
+function handles(): { readonly of: (texture: Texture) => TextureHandle; readonly handleOf: Map<Texture, TextureHandle> } {
+    const handleOf = new Map<Texture, TextureHandle>();
+    return {
+        handleOf,
+        of: (texture) => {
+            if (!handleOf.has(texture)) handleOf.set(texture, (100 + handleOf.size) as TextureHandle);
+            return handleOf.get(texture)!;
+        },
+    };
+}
+
+/** A converted material and the warnings it gave. */
+function convert(material: Material): { descriptor: MaterialDescriptor; warnings: string[]; handleOf: Map<Texture, TextureHandle> } {
+    const warnings: string[] = [];
+    const { of, handleOf } = handles();
+    const descriptor = materialDescriptor(material, of, { warn: (message) => warnings.push(message) });
+    return { descriptor, warnings, handleOf };
+}
+
+// ---------------------------------------------------------------------------
+// The material matrix (docs/design/m4-materials.md §4)
+// ---------------------------------------------------------------------------
+
+interface MaterialType {
+    readonly name: string;
+    readonly make: () => Material;
+    /** Has `metalness` and `metalnessMap` (Standard, Physical and their node versions). */
+    readonly metalness: boolean;
+    /** Has `emissive` (every lit material; not Basic). */
+    readonly emission: boolean;
+    /** Has `transmission` (Physical). */
+    readonly transmission: boolean;
+    readonly node: boolean;
+}
+
+const MATERIAL_TYPES: readonly MaterialType[] = [
+    { name: 'MeshStandardMaterial', make: () => new MeshStandardMaterial(), metalness: true, emission: true, transmission: false, node: false },
+    { name: 'MeshPhysicalMaterial', make: () => new MeshPhysicalMaterial(), metalness: true, emission: true, transmission: true, node: false },
+    { name: 'MeshLambertMaterial', make: () => new MeshLambertMaterial(), metalness: false, emission: true, transmission: false, node: false },
+    { name: 'MeshPhongMaterial', make: () => new MeshPhongMaterial(), metalness: false, emission: true, transmission: false, node: false },
+    { name: 'MeshToonMaterial', make: () => new MeshToonMaterial(), metalness: false, emission: true, transmission: false, node: false },
+    { name: 'MeshBasicMaterial', make: () => new MeshBasicMaterial(), metalness: false, emission: false, transmission: false, node: false },
+    { name: 'MeshStandardNodeMaterial', make: () => new MeshStandardNodeMaterial(), metalness: true, emission: true, transmission: false, node: true },
+    { name: 'MeshPhysicalNodeMaterial', make: () => new MeshPhysicalNodeMaterial(), metalness: true, emission: true, transmission: true, node: true },
+    { name: 'MeshLambertNodeMaterial', make: () => new MeshLambertNodeMaterial(), metalness: false, emission: true, transmission: false, node: true },
+    { name: 'MeshPhongNodeMaterial', make: () => new MeshPhongNodeMaterial(), metalness: false, emission: true, transmission: false, node: true },
+    { name: 'MeshToonNodeMaterial', make: () => new MeshToonNodeMaterial(), metalness: false, emission: true, transmission: false, node: true },
+    { name: 'MeshBasicNodeMaterial', make: () => new MeshBasicNodeMaterial(), metalness: false, emission: false, transmission: false, node: true },
+];
+
+type Fields = Material & {
+    color: Color;
+    map: Texture | null;
+    metalness?: number;
+    metalnessMap?: Texture | null;
+    emissive?: Color;
+    emissiveIntensity?: number;
+    emissiveMap?: Texture | null;
+    transmission?: number;
+    colorNode?: unknown;
+};
+
+describe.each(MATERIAL_TYPES)('$name', (type) => {
+    const make = () => type.make() as Fields;
+
+    it('sends its colour as the albedo, with metalness apart (the platform applies it)', () => {
+        const material = make();
+        material.color.setRGB(0.8, 0.6, 0.4);
+        if (type.metalness) material.metalness = 0.25;
+        const { descriptor, warnings } = convert(material);
+        // Not multiplied by (1 − metalness): the platform does that, with the metalness map.
+        expectClose(descriptor.albedo, [0.8, 0.6, 0.4]);
+        expect(descriptor.metalness).toBe(type.metalness ? 0.25 : undefined);
+        expect(descriptor).toMatchObject({ alphaMode: 'opaque', blocksLight: true, doubleSided: true });
+        expect(descriptor.opacity).toBeUndefined();
+        expect(descriptor.alphaCutoff).toBeUndefined();
+        expect(warnings).toEqual([]);
     });
 
-    it('gives a full metal no diffuse albedo', () => {
-        const material = new MeshPhysicalMaterial({ color: 0xffffff, metalness: 1 });
-        expectClose(materialDescriptor(material, noTextures).albedo, [0, 0, 0]);
+    it('sends its map as the albedo texture, with its uv mapping', () => {
+        const material = make();
+        const map = dataTexture();
+        map.repeat.set(2, 3);
+        material.map = map;
+        const { descriptor, handleOf } = convert(material);
+        expect(descriptor.albedoTexture).toBe(handleOf.get(map));
+        expectClose(descriptor.albedoUv?.matrix, [2, 0, 0, 3, 0, 0]);
+        // The colour still multiplies it, unfolded.
+        expectClose(descriptor.albedo, [1, 1, 1]);
     });
 
-    it('leaves materials without metalness alone', () => {
-        const lambert = new MeshLambertMaterial({ color: new Color().setRGB(0.5, 0.25, 0.125) });
-        expectClose(materialDescriptor(lambert, noTextures).albedo, [0.5, 0.25, 0.125]);
-        const basic = new MeshBasicMaterial({ color: new Color().setRGB(0.3, 0.3, 0.3) });
-        expectClose(materialDescriptor(basic, noTextures).albedo, [0.3, 0.3, 0.3]);
+    it(type.metalness ? 'sends its metalnessMap as blue-channel metalness with its own mapping' : 'has no metalness to send', () => {
+        const material = make();
+        const metalnessMap = dataTexture();
+        metalnessMap.offset.set(0.5, 0);
+        material.metalnessMap = metalnessMap;
+        if (type.metalness) material.metalness = 1;
+        const { descriptor, handleOf } = convert(material);
+        if (type.metalness) {
+            expect(descriptor.metalness).toBe(1);
+            expect(descriptor.metalnessTexture).toMatchObject({ texture: handleOf.get(metalnessMap), channel: 'b' });
+            expectClose(descriptor.metalnessTexture?.uv?.matrix, [1, 0, 0, 1, 0.5, 0]);
+            // Albedo unchanged: no texture average is folded into it.
+            expectClose(descriptor.albedo, [1, 1, 1]);
+        } else {
+            expect(descriptor.metalness).toBeUndefined();
+            expect(descriptor.metalnessTexture).toBeUndefined();
+            expect(handleOf.size).toBe(0);
+        }
     });
 
-    it('clamps metalness outside 0..1', () => {
-        const material = new MeshStandardMaterial({ color: 0xffffff });
-        material.metalness = 1.5;
-        expectClose(giAlbedo(material), [0, 0, 0]);
+    it('turns alphaTest into a cutout at alphaTest, alpha = opacity × the map\'s alpha', () => {
+        const material = make();
+        material.alphaTest = 0.4;
+        material.opacity = 0.8;
+        const { descriptor } = convert(material);
+        expect(descriptor).toMatchObject({ alphaMode: 'cutout', opacity: 0.8, blocksLight: true });
+        expect(descriptor.alphaCutoff).toBeCloseTo(0.4);
+        // Alpha-tested and transparent is still a cutout: three tests alpha first.
+        material.transparent = true;
+        expect(convert(material).descriptor.alphaMode).toBe('cutout');
+    });
+
+    it('makes a blended (transparent) material stochastic: it blocks light by its alpha', () => {
+        const material = make();
+        material.transparent = true;
+        material.opacity = 0.3;
+        const { descriptor } = convert(material);
+        expect(descriptor).toMatchObject({ alphaMode: 'stochastic', opacity: 0.3, blocksLight: true });
+        expect(descriptor.alphaCutoff).toBeUndefined();
+    });
+
+    it(type.transmission ? 'lets light through as glass (transmission > 0)' : 'has no transmission', () => {
+        const material = make();
+        if (type.transmission) material.transmission = 1;
+        expect(convert(material).descriptor.blocksLight).toBe(!type.transmission);
+    });
+
+    it(type.emission ? 'sends emissive × emissiveIntensity × emissiveMap' : 'has no emission (Basic)', () => {
+        const material = make();
+        const emissiveMap = dataTexture();
+        if (type.emission) {
+            material.emissive!.setRGB(1, 0.5, 0.25);
+            material.emissiveIntensity = 12;
+            material.emissiveMap = emissiveMap;
+        }
+        const { descriptor, handleOf } = convert(material);
+        if (type.emission) {
+            expectClose(descriptor.emissive, [1, 0.5, 0.25]);
+            expect(descriptor.emissiveIntensity).toBe(12);
+            expect(descriptor.emissiveTexture).toBe(handleOf.get(emissiveMap));
+            expectClose(descriptor.emissiveUv?.matrix, [1, 0, 0, 1, 0, 0]);
+        } else {
+            expect(descriptor.emissive).toBeUndefined();
+            expect(descriptor.emissiveIntensity).toBeUndefined();
+        }
+    });
+
+    it('takes userData.giAlbedo, giAlbedoMap and giEmissive over its own', () => {
+        const material = make();
+        material.color.setRGB(1, 0, 0);
+        material.map = dataTexture();
+        const override = dataTexture();
+        material.userData.giAlbedo = [0.2, 0.3, 0.4];
+        material.userData.giAlbedoMap = override;
+        material.userData.giEmissive = new Color().setRGB(2, 1, 0);
+        const { descriptor, handleOf } = convert(material);
+        expectClose(descriptor.albedo, [0.2, 0.3, 0.4]);
+        expect(descriptor.albedoTexture).toBe(handleOf.get(override));
+        expect(handleOf.has(material.map!)).toBe(false);
+        expectClose(descriptor.emissive, [2, 1, 0]);
+        expect(descriptor.emissiveIntensity).toBe(1);
+    });
+
+    if (type.node) {
+        it('guesses grey 0.5 for a colorNode graph with nothing to go by, and warns naming it', () => {
+            const material = make();
+            material.name = 'swirl';
+            material.colorNode = colorNode(1, 0, 0);
+            const { descriptor, warnings } = convert(material);
+            expectClose(descriptor.albedo, CUSTOM_SHADING_ALBEDO);
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]).toContain('"swirl"');
+            expect(warnings[0]).toContain('grey 0.5');
+            // Its map is left out: three ignores it under a colorNode.
+            material.map = dataTexture();
+            const withMap = convert(material);
+            expectClose(withMap.descriptor.albedo, CUSTOM_SHADING_ALBEDO);
+            expect(withMap.descriptor.albedoTexture).toBeUndefined();
+            expect(withMap.handleOf.size).toBe(0);
+            // A colour that isn't the default white is used instead of grey.
+            material.color.setRGB(0.2, 0.4, 0.6);
+            expectClose(convert(material).descriptor.albedo, [0.2, 0.4, 0.6]);
+            // giAlbedoMap says what to use: its texture, and no warning.
+            const override = dataTexture();
+            material.userData.giAlbedoMap = override;
+            const told = convert(material);
+            expect(told.descriptor.albedoTexture).toBe(told.handleOf.get(override));
+            expect(told.warnings).toEqual([]);
+        });
+    }
+});
+
+describe('custom shading', () => {
+    it('gives a ShaderMaterial or RawShaderMaterial grey 0.5 and a warning, unless userData says what to use', () => {
+        for (const material of [new ShaderMaterial({ name: 'water' }), new RawShaderMaterial({ name: 'raw' })]) {
+            const { descriptor, warnings } = convert(material);
+            expectClose(descriptor.albedo, CUSTOM_SHADING_ALBEDO);
+            expect(descriptor.emissive).toBeUndefined();
+            expect(warnings).toHaveLength(1);
+            expect(warnings[0]).toContain(`"${material.name}"`);
+            material.userData.giAlbedo = 0x336699;
+            const told = convert(material);
+            expectClose(told.descriptor.albedo, new Color(0x336699).toArray());
+            expect(told.warnings).toEqual([]);
+        }
+    });
+
+    it('reads a node material with only an emissiveNode as plain: its color and map, no warning', () => {
+        const map = dataTexture();
+        const material = new MeshStandardNodeMaterial({ name: 'glow', map });
+        material.emissiveNode = colorNode(5, 5, 5);
+        const { descriptor, warnings, handleOf } = convert(material);
+        // White colour × map, as three draws it; not the grey guess.
+        expectClose(descriptor.albedo, [1, 1, 1]);
+        expect(descriptor.albedoTexture).toBe(handleOf.get(map));
+        expect(warnings).toEqual([]);
+    });
+
+    it('treats node materials with plain properties like their plain counterparts', () => {
+        const material = new MeshStandardNodeMaterial({ color: new Color().setRGB(0.5, 0.25, 0.125), metalness: 0.5, roughness: 0.3 });
+        const { descriptor, warnings } = convert(material);
+        expectClose(descriptor.albedo, [0.5, 0.25, 0.125]);
+        expect(descriptor.metalness).toBe(0.5);
+        expect(warnings).toEqual([]);
     });
 });
 
-describe('the rest of the material', () => {
-    it('passes emissive and its intensity separately', () => {
-        const material = new MeshStandardMaterial({ emissive: new Color().setRGB(1, 0.5, 0.25), emissiveIntensity: 12 });
-        const descriptor = materialDescriptor(material, noTextures);
-        expectClose(descriptor.emissive, [1, 0.5, 0.25]);
-        expect(descriptor.emissiveIntensity).toBe(12);
-    });
-
-    it('turns alphaTest into alphaCutoff', () => {
-        const material = new MeshStandardMaterial({ alphaTest: 0.3 });
-        expect(materialDescriptor(material, noTextures).alphaCutoff).toBeCloseTo(0.3);
-        expect(materialDescriptor(new MeshStandardMaterial(), noTextures).alphaCutoff).toBeUndefined();
-    });
-
-    it('lets light through glass, mostly transparent and invisible materials', () => {
-        expect(materialDescriptor(new MeshPhysicalMaterial({ transmission: 1 }), noTextures).blocksLight).toBe(false);
-        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, opacity: 0.2 }), noTextures).blocksLight).toBe(false);
-        expect(materialDescriptor(new MeshStandardMaterial({ visible: false }), noTextures).blocksLight).toBe(false);
-        expect(materialDescriptor(new MeshStandardMaterial(), noTextures).blocksLight).toBe(true);
-    });
-
-    it('lets light through alpha-blended materials at any opacity (glTF BLEND), but not alpha-tested ones', () => {
-        // Sponza's dirt_decal as GLTFLoader makes it: BLEND, no metallicFactor (so metalness 1), a texture.
-        const decal = new MeshStandardMaterial({ transparent: true, metalness: 1, map: new Texture() });
-        const sent = materialDescriptor(decal, () => HANDLE);
-        expect(sent.blocksLight).toBe(false);
-        expect(sent.alphaCutoff).toBeUndefined();
-        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, opacity: 0.9 }), noTextures).blocksLight).toBe(false);
-        // glTF MASK: alpha-tested, so a cutout that blocks light, transparent or not; mostly see-through still lets it pass.
-        expect(materialDescriptor(new MeshStandardMaterial({ alphaTest: 0.5 }), noTextures).blocksLight).toBe(true);
-        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, alphaTest: 0.5 }), noTextures).blocksLight).toBe(true);
-        expect(materialDescriptor(new MeshStandardMaterial({ transparent: true, alphaTest: 0.5, opacity: 0.2 }), noTextures).blocksLight).toBe(false);
-    });
-
-    it('keeps a see-through material blocking when it opts in, cutting a textured blended one at half alpha', () => {
-        const decal = new MeshStandardMaterial({ transparent: true, map: new Texture() });
-        decal.userData.giBlocksLight = true;
-        const sent = materialDescriptor(decal, () => HANDLE);
-        expect(sent.blocksLight).toBe(true);
-        expect(sent.alphaCutoff).toBe(0.5);
-        const glass = new MeshPhysicalMaterial({ transmission: 1 });
-        glass.userData.giBlocksLight = true;
-        expect(materialDescriptor(glass, noTextures).blocksLight).toBe(true);
-        // Untextured: no cutoff to make. Hidden: the opt-in doesn't bring it back.
-        const plain = new MeshStandardMaterial({ transparent: true, opacity: 0.2 });
-        plain.userData.giBlocksLight = true;
-        expect(materialDescriptor(plain, noTextures)).toMatchObject({ blocksLight: true, alphaCutoff: undefined });
+describe('alpha and light passing', () => {
+    it('lets light through hidden materials and shadow catchers, whatever else they are', () => {
+        expect(convert(new MeshStandardMaterial({ visible: false })).descriptor.blocksLight).toBe(false);
+        expect(convert(new ShadowMaterial()).descriptor.blocksLight).toBe(false);
         const hidden = new MeshStandardMaterial({ transparent: true, visible: false });
         hidden.userData.giBlocksLight = true;
-        expect(materialDescriptor(hidden, noTextures).blocksLight).toBe(false);
+        expect(convert(hidden).descriptor.blocksLight).toBe(false);
+    });
+
+    it('makes three\'s alphaHash stochastic too', () => {
+        expect(convert(new MeshStandardMaterial({ alphaHash: true, opacity: 0.5 })).descriptor).toMatchObject({ alphaMode: 'stochastic', opacity: 0.5 });
+    });
+
+    it('blocks Sponza\'s dirt_decal by its alpha (glTF BLEND, metalness 1 from no metallicFactor, a map)', () => {
+        const map = dataTexture();
+        const decal = new MeshStandardMaterial({ transparent: true, metalness: 1, map, name: 'dirt_decal' });
+        const { descriptor, handleOf } = convert(decal);
+        expect(descriptor).toMatchObject({ alphaMode: 'stochastic', opacity: 1, blocksLight: true, metalness: 1, albedoTexture: handleOf.get(map) });
+    });
+
+    it('makes a see-through material opaque for GI when it opts in (userData.giBlocksLight)', () => {
+        const blended = new MeshStandardMaterial({ transparent: true, opacity: 0.2, map: dataTexture() });
+        blended.userData.giBlocksLight = true;
+        expect(convert(blended).descriptor).toMatchObject({ alphaMode: 'opaque', blocksLight: true });
+        expect(convert(blended).descriptor.opacity).toBeUndefined();
+        const glass = new MeshPhysicalMaterial({ transmission: 1 });
+        glass.userData.giBlocksLight = true;
+        expect(convert(glass).descriptor.blocksLight).toBe(true);
+        // A cutout keeps its holes.
+        const leaves = new MeshStandardMaterial({ alphaTest: 0.5 });
+        leaves.userData.giBlocksLight = true;
+        expect(convert(leaves).descriptor.alphaMode).toBe('cutout');
         // Only true is read.
         const notTrue = new MeshStandardMaterial({ transparent: true });
         notTrue.userData.giBlocksLight = 'yes';
-        expect(materialDescriptor(notTrue, noTextures).blocksLight).toBe(false);
+        expect(convert(notTrue).descriptor.alphaMode).toBe('stochastic');
     });
 
-    it('sees the blocks-light opt-in change', () => {
-        const material = new MeshStandardMaterial({ transparent: true });
-        const before = new MaterialSnapshot();
-        before.read(material);
-        material.userData.giBlocksLight = true;
-        const after = new MaterialSnapshot();
-        after.read(material);
-        expect(after.equals(before)).toBe(false);
+    it('clamps alphaTest and opacity to 0..1', () => {
+        const material = new MeshStandardMaterial({ alphaTest: 1.5, opacity: 1.2 });
+        expect(convert(material).descriptor).toMatchObject({ alphaCutoff: 1, opacity: 1 });
+    });
+
+    it('warns once that alphaMap is ignored, and about uv channels the platform lacks', () => {
+        const material = new MeshStandardMaterial({ alphaMap: dataTexture(), alphaTest: 0.5 });
+        const map = dataTexture();
+        map.channel = 2;
+        material.map = map;
+        const { descriptor, warnings } = convert(material);
+        expect(descriptor.alphaMode).toBe('cutout');
+        expect(warnings.some((warning) => warning.includes('alphaMap'))).toBe(true);
+        expect(warnings.some((warning) => warning.includes('uv channel 2'))).toBe(true);
+        expect(descriptor.albedoUv?.channel).toBe(0);
     });
 
     it('makes every material double-sided for GI whatever its side, unless it opts out', () => {
-        expect(materialDescriptor(new MeshStandardMaterial({ side: DoubleSide }), noTextures).doubleSided).toBe(true);
-        expect(materialDescriptor(new MeshStandardMaterial({ side: FrontSide }), noTextures).doubleSided).toBe(true);
+        expect(convert(new MeshStandardMaterial({ side: DoubleSide })).descriptor.doubleSided).toBe(true);
+        expect(convert(new MeshStandardMaterial({ side: FrontSide })).descriptor.doubleSided).toBe(true);
         const optedOut = new MeshStandardMaterial({ side: DoubleSide });
         optedOut.userData.giSingleSided = true;
-        expect(materialDescriptor(optedOut, noTextures).doubleSided).toBe(false);
-    });
-
-    it('sees the single-sided opt-out change', () => {
-        const material = new MeshStandardMaterial();
-        const before = new MaterialSnapshot();
-        const after = new MaterialSnapshot();
-        before.read(material);
-        material.userData.giSingleSided = true;
-        after.read(material);
-        expect(after.equals(before)).toBe(false);
+        expect(convert(optedOut).descriptor.doubleSided).toBe(false);
     });
 });
 
-describe('texture averages folded into GI (until the core samples textures, M4)', () => {
-    /** Averages as the scene sync supplies them, but fixed: albedo factor and emissive colour. */
-    const fixedAverages = (factor: [number, number, number] | undefined, color: [number, number, number] | undefined) => ({
-        diffuse: () => factor,
-        color: () => color,
+describe('userData colour overrides', () => {
+    it('reads Colors and [r, g, b] as linear, hex numbers and CSS strings as sRGB, and ignores anything else', () => {
+        const material = new MeshLambertMaterial();
+        const albedoFor = (value: unknown) => {
+            material.userData.giAlbedo = value;
+            return convert(material).descriptor.albedo;
+        };
+        expectClose(albedoFor(new Color().setRGB(0.1, 0.2, 0.3)), [0.1, 0.2, 0.3]);
+        expectClose(albedoFor([0.1, 0.2, 0.3]), [0.1, 0.2, 0.3]);
+        expectClose(albedoFor(0x808080), new Color(0x808080).toArray());
+        expectClose(albedoFor('#ff8000'), new Color('#ff8000').toArray());
+        // Not colours: the material's own colour (white) is used.
+        expectClose(albedoFor([1, 2]), [1, 1, 1]);
+        expectClose(albedoFor({ r: 'red' }), [1, 1, 1]);
+        expectClose(albedoFor(Number.NaN), [1, 1, 1]);
     });
 
-    it('multiplies the colour by the diffuse factor and the emission by the emissive map\'s average', () => {
-        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.8, 0.8, 0.8), map: new Texture(), emissive: new Color().setRGB(1, 1, 1), emissiveMap: new Texture() });
-        const descriptor = materialDescriptor(material, () => HANDLE, fixedAverages([0.5, 0.25, 1], [0.5, 0.25, 1]));
-        expectClose(descriptor.albedo, [0.4, 0.2, 0.8]);
-        expectClose(descriptor.emissive, [0.5, 0.25, 1]);
-    });
-
-    it('falls back to colour × (1 − metalness) when no texture can be read', () => {
-        const material = new MeshStandardMaterial({ color: new Color().setRGB(0.5, 0.5, 0.5), metalness: 0.5, map: new Texture() });
-        expectClose(materialDescriptor(material, () => HANDLE, fixedAverages(undefined, undefined)).albedo, [0.25, 0.25, 0.25]);
-    });
-
-    it('gives a Sponza-like material (metalness 1 from the factor, mostly 0 in its map) a real albedo', () => {
-        // glTF's metallicRoughness: metalness in B. Three quarters of the texels are paint (B = 0), one quarter metal (B = 255).
-        const albedoPixels = new Uint8Array(4 * 4 * 4).fill(255);
-        const metalPixels = new Uint8Array(4 * 4 * 4);
-        for (let texel = 0; texel < 16; texel++) {
-            metalPixels.set([0, 128, texel < 4 ? 255 : 0, 255], texel * 4);
-            albedoPixels.set([204, 102, 51, 255], texel * 4);
-        }
-        const map = new DataTexture(albedoPixels, 4, 4);
-        const metalnessMap = new DataTexture(metalPixels, 4, 4);
-        const material = new MeshStandardMaterial({ color: 0xffffff, metalness: 1, map, metalnessMap });
-        const real = { color: textureAverage, diffuse: (a: Texture | null, b: Texture | null, metalness: number, sameUv: boolean) => diffuseAverage(a, b, metalness, sameUv)?.factor };
-        const albedo = materialDescriptor(material, () => HANDLE, real).albedo!;
-        // 3/4 of the texels keep their albedo (0.8, 0.4, 0.2): 0.6, 0.3, 0.15. Folding the factor alone would give 0.
-        expectClose(albedo, [0.6, 0.3, 0.15], 3);
-        expect(diffuseAverage(map, metalnessMap, 1, true)!.method).toBe('per-texel');
-    });
-
-    it('multiplies separate averages when the two maps are sampled differently', () => {
-        const map = new DataTexture(new Uint8Array([255, 255, 255, 255, 0, 0, 0, 255]), 2, 1);
-        const metalnessMap = new DataTexture(new Uint8Array([0, 0, 255, 255, 0, 0, 0, 255]), 2, 1);
-        metalnessMap.repeat.set(2, 1);
-        expect(sameUvMapping(map, metalnessMap)).toBe(false);
-        const material = new MeshStandardMaterial({ color: 0xffffff, metalness: 1, map, metalnessMap });
-        const real = { color: textureAverage, diffuse: (a: Texture | null, b: Texture | null, metalness: number, sameUv: boolean) => diffuseAverage(a, b, metalness, sameUv)?.factor };
-        // Albedo average 0.5, metalness average 0.5: 0.5 × (1 − 0.5).
-        expectClose(materialDescriptor(material, () => HANDLE, real).albedo, [0.25, 0.25, 0.25]);
-        expect(diffuseAverage(map, metalnessMap, 1, false)!.method).toBe('separate-averages');
-    });
-
-    it('averages a metalness map alone into 1 − metalness × average', () => {
-        const metalnessMap = new DataTexture(new Uint8Array([0, 0, 255, 255, 0, 0, 0, 255]), 2, 1);
-        expect(diffuseAverage(null, metalnessMap, 0.5, false)).toEqual({ factor: [0.75, 0.75, 0.75], method: 'metalness-map' });
+    it('needs uv1 when an override map samples channel 1', () => {
+        const material = new MeshLambertMaterial();
+        expect(usesUvChannel1(material)).toBe(false);
+        const map = dataTexture();
+        map.channel = 1;
+        material.userData.giAlbedoMap = map;
+        expect(usesUvChannel1(material)).toBe(true);
     });
 });
 
-describe('texture averages', () => {
-    it('averages in linear light, decoding sRGB texel by texel', () => {
-        const linear = new DataTexture(new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
-        expectClose(textureAverage(linear), [0.5, 0, 0.5]);
-        // Black and white sRGB texels average to linear 0.5 (encoded averaging would give sRGB 128, linear 0.22).
-        const srgb = new DataTexture(new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255]), 2, 1);
-        srgb.colorSpace = SRGBColorSpace;
-        expectClose(textureAverage(srgb), [0.5, 0.5, 0.5]);
+// ---------------------------------------------------------------------------
+// Texture sources
+// ---------------------------------------------------------------------------
+
+/** A CompressedTexture with three mips of made-up blocks (16 bytes per 4×4 block). */
+function compressedTexture(format: CompressedPixelFormat, colorSpace: string): CompressedTexture {
+    const mipmaps = [512, 256, 128].map((size) => ({ data: new Uint8Array((size / 4) * (size / 4) * 16).fill(size & 0xff), width: size, height: size }));
+    const texture = new CompressedTexture(mipmaps, 512, 512, format);
+    texture.colorSpace = colorSpace;
+    return texture;
+}
+
+describe('texture sources', () => {
+    it('sends a BC7 CompressedTexture as compressed mips, sRGB or linear by its colour space', () => {
+        const srgb = compressedTexture(RGBA_BPTC_Format, SRGBColorSpace);
+        const descriptor = textureDescriptor(srgb)!;
+        const source = descriptor.source as CompressedPixelData;
+        expect(source.format).toBe('bc7-rgba-unorm-srgb');
+        expect(descriptor.srgb).toBe(true);
+        expect(source.levels.map((level) => [level.width, level.height])).toEqual([
+            [512, 512],
+            [256, 256],
+            [128, 128],
+        ]);
+        // The mips' own bytes, not copies.
+        expect(source.levels[1].data).toBe(srgb.mipmaps[1].data);
+        const linear = textureDescriptor(compressedTexture(RGBA_BPTC_Format, NoColorSpace))!;
+        expect((linear.source as CompressedPixelData).format).toBe('bc7-rgba-unorm');
+        expect(linear.srgb).toBe(false);
+        expect(unreadableTextureReason(srgb)).toBeNull();
     });
 
-    it('weights by alpha, so cut-out texels don\'t count as black', () => {
-        // Two opaque green leaves and two fully transparent black texels.
-        const leaves = new DataTexture(new Uint8Array([0, 255, 0, 255, 0, 0, 0, 0, 0, 255, 0, 255, 0, 0, 0, 0]), 4, 1);
-        expectClose(textureAverage(leaves), [0, 1, 0]);
-        expect(textureAverage(new DataTexture(new Uint8Array(8), 2, 1))).toBeUndefined();
+    it('maps BC1, BC3, BC5, ETC2 and ASTC 4×4 as three\'s backend does', () => {
+        const formatOf = (format: CompressedPixelFormat, colorSpace: string = SRGBColorSpace) => (textureDescriptor(compressedTexture(format, colorSpace))!.source as CompressedPixelData).format;
+        expect(formatOf(RGBA_S3TC_DXT1_Format)).toBe('bc1-rgba-unorm-srgb');
+        expect(formatOf(RGBA_S3TC_DXT5_Format, NoColorSpace)).toBe('bc3-rgba-unorm');
+        expect(formatOf(RGB_ETC2_Format)).toBe('etc2-rgb8unorm-srgb');
+        expect(formatOf(RGBA_ETC2_EAC_Format)).toBe('etc2-rgba8unorm-srgb');
+        expect(formatOf(RGBA_ASTC_4x4_Format)).toBe('astc-4x4-unorm-srgb');
+        // BC5 has no sRGB variant: read linear, as three reads it, whatever the colour space says.
+        const bc5 = textureDescriptor(compressedTexture(RED_GREEN_RGTC2_Format, SRGBColorSpace))!;
+        expect((bc5.source as CompressedPixelData).format).toBe('bc5-rg-unorm');
+        expect(bc5.srgb).toBe(false);
     });
 
-    it('counts every texel of a data texture', () => {
-        const size = 512;
-        const data = new Uint8Array(size * size * 4).fill(255);
-        data.set([0, 0, 0], 0); // one black texel in a quarter of a million
-        const average = textureAverage(new DataTexture(data, size, size))!;
-        expect(average[0]).toBeCloseTo(1 - 1 / (size * size), 7);
+    it('skips compressed formats GI doesn\'t read, and compressed textures with no mips yet, saying why only for the first', () => {
+        const bc6h = compressedTexture(RGB_BPTC_UNSIGNED_Format, NoColorSpace);
+        expect(textureDescriptor(bc6h)).toBeNull();
+        expect(unreadableTextureReason(bc6h)).toContain(`format ${RGB_BPTC_UNSIGNED_Format}`);
+        const empty = new CompressedTexture([], 512, 512, RGBA_BPTC_Format);
+        expect(textureDescriptor(empty)).toBeNull();
+        expect(unreadableTextureReason(empty)).toBeNull();
     });
 
-    it('has nothing for an image that has not loaded', () => {
-        expect(textureAverage(new Texture())).toBeUndefined();
+    it('sends an 8-bit RGBA data texture as PixelData, sRGB by its colour space', () => {
+        const texture = dataTexture();
+        const linear = textureDescriptor(texture)!;
+        expect(linear.srgb).toBe(false);
+        expect((linear.source as PixelData).data).toBe(texture.image.data);
+        texture.colorSpace = SRGBColorSpace;
+        expect(textureDescriptor(texture)!.srgb).toBe(true);
+    });
+
+    it('skips float data textures and render targets with a reason, and images still loading without one', () => {
+        const float = new DataTexture(new Float32Array(16), 2, 2, undefined, FloatType);
+        expect(textureDescriptor(float)).toBeNull();
+        expect(unreadableTextureReason(float)).toContain('8-bit RGBA');
+        const target = new RenderTarget(4, 4).texture;
+        expect(textureDescriptor(target)).toBeNull();
+        expect(unreadableTextureReason(target)).toContain('render-target');
+        const loading = new Texture();
+        expect(textureDescriptor(loading)).toBeNull();
+        expect(unreadableTextureReason(loading)).toBeNull();
     });
 });
 
-describe('UV mappings are passed through', () => {
-    it('passes texture.matrix as the contract\'s 3x2', () => {
+// ---------------------------------------------------------------------------
+// UV mappings
+// ---------------------------------------------------------------------------
+
+describe('UV mappings', () => {
+    /** A texture as glTF loads it (`flipY` false), so the matrix passes through unchanged. */
+    function unflipped(): Texture {
         const texture = new Texture();
+        texture.flipY = false;
+        return texture;
+    }
+
+    it('passes texture.matrix as the contract\'s 3x2', () => {
+        const texture = unflipped();
         texture.repeat.set(2, 3);
         texture.offset.set(0.25, 0.5);
-        const mapping = uvMapping(texture);
-        expectClose(mapping.matrix, [2, 0, 0, 3, 0.25, 0.5]);
+        expectClose(uvMapping(texture).matrix, [2, 0, 0, 3, 0.25, 0.5]);
     });
 
     it('matches three\'s own matrix with rotation and centre', () => {
-        const texture = new Texture();
+        const texture = unflipped();
         texture.repeat.set(4, 0.5);
         texture.offset.set(-0.1, 0.3);
         texture.rotation = 0.7;
@@ -256,8 +523,28 @@ describe('UV mappings are passed through', () => {
         expectClose(viaContract, viaThree);
     });
 
-    it('uses a matrix three doesn\'t update as it is', () => {
+    it('turns v upside down after three\'s matrix for a flipY texture (three uploads it flipped; the platform never flips)', () => {
         const texture = new Texture();
+        expect(texture.flipY).toBe(true);
+        texture.repeat.set(2, 3);
+        texture.offset.set(0.25, 0.5);
+        texture.rotation = 0.4;
+        const mapping = uvMapping(texture);
+        const e = texture.matrix.elements;
+        const [u, v] = [0.3, 0.8];
+        const threeV = e[1] * u + e[4] * v + e[7];
+        const platformV = mapping.matrix![1] * u + mapping.matrix![3] * v + mapping.matrix![5];
+        // three's v counts from the image's bottom row, the platform's from its top.
+        expect(platformV).toBeCloseTo(1 - threeV, 12);
+        expect(mapping.matrix![0] * u + mapping.matrix![2] * v + mapping.matrix![4]).toBeCloseTo(e[0] * u + e[3] * v + e[6], 12);
+        // Compressed textures are never flipped by three, so neither is their mapping.
+        const compressed = compressedTexture(RGBA_BPTC_Format, SRGBColorSpace);
+        compressed.flipY = true;
+        expectClose(uvMapping(compressed).matrix, [1, 0, 0, 1, 0, 0]);
+    });
+
+    it('uses a matrix three doesn\'t update as it is', () => {
+        const texture = unflipped();
         texture.matrixAutoUpdate = false;
         texture.matrix.set(1, 2, 3, 4, 5, 6, 0, 0, 1);
         expectClose(uvMapping(texture).matrix, [1, 4, 2, 5, 3, 6]);
@@ -284,26 +571,12 @@ describe('UV mappings are passed through', () => {
         expect(mapping.channelSupported).toBe(false);
     });
 
-    it('puts the mapping and handle on the material', () => {
-        const map = new Texture();
-        map.repeat.set(2, 2);
-        map.channel = 1;
-        const emissiveMap = new Texture();
-        emissiveMap.offset.set(0.5, 0);
-        const material = new MeshStandardMaterial({ map, emissiveMap });
-        const descriptor = materialDescriptor(material, (texture) => (texture === map ? HANDLE : ((HANDLE + 1) as TextureHandle)));
-        expect(descriptor.albedoTexture).toBe(HANDLE);
-        expect(descriptor.albedoUv?.channel).toBe(1);
-        expectClose(descriptor.albedoUv?.matrix, [2, 0, 0, 2, 0, 0]);
-        expect(descriptor.emissiveTexture).toBe(HANDLE + 1);
-        expectClose(descriptor.emissiveUv?.matrix, [1, 0, 0, 1, 0.5, 0]);
-    });
-
     it('leaves the mapping out when the texture has no handle yet', () => {
         const material = new MeshStandardMaterial({ map: new Texture() });
         const descriptor = materialDescriptor(material, noTextures);
         expect(descriptor.albedoTexture).toBeUndefined();
         expect(descriptor.albedoUv).toBeUndefined();
+        expect(materialDescriptor(material, () => HANDLE).albedoUv).toBeDefined();
     });
 });
 
@@ -476,5 +749,33 @@ describe('material snapshots', () => {
         material.map = null;
         after.read(material);
         expect(after.equals(before)).toBe(false);
+    });
+
+    it('see texture versions, flipY, alpha modes, custom shading and the userData overrides', () => {
+        const map = dataTexture();
+        const material = new MeshStandardNodeMaterial({ map });
+        const before = new MaterialSnapshot();
+        const after = new MaterialSnapshot();
+        const edits: (() => void)[] = [
+            () => (map.needsUpdate = true),
+            () => (map.flipY = true),
+            () => (material.alphaHash = true),
+            () => (material.colorNode = colorNode(1, 0, 0)),
+            () => (material.userData.giAlbedo = [0.1, 0.2, 0.3]),
+            () => (material.userData.giAlbedo = [0.1, 0.2, 0.4]),
+            () => (material.userData.giEmissive = 0xff0000),
+            () => (material.userData.giAlbedoMap = dataTexture()),
+            () => (material.userData.giBlocksLight = true),
+        ];
+        for (const edit of edits) {
+            before.read(material);
+            edit();
+            after.read(material);
+            expect(after.equals(before)).toBe(false);
+        }
+        // Reading again without an edit: equal.
+        before.read(material);
+        after.read(material);
+        expect(after.equals(before)).toBe(true);
     });
 });

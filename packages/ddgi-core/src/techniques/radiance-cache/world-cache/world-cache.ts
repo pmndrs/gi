@@ -101,8 +101,12 @@ export interface WorldCacheProbeRays {
 
 // ---- The world cache --------------------------------------------------------------------------------
 
-/** What a world cache uses from the technique's context. A `TechniqueContext` is one. */
-export type WorldCacheContext = Pick<TechniqueContext, 'device' | 'kernels' | 'compute'>;
+/**
+ * What a world cache uses from the technique's context. A `TechniqueContext`
+ * is one: the hash grid lights its hits through the platform's hit shading
+ * (`shade`) and times its passes (`timer`).
+ */
+export type WorldCacheContext = Pick<TechniqueContext, 'device' | 'kernels' | 'compute' | 'shade' | 'timer'>;
 
 /** Per-frame inputs. */
 export interface WorldCacheFrame {

@@ -16,6 +16,9 @@
  *   VITE_DDGI_WIDTH=2560 VITE_DDGI_HEIGHT=1440   the view size (default 1280x720)
  *   VITE_DDGI_MAX_TEXTURE_SIZE=1024   scale model textures down to this side at load (default: as the files have them).
  *                                  Bistro exterior's textures take 5.1 GB as loaded, more than a 6 GB GPU holds with DDGI (T2.17).
+ *   VITE_DDGI_TEXTURES=compressed  compress model textures at load (BC7/BC5 through gputex): `compressed` leaves the maps GI
+ *                                  reads colours from until M4, `all-compressed` takes them too (default: uncompressed;
+ *                                  apps/viewer/src/scene/compress-textures.ts, T3.12).
  *
  * DDGI's frame cost for T1.9 (GI on against off: GPU ms, frame p50 and p95):
  *   VITE_DDGI_SCENES=cornell-box,two-room,sponza VITE_DDGI_TECHNIQUES=none,ddgi pnpm test:gpu --filter viewer-baselines
@@ -36,6 +39,7 @@
 
 import { reportGpuTest } from '../../client.ts';
 import { DEFAULT_BASELINE_OPTIONS, failedMeasurements, runBaselines, type BaselineOptions } from '../../../../apps/viewer/src/bench/baselines.ts';
+import { TEXTURE_COMPRESSIONS } from '../../../../apps/viewer/src/scene/texture-compression-mode.ts';
 import { runBreakdown, VARIANTS, type VariantId } from './breakdown.ts';
 
 const QUICK_SCENES = ['cornell-box', 'two-room'];
@@ -111,6 +115,7 @@ async function baselines(): Promise<void> {
         width: countFromEnv(env.VITE_DDGI_WIDTH, DEFAULT_BASELINE_OPTIONS.width),
         height: countFromEnv(env.VITE_DDGI_HEIGHT, DEFAULT_BASELINE_OPTIONS.height),
         maxTextureSize: env.VITE_DDGI_MAX_TEXTURE_SIZE === undefined ? null : countFromEnv(env.VITE_DDGI_MAX_TEXTURE_SIZE, 1024),
+        textureCompression: TEXTURE_COMPRESSIONS.find((mode) => mode === env.VITE_DDGI_TEXTURES) ?? DEFAULT_BASELINE_OPTIONS.textureCompression,
         log,
     });
     const failures = failedMeasurements(result);

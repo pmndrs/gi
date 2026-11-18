@@ -24,6 +24,8 @@ export interface ProbeSnapshot {
     readonly owed: number[];
     readonly flags: number[];
     readonly moverMask: number[];
+    /** The frame until which the probe is awake (T3.4, woken air probes); 0 when it isn't. */
+    readonly wakeUntil: number[];
     /** Where the probe sits (grid point plus relocation). */
     readonly position: Vec3[];
 }
@@ -34,7 +36,7 @@ export async function probeSnapshot(device: GPUDevice, field: DDGIField): Promis
     const floats = new Float32Array(words.buffer);
     const probes = await readProbeData(device, field);
     const [nx, , nz] = field.grid.counts;
-    const snapshot: ProbeSnapshot = { state: [], mean: [], pendingChange: [], updates: [], owed: [], flags: [], moverMask: [], position: [] };
+    const snapshot: ProbeSnapshot = { state: [], mean: [], pendingChange: [], updates: [], owed: [], flags: [], moverMask: [], wakeUntil: [], position: [] };
     for (let probe = 0; probe < probeCount; probe++) {
         const base = probe * PROBE_HISTORY_WORDS;
         const redGreen = words[base + PROBE_HISTORY_WORD.meanRedGreen];
@@ -47,6 +49,7 @@ export async function probeSnapshot(device: GPUDevice, field: DDGIField): Promis
         snapshot.owed.push((updates >>> PROBE_HISTORY_UPDATES.owedShift) & PROBE_HISTORY_UPDATES.owedMask);
         snapshot.flags.push(words[base + PROBE_HISTORY_WORD.scheduleAndFlags] & PROBE_HISTORY_FLAGS_MASK);
         snapshot.moverMask.push(words[base + PROBE_HISTORY_WORD.moverMask]);
+        snapshot.wakeUntil.push(words[base + PROBE_HISTORY_WORD.wakeUntil]);
         const grid: Vec3 = [probe % nx, Math.floor(probe / (nx * nz)), Math.floor(probe / nx) % nz];
         const offset = probes[probe].offset;
         snapshot.position.push([0, 1, 2].map((axis) => field.grid.origin[axis] + (grid[axis] + offset[axis]) * field.grid.spacing[axis]) as Vec3);

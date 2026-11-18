@@ -97,6 +97,6 @@ export function cameraRelativeInverseViewProjection(camera: Pick<FrameCamera, 'p
     const translateToEye = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
     const relative = multiplyMat4(multiplyMat4(jitteredProjection(camera), camera.view), translateToEye);
     const inverse = invertMat4(relative);
-    if (!inverse) throw new Error('@pmndrs/ddgi: the radiance cache needs a camera whose projection × view can be inverted');
+    if (!inverse) throw new Error('@pmndrs/gi: the radiance cache needs a camera whose projection × view can be inverted');
     return inverse;
 }

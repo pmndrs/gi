@@ -34,6 +34,10 @@
  * 8. **Find stops at the first empty slot** (Capsaicin's behaviour, kept):
  *    with slot 0's tile purged, the tile in slot 1 isn't found, and
  *    inserting it again claims slot 0.
+ * 9. **Halves as f32tof16 makes them** (register D31): `HashGridCache_PackHalf2`
+ *    gives the nearest half on random values and exact ties (to the even
+ *    one, both parities and signs, normal and subnormal), and clamps past
+ *    65,504; the CPU's `floatToHalfBits` is the reference.
  *
  * Correctness only, nothing timed (DECISIONS 2026-11-09).
  * `pnpm test:gpu --filter radiance-cache-hash-grid --gpu nvidia` (or intel).
@@ -42,9 +46,9 @@
 import { GILimitError } from '../../../../packages/ddgi-core/src/platform/contract/errors.ts';
 import type { FrameCamera } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { PlatformGpuCompute } from '../../../../packages/ddgi-core/src/platform/compute/gpu-compute.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { PlatformKernelBuilder } from '../../../../packages/ddgi-core/src/platform/kernel-builder.ts';
+import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import {
@@ -67,11 +71,15 @@ import {
     type WorldCacheFrame,
     type WorldCacheProbeRays,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { floatToHalfBits } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { COUNTER, createProbeRayReader, createTestIo, createTestKernels, HIT_WORDS, PROBE_RAY_READ_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';
 
 const f32 = Math.fround;
+
+/** The cache's passes untimed: this page times nothing. */
+const NO_TIMER: GpuTimerScope = { computePass: () => undefined };
 
 const RENDER_WIDTH = 1280;
 const RENDER_HEIGHT = 720;
@@ -223,7 +231,8 @@ try {
         const defaultErrors = watchDevice(defaultDevice);
         let refusal: unknown = null;
         try {
-            const context: WorldCacheContext = { device: defaultDevice, kernels: new PlatformKernelBuilder(defaultDevice, 'hash-grid default limits'), compute: new PlatformGpuCompute(defaultDevice) };
+            const defaultPlatform = new GIPlatformImpl(defaultDevice, { label: 'hash-grid default limits' });
+            const context: WorldCacheContext = { device: defaultDevice, kernels: defaultPlatform.kernels, compute: defaultPlatform.compute, shade: defaultPlatform.shade, timer: NO_TIMER };
             await new HashGridCache().prepare(context);
         } catch (error) {
             refusal = error;
@@ -248,9 +257,18 @@ try {
     data.limits = { maxStorageBufferBindingSize: device.limits.maxStorageBufferBindingSize, maxBufferSize: device.limits.maxBufferSize };
 
     const options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS };
-    const kernels = new PlatformKernelBuilder(device, 'hash-grid');
+    // An empty platform: the cache's population kernels light hits through its hit shading
+    // (none here: this page's probe rays are empty, so they run on no rays).
+    const platform = new GIPlatformImpl(device, { label: 'hash-grid' });
+    await platform.prepare();
+    {
+        const encoder = device.createCommandEncoder({ label: 'hash-grid platform frame' });
+        platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: 0 }, camera: CAMERA });
+        device.queue.submit([encoder.finish()]);
+    }
+    const kernels = platform.kernels;
     const cache = new HashGridCache(options);
-    await cache.prepare({ device, kernels, compute: new PlatformGpuCompute(device, { label: 'hash-grid' }) });
+    await cache.prepare({ device, kernels, compute: platform.compute, shade: platform.shade, timer: NO_TIMER });
 
     const capacity = cache.capacity;
     const expected = hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS);
@@ -343,7 +361,8 @@ try {
         log(`probe-ray layout: ray ${rayIndex} written at byte ${WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + rayIndex * WORLD_CACHE_PROBE_RAY_BYTES} reads back through WorldCacheProbeRays field by field`);
     }
 
-    const rayBuffer = device.createBuffer({ label: 'no probe rays', size: 64, usage: GPUBufferUsage.STORAGE });
+    // Copy source too: the cache copies the ray count where its first pass's indirect arguments read it.
+    const rayBuffer = device.createBuffer({ label: 'no probe rays', size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const radianceBuffer = device.createBuffer({ label: 'no radiance', size: 16, usage: GPUBufferUsage.STORAGE });
     const noRays: WorldCacheProbeRays = { buffer: rayBuffer, count: { buffer: rayBuffer, offset: 0 }, capacity: 1, radiance: { buffer: radianceBuffer } };
 
@@ -679,6 +698,32 @@ try {
         assert(again[1] === firstSlot && again[2] === 1, `inserting it again took tile ${again[1]} (new ${again[2]}); Capsaicin's insert claims the empty slot 0`);
         data.findStopsAtEmptySlot = { purgedSlot: 0, keptSlot: 1, reinsertedSlot: again[1] - firstSlot };
         log('find stops at the first empty slot: slot 0 purged, slot 1\'s tile not found, re-inserted into slot 0 (Capsaicin\'s behaviour)');
+    }
+
+    // ---- 9. Halves rounded to nearest, ties to even, clamped (register D31) ----
+    {
+        const step = 2 ** -10;
+        const values: number[] = [
+            // Ties: halfway between two halves; the even one wins (the old rule kept the truncated one).
+            1 + step / 2, 1 + 3 * step / 2, -(1 + step / 2), -(1 + 3 * step / 2), 1000.25, 1000.75, 0.5 + step / 4, 3 * 2 ** -25, -(5 * 2 ** -25),
+            // Exact halves, and the clamp.
+            0, 1, -2, 65504, 70000, -1e9, 65520,
+        ];
+        const random = seeded(91);
+        while (values.length < HASH_INPUTS) values.push((random() - 0.5) * 2 ** (random() * 40 - 24));
+        const floats = new Float32Array(values);
+        runKernel('packHalves', new Uint32Array(floats.buffer), floats.length / 2);
+        const packed = await results(floats.length / 2);
+        const clampHalf = (value: number): number => Math.min(Math.max(value, -65504), 65504);
+        const mismatches: string[] = [];
+        for (let index = 0; index < floats.length; index++) {
+            const gpu = (packed[index >> 1] >>> ((index & 1) * 16)) & 0xffff;
+            const expected = floatToHalfBits(clampHalf(floats[index]));
+            if (gpu !== expected) mismatches.push(`${floats[index]}: GPU 0x${gpu.toString(16)}, f32tof16 0x${expected.toString(16)}`);
+        }
+        data.packHalves = { values: floats.length, ties: 9, mismatches: mismatches.length };
+        assert(mismatches.length === 0, `${mismatches.length} of ${floats.length} values pack to another half than f32tof16's: ${mismatches.slice(0, 4).join(' | ')}`);
+        log(`halves: ${floats.length} values (9 exact ties, the clamp) pack as f32tof16 does, ties to even`);
     }
 
     rayBuffer.destroy();

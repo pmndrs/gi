@@ -1,0 +1,4 @@
+{
+    "description": "T3.0 spike, question 1: a TSL compute (three's computeSkinning) writes a skinned mesh's deformed positions into a storage ExternalTexture we own; three's vertex shader draws from it, and GpuMeshRefit refits the mesh's tree from it on the same device (a GPU texture-to-buffer copy, no CPU copy). Also tries the storage-buffer route through three's backend.",
+    "timeoutMs": 120000
+}

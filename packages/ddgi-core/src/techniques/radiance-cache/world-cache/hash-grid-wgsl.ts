@@ -76,7 +76,8 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
 
 /**
  * Word offsets of `HashGridCacheConstants`' fields (`gi1_shared.h:59-92`,
- * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front), for
+ * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front and
+ * `g_UseDirectLighting` in the first padding word), for
  * the TypeScript that writes the block. 32 words, 128 bytes.
  */
 export const HASH_GRID_CONSTANTS_WORD = {
@@ -98,6 +99,7 @@ export const HASH_GRID_CONSTANTS_WORD = {
     maxSampleCount: 26,
     discardMultibounceRayProbability: 27,
     maxMultibounceSampleCount: 28,
+    useDirectLighting: 29,
 } as const;
 
 /** Bytes of `HashGridCacheConstants`. */
@@ -111,7 +113,7 @@ function floatLiteral(value: number): string {
 
 const HASH_GRID_CONSTANTS_STRUCT_WGSL = /* wgsl */ `
 // HashGridCacheConstants (gi1_shared.h:59-92), without the debug fields, with GI1's g_Eye and
-// g_FrameIndex (gi1.comp:33-36) at the front.
+// g_FrameIndex (gi1.comp:33-36) at the front and its g_UseDirectLighting after the options.
 struct HashGridCacheConstants {
     eye_position: vec3f,
     frame_index: u32,
@@ -140,7 +142,7 @@ struct HashGridCacheConstants {
     max_sample_count: f32,
     discard_multibounce_ray_probability: f32,
     max_multibounce_sample_count: f32,
-    padding0: u32,
+    use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
     padding1: u32,
     padding2: u32,
 }
@@ -210,6 +212,7 @@ const HASHGRIDCACHE_HASHBUFFER: u32 = ${words.hashBuffer}u;
 const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${words.decayTileBuffer}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1}u;
+const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
 // In the cell values (vec2u elements) and the update scratch (words).
 const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
 const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
@@ -474,6 +477,18 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
     }
 }
 
+// Whether this call puts the tile on this frame's update list (g_HashGridCache_UpdateTileBuffer),
+// asked only by a thread whose append Capsaicin's rule asks for (gi1.comp:1043-1048, 1819-1824:
+// the tile is new, or this thread touched it first this frame). That rule can pick two threads
+// for a new tile: the one that claimed its slot, and one that found the tile and touched it before
+// the claimer did. Two UpdateTiles workgroups then update the tile at once and race on its scratch
+// (register D32). The tile's own word, set to the frame plus one, lets exactly one of them append
+// it: plus one, so the zeroed words of a new or reset cache never read as frame 0.
+fn HashGridCache_ListTileForUpdate(tile_index: u32) -> bool {
+    let listed = g_HashGridCacheConstants.frame_index + 1u;
+    return atomicExchange(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATELISTEDTILEBUFFER + tile_index], listed) != listed;
+}
+
 // Quantizes the radiance value so it can be blended atomically (:300-306). WGSL's round, like
 // the HLSL round DXC compiles (Round_ne), rounds halfway cases to even.
 fn HashGridCache_QuantizeRadiance(radiance: vec3f) -> vec4u {
@@ -490,9 +505,52 @@ fn HashGridCache_RecoverRadiance(quantized_radiance: vec4u) -> vec4f {
                  f32(quantized_radiance.w));
 }
 
-// Packs the radiance for storing inside the hash grid (:355-359): rgb and a sample count as halves.
+// The largest finite half.
+const HASHGRIDCACHE_LARGEST_HALF: f32 = 65504.0;
+
+// Two floats as halves, as HLSL's f32tof16 makes them (register D31): rounded to the nearest
+// half, ties to even (pack2x16float truncates on both our GPUs, NOTES, and UpdateTiles re-packs
+// every value each frame, where truncation would pull a cell's running mean down by up to 16
+// half steps), and clamped to the largest finite half (beyond it pack2x16float is indeterminate
+// in WGSL, where f32tof16 gives infinity).
+fn HashGridCache_PackHalf2(value: vec2f) -> u32 {
+    let clamped = clamp(value, vec2f(-HASHGRIDCACHE_LARGEST_HALF), vec2f(HASHGRIDCACHE_LARGEST_HALF));
+    let packed = pack2x16float(clamped);
+    return HashGridCache_RoundHalfBits(clamped.x, packed & 0xffffu) | (HashGridCache_RoundHalfBits(clamped.y, packed >> 16u) << 16u);
+}
+
+// The half nearest 'value' (within the half range), a tie going to the even one as f32tof16's
+// does, worked out from the half 'bits' pack2x16float gave for it. WGSL lets that be either
+// neighbour, so the pair around 'value' is taken from whichever side 'bits' landed on. Halves
+// are sign and magnitude: one step up in the bits is one step away from zero. The distances
+// are exact in f32 wherever a tie can happen (each is a difference of two floats within a
+// factor of two, or of a float and zero).
+fn HashGridCache_RoundHalfBits(value: f32, bits: u32) -> u32 {
+    let magnitude = abs(value);
+    let packed_magnitude = abs(unpack2x16float(bits).x);
+    if (magnitude == packed_magnitude) {
+        return bits;
+    }
+    var lower = bits;
+    var upper = bits + 1u;
+    if (packed_magnitude > magnitude) {
+        // Rounded away from zero: the pair is the half below and this one.
+        lower = bits - 1u;
+        upper = bits;
+    } else if ((bits & 0x7fffu) >= 0x7bffu) {
+        // The largest finite half, and 'value' was clamped to it: nothing further out to take.
+        return bits;
+    }
+    let below = magnitude - abs(unpack2x16float(lower).x);
+    let above = abs(unpack2x16float(upper).x) - magnitude;
+    let upper_is_even = (upper & 1u) == 0u;
+    return select(lower, upper, above < below || (above == below && upper_is_even));
+}
+
+// Packs the radiance for storing inside the hash grid (:355-359): rgb and a sample count as halves
+// (packHalf4, rounded and clamped as f32tof16 would; HashGridCache_PackHalf2).
 fn HashGridCache_PackRadiance(radiance: vec4f) -> vec2u {
-    return packHalf4(radiance);
+    return vec2u(HashGridCache_PackHalf2(radiance.xy), HashGridCache_PackHalf2(radiance.zw));
 }
 
 // Unpacks the radiance from its packed format inside the hash grid (:361-365).

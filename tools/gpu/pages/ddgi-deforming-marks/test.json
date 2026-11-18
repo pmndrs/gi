@@ -1,0 +1,4 @@
+{
+    "description": "T3.4, deforming movers: two-room with a 1 m deforming sheet; its first pose marks every near probe with r = min(1, moved / spacing) from the pose's region (deformBounds, vertex travel) and nothing beyond the far reach; its second pose marks every probe whose mover mask saw the sheet.",
+    "timeoutMs": 180000
+}

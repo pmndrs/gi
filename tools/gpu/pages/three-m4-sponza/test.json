@@ -1,0 +1,5 @@
+{
+    "description": "M4 T4.3: Sponza with the curtains through the three adapter as the viewer starts it: every mesh (dirt_decal and curtains included) in GI's rays, every texture a store layer; reports the irradiance atlas mean as ddgi-field-unchanged measures it, and the adapter's still-frame CPU time. Needs the Sponza download.",
+    "timeoutMs": 1200000,
+    "manual": true
+}

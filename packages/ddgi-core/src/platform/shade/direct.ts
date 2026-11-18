@@ -489,7 +489,7 @@ export function rayScratchBytes(rays: number, workItems: number, layers = 1): nu
 export function packSunLayer(sunLayer: number | undefined, layers: number): number {
     if (sunLayer === undefined) return NO_SUN_LAYER;
     if (!Number.isInteger(sunLayer) || sunLayer < 0 || sunLayer >= layers) {
-        throw new RangeError(`@pmndrs/ddgi: the sun goes into result layer ${sunLayer}, but the ray scratch has ${layers} layer(s)`);
+        throw new RangeError(`@pmndrs/gi: the sun goes into result layer ${sunLayer}, but the ray scratch has ${layers} layer(s)`);
     }
     return sunLayer;
 }
@@ -500,7 +500,7 @@ export function packGroupLayers(groupLayers: readonly number[] | undefined, laye
     for (let group = 0; group < LIGHT_GROUPS; group++) {
         const layer = groupLayers?.[group] ?? 0;
         if (!Number.isInteger(layer) || layer < 0 || layer >= layers) {
-            throw new RangeError(`@pmndrs/ddgi: light group ${group} goes into result layer ${layer}, but the ray scratch has ${layers} layer(s)`);
+            throw new RangeError(`@pmndrs/gi: light group ${group} goes into result layer ${layer}, but the ray scratch has ${layers} layer(s)`);
         }
         packed |= layer << (8 * group);
     }
@@ -611,19 +611,19 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
 
     traceWgsl(scratchVariable: string, workList: DirectWorkList): string {
         if (workList === 'subgroups' && !this.device.features.has('subgroups')) {
-            throw new Error("@pmndrs/ddgi: the 'subgroups' work list needs a device with the 'subgroups' feature");
+            throw new Error("@pmndrs/gi: the 'subgroups' work list needs a device with the 'subgroups' feature");
         }
         return rayScratchTraceWgsl(scratchVariable, workList);
     }
 
     createScratch(options: { readonly label: string; readonly rays: number; readonly workItems: number; readonly layers?: number }): RayScratch {
         const kernels = this.kernels;
-        if (!kernels) throw new Error('@pmndrs/ddgi: await shade.direct.prepare() before creating a ray scratch');
+        if (!kernels) throw new Error('@pmndrs/gi: await shade.direct.prepare() before creating a ray scratch');
         const rays = Math.max(1, Math.ceil(options.rays));
         const workItems = Math.max(0, Math.ceil(options.workItems));
         const layers = options.layers ?? 1;
         if (!Number.isInteger(layers) || layers < 1 || layers > MAX_RAY_RESULT_LAYERS) {
-            throw new RangeError(`@pmndrs/ddgi: a ray scratch holds 1 to ${MAX_RAY_RESULT_LAYERS} result layers, got ${layers}`);
+            throw new RangeError(`@pmndrs/gi: a ray scratch holds 1 to ${MAX_RAY_RESULT_LAYERS} result layers, got ${layers}`);
         }
         const bytes = rayScratchBytes(rays, workItems, layers);
         const allowed = this.device.limits.maxStorageBufferBindingSize;
@@ -633,8 +633,8 @@ export class PlatformDeferredDirect implements DeferredDirectLight {
 
     encode(encoder: GPUCommandEncoder, scratch: RayScratch, frame: DirectLightFrame): void {
         const kernels = this.kernels;
-        if (!kernels) throw new Error('@pmndrs/ddgi: gi/direct is not prepared');
-        if (!(scratch instanceof PlatformRayScratch)) throw new Error('@pmndrs/ddgi: a ray scratch must come from shade.direct.createScratch');
+        if (!kernels) throw new Error('@pmndrs/gi: gi/direct is not prepared');
+        if (!(scratch instanceof PlatformRayScratch)) throw new Error('@pmndrs/gi: a ray scratch must come from shade.direct.createScratch');
         // The frame and groups for this frame's dispatches. A queue write lands before the
         // host submits this encoder, so the tracing kernel recorded before this call reads the
         // same group mask as gi/direct.

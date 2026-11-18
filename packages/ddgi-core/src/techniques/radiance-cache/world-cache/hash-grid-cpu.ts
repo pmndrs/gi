@@ -36,6 +36,7 @@ THE SOFTWARE.
  */
 
 import type { Vec3 } from '../../../platform/contract/math.ts';
+import { halfBitsToFloat } from '../capsaicin-math.ts';
 import type { HashGridCacheCapacity } from './capacity.ts';
 
 const f32 = Math.fround;
@@ -248,4 +249,73 @@ export function hashGridCacheCellSizeConstant(fovY: number, width: number, heigh
 /** The vertical field of view of a perspective projection (column-major): `projection[5]` is `1 / tan(fovY / 2)`. */
 export function verticalFieldOfView(projection: ArrayLike<number>): number {
     return 2 * Math.atan(1 / projection[5]);
+}
+
+// ---- UpdateTiles and the filtered readback -------------------------------------------------------
+
+/** Four floats: rgb radiance (times the sample count, for a stored cell value) and a sample count. */
+export type CellValue = readonly [number, number, number, number];
+
+/**
+ * `UpdateTiles`' temporal accumulation of one cell (gi1.comp:2162-2177): the
+ * stored value (radiance times its count, and the count) and this frame's
+ * samples (their sum and count), each turned into a mean, blended with weight
+ * 1 / count, the count capped at `maxCount`, and stored times the count. In
+ * f32 steps, as the GPU computes it (before the value is packed as halves).
+ */
+export function updateTilesAccumulate(stored: CellValue, newSamples: CellValue, maxCount: number): [number, number, number, number] {
+    const sampleCount = f32(Math.min(f32(stored[3] + newSamples[3]), f32(maxCount)));
+    const storedScale = f32(Math.max(stored[3], 1));
+    const newScale = f32(Math.max(newSamples[3], 1));
+    const radiance = stored.map((value) => f32(value / storedScale));
+    const newRadiance = newSamples.map((value) => f32(value / newScale));
+    const blended = radiance[3] <= 0 ? newRadiance : radiance.map((value, channel) => f32(value + f32(f32(newRadiance[channel] - value) * f32(1 / sampleCount))));
+    return [f32(blended[0] * sampleCount), f32(blended[1] * sampleCount), f32(blended[2] * sampleCount), f32(blended[3] * sampleCount)];
+}
+
+/**
+ * `HashGridCache_RoundHalfBits` (ours, register D31): the half nearest
+ * `value`, a tie to the even one as `f32tof16` rounds, from the half `bits`
+ * that `pack2x16float` gave for it (either neighbour: WGSL leaves the
+ * rounding open, and our GPUs truncate). `value` is in the half range (the
+ * WGSL clamps it first). Step for step as the WGSL, in f32.
+ */
+export function hashGridCacheRoundHalfBits(value: number, bits: number): number {
+    const magnitude = Math.abs(f32(value));
+    const packedMagnitude = Math.abs(halfBitsToFloat(bits));
+    if (magnitude === packedMagnitude) return bits;
+    let lower = bits;
+    let upper = bits + 1;
+    if (packedMagnitude > magnitude) {
+        lower = bits - 1;
+        upper = bits;
+    } else if ((bits & 0x7fff) >= 0x7bff) {
+        return bits;
+    }
+    const below = f32(magnitude - Math.abs(halfBitsToFloat(lower)));
+    const above = f32(Math.abs(halfBitsToFloat(upper)) - magnitude);
+    const upperIsEven = (upper & 1) === 0;
+    return above < below || (above === below && upperIsEven) ? upper : lower;
+}
+
+/**
+ * Which level `HashGridCache_FilteredRadianceDirect` (and `...Indirect`)
+ * reads (hash_grid_cache.hlsl:434-494): the finest cell's value, replaced by
+ * the next coarser level's while the value in hand has fewer than `maxCount`
+ * samples and that level exists. `levels[0]` is the finest cell's value,
+ * then its three coarser cells' (`null` where a level has no cells). Returns
+ * the level read and its value; the resolve divides rgb by `max(count, 1)`.
+ */
+export function hashGridCacheFilteredRadiance(levels: readonly (CellValue | null)[], maxCount: number): { readonly level: number; readonly value: CellValue } {
+    let level = 0;
+    let value = levels[0];
+    if (!value) throw new RangeError("@pmndrs/ddgi: the finest level's value is needed");
+    for (let next = 1; next < levels.length; next++) {
+        const coarser = levels[next];
+        if (value[3] < maxCount && coarser) {
+            level = next;
+            value = coarser;
+        }
+    }
+    return { level, value };
 }

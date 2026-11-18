@@ -1,5 +1,5 @@
 /**
- * The smallest plain-WebGPU use of @pmndrs/ddgi: no engine, one scene, DDGI.
+ * The smallest plain-WebGPU use of @pmndrs/gi: no engine, one scene, DDGI.
  *
  *   pnpm --filter @pmndrs/ddgi-example-hello dev
  *
@@ -15,7 +15,8 @@
  * and then the renderer's own passes into one encoder.
  */
 
-import { createGI, DDGI_DEBUG_VIEW, DDGITechnique, optionalFeatures, requiredLimits } from '@pmndrs/ddgi/core';
+import { createGI, optionalFeatures, requiredLimits } from '@pmndrs/gi/core';
+import { DDGI_DEBUG_VIEW, DDGITechnique } from '@pmndrs/gi/ddgi';
 import { ForwardRenderer, type RenderView } from './renderer.ts';
 import { describeScene, loadManifest } from './scene.ts';
 

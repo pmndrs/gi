@@ -20,6 +20,18 @@ describe('native motion files (T2.7)', () => {
         expect(lines.slice(1)).toEqual(motion.keyframes.map((key) => `key ${key.t} ${key.position!.join(' ')}`));
     });
 
+    it("reads manifests with the viewer's object and camera motions, and refuses to write those motions by name", () => {
+        // T3.8's targets: the harness reads these manifests for their lights, and says plainly why it can't play the rest.
+        for (const [sceneId, motionId, kind] of [
+            ['closed-door', 'door-swing', 'an object'],
+            ['bistro-exterior', 'fly-through', 'a camera'],
+        ] as const) {
+            const manifest = readManifest(sceneId);
+            const motion = manifest.motions!.find((candidate) => candidate.id === motionId)!;
+            expect(() => manifestMotionFile(manifest, motion)).toThrow(`is ${kind} motion, which only the viewer plays`);
+        }
+    });
+
     it('finds no distance between a log that follows motionState and the motion', () => {
         const manifest = readManifest('two-room');
         const motion = manifest.motions!.find((candidate) => candidate.id === 'light-sweep')!;

@@ -10,8 +10,8 @@ export class GINotReadyError extends Error {
     constructor(readonly reason: 'preparing' | 'device-lost') {
         super(
             reason === 'device-lost'
-                ? '@pmndrs/ddgi: the GPU device was lost. Create a new platform on the new device.'
-                : '@pmndrs/ddgi: await prepare() before encode().',
+                ? '@pmndrs/gi: the GPU device was lost. Create a new platform on the new device.'
+                : '@pmndrs/gi: await prepare() before encode().',
         );
         this.name = 'GINotReadyError';
     }
@@ -30,7 +30,7 @@ export class GILimitError extends Error {
         readonly available: number,
     ) {
         super(
-            `@pmndrs/ddgi: needs ${limit} = ${needed}, but the device allows ${available}. ` +
+            `@pmndrs/gi: needs ${limit} = ${needed}, but the device allows ${available}. ` +
                 'Request it when creating the device; requiredLimits(adapter) lists what to ask for.',
         );
         this.name = 'GILimitError';

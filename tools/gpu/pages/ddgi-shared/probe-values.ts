@@ -50,10 +50,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let index = i32(query.w);
     let counts = volume.counts;
     let probe = vec3i(index % counts.x, index / (counts.x * counts.z), (index / counts.x) % counts.z);
-    let scale = ddgiAtlasScale(volume.irradianceTexels, counts);
+    let scale = ddgiAtlasScale(volume, volume.irradianceTexels);
     let uv = ddgiTileUv(ddgiTileTexel(normalize(query.xyz), volume.irradianceTexels), probe, scale);
-    let irradiance = textureSampleLevel(probeIrradiance, probeSampler, uv, probe.y, 0.0).rgb;
-    let data = ddgiReadProbeData(probeDataAtlas, probe);
+    let irradiance = textureSampleLevel(probeIrradiance, probeSampler, uv, ddgiAtlasLayer(volume, probe), 0.0).rgb;
+    let data = ddgiReadProbeData(probeDataAtlas, volume, probe);
     // w: the probe's state, for checking the selection.
     probeResults[id.x] = vec4f(irradiance, f32(data.state));
 }

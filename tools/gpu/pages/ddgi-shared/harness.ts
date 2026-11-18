@@ -15,6 +15,7 @@
 
 import type { FrameBudget, FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
+import type { GIPlatformOptions } from '../../../../packages/ddgi-core/src/platform/contract/platform.ts';
 import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique, type DDGIField, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -22,6 +23,7 @@ import type { DDGISettingsInput } from '../../../../packages/ddgi-core/src/techn
 import { DDGI_SAMPLE_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/sample.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import type { CameraBookmark, ManifestLight, SceneManifest } from '../../../../scenes/src/manifest.ts';
+import { describeProceduralScene } from '../../../../scenes/src/platform-scene.ts';
 import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 
@@ -75,7 +77,8 @@ function toPlatformEnvironment(manifest: SceneManifest): EnvironmentDescriptor {
 }
 
 /**
- * Describes a procedural manifest scene through the scene API. Lights come
+ * Describes a procedural manifest scene through the scene API, with its
+ * textures, groups and slot materials (scenes/src/platform-scene.ts). Lights come
  * from the manifest, as every renderer takes them; their handles are pushed
  * to `lightHandles` (in manifest order) when given, for pages that change them.
  */
@@ -89,14 +92,11 @@ export function describeScene(
 ): ProceduralScene {
     const data = mergeScenes(buildProceduralParts(manifest));
     const scene = platform.scene;
-    const meshes = data.meshes.map((mesh) => scene.createMesh({ positions: mesh.positions, indices: mesh.indices, normals: mesh.normals, uvs: mesh.uvs, label: mesh.name }));
-    const materials = data.materials.map((material) =>
-        scene.createMaterial({ albedo: material.albedo, emissive: material.emissive, doubleSided: material.doubleSided, label: material.name }),
-    );
-    materialHandles.push(...materials);
-    for (const instance of data.instances) {
-        instanceHandles.set(instance.name, scene.createInstance({ mesh: meshes[instance.mesh], materials: [materials[instance.material]], transform: instance.transform, label: instance.name }));
-    }
+    // Everything the scene data says (textures, uv sets, groups, slot materials, alpha,
+    // metalness, glass); a field the conversion can't pass throws, naming it.
+    const handles = describeProceduralScene(scene, data);
+    materialHandles.push(...handles.materials);
+    for (const [name, instance] of handles.instances) instanceHandles.set(name, instance);
     for (const light of manifest.lights) lightHandles.push(scene.createLight(toPlatformLight(light, options)));
     scene.setEnvironment(toPlatformEnvironment(manifest));
     return data;
@@ -124,10 +124,10 @@ export async function createDdgiScene(
     device: GPUDevice,
     manifestId: string,
     settings: Partial<DDGISettingsInput> = {},
-    options: SceneOptions & { readonly gpuTiming?: boolean; readonly technique?: DDGITechniqueOptions } = {},
+    options: SceneOptions & { readonly gpuTiming?: boolean; readonly technique?: DDGITechniqueOptions; readonly textureLayerSize?: GIPlatformOptions['textureLayerSize'] } = {},
 ): Promise<DdgiScene> {
     const manifest = loadManifest(manifestId);
-    const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming });
+    const platform = new GIPlatformImpl(device, { label: `ddgi ${manifestId}`, gpuTiming: options.gpuTiming, textureLayerSize: options.textureLayerSize });
     const lights: LightHandle[] = [];
     const materials: MaterialHandle[] = [];
     const instances = new Map<string, InstanceHandle>();
@@ -180,10 +180,17 @@ export const FIELD_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
         { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'float', viewDimension: '2d-array' } },
         { binding: 4, visibility: GPUShaderStage.COMPUTE, sampler: { type: 'filtering' } },
+        // The volume table (rgba32float, read with textureLoad).
+        { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
     ],
 };
 
-/** Declarations matching FIELD_GROUP, and a call of the one sampling function with them. */
+/**
+ * Declarations matching FIELD_GROUP, and a call of the sampling function
+ * renderers use (`ddgiSampleVolumes`: every volume, blended by priority; one
+ * volume's answer is exactly `ddgiSampleIrradiance`'s). `testField` holds the
+ * first volume's four parameters, for the diagnostics that read one volume.
+ */
 const FIELD_WGSL = /* wgsl */ `
 ${DDGI_SAMPLE_WGSL}
 
@@ -198,13 +205,17 @@ struct TestFieldParameters {
 @group(1) @binding(2) var testDistance: texture_2d_array<f32>;
 @group(1) @binding(3) var testProbeData: texture_2d_array<f32>;
 @group(1) @binding(4) var testSampler: sampler;
+@group(1) @binding(5) var testVolumeTable: texture_2d<f32>;
+
+fn testFieldSample(position: vec3f, normal: vec3f, viewDirection: vec3f) -> DdgiVolumesSample {
+    return ddgiSampleVolumes(
+        position, normal, viewDirection,
+        testIrradiance, testSampler, testDistance, testSampler, testProbeData, testVolumeTable,
+    );
+}
 
 fn testFieldIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -> vec3f {
-    return ddgiSampleIrradiance(
-        position, normal, viewDirection,
-        testIrradiance, testSampler, testDistance, testSampler, testProbeData,
-        testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels,
-    );
+    return testFieldSample(position, normal, viewDirection).irradiance;
 }
 `;
 
@@ -219,6 +230,7 @@ export function fieldBindGroup(device: GPUDevice, layout: GPUBindGroupLayout, fi
             { binding: 2, resource: view(field.distance) },
             { binding: 3, resource: view(field.probeData) },
             { binding: 4, resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) },
+            { binding: 5, resource: field.volumeTable.createView() },
         ],
     });
 }
@@ -345,14 +357,14 @@ fn testFieldIrradianceTracedVisibility(position: vec3f, normal: vec3f, viewDirec
     let volume = ddgiVolume(testField.volumeOrigin, testField.volumeSpacing, testField.volumeCounts, testField.volumeTexels);
     let samplePoint = ddgiBiasedPoint(volume, position, normal, viewDirection);
     let cage = ddgiCage(volume, samplePoint);
-    let irradianceScale = ddgiAtlasScale(volume.irradianceTexels, volume.counts);
+    let irradianceScale = ddgiAtlasScale(volume, volume.irradianceTexels);
     let normalInTile = ddgiTileTexel(normal, volume.irradianceTexels);
     var irradianceSum = vec3f(0.0);
     var weightSum = 0.0;
     for (var corner = 0u; corner < 8u; corner++) {
         let step = ddgiCageStep(corner);
         let probe = min(cage.baseProbe + step, volume.counts - 1);
-        let data = ddgiReadProbeData(testProbeData, probe);
+        let data = ddgiReadProbeData(testProbeData, volume, probe);
         if (data.state != DDGI_STATE_ACTIVE) {
             continue;
         }
@@ -364,7 +376,7 @@ fn testFieldIrradianceTracedVisibility(position: vec3f, normal: vec3f, viewDirec
         }
         let facing = (dot(normalize(probePosition - position), normal) + 1.0) * 0.5;
         let weight = (facing * facing + DDGI_DIRECTION_WEIGHT_FLOOR) * ddgiTrilinearWeight(cage, step);
-        irradianceSum += weight * textureSampleLevel(testIrradiance, testSampler, ddgiTileUv(normalInTile, probe, irradianceScale), probe.y, 0.0).rgb;
+        irradianceSum += weight * textureSampleLevel(testIrradiance, testSampler, ddgiTileUv(normalInTile, probe, irradianceScale), ddgiAtlasLayer(volume, probe), 0.0).rgb;
         weightSum += weight;
     }
     return irradianceSum / max(weightSum, DDGI_MIN_WEIGHT_SUM);

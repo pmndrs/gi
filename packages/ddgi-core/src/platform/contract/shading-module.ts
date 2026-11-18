@@ -106,7 +106,9 @@ export interface ShadingModule {
      * Self-contained: it starts with {@link code}, so a host includes this
      * string alone. Bindings: every `texture` and `sampler` parameter in
      * parameter order from 0, then the uniform buffer (the `vec4f`
-     * parameters in order) at the next binding.
+     * parameters in order) at the next binding, when there are any `vec4f`
+     * parameters (WGSL has no empty structs; DDGI's module has none since
+     * its version 2, which moved the volume into a table texture).
      */
     globalsCode(group: number): string;
     /** Writes all `vec4f` parameters, in order, into `target` for the globals path. */

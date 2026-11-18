@@ -13,6 +13,8 @@ import type {
     SceneLightData,
     SceneMaterialData,
     SceneMeshData,
+    SceneMeshGroup,
+    SceneTextureData,
     Vector3Tuple,
 } from '../scene-data';
 
@@ -78,6 +80,58 @@ export function createUnitQuad(name = 'unit-quad'): SceneMeshData {
     };
 }
 
+/** An axis-aligned box given by its minimum and maximum corners. */
+export interface BoxExtent {
+    readonly min: Vector3Tuple;
+    readonly max: Vector3Tuple;
+}
+
+/** One material slot's boxes in a {@link createGroupedBoxMesh}. */
+export interface BoxRun {
+    readonly materialSlot: number;
+    readonly boxes: readonly BoxExtent[];
+}
+
+/**
+ * One mesh made of several boxes, with one group (material run) per entry of
+ * `runs`, in mesh space. Used where a single object needs two materials, like
+ * a wall with a glass pane in it: in three it is one `Mesh` with a material
+ * array, in glTF one mesh with a primitive per run. Each box is the unit box
+ * scaled and moved, so its faces keep their own 0..1 uvs.
+ */
+export function createGroupedBoxMesh(name: string, runs: readonly BoxRun[]): SceneMeshData {
+    const unit = createUnitBox();
+    const verticesPerBox = unit.positions.length / 3;
+    const boxCount = runs.reduce((total, run) => total + run.boxes.length, 0);
+    const positions = new Float32Array(boxCount * unit.positions.length);
+    const normals = new Float32Array(boxCount * unit.normals.length);
+    const uvs = new Float32Array(boxCount * unit.uvs.length);
+    const indices = new Uint32Array(boxCount * unit.indices.length);
+    const groups: SceneMeshGroup[] = [];
+
+    let box = 0;
+    for (const run of runs) {
+        const start = box * unit.indices.length;
+        for (const { min, max } of run.boxes) {
+            for (let vertex = 0; vertex < verticesPerBox; vertex++) {
+                for (let axis = 0; axis < 3; axis++) {
+                    // Unit box corners are at -0.5 and +0.5; map them onto min and max.
+                    const unitCoordinate = unit.positions[vertex * 3 + axis];
+                    positions[(box * verticesPerBox + vertex) * 3 + axis] = min[axis] + (unitCoordinate + 0.5) * (max[axis] - min[axis]);
+                }
+            }
+            normals.set(unit.normals, box * unit.normals.length);
+            uvs.set(unit.uvs, box * unit.uvs.length);
+            for (let index = 0; index < unit.indices.length; index++) {
+                indices[box * unit.indices.length + index] = unit.indices[index] + box * verticesPerBox;
+            }
+            box++;
+        }
+        groups.push({ start, count: box * unit.indices.length - start, materialSlot: run.materialSlot });
+    }
+    return { name, positions, normals, uvs, indices, groups };
+}
+
 // ---------------------------------------------------------------------------
 // Transforms (column-major 4x4, same layout as three.js Matrix4.elements)
 // ---------------------------------------------------------------------------
@@ -116,8 +170,38 @@ export class SceneBuilder {
     private readonly instances: SceneInstanceData[] = [];
     private readonly lights: SceneLightData[] = [];
     private readonly meshes: SceneMeshData[] = [createUnitBox(), createUnitQuad()];
+    private readonly textures: SceneTextureData[] = [];
     private static readonly boxMesh = 0;
     private static readonly quadMesh = 1;
+
+    /** Adds a texture and returns its index, for a material's `albedoMap`. */
+    addTexture(texture: SceneTextureData): number {
+        this.textures.push(texture);
+        return this.textures.length - 1;
+    }
+
+    /** Adds a mesh of its own (beside the shared unit box and quad) and returns its index. */
+    addMesh(mesh: SceneMeshData): number {
+        this.meshes.push(mesh);
+        return this.meshes.length - 1;
+    }
+
+    /** Places any mesh. `materials` has one entry per material slot of the mesh's groups. */
+    addInstance(name: string, mesh: number, materials: readonly number[], transform: Matrix4Elements): void {
+        if (materials.length === 0) throw new Error(`instance ${name} needs at least one material`);
+        this.instances.push({
+            name,
+            mesh,
+            material: materials[0],
+            ...(materials.length > 1 ? { materials: [...materials] } : {}),
+            transform,
+        });
+    }
+
+    /** The unit quad (1 m square facing +Z, uv 0..1 over it) under any transform. */
+    addQuad(name: string, material: number, transform: Matrix4Elements): void {
+        this.addInstance(name, SceneBuilder.quadMesh, [material], transform);
+    }
 
     /** Adds a material and returns its index. */
     addMaterial(material: Pick<SceneMaterialData, 'name' | 'albedo'> & Partial<SceneMaterialData>): number {
@@ -187,6 +271,7 @@ export class SceneBuilder {
             materials: this.materials,
             instances: this.instances,
             lights: this.lights,
+            ...(this.textures.length > 0 ? { textures: this.textures } : {}),
         };
     }
 }

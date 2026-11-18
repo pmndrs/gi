@@ -37,14 +37,14 @@ import {
     giAlbedo,
     GI_ALBEDO_OUTPUT,
     GI_NORMAL_OUTPUT,
-    RADIANCE_CACHE_DEBUG_VIEW,
-    RadianceCacheTechnique,
     screenInputs,
     ThreeGI,
     type EnvironmentDescriptor,
     type GIPlatform,
     type ScreenInputsNode,
 } from '../ddgi/library';
+// Not in the published package (internal until validated, docs/design/radiance-cache.md): by path.
+import { RADIANCE_CACHE_DEBUG_VIEW, RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/index.ts';
 import { applyViewLayers, LAYER_RADIANCE_CACHE, type GiMode } from '../scene/layers';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';
 import { copyViewerCamera, createViewCamera } from './view-camera';
