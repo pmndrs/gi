@@ -103,7 +103,7 @@ describe('the projection and its units (ProjectScreenProbes, InterpolateScreenPr
         [0.36, -0.48, 0.8],
     ];
 
-    it('reads a constant sky of radiance L as E = pi L along the normal; Capsaicin projection reads 1.30 pi L (register D25)', () => {
+    it('reads a constant sky of radiance L as E = pi L along the normal; Capsaicin projection reads 1.30 pi L with no history (register D25, D34)', () => {
         expect(WGSL_SH_CELL_SOLID_ANGLE).toBeCloseTo(SH_CELL_SOLID_ANGLE, 12);
         expect(WGSL_SH_CELL_SUBSAMPLES).toBe(SH_CELL_SUBSAMPLES);
         const radiance = 0.7;

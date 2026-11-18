@@ -46,7 +46,8 @@
  * kernel's output directly (the design doc's phase 2 notes).
  *
  * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
- * the projection weight is a cell's solid angle (D25), the SH live in a
+ * the projection weight is a cell's solid angle (D25) and the basis the
+ * cell's mean (D34), the SH live in a
  * texture (D26), the interpolation's jitter is white noise (D27), SH
  * coefficients are clamped to the half range (D28). Without SSGI (phase 4)
  * the interpolation runs Capsaicin's `#ifndef HAS_OCCLUSION` branch, below.
@@ -202,7 +203,7 @@ export const PROJECT_GROUP: GPUBindGroupLayoutDescriptor = {
 
 /** The solid angle of one probe cell: the hemisphere's 2 pi over 64 equal-area cells (register D25). */
 export const SH_CELL_SOLID_ANGLE = (2 * Math.PI) / 64;
-/** Points across a cell, each way, that the projection averages the SH basis over (register D25). */
+/** Points across a cell, each way, that the projection averages the SH basis over (register D34). */
 export const SH_CELL_SUBSAMPLES = 4;
 
 export const PROJECT_WGSL = /* wgsl */ `
@@ -218,13 +219,14 @@ ${WORKGROUP_INDEX_WGSL}
 // g_ScreenProbes_ProbeSHBuffer, as a texture (register D26): nine packHalf4 coefficients per probe tile.
 @group(1) @binding(4) var rcProbeSHBuffer: texture_storage_2d<rg32uint, write>;
 
-// How a cell counts in the projection (register D25). The coefficients are meant to be the SH of
+// How a cell counts in the projection (register D25 for the weight, D34 for the basis). The coefficients are meant to be the SH of
 // the radiance, c_i = the integral of L Y_i over the hemisphere, here a sum over 64 equal-area
 // cells of the cell's radiance times the integral of Y_i over the cell: its solid angle times
 // the basis averaged over the cell, from RC_SH_CELL_SUBSAMPLES^2 points spread evenly over it.
 // Capsaicin takes 1 / probe_size and the basis at the cell centre (gi1.comp:1466-1474): 4 / pi
 // times the solid angle, and a centre point that leans towards the normal, so a constant sky
-// of radiance L reads about 4.08 L where irradiance is pi L (1.30 x). The cell-mean basis reads
+// of radiance L reads about 4.08 L where irradiance is pi L (1.30 x) for one frame's probes with
+// no history; Capsaicin's steady state with history is not measured yet. The cell-mean basis reads
 // within 0.2% of pi L (screen-irradiance.test.ts).
 const RC_SH_CELL_SOLID_ANGLE: f32 = ${SH_CELL_SOLID_ANGLE};
 const RC_SH_CELL_SUBSAMPLES: u32 = ${SH_CELL_SUBSAMPLES}u;
@@ -275,7 +277,7 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.project}(
     let probePos = probe * RC_PROBE_SIZE + cell;
 
     // Compute our SH probe (gi1.comp:1462-1481): the cell's radiance times the cell's SH basis,
-    // in world space through the probe's frame (the cell's mean basis, register D25).
+    // in world space through the probe's frame (the cell's mean basis, register D34).
     if (probeIndex < probeCount) {
         let normal = rcLoadNormal(seed);
         let radiance = textureLoad(rcProbeBuffer, probePos, 0).xyz * RC_SH_CELL_SOLID_ANGLE;

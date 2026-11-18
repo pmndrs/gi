@@ -294,7 +294,7 @@ export function probeCellDirection(cell: number, normal: Direction): Direction {
     return [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
 }
 
-/** Points across a cell, each way, that `ProjectScreenProbes` averages the SH basis over (register D25). */
+/** Points across a cell, each way, that `ProjectScreenProbes` averages the SH basis over (register D34). */
 export const SH_CELL_SUBSAMPLES = 4;
 
 /**
