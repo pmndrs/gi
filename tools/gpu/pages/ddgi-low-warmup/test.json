@@ -1,0 +1,5 @@
+{
+    "description": "Windows Intel UHD measurement (not a gate): the technique warm-up on two-room with a refined probe grid under the low preset, per-frame wall time with the GPU waited on each frame. VITE_WARMUP_MAX sets maxProbesPerFrame, VITE_WARMUP_SPACING_DIVISOR the grid refinement.",
+    "manual": true,
+    "timeoutMs": 600000
+}

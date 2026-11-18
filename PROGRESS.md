@@ -21,6 +21,43 @@ Rules:
 
 ---
 
+## 2026-11-19 · Windows Intel UHD: tracer re-check, M3's checks, `low` preset, textured furnace · measurer
+Did: worktree `webgpu-ddgi-win-m34`, branch `m34-win` from e6d0d21, no library changes. Intel UHD (vendor intel, architecture gen-12lp), headless Chrome 157.0.8103.79, each command under `bench-lock run --no-cool-wait`, at most 2 pages a command, `trace-materials` and `ddgi-leak`'s re-run alone. Correctness gates only; no timings judged. Rows in `bench/results/checks.csv`. New page `tools/gpu/pages/ddgi-low-warmup` (manual, a measurement, not a gate).
+
+| check | result |
+|---|---|
+| `trace-oracle` (after the shared-edge fix) | PASS 84-89 s: 0 slipped rays in all 8 variants, 2M shared-edge rays each |
+| `trace-materials` (alone) | PASS 19 s: 0 mismatches in all 12 cases (agreement 1; checker cutout 0.99962 of all rays, stochastic quad 0.626 all ambiguous, as on the RTX) |
+| `trace-bench-quick` | PASS 8.6 s: all 4 pairs agree on 133,120 closest rays (0 mismatches); ours-tinybvh closest 17.9 ms median (information only) |
+| `ddgi-furnace` | PASS: E/pi 0.4986, mean error 0.28% (worst 3.8%) |
+| `ddgi-leak` | PASS alone (222 s): two-room 0.83%, thin-wall 0.60%, closed-door 0.06% |
+| `ddgi-change-still`, `ddgi-flicker`, `ddgi-warmup` | PASS (warm-up 16 frames, host = viewer value for value) |
+| `three-neutrality` | PASS (mean difference 5e-9 on Cornell) |
+| `platform-recompiles`, `ddgi-session-recompiles` | PASS, recompiles 0 |
+| `trace-runtime-trees`, `scene-deformed-positions`, `three-wind-tree-gi` | PASS (484 s, 125 s, 54 s) |
+| `three-change-tracking`, `three-deforming-gi` | PASS (76 s, 59 s) |
+| `ddgi-volumes`, `ddgi-camera-volume` | PASS (78 s, 202 s) |
+| `ddgi-wake-air-probes`, `ddgi-deforming-marks` | PASS (35 s, 11 s) |
+| `ddgi-door-swing` | PASS (270 s): open leak 7.5% falling to 0.19% after the swing |
+| `ddgi-textured-furnace` | PASS: flat 0.4986, textured +0.121%, textures-off -0.373% against the 0.5% limit (the limit was raised from 0.1%; the number is the same -0.37% M4 saw) |
+| `low`: `ddgi-furnace`, `platform-recompiles`, `ddgi-leak` (`VITE_DDGI_PRESET=low`) | PASS: furnace 0.4985 (0.30% low, 128 rays), recompiles 0, leak two-room 0.87% |
+| `ddgi-presets` | PASS 115 s (low / medium / high update 13.9 / 19.9 / 27.8 ms on Cornell, 12.9 / 18.3 / 26.1 on two-room; Intel is slower than the RTX, information only) |
+
+**Hang:** one. `ddgi-leak` as the second page of a batch with `ddgi-change-still` (which passed first) hit `DXGI_ERROR_DEVICE_HUNG` (0x887A0006) at 15 s and reported "the GPU device was lost", with a "GPU mesh tree build failed: mapAsync" warning after it. The same page run alone passed. This is the T3.19 batch-hang pattern again, on the 2nd page this time, not the 3rd. No other hang or device loss in about 30 page runs. Pairs after it were fine.
+
+**`low` warm-up (T5.1 leftover).** The harness builds procedural scenes only (sponza and Bistro come out empty there: atlas 0, 5-7 ms frames, so my first runs on them are not valid and are left out), so `ddgi-low-warmup` refines two-room's grid: 25,194 probes, `low` rays and tiles, the technique's own warm-up (16 passes), every frame waited on. 3 runs at the default 4,096 probes a frame: 98 warm-up frames, 3.5-3.7 s, first frame 221-224 ms (pipeline build), then 70 ms for 4 frames, about 47-50 ms after, median 25-26 ms, p90 54-55 ms. No hang, no device loss. Other sizes, one run each:
+| maxProbesPerFrame | warm-up frames | total | frame median / p90 / max |
+|---|---|---|---|
+| 8192 | 49 | 3.8 s | 52 / 113 / 407 ms |
+| 4096 (3 runs) | 98 | 3.5-3.7 s | 25-26 / 54-55 / 221-224 ms |
+| 2048 | 196 | 5.6 s | 28 / 32 / 158 ms |
+| 1024 | 393 | 4.6 s | 9 / 17 / 142 ms |
+| 512 | 787 | 7.9 s | 10 / 12 / 144 ms |
+Frame cost is not linear in probes (probes in empty air are cheap), so per-frame times are rough. The cost of the first frame is the shader build, whatever the batch.
+**Proposed batch for `low`: `maxProbesPerFrame` 1,024** (warm-up frames about 20 ms, so a page keeps turning, in about 4-5 s here; 4,096 gives 50-70 ms hitches for 3.6 s and 8,192 over 100 ms). The Intel did not hang at 4,096 on this scene, so it is a smoothness proposal, not a hang fix; the iPad is slower than this Intel and wants the same or lower. Not changed in code.
+
+Flagged: the `ddgi-leak` hang above. Nothing black, NaN, or on the wrong adapter. Not done: nothing from the list.
+
 ## 2026-11-19 · Windows RTX: tracer re-check and M4's remaining accuracy runs · measurer
 Did: worktree `webgpu-ddgi-win-m34`, branch `m34-win` at e6d0d21 (no code changes). RTX 3060 Laptop (nvidia, ampere), headless Chrome 157.0.8103.79, each command under `bench-lock run --no-cool-wait`. Correctness only; timings not judged.
 **Tracer after the Metal shared-edge fix:** `trace-oracle` PASS (75.8 s; 0 mismatches, 0 slipped rays in all 8 variants, 2M shared-edge rays each), `trace-materials` PASS (14.3 s), `trace-bench-quick` PASS (4.6 s; all four tracers agree). No pre-fix RTX numbers in PROGRESS beyond the standing "0 slipped", which still holds.
