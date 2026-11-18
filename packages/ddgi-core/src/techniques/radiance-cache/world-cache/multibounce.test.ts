@@ -1,0 +1,241 @@
+import { describe, expect, it } from 'vitest';
+import type { Vec3 } from '../../../platform/contract/math.ts';
+import { DEFAULT_HASH_GRID_CACHE_OPTIONS } from './capacity.ts';
+import { HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
+import { hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
+import {
+    makeRandom,
+    mapToCosineHemisphere,
+    multibounceDraw,
+    multibounceSample,
+    multibounceSettledIndirect,
+    quaternionInverse,
+    quaternionRotationZ,
+    quaternionTransform,
+    rand,
+    randInt,
+    sampleBRDFAndEvaluateDiffuse,
+} from './multibounce-cpu.ts';
+import {
+    generateMultibounceReservoirsWgsl,
+    hashGridCacheRayListLayout,
+    MULTIBOUNCE_INFO_WORDS,
+    MULTIBOUNCE_RAY_WORDS,
+    POPULATION_ENTRY_POINT,
+    populateMultibounceCellsWgsl,
+    RESERVOIR_WORDS,
+    updateMultibounceCellsWgsl,
+} from './hash-grid-population-wgsl.ts';
+
+// ---- Independent reference: Capsaicin's PCG in BigInt, mod 2^32 at every step ----
+
+const MASK = 0xffffffffn;
+
+function pcgOutput(state: bigint): number {
+    const word = (((state >> ((state >> 28n) + 4n)) ^ state) * 277803737n) & MASK;
+    return Number((word >> 22n) ^ word);
+}
+
+function pcgHashBigInt(value: number): bigint {
+    return BigInt(pcgOutput((BigInt(value) * 747796405n + 2891336453n) & MASK));
+}
+
+/** MakeRandom(seed, index) then `count` randInt calls (random_number_generator.hlsl:38-46, 108-116). */
+function randIntsBigInt(seed: number, index: number, count: number): number[] {
+    const increment = ((BigInt(index) << 1n) | 1n) & MASK;
+    let state = ((pcgHashBigInt(seed) + increment) * 747796405n + increment) & MASK;
+    const out: number[] = [];
+    for (let i = 0; i < count; i++) {
+        out.push(pcgOutput(state));
+        state = (state * 747796405n + 2891336453n) & MASK;
+    }
+    return out;
+}
+
+function length(v: readonly number[]): number {
+    return Math.hypot(...v);
+}
+
+function dot(a: readonly number[], b: readonly number[]): number {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+describe("Capsaicin's random numbers (CPU twin of rcMakeRandom)", () => {
+    it('gives the BigInt reference bits for MakeRandom(seed, index) and randInt', () => {
+        for (const [seed, index] of [
+            [0, 0],
+            [1, 0],
+            [12345, 77],
+            [0xffffffff, 0xfffffffe],
+            [230399, 4294967295],
+        ]) {
+            const random = makeRandom(seed, index);
+            expect([randInt(random), randInt(random), randInt(random)]).toEqual(randIntsBigInt(seed, index, 3));
+        }
+    });
+
+    it('rand is in [0, 1) and its draws are uniform: about 70% at or below 0.7', () => {
+        let below = 0;
+        let outside = 0;
+        const draws = 50_000;
+        for (let did = 0; did < draws; did++) {
+            const value = rand(makeRandom(did, 1234));
+            if (!(value >= 0 && value < 1)) outside++;
+            if (value <= Math.fround(0.7)) below++;
+        }
+        expect(outside).toBe(0);
+        // Binomial standard deviation sqrt(0.21 / 50k) = 0.002: five of them.
+        expect(Math.abs(below / draws - 0.7)).toBeLessThan(0.01);
+    });
+});
+
+describe('the second-bounce direction (sampleBRDFAndEvaluateDiffuse, Lambert)', () => {
+    const normals: Vec3[] = [
+        [0, 1, 0],
+        [0, -1, 0],
+        [0, 0, 1],
+        [0, 0, -1], // QuaternionRotationZ's special case
+        [1, 0, 0],
+        [0.48, -0.6, 0.64],
+    ];
+
+    it('QuaternionRotationZ takes the normal to +z, and its inverse takes +z back', () => {
+        for (const normal of normals) {
+            const rotation = quaternionRotationZ(normal);
+            const toZ = quaternionTransform(rotation, normal);
+            const back = quaternionTransform(quaternionInverse(rotation), [0, 0, 1]);
+            // The special case is a half turn about x: it takes -z to +z exactly.
+            expect(toZ[2]).toBeCloseTo(1, 5);
+            back.forEach((value, axis) => expect(value).toBeCloseTo(normal[axis], 5));
+        }
+    });
+
+    it('mapToCosineHemisphere gives unit directions with z = sqrt(1 - u)', () => {
+        for (const samples of [
+            [0, 0],
+            [0.25, 0.5],
+            [0.999, 0.1],
+            [1 - 2 ** -24, 0.75],
+        ] as [number, number][]) {
+            const direction = mapToCosineHemisphere(samples);
+            expect(length(direction)).toBeCloseTo(1, 6);
+            expect(direction[2]).toBeCloseTo(Math.sqrt(1 - samples[0]), 6);
+        }
+    });
+
+    it('samples the hemisphere about the normal, cosine-weighted, with BRDF / pdf equal to the albedo', () => {
+        const albedo: Vec3 = [0.5, 0.25, 0.8];
+        for (const normal of normals) {
+            let cosineSum = 0;
+            let worst = 0;
+            let belowSurface = 0;
+            const count = 5_000;
+            for (let did = 0; did < count; did++) {
+                const random = makeRandom(did, 7);
+                const sample = sampleBRDFAndEvaluateDiffuse(albedo, [rand(random), rand(random)], normal);
+                const cosine = dot(sample.direction, normal);
+                if (!(cosine > 0)) belowSurface++;
+                worst = Math.max(
+                    worst,
+                    Math.abs(length(sample.direction) - 1),
+                    Math.abs(sample.pdf - cosine / Math.PI) / (cosine / Math.PI),
+                    ...sample.brdf.map((value, channel) => Math.abs(value / sample.pdf - albedo[channel]) / albedo[channel]),
+                );
+                cosineSum += cosine;
+            }
+            expect(belowSurface).toBe(0);
+            // f32 steps: well within 1e-4 (relative) except where the cosine is tiny.
+            expect(worst).toBeLessThan(1e-3);
+            // A cosine-weighted hemisphere has a mean cosine of 2/3 (standard deviation of the mean about 0.0033 here).
+            expect(Math.abs(cosineSum / count - 2 / 3)).toBeLessThan(0.015);
+        }
+    });
+});
+
+describe('the multibounce sample and its settled value', () => {
+    it('discards with probability 0.7 and draws the direction from the next two numbers', () => {
+        let kept = 0;
+        let mismatches = 0;
+        const draws = 50_000;
+        for (let did = 0; did < draws; did++) {
+            const draw = multibounceDraw(did, 99, 0.7);
+            const random = makeRandom(did, 99);
+            const first = rand(random);
+            if (draw.discarded !== first <= Math.fround(0.7)) mismatches++;
+            if (draw.discarded) continue;
+            kept++;
+            const samples = [rand(random), rand(random)];
+            if (draw.samples[0] !== samples[0] || draw.samples[1] !== samples[1]) mismatches++;
+        }
+        expect(mismatches).toBe(0);
+        expect(Math.abs(kept / draws - 0.3)).toBeLessThan(0.01);
+    });
+
+    it("weighs the second cell's direct radiance by BRDF / pdf / (1 - p)", () => {
+        const sample = sampleBRDFAndEvaluateDiffuse([0.5, 0.5, 0.5], [0.3, 0.6], [0, -1, 0]);
+        const value = multibounceSample([2, 1, 0.5], sample.brdf, sample.pdf, 0.7);
+        [2, 1, 0.5].forEach((direct, channel) => expect(value[channel]).toBeCloseTo((0.5 * direct) / 0.3, 4));
+    });
+
+    it('settles at 1 / (1 - p) times the expected second bounce, since only kept rays count (Capsaicin, kept)', () => {
+        // Simulate one first-bounce cell over many hits: the discarded ones add nothing, not even a count.
+        const albedo = 0.5;
+        const secondDirect = 0.6366;
+        let sum = 0;
+        let count = 0;
+        const hits = 30_000;
+        for (let did = 0; did < hits; did++) {
+            const draw = multibounceDraw(did, 5, 0.7);
+            if (draw.discarded) continue;
+            const sample = sampleBRDFAndEvaluateDiffuse([albedo, albedo, albedo], draw.samples, [0, -1, 0]);
+            sum += multibounceSample([secondDirect, secondDirect, secondDirect], sample.brdf, sample.pdf, 0.7)[0];
+            count++;
+        }
+        // Every kept sample is the same here (BRDF / pdf is the albedo), so the mean is exact to f32.
+        expect(sum / count).toBeCloseTo(multibounceSettledIndirect(albedo, secondDirect, 0.7), 4);
+        // The unbiased second bounce would be the sum over every hit, kept or not (the kept share is binomial).
+        expect(Math.abs(sum / hits / (albedo * secondDirect) - 1)).toBeLessThan(0.05);
+        expect(multibounceSettledIndirect(albedo, secondDirect, 0.7) / (albedo * secondDirect)).toBeCloseTo(1 / 0.3, 10);
+    });
+});
+
+describe('the multibounce kernels and lists', () => {
+    const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+
+    it("keep room for a second-bounce entry's BRDF, pdf and ray per probe ray", () => {
+        const maxRayCount = 230_400;
+        const lists = hashGridCacheRayListLayout(maxRayCount, 22282240);
+        expect(lists.multibounceInfoBuffer).toBe(lists.reservoirBuffer + RESERVOIR_WORDS * 2 * maxRayCount);
+        expect(lists.multibounceRayBuffer).toBe(lists.multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount);
+        expect(lists.bytes).toBe((lists.multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount) * 4);
+        // 29 words a probe ray: 26,726,400 bytes at 1280 x 720.
+        expect(lists.bytes).toBe(29 * maxRayCount * 4);
+    });
+
+    it('declare their entry points, read the multibounce constants and the counters Capsaicin dispatches on', () => {
+        const populate = populateMultibounceCellsWgsl(layout);
+        expect(populate).toContain(`fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(`);
+        expect(populate).toContain('discard_multibounce_ray_probability');
+        expect(populate).toContain('HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1');
+        expect(populate).toContain('giTraceClosest');
+        const reservoirs = generateMultibounceReservoirsWgsl(layout);
+        expect(reservoirs).toContain(`fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(`);
+        expect(reservoirs).toContain('giDirectChooseLight');
+        const update = updateMultibounceCellsWgsl(layout);
+        expect(update).toContain(`fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(`);
+        expect(update).toContain('HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER');
+        expect(update).toContain('1.0 - g_HashGridCacheConstants.discard_multibounce_ray_probability');
+    });
+
+    it('put use_multibounce in the constant block at the word the TypeScript writes', () => {
+        const code = hashGridCacheWgsl(1, layout);
+        const body = /struct HashGridCacheConstants \{([^}]*)\}/.exec(code)?.[1] ?? '';
+        const fields = body
+            .split('\n')
+            .map((line) => line.replace(/\/\/.*$/, '').trim())
+            .filter((line) => line.length > 0)
+            .map((line) => line.split(':')[0]);
+        // eye_position is a vec3f (three words); every other field one word.
+        expect(fields.indexOf('use_multibounce') + 2).toBe(HASH_GRID_CONSTANTS_WORD.useMultibounce);
+    });
+});

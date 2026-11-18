@@ -44,20 +44,41 @@ THE SOFTWARE.
  * 5. `ResolveCells` (gi1.comp:2351-2385): each resolved ray that doesn't
  *    bypass the cache adds its cell's filtered radiance.
  *
- * Capsaicin compiles GI-1.2's multibounce in by default (`USE_MULTI_BOUNCE`,
- * gi1_use_multibounce true, gi1.h:55), so this is that path: the resolve list
- * holds every non-emissive hit, `UpdateTiles` and `ResolveCells` carry the
- * indirect values, and the visibility lists have room for the second-bounce
- * hits RC3.3 adds. Until RC3.3 nothing writes the indirect scratch, so the
- * indirect values stay 0.
+ * GI-1.2's multibounce (RC3.3; `USE_MULTI_BOUNCE`, on by default, gi1.h:55)
+ * adds three passes in the slots Capsaicin runs them (gi1.cpp:2363-2390,
+ * 2427-2436, 2506-2516):
+ *
+ * - `PopulateMultibounceCells` (gi1.comp:1761-1946), after the probe rays'
+ *   insert: 70% of the first-bounce hits stop there (the discard,
+ *   `discard_multibounce_ray_probability`); the rest trace one ray in a
+ *   cosine-weighted direction from the hit, and that ray's hit inserts its
+ *   cell, joins the visibility lists after the first-bounce entries, and
+ *   keeps the BRDF and pdf of its direction (`MultibounceInfoBuffer`).
+ * - `GenerateMultibounceReservoirs` (gi1.comp:2603-2700), after
+ *   `GenerateReservoirs`: one light per second-bounce hit, its shadow ray
+ *   appended to the same list, so `PopulateCells` lights the second-bounce
+ *   cells with the first-bounce ones.
+ * - `UpdateMultibounceCells` (gi1.comp:1948-1989), after `UpdateTiles`: each
+ *   second-bounce hit reads its cell's filtered direct radiance, weighs it by
+ *   BRDF / pdf / (1 - discard) and adds it into the first-bounce cell's
+ *   indirect scratch. `UpdateTiles` blends that scratch next frame (the
+ *   one-frame lag), and `ResolveCells` reads the indirect values with the
+ *   direct ones.
+ *
+ * Off (`useMultibounce` false) is GI-1.0's single bounce: those passes don't
+ * run, the indirect values are neither updated nor read, and the resolve list
+ * holds only the hits with a light, as Capsaicin's build without
+ * `USE_MULTI_BOUNCE` resolves its shadow-ray list (register D34).
  *
  * How the passes find their data (register D30): Capsaicin copies each hit
  * into its own visibility buffer (`HashGridCache_PackVisibility`) and keeps
  * the reservoir's surface and material in their own lists; here a visibility
  * entry keeps its probe ray's index (`VisibilityQueryBuffer`, which Capsaicin
  * also keeps) and its cell, and each pass reads the hit from the probe ray and
- * rebuilds the surface with the platform's `giSurfaceAt`. The lists live in
- * one packed buffer (register D6) at the word offsets of `HashGridCacheRayLists`.
+ * rebuilds the surface with the platform's `giSurfaceAt`. A second-bounce
+ * entry has no probe ray, so its ray is kept in the lists in the probe rays'
+ * own record (`MultibounceRayBuffer`, register D35). The lists live in one
+ * packed buffer (register D6) at the word offsets of `HashGridCacheRayLists`.
  */
 
 import { GILimitError } from '../../../platform/contract/errors.ts';
@@ -91,11 +112,17 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: RAY_DATA_BINDING.listWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
-/** Bytes of `HashGridCacheRayLists`. */
-export const RAY_LISTS_UNIFORM_BYTES = 32;
+/** Bytes of `HashGridCacheRayLists`: ten words, padded to 16 bytes. */
+export const RAY_LISTS_UNIFORM_BYTES = 48;
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
 export const RESERVOIR_WORDS = 3;
+
+/** Words of a second-bounce entry's `MultibounceInfoBuffer` value: BRDF and pdf as four halves (`HashGridCache_PackBRDF`). */
+export const MULTIBOUNCE_INFO_WORDS = 2;
+
+/** Words of a second-bounce ray kept in the lists: a `WorldCacheProbeRay`, word for word (register D35). */
+export const MULTIBOUNCE_RAY_WORDS = 12;
 
 /** The top bit of a visibility-ray or resolve entry: the ray bypasses the cache (gi1.comp:2566, 2582). */
 export const BYPASS_CACHE_BIT = 0x80000000;
@@ -111,6 +138,12 @@ export const POPULATION_WORKGROUP_SIZE = {
     generateReservoirs: 64,
     /** PopulateCellsMain (gi1.comp:2110): 32. */
     populateCells: 32,
+    /** PopulateMultibounceCellsMain (gi1.comp:1942): 32. */
+    populateMultibounceCells: 32,
+    /** GenerateMultibounceReservoirs (gi1.comp:2603): 64. */
+    generateMultibounceReservoirs: 64,
+    /** UpdateMultibounceCellsMain (gi1.comp:1985): 32. */
+    updateMultibounceCells: 32,
     /** UpdateTiles (gi1.comp:2120-2122, 2142): 8 × 8, one tile of 8 × 8 cells per workgroup at the default ratio. */
     updateTilesSide: 8,
     /** ResolveCells (gi1.comp:2350): 64. */
@@ -124,6 +157,9 @@ export const POPULATION_ENTRY_POINT = {
     populateCells: 'PopulateCells',
     updateTiles: 'UpdateTiles',
     resolveCells: 'ResolveCells',
+    populateMultibounceCells: 'PopulateMultibounceCells',
+    generateMultibounceReservoirs: 'GenerateMultibounceReservoirs',
+    updateMultibounceCells: 'UpdateMultibounceCells',
 } as const;
 
 /** Where each per-ray list starts in the packed list words, for a screen of `maxRayCount` probe rays. */
@@ -139,6 +175,10 @@ export interface HashGridCacheRayListLayout {
     readonly visibilityRayBuffer: number;
     readonly resolveBuffer: number;
     readonly reservoirBuffer: number;
+    /** `g_HashGridCache_MultibounceInfoBuffer`: a second-bounce entry's BRDF and pdf (`max_ray_count` × uint2, gi1.cpp:688). */
+    readonly multibounceInfoBuffer: number;
+    /** Ours (register D35): a second-bounce entry's ray, as a probe-ray record (`max_ray_count` of them). */
+    readonly multibounceRayBuffer: number;
     readonly bytes: number;
 }
 
@@ -146,8 +186,10 @@ export interface HashGridCacheRayListLayout {
  * The lists Capsaicin sizes from the screen (`ensureMemoryIsAllocated`,
  * gi1.cpp:637-695): the update tiles (at most one per cell), the visibility
  * cell, query and ray lists (`max_combined_ray_count` each), the resolve list
- * (`max_ray_count`, first bounce only) and a reservoir per visibility ray
- * (`g_Reservoir_IndirectSampleReservoirBuffer`).
+ * (`max_ray_count`, first bounce only), a reservoir per visibility ray
+ * (`g_Reservoir_IndirectSampleReservoirBuffer`), and for each second-bounce
+ * entry (at most one per first-bounce entry, so `max_ray_count`) its BRDF and
+ * pdf (`MultibounceInfoBuffer`) and its ray (ours, register D35).
  */
 export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number): HashGridCacheRayListLayout {
     // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
@@ -158,7 +200,9 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const visibilityRayBuffer = visibilityQueryBuffer + maxCombinedRayCount;
     const resolveBuffer = visibilityRayBuffer + maxCombinedRayCount;
     const reservoirBuffer = resolveBuffer + maxRayCount;
-    const words = reservoirBuffer + RESERVOIR_WORDS * maxCombinedRayCount;
+    const multibounceInfoBuffer = reservoirBuffer + RESERVOIR_WORDS * maxCombinedRayCount;
+    const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount;
+    const words = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount;
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -168,6 +212,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         visibilityRayBuffer,
         resolveBuffer,
         reservoirBuffer,
+        multibounceInfoBuffer,
+        multibounceRayBuffer,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -175,11 +221,11 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
 /**
  * Throws `GILimitError` naming the limit the per-ray lists pass. They are one
  * buffer bound whole as one storage binding, so it must fit both the binding
- * limit and the buffer limit. It grows with the screen (15 words per probe
- * ray: 14 MB at 1280 × 720, 124 MB at 3840 × 2160, just under WebGPU's
- * default 128 MiB binding), so a larger screen or a device with smaller
- * limits can't bind it where the cache itself fits (register D14's rule:
- * name the limit, no fallback).
+ * limit and the buffer limit. It grows with the screen (29 words per probe
+ * ray: 27 MB at 1280 × 720, 240 MB at 3840 × 2160, past WebGPU's default
+ * 128 MiB binding), so a larger screen or a device with smaller limits can't
+ * bind it where the cache itself fits (register D14's rule: name the limit,
+ * no fallback).
  */
 export function checkHashGridRayListLimits(layout: HashGridCacheRayListLayout, limits: Pick<GPUSupportedLimits, 'maxStorageBufferBindingSize' | 'maxBufferSize'>): void {
     if (layout.bytes > limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', layout.bytes, limits.maxStorageBufferBindingSize);
@@ -200,6 +246,10 @@ struct HashGridCacheRayLists {
     visibility_ray_buffer: u32,     // g_HashGridCache_VisibilityRayBuffer: entries with a shadow ray (top bit: bypass)
     resolve_buffer: u32,            // g_HashGridCache_ResolveBuffer: entries to resolve (top bit: bypass)
     reservoir_buffer: u32,          // g_Reservoir_IndirectSampleReservoirBuffer: 3 words per visibility ray
+    multibounce_info_buffer: u32,   // g_HashGridCache_MultibounceInfoBuffer: BRDF and pdf per second-bounce entry, 2 words
+    multibounce_ray_buffer: u32,    // ours (register D35): each second-bounce entry's ray, a WorldCacheProbeRay in 12 words
+    padding0: u32,
+    padding1: u32,
 }
 
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.rayLists}) var<uniform> g_HashGridCache_RayLists: HashGridCacheRayLists;
@@ -229,6 +279,76 @@ fn HashGridCache_RayListWord(offset: u32, index: u32) -> u32 {
 
 fn HashGridCache_SetRayListWord(offset: u32, index: u32, value: u32) {
     atomicStore(&g_HashGridCache_RayListWords[offset + index], value);
+}
+
+// GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:74-81): maps the colour to [0, 1), clamps it and maps
+// it back, so a NaN becomes 0 and anything past about 1e4 is held there. HLSL's saturate turns a
+// NaN into 0; WGSL's clamp leaves that to the implementation, so the NaN test is on the bits.
+fn GIDenoiser_RemoveNaNs(color_in: vec3f) -> vec3f {
+    var color = color_in / (1.0 + color_in);
+    let is_nan = (bitcast<vec3u>(color) & vec3u(0x7fffffffu)) > vec3u(0x7f800000u);
+    color = select(saturate(color), vec3f(0.0), is_nan);
+    color /= max(1.0 - color, vec3f(1e-4));
+    return color;
+}
+
+// ---- GI-1.2's second-bounce entries (USE_MULTI_BOUNCE) ----
+
+// HashGridCache_PackBRDF / HashGridCache_UnpackBRDF (hash_grid_cache.hlsl:410-419): the BRDF and
+// the pdf of a second-bounce ray's direction as four halves (packHalf4, rounded as f32tof16 would).
+fn HashGridCache_PackBRDF(brdf: vec3f, pdf: f32) -> vec2u {
+    return HashGridCache_PackRadiance(vec4f(brdf, pdf));
+}
+
+fn HashGridCache_UnpackBRDF(packed_data: vec2u) -> vec4f {
+    return unpackHalf4(packed_data);
+}
+
+// A second-bounce entry's ray (register D35): Capsaicin keeps the hit in its visibility buffer
+// (HashGridCache_PackVisibility, gi1.comp:1781-1793); the lists keep the whole ray here, in the
+// probe rays' own record, so the passes rebuild its surface as they rebuild a probe ray's.
+// 'index' counts second-bounce entries (the visibility index less VisibilityCountBuffer0).
+fn HashGridCache_StoreMultibounceRay(index: u32, ray: WorldCacheProbeRay) {
+    let base = g_HashGridCache_RayLists.multibounce_ray_buffer + ${MULTIBOUNCE_RAY_WORDS}u * index;
+    HashGridCache_SetRayListWord(base, 0u, bitcast<u32>(ray.origin.x));
+    HashGridCache_SetRayListWord(base, 1u, bitcast<u32>(ray.origin.y));
+    HashGridCache_SetRayListWord(base, 2u, bitcast<u32>(ray.origin.z));
+    HashGridCache_SetRayListWord(base, 3u, ray.flags);
+    HashGridCache_SetRayListWord(base, 4u, ray.direction.x);
+    HashGridCache_SetRayListWord(base, 5u, ray.direction.y);
+    HashGridCache_SetRayListWord(base, 6u, bitcast<u32>(ray.hitT));
+    HashGridCache_SetRayListWord(base, 7u, ray.hitInstance);
+    HashGridCache_SetRayListWord(base, 8u, ray.hitTriangle);
+    HashGridCache_SetRayListWord(base, 9u, ray.hitFrontFace);
+    HashGridCache_SetRayListWord(base, 10u, bitcast<u32>(ray.hitBarycentrics.x));
+    HashGridCache_SetRayListWord(base, 11u, bitcast<u32>(ray.hitBarycentrics.y));
+}
+
+fn HashGridCache_LoadMultibounceRay(index: u32) -> WorldCacheProbeRay {
+    let base = g_HashGridCache_RayLists.multibounce_ray_buffer + ${MULTIBOUNCE_RAY_WORDS}u * index;
+    var ray: WorldCacheProbeRay;
+    ray.origin = vec3f(bitcast<f32>(HashGridCache_RayListWord(base, 0u)),
+                       bitcast<f32>(HashGridCache_RayListWord(base, 1u)),
+                       bitcast<f32>(HashGridCache_RayListWord(base, 2u)));
+    ray.flags = HashGridCache_RayListWord(base, 3u);
+    ray.direction = vec2u(HashGridCache_RayListWord(base, 4u), HashGridCache_RayListWord(base, 5u));
+    ray.hitT = bitcast<f32>(HashGridCache_RayListWord(base, 6u));
+    ray.hitInstance = HashGridCache_RayListWord(base, 7u);
+    ray.hitTriangle = HashGridCache_RayListWord(base, 8u);
+    ray.hitFrontFace = HashGridCache_RayListWord(base, 9u);
+    ray.hitBarycentrics = vec2f(bitcast<f32>(HashGridCache_RayListWord(base, 10u)), bitcast<f32>(HashGridCache_RayListWord(base, 11u)));
+    return ray;
+}
+
+// The ray whose hit a visibility entry stands for: a first-bounce entry (below
+// VisibilityCountBuffer0) is a probe ray's hit, found through its query index; a second-bounce
+// entry's ray is in the lists (register D35).
+fn HashGridCache_VisibilityRay(visibility_index: u32) -> WorldCacheProbeRay {
+    let first_bounce_count = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0]);
+    if (visibility_index < first_bounce_count) {
+        return g_ProbeRays.rays[HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, visibility_index)];
+    }
+    return HashGridCache_LoadMultibounceRay(visibility_index - first_bounce_count);
 }
 `;
 
@@ -398,6 +518,12 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
     let sample_params = rcRand2(&random);
 
+    // Without USE_MULTI_BOUNCE Capsaicin resolves the shadow-ray list (gi1.comp:2363-2368, 2514-2521),
+    // so a hit with no light isn't resolved; the resolve list then holds the same entries (register D34).
+    if (g_HashGridCacheConstants.use_multibounce == 0u && reservoir.light == GI_DIRECT_NO_LIGHT) {
+        return;
+    }
+
     // Resolve cells (no reservoir only discards nee, not second bounce contrib we need to resolve into screen probes)
     let resolve_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 1u);
 
@@ -458,17 +584,6 @@ ${PROBE_RAY_SURFACE_WGSL}
 // INV_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
 
-// GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:74-81): maps the colour to [0, 1), clamps it and maps
-// it back, so a NaN becomes 0 and anything past about 1e4 is held there. HLSL's saturate turns a
-// NaN into 0; WGSL's clamp leaves that to the implementation, so the NaN test is on the bits.
-fn GIDenoiser_RemoveNaNs(color_in: vec3f) -> vec3f {
-    var color = color_in / (1.0 + color_in);
-    let is_nan = (bitcast<vec3u>(color) & vec3u(0x7fffffffu)) > vec3u(0x7f800000u);
-    color = select(saturate(color), vec3f(0.0), is_nan);
-    color /= max(1.0 - color, vec3f(1e-4));
-    return color;
-}
-
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.populateCells}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -483,10 +598,9 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     let visibility_ray   = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_ray_buffer, did);
     let visibility_index = visibility_ray & ~HASHGRIDCACHE_BYPASS_BIT;
 
-    // Reconstruct world-space position and normal
-    let query_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, visibility_index);
-    let probe_ray = g_ProbeRays.rays[query_index];
-    let surface = HashGridCache_ProbeSurface(probe_ray);
+    // Reconstruct world-space position and normal: a first-bounce entry's probe ray, or a
+    // second-bounce entry's own ray (GenerateMultibounceReservoirs appends those to this list).
+    let surface = HashGridCache_ProbeSurface(HashGridCache_VisibilityRay(visibility_index));
 
     // Retrieve the light sample that we should use for our shadow ray
     let reservoir_word = g_HashGridCache_RayLists.reservoir_buffer + ${RESERVOIR_WORDS}u * did;
@@ -523,6 +637,10 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     let bypass_cache = (visibility_ray >> 31u) != 0u;
 
     if (bypass_cache) {
+        // BE CAREFUL: for a second-bounce entry the query is the first-bounce entry's visibility
+        // index, not a probe ray's, and Capsaicin adds to that probe ray all the same
+        // (gi1.comp:2102-2105 with gi1.comp:1793): kept as Capsaicin has it (NOTES, RC3.3).
+        let query_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, visibility_index);
         ScreenProbes_AccumulateRadiance(query_index, GIDenoiser_RemoveNaNs(lighting));
     }
 }
@@ -550,7 +668,8 @@ export function updateTilesPerWorkgroup(tileCellRatio: number): number {
  * `UpdateTiles` (gi1.comp:2142-2348). One difference in form: Capsaicin's
  * threads past the update list return before the group's barriers; WGSL
  * needs every thread at a barrier, so they skip the work instead (the same
- * result).
+ * result). The indirect values (`USE_MULTI_BOUNCE`) are updated only with
+ * multibounce on (register D34).
  */
 export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     const side = POPULATION_WORKGROUP_SIZE.updateTilesSide;
@@ -629,9 +748,11 @@ fn UpdateTiles_FilterLevel(group_thread_id: vec2u, tile_cell_offset: vec2u, tile
     g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_radiance;
 
     // USE_MULTI_BOUNCE
-    let packed_radiance_indirect = HashGridCache_PackRadiance(UpdateTiles_SumIndirect(group_thread_id, step));
-    lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance_indirect;
-    g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_radiance_indirect;
+    if (g_HashGridCacheConstants.use_multibounce != 0u) {
+        let packed_radiance_indirect = HashGridCache_PackRadiance(UpdateTiles_SumIndirect(group_thread_id, step));
+        lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance_indirect;
+        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_radiance_indirect;
+    }
 }
 
 @compute @workgroup_size(${side}, ${side})
@@ -666,20 +787,22 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
             HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]),
             UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index),
             g_HashGridCacheConstants.max_sample_count);
-        // USE_MULTI_BOUNCE
-        let indirect_radiance = UpdateTiles_Accumulate(
-            HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]),
-            UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index),
-            g_HashGridCacheConstants.max_multibounce_sample_count);
 
         // Pack
         let packed_direct_radiance = HashGridCache_PackRadiance(direct_radiance);
         lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_direct_radiance;
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_direct_radiance;
 
-        let packed_indirect_radiance = HashGridCache_PackRadiance(indirect_radiance);
-        lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_indirect_radiance;
-        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_indirect_radiance;
+        // USE_MULTI_BOUNCE: the scratch UpdateMultibounceCells filled last frame (its one-frame lag).
+        if (g_HashGridCacheConstants.use_multibounce != 0u) {
+            let indirect_radiance = UpdateTiles_Accumulate(
+                HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]),
+                UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index),
+                g_HashGridCacheConstants.max_multibounce_sample_count);
+            let packed_indirect_radiance = HashGridCache_PackRadiance(indirect_radiance);
+            lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_indirect_radiance;
+            g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_indirect_radiance;
+        }
     }
 
     // MIP 1
@@ -706,11 +829,13 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
 // ---- ResolveCells ------------------------------------------------------------------------------------
 
 /**
- * `ResolveCells` (gi1.comp:2350-2385), the `USE_MULTI_BOUNCE` path: each
- * entry of the resolve list without the bypass bit adds its cell's filtered
- * direct radiance (a coarser level while the cell has fewer than
- * `max_sample_count` samples, `HashGridCache_FilteredRadianceDirect`) and its
- * filtered indirect radiance to its probe ray.
+ * `ResolveCells` (gi1.comp:2350-2385): each entry of the resolve list without
+ * the bypass bit adds its cell's filtered direct radiance (a coarser level
+ * while the cell has fewer than `max_sample_count` samples,
+ * `HashGridCache_FilteredRadianceDirect`) and, with multibounce
+ * (`USE_MULTI_BOUNCE`), its filtered indirect radiance to its probe ray.
+ * Without multibounce the list holds the hits with a light only, Capsaicin's
+ * shadow-ray list (register D34).
  */
 export function resolveCellsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.resolveCells;
@@ -739,10 +864,348 @@ fn ${POPULATION_ENTRY_POINT.resolveCells}(
 
     let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
     var radiance = (direct_radiance.rgb / max(direct_radiance.w, 1.0));
-    // USE_MULTI_BOUNCE
-    let indirect_radiance = HashGridCache_FilteredRadianceIndirect(cell_index);
-    radiance += (indirect_radiance.rgb / max(indirect_radiance.w, 1.0));
+    if (g_HashGridCacheConstants.use_multibounce != 0u) {  // USE_MULTI_BOUNCE
+        let indirect_radiance = HashGridCache_FilteredRadianceIndirect(cell_index);
+        radiance += (indirect_radiance.rgb / max(indirect_radiance.w, 1.0));
+    }
     ScreenProbes_AccumulateRadiance(query_index, radiance);
+}
+`;
+}
+
+// ---- GI-1.2's multibounce: PopulateMultibounceCells, GenerateMultibounceReservoirs, UpdateMultibounceCells ----
+
+/**
+ * Sampling a second-bounce direction (`sampleBRDFAndEvaluateDiffuse`,
+ * material_sampling.hlsl:741-773) with Capsaicin's quaternion frame
+ * (`QuaternionRotationZ` and `Quaternion`, quaternion.hlsl) and
+ * `mapToCosineHemisphere` (sampling.hlsl:161-169), so the same two random
+ * numbers give the same direction. The reflectance is Lambert's, albedo / π ×
+ * cos (register D8): Capsaicin forces the second vertex diffuse (metallicity
+ * 0, roughness 1, gi1.comp:1904-1908) but its default build still evaluates
+ * GGX at roughness 1 with the diffuse compensation there. The CPU twin is
+ * `multibounce-cpu.ts`.
+ */
+const MULTIBOUNCE_SAMPLING_WGSL = /* wgsl */ `
+// INV_PI and TWO_PI (math/math_constants.hlsl).
+const HASHGRIDCACHE_MULTIBOUNCE_INV_PI: f32 = 0.318309886183791;
+const HASHGRIDCACHE_MULTIBOUNCE_TWO_PI: f32 = 6.28318530717959;
+
+// QuaternionRotationZ (quaternion.hlsl:58-64): the rotation taking 'direction' to +z, with the
+// special case of a direction at or near -z.
+fn HashGridCache_QuaternionRotationZ(direction: vec3f) -> vec4f {
+    if (direction.z >= -0.99999) {
+        return normalize(vec4f(direction.y, -direction.x, 0.0, 1.0 + direction.z));
+    }
+    return vec4f(1.0, 0.0, 0.0, 0.0);
+}
+
+// Quaternion::inverse (quaternion.hlsl:37-42).
+fn HashGridCache_QuaternionInverse(quaternion: vec4f) -> vec4f {
+    return vec4f(-quaternion.xyz, quaternion.w);
+}
+
+// Quaternion::transform (quaternion.hlsl:49-55).
+fn HashGridCache_QuaternionTransform(quaternion: vec4f, direction: vec3f) -> vec3f {
+    let q_axis = quaternion.xyz;
+    return 2.0 * dot(q_axis, direction) * q_axis + (quaternion.w * quaternion.w - dot(q_axis, q_axis)) * direction + 2.0 * quaternion.w * cross(q_axis, direction);
+}
+
+// mapToCosineHemisphere (sampling.hlsl:161-169): Ray Tracing Gems, "Sampling Transformations Zoo".
+fn HashGridCache_MapToCosineHemisphere(samples: vec2f) -> vec3f {
+    let sin_theta = sqrt(samples.x);
+    let phi = HASHGRIDCACHE_MULTIBOUNCE_TWO_PI * samples.y;
+    return vec3f(sin_theta * cos(phi), sin_theta * sin(phi), sqrt(1.0 - samples.x));
+}
+
+struct HashGridCache_BRDFSample {
+    direction: vec3f,
+    brdf: vec3f,    // reflectance toward the sampled direction, the cosine included
+    pdf: f32,
+}
+
+// sampleBRDFAndEvaluateDiffuse (material_sampling.hlsl:741-773) for a Lambert surface: the view
+// direction it also takes only matters to the GGX term, which the platform's materials don't have.
+fn HashGridCache_SampleBRDFAndEvaluateDiffuse(albedo: vec3f, samples: vec2f, normal: vec3f) -> HashGridCache_BRDFSample {
+    // Transform into the surface's tangent space (oriented so that z axis is aligned to normal)
+    let local_rotation = HashGridCache_QuaternionRotationZ(normal);
+
+    // Sample diffuse BRDF component (sampleLambert, material_sampling.hlsl:295-299)
+    let new_light = HashGridCache_MapToCosineHemisphere(samples);
+
+    // Evaluate BRDF for new light direction: evaluateLambert x saturate(dotNL) (material_evaluation.hlsl:157-160)
+    let dot_nl = clamp(new_light.z, -1.0, 1.0);
+    let reflectance = albedo * HASHGRIDCACHE_MULTIBOUNCE_INV_PI * saturate(dot_nl);
+
+    // sampleLambertPDF (material_sampling.hlsl:306-309)
+    let pdf = saturate(dot_nl) * HASHGRIDCACHE_MULTIBOUNCE_INV_PI;
+
+    // Transform the new direction back into world space
+    let light_direction = normalize(HashGridCache_QuaternionTransform(HashGridCache_QuaternionInverse(local_rotation), new_light));
+    return HashGridCache_BRDFSample(light_direction, reflectance, pdf);
+}
+`;
+
+/**
+ * `PopulateMultibounceCells` (gi1.comp:1869-1946) with its hit handler
+ * (`PopulateMultibounceCellsHandleHit`, gi1.comp:1761-1852): over the
+ * first-bounce visibility entries (dispatched on `VisibilityCountBuffer0`,
+ * gi1.cpp:2386-2390), each draws whether to stop (the discard, probability
+ * `discard_multibounce_ray_probability`, 0.7), and otherwise traces one
+ * closest-hit ray from its hit in a cosine-weighted direction. That ray's hit
+ * is inserted as `PopulateScreenProbesHandleHit` inserts a probe ray's: its
+ * cell, its tile's decay stamp, the packed and update lists; and it becomes a
+ * second-bounce visibility entry, after the first-bounce ones, whose query is
+ * the first-bounce entry and whose `MultibounceInfoBuffer` value is the
+ * direction's BRDF and pdf.
+ *
+ * Built with the platform's hit-shading module (group 0), which brings the
+ * tracer's `giTraceClosest`.
+ */
+export function populateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout): string {
+    const size = POPULATION_WORKGROUP_SIZE.populateMultibounceCells;
+    return /* wgsl */ `
+${CAPSAICIN_WGSL}
+${populationHeadWgsl(layout)}
+${PROBE_RAY_SURFACE_WGSL}
+${MULTIBOUNCE_SAMPLING_WGSL}
+
+fn PopulateMultibounceCellsHandleHit(did: u32, brdf: vec3f, pdf: f32, ray: GiRay, hit: GiHit) {
+    var data: HashGridCache_Data;
+    data.eye_position = g_HashGridCacheConstants.eye_position;
+    data.hit_position = ray.origin + (hit.t * ray.direction);
+    data.direction    = ray.direction;
+    data.hit_distance = hit.t;
+
+    let inserted = HashGridCache_InsertCell(data);
+    let tile_index = inserted.tile_index;
+    let is_new_tile = inserted.is_new_tile;
+    let cell_index = inserted.cell_index;
+
+    if (cell_index != kGI1_InvalidId) {
+        // Bump the cell's decay to the max. now that it's been 'touched'
+        let previous_tile_decay = HashGridCache_TouchTile(tile_index);
+
+        // We update the cell index for later passes
+        var visibility_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1], 1u);
+        let packed_brdf = HashGridCache_PackBRDF(brdf, pdf);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_info_buffer, ${MULTIBOUNCE_INFO_WORDS}u * visibility_index + 0u, packed_brdf.x);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_info_buffer, ${MULTIBOUNCE_INFO_WORDS}u * visibility_index + 1u, packed_brdf.y);
+
+        // The hit (Capsaicin's HashGridCache_PackVisibility): the whole ray, in a probe ray's record (register D35).
+        var multibounce_ray: WorldCacheProbeRay;
+        multibounce_ray.origin = ray.origin;
+        multibounce_ray.flags = 0u;
+        multibounce_ray.direction = vec2u(pack2x16float(ray.direction.xy), pack2x16float(vec2f(ray.direction.z, 0.0)));
+        multibounce_ray.hitT = hit.t;
+        multibounce_ray.hitInstance = hit.instance;
+        multibounce_ray.hitTriangle = hit.triangle;
+        multibounce_ray.hitFrontFace = select(0u, 1u, hit.frontFace);
+        multibounce_ray.hitBarycentrics = hit.barycentrics;
+        HashGridCache_StoreMultibounceRay(visibility_index, multibounce_ray);
+
+        visibility_index += atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0]);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, visibility_index, cell_index);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.visibility_query_buffer, visibility_index, did);
+
+        // requestLightSampleLocation(data.hit_position): the platform's light grid covers the
+        // scene's bounds instead (register D4).
+
+        // If this cell is inside a new tile, we need to add the tile to the packed storage and clear its cells.
+        if (is_new_tile) {
+            HashGridCache_AddNewTile(tile_index);
+        }
+
+        // If we're the 1st invocation touching this cell (this frame), we want to clear the
+        // scratch storage that'll be used for atomically updating the radiance.
+        // The accumulation will be resolved in the 'UpdateTiles()' kernel to
+        // avoid integer overflow.
+        // (Capsaicin's condition, with a once-per-frame check so a new tile is listed once: register D32.)
+        if ((is_new_tile || previous_tile_decay != g_HashGridCacheConstants.frame_index) && HashGridCache_ListTileForUpdate(tile_index)) {
+            let update_tile_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATETILECOUNTBUFFER], 1u);
+            HashGridCache_SetRayListWord(g_HashGridCache_RayLists.update_tile_buffer, update_tile_index, tile_index);
+        }
+    }
+}
+
+@compute @workgroup_size(${size})
+fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(
+    @builtin(workgroup_id) workgroup: vec3u,
+    @builtin(num_workgroups) workgroups: vec3u,
+    @builtin(local_invocation_index) local_index: u32,
+) {
+    let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0])) {
+        return; // out of bounds
+    }
+
+    // Random sample
+    var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
+
+    if (rcRand(&random) <= g_HashGridCacheConstants.discard_multibounce_ray_probability) {
+        return;
+    }
+
+    // Load our visibility sample, and reconstruct the world-space position and normal (the
+    // shading normal facing the ray's side, as Capsaicin flips it by the hit's face).
+    let query_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, did);
+    let surface = HashGridCache_ProbeSurface(g_ProbeRays.rays[query_index]);
+
+    // Force diffuse lighting on secondary bounce to reduce noise: the platform's materials are
+    // diffuse already (register D8). Capsaicin recovers the probe's pixel here for the view
+    // direction, which only its GGX term reads.
+
+    // Sample diffuse direction
+    let brdf_sample = HashGridCache_SampleBRDFAndEvaluateDiffuse(surface.albedo, rcRand2(&random), surface.normal);
+
+    // Trace (MakeRayInfoClosest, trace_ray.hlsl:95-118: the origin pushed off the surface, here as
+    // the platform pushes a ray's origin, on the side the probe ray arrived from; register D35)
+    let ray = GiRay(giShadeOffsetRayOrigin(surface.position, giShadeRaySide(surface)), 0.0, brdf_sample.direction, RC_MAX_HIT_DISTANCE);
+    let hit = giTraceClosest(ray);
+
+    // If we hit some geometry, we append a new world-space hash-grid cache query
+    if (hit.t >= 0.0) {
+        PopulateMultibounceCellsHandleHit(did, brdf_sample.brdf, brdf_sample.pdf, ray, hit);
+    }
+}
+`;
+}
+
+/**
+ * `GenerateMultibounceReservoirs` (gi1.comp:2603-2700): over the
+ * second-bounce entries (dispatched on `VisibilityCountBuffer1`,
+ * gi1.cpp:2427-2436), one light each (the platform's light choice, register
+ * D4, as `GenerateReservoirs`), its shadow ray appended to the same list as
+ * the first bounce's, flagged to bypass the cache when the second-bounce ray
+ * is shorter than its cell. Capsaicin checks no emissive surface here: a
+ * second-bounce hit is lit by its light sample only.
+ *
+ * Built with the platform's hit-shading module (group 0).
+ */
+export function generateMultibounceReservoirsWgsl(layout: HashGridCacheBufferLayout): string {
+    const size = POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs;
+    return /* wgsl */ `
+${CAPSAICIN_WGSL}
+${populationHeadWgsl(layout)}
+${PROBE_RAY_SURFACE_WGSL}
+
+const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
+
+@compute @workgroup_size(${size})
+fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
+    @builtin(workgroup_id) workgroup: vec3u,
+    @builtin(num_workgroups) workgroups: vec3u,
+    @builtin(local_invocation_index) local_index: u32,
+) {
+    var did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1])) {
+        return; // out of bounds
+    }
+
+    let first_bounce_count = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0]);
+    did += first_bounce_count;
+
+    // Load our visibility sample (the second-bounce ray, register D35), and reconstruct the
+    // world-space position and normal
+    let ray = HashGridCache_LoadMultibounceRay(did - first_bounce_count);
+    let surface = HashGridCache_ProbeSurface(ray);
+
+    // Recover the ray origin: the first-bounce hit. Capsaicin rebuilds that hit's point from its
+    // visibility entry; the second-bounce ray starts there, pushed off by the platform's offset
+    // (256 rounding steps of its largest coordinate: hundredths of a millimetre near the origin).
+    let origin = ray.origin;
+
+    // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2662-2667);
+    // the platform's materials are diffuse already (register D8). Its light list also holds the
+    // environment map; the platform's doesn't (register D33).
+    var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
+    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
+    let sample_params = rcRand2(&random);
+
+    if (reservoir.light == GI_DIRECT_NO_LIGHT) {
+        return;
+    }
+
+    // Append our resampled shadow ray
+    let ray_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYRAYCOUNTBUFFER], 1u);
+
+    let cell_size  = HashGridCache_GetCellSize(surface.position);
+    let ray_length = distance(origin, surface.position);
+
+    let bypass_cache = ray_length < cell_size;
+    let bypass_bit = select(0u, HASHGRIDCACHE_BYPASS_BIT, bypass_cache);
+    HashGridCache_SetRayListWord(g_HashGridCache_RayLists.visibility_ray_buffer, ray_index, did | bypass_bit);   // compact the surviving shadow rays
+
+    // Write the results out to memory: the reservoir (packReservoir), as GenerateReservoirs does.
+    let reservoir_word = g_HashGridCache_RayLists.reservoir_buffer + ${RESERVOIR_WORDS}u * ray_index;
+    HashGridCache_SetRayListWord(reservoir_word, 0u, reservoir.light);
+    HashGridCache_SetRayListWord(reservoir_word, 1u, bitcast<u32>(reservoir.weight));
+    HashGridCache_SetRayListWord(reservoir_word, 2u, pack2x16unorm(sample_params));
+}
+`;
+}
+
+/**
+ * `UpdateMultibounceCells` (gi1.comp:1948-1983), run after `UpdateTiles`
+ * (gi1.cpp:2506-2516) over the second-bounce entries: the second-bounce
+ * cell's filtered direct radiance (this frame's, `UpdateTiles` just ran),
+ * times BRDF / pdf, divided by 1 - the discard probability, is added,
+ * quantised, into the indirect scratch of the first-bounce cell (the query's
+ * cell). `UpdateTiles` blends that scratch into the indirect values next
+ * frame: the one-frame lag.
+ *
+ * Two of Capsaicin's index uses are kept as they are (NOTES, RC3.3): the
+ * bypass test reads the shadow-ray list at the visibility index, and a
+ * bypassed sample is added to the probe ray numbered as the first-bounce
+ * entry's visibility index.
+ */
+export function updateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout): string {
+    const size = POPULATION_WORKGROUP_SIZE.updateMultibounceCells;
+    return /* wgsl */ `
+${populationHeadWgsl(layout)}
+
+@compute @workgroup_size(${size})
+fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
+    @builtin(workgroup_id) workgroup: vec3u,
+    @builtin(num_workgroups) workgroups: vec3u,
+    @builtin(local_invocation_index) local_index: u32,
+) {
+    let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
+    if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1])) {
+        return; // out of bounds
+    }
+
+    let did2 = did + atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0]);
+    let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did2);
+    let query_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, did2);
+    let cell_index_base = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, query_index);   // BE CAREFUL: also a cell
+    let packed_info = vec2u(HashGridCache_RayListWord(g_HashGridCache_RayLists.multibounce_info_buffer, ${MULTIBOUNCE_INFO_WORDS}u * did + 0u),
+                            HashGridCache_RayListWord(g_HashGridCache_RayLists.multibounce_info_buffer, ${MULTIBOUNCE_INFO_WORDS}u * did + 1u));
+    let query_info = HashGridCache_UnpackBRDF(packed_info);
+    let brdf = query_info.xyz;
+    let pdf = query_info.w;
+    let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
+
+    var radiance = (direct_radiance.rgb / max(direct_radiance.w, 1.0));
+    radiance = (radiance * brdf) / pdf;
+    radiance /= 1.0 - g_HashGridCacheConstants.discard_multibounce_ray_probability;
+    let quantized_radiance = HashGridCache_QuantizeRadiance(radiance);
+    let scratch = HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index_base;
+
+    if (dot(radiance, radiance) > 0.0) {
+        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
+        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
+        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+    }
+    atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+
+    // BE CAREFUL (kept as Capsaicin has it, gi1.comp:1977-1982): the shadow-ray list is read at
+    // the visibility index, and the query is the first-bounce entry's visibility index, which is
+    // added to as a probe ray's.
+    let bypass_cache = (HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_ray_buffer, did2) >> 31u) != 0u;
+    if (bypass_cache) {
+        ScreenProbes_AccumulateRadiance(query_index, GIDenoiser_RemoveNaNs(radiance));
+    }
 }
 `;
 }

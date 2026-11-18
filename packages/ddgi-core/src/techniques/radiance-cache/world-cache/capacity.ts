@@ -52,7 +52,16 @@ export interface HashGridCacheOptions {
     hashGridCacheNumTilesPerBucket: number;
     /** `gi1_hash_grid_cache_max_sample_count` (gi1.h:63, default 16): a cell's temporal sample cap; below it the resolve reads a coarser level. */
     hashGridCacheMaxSampleCount: number;
-    /** `gi1_hash_grid_cache_discard_multibounce_ray_probability` (gi1.h:64, default 0.7). Read by RC3.3. */
+    /**
+     * `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second bounce.
+     * With it, `PopulateMultibounceCells`, `GenerateMultibounceReservoirs` and
+     * `UpdateMultibounceCells` run and the indirect values are read; without
+     * it the cache is GI-1.0's single bounce (register D34). Changing it
+     * empties the cache, as Capsaicin's `needs_hash_grid_clear` does
+     * (gi1.cpp:1740-1745).
+     */
+    useMultibounce: boolean;
+    /** `gi1_hash_grid_cache_discard_multibounce_ray_probability` (gi1.h:64, default 0.7): the share of first-bounce hits that trace no second-bounce ray. */
     hashGridCacheDiscardMultibounceRayProbability: number;
     /** `gi1_hash_grid_cache_max_multibounce_sample_count` (gi1.h:65, default 16): the same cap for the indirect values. */
     hashGridCacheMaxMultibounceSampleCount: number;
@@ -72,6 +81,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheNumBuckets: 14,
     hashGridCacheNumTilesPerBucket: 4,
     hashGridCacheMaxSampleCount: 16,
+    useMultibounce: true,
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     useDirectLighting: true,
