@@ -5,9 +5,10 @@ import type { AddressInfo, Socket } from 'node:net';
 import { appendFile, link, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
+    blenderCandidates,
     checkGlbStructure,
     checkLicenseApprovals,
     checkOutputs,
@@ -18,28 +19,37 @@ import {
     DEFAULT_DOWNLOAD_TIMEOUTS,
     downloadFile,
     downloadsOf,
+    generatedConvert,
     downloadWithCurl,
     endedByGuardKill,
     extractWithCache,
+    extractZip,
     fetchAsset,
     fileFingerprints,
     findBlender,
     findSystemCurl,
     formatBytes,
     formatGlbViewRecord,
+    formatSourcesJson,
     GUARD_KILL_EXIT_CODE,
     isAllowedLicense,
     isSafeRelativePath,
+    macApplicationFolders,
     makeGlbViewRecord,
     metalProblems,
+    outputForPlatform,
     parseArgs,
     parseBlenderVersion,
+    platformKey,
+    platformViewsPath,
     readGlbJson,
     readGlbStructure,
     readGlbViewRecord,
+    recordPlatformEntries,
     runConversionProcess,
     selectAssets,
     sha256OfFile,
+    sortBlenderApps,
     sortBlenderFolders,
     substitutePlaceholders,
     systemCurlPath,
@@ -246,15 +256,26 @@ describe('isSafeRelativePath', () => {
 
 describe('parseArgs', () => {
     it('reads flags', () => {
-        expect(parseArgs([])).toEqual({ only: [], force: false, sourcesPath: null, hash: null, recordGlbViews: [], verifyOnly: false, help: false });
+        expect(parseArgs([])).toEqual({
+            only: [],
+            force: false,
+            sourcesPath: null,
+            hash: null,
+            recordGlbViews: [],
+            recordPlatform: [],
+            verifyOnly: false,
+            help: false,
+        });
         expect(parseArgs(['--verify-only']).verifyOnly).toBe(true);
         expect(parseArgs(['--record-glb-views', 'a,b']).recordGlbViews).toEqual(['a', 'b']);
+        expect(parseArgs(['--record-platform', 'a,b', '--record-platform', 'c']).recordPlatform).toEqual(['a', 'b', 'c']);
         expect(parseArgs(['--only', 'a', '--only', 'b,c', '--force', '--sources', 'x.json'])).toEqual({
             only: ['a', 'b', 'c'],
             force: true,
             sourcesPath: 'x.json',
             hash: null,
             recordGlbViews: [],
+            recordPlatform: [],
             verifyOnly: false,
             help: false,
         });
@@ -545,6 +566,83 @@ describe('picking a Blender by version', () => {
                 readVersion,
             }).catch((error: Error) => error.message);
             expect(message).toContain('No Blender was found at all');
+        });
+    });
+
+    describe('on macOS, with fake app bundles', () => {
+        let directory: string;
+        let systemApps: string;
+        let userApps: string;
+        const versions = new Map<string, string | null>();
+        const readVersion = async (path: string) => versions.get(path) ?? null;
+        const executableOf = (folder: string, app: string) => join(folder, app, 'Contents', 'MacOS', 'Blender');
+
+        beforeAll(async () => {
+            directory = await mkdtemp(join(tmpdir(), 'ddgi-blender-mac-'));
+            systemApps = join(directory, 'Applications');
+            userApps = join(directory, 'home', 'Applications');
+            // As on Dennis's Mac: the installed 5.1.1 as Blender.app, a renamed 4.5.0 beside it, and an older one in ~/Applications.
+            for (const [folder, app] of [
+                [systemApps, 'Blender.app'],
+                [systemApps, 'Blender-4.4.0.app'],
+                [userApps, 'Blender-4.5.0.app'],
+                [userApps, 'Blender 5.0.app'],
+            ] as const) {
+                await mkdir(join(folder, app, 'Contents', 'MacOS'), { recursive: true });
+                await writeFile(executableOf(folder, app), '');
+            }
+            // Not Blender, and a Blender bundle with no executable in it: neither is a candidate.
+            await mkdir(join(systemApps, 'Safari.app', 'Contents', 'MacOS'), { recursive: true });
+            await writeFile(join(systemApps, 'Safari.app', 'Contents', 'MacOS', 'Blender'), '');
+            await mkdir(join(systemApps, 'Blender-9.9.9.app'), { recursive: true });
+            versions.set(executableOf(systemApps, 'Blender.app'), '5.1.1');
+            versions.set(executableOf(systemApps, 'Blender-4.4.0.app'), '4.4.0');
+            versions.set(executableOf(userApps, 'Blender-4.5.0.app'), '4.5.0');
+            versions.set(executableOf(userApps, 'Blender 5.0.app'), '5.0.0');
+        });
+        afterAll(() => rm(directory, { recursive: true, force: true }));
+
+        it('searches /Applications and ~/Applications', () => {
+            expect(macApplicationFolders({ HOME: '/Users/someone' })).toEqual(['/Applications', join('/Users/someone', 'Applications')]);
+            expect(macApplicationFolders({})).toEqual(['/Applications']);
+        });
+
+        it('takes only Blender*.app bundles, newest version first, with the plain Blender.app last', () => {
+            expect(sortBlenderApps(['Blender.app', 'Safari.app', 'Blender-4.5.0.app', 'Blender-5.1.1.app', 'Blender-4.5.0', 'blender-4.10.0.app'])).toEqual([
+                'Blender-5.1.1.app',
+                'blender-4.10.0.app',
+                'Blender-4.5.0.app',
+                'Blender.app',
+            ]);
+        });
+
+        it('lists every bundle that has an executable, folder by folder, newest first in each', async () => {
+            const candidates = await blenderCandidates({ PATH: '' }, 'darwin', [systemApps, userApps]);
+            expect(candidates).toEqual([
+                executableOf(systemApps, 'Blender-4.4.0.app'),
+                executableOf(systemApps, 'Blender.app'),
+                executableOf(userApps, 'Blender 5.0.app'),
+                executableOf(userApps, 'Blender-4.5.0.app'),
+            ]);
+        });
+
+        it('finds a renamed 4.5.0 in ~/Applications beside a newer Blender.app', async () => {
+            const choice = await findBlender('4.5.0', { env: { PATH: '' }, platform: 'darwin', macFolders: [systemApps, userApps], readVersion });
+            expect(choice).toEqual({ path: executableOf(userApps, 'Blender-4.5.0.app'), version: '4.5.0' });
+        });
+
+        it('still tries the BLENDER variable first, for a Blender anywhere else', async () => {
+            const elsewhere = join(directory, 'tools', 'Blender-4.5.0.app', 'Contents', 'MacOS', 'Blender');
+            await mkdir(dirname(elsewhere), { recursive: true });
+            await writeFile(elsewhere, '');
+            versions.set(elsewhere, '4.5.0');
+            const choice = await findBlender('4.5.0', { env: { BLENDER: elsewhere, PATH: '' }, platform: 'darwin', macFolders: [systemApps, userApps], readVersion });
+            expect(choice.path).toBe(elsewhere);
+        });
+
+        it('lives with a missing ~/Applications', async () => {
+            const candidates = await blenderCandidates({ PATH: '' }, 'darwin', [join(directory, 'no-such-folder'), userApps]);
+            expect(candidates).toEqual([executableOf(userApps, 'Blender 5.0.app'), executableOf(userApps, 'Blender-4.5.0.app')]);
         });
     });
 
@@ -1426,5 +1524,418 @@ describe('outputs that must have no metal (dielectric)', () => {
         expect(validateSources({ assets: [rawAsset({ outputs: [output] })] })).toEqual([]);
         expect(validateSources({ assets: [rawAsset({ outputs: [{ ...output, dielectric: 'yes' }] })] }).join('\n')).toContain('dielectric: must be true or false');
         expect(validateSources({ assets: [rawAsset({ outputs: [{ ...output, path: 'room.gltf' }] })] }).join('\n')).toContain('dielectric: only supported for .glb');
+    });
+});
+
+describe('generated assets (made by one of our scripts, no download)', () => {
+    const generatedEntry = (overrides: Partial<AssetEntry> = {}): AssetEntry => {
+        const { download: _download, ...rest } = asset();
+        return {
+            ...rest,
+            license: 'MIT',
+            sourceUrl: 'tools/assets/convert/x.ts',
+            generated: { script: 'tools/assets/convert/x.ts', seed: 7, args: ['{dir}/x.glb'] },
+            ...overrides,
+        };
+    };
+
+    it('accepts an entry with a generator and a seed in place of a download', () => {
+        expect(validateSources({ assets: [generatedEntry()] })).toEqual([]);
+        expect(downloadsOf(generatedEntry())).toEqual([]);
+    });
+
+    it('turns the seed and arguments into a node conversion', () => {
+        expect(generatedConvert({ script: 'tools/assets/convert/x.ts', seed: 7, args: ['out.glb'] })).toEqual({
+            tool: 'node',
+            script: 'tools/assets/convert/x.ts',
+            args: ['--seed', '7', 'out.glb'],
+        });
+    });
+
+    it('still needs a recorded sha256 and size for the output, so a changed generator shows up', () => {
+        const entry = generatedEntry({ outputs: [{ path: 'x.glb' } as AssetOutput] });
+        const text = validateSources({ assets: [entry] }).join('\n');
+        expect(text).toContain('outputs[0].sha256');
+        expect(text).toContain('outputs[0].bytes');
+    });
+
+    it('rejects a bad script, a missing seed, a download beside the generator, and a license that is not MIT', () => {
+        const bad = (generated: unknown, overrides: Partial<AssetEntry> = {}) =>
+            validateSources({ assets: [generatedEntry({ generated: generated as AssetEntry['generated'], ...overrides })] }).join('\n');
+        expect(bad({ script: '../x.ts', seed: 1, args: [] })).toContain('script must be a repo-relative .ts path');
+        expect(bad({ script: 'x.py', seed: 1, args: [] })).toContain('script must be a repo-relative .ts path');
+        expect(bad({ script: 'x.ts', seed: 1.5, args: [] })).toContain('seed must be a whole number');
+        expect(bad({ script: 'x.ts', seed: 1, args: [] }, { download: asset().download })).toContain('a generated asset has no download');
+        expect(bad({ script: 'x.ts', seed: 1, args: [] }, { license: 'CC0-1.0' })).toContain('license is "MIT"');
+    });
+
+    it('still demands a download from an ordinary asset, and an allow-listed license (MIT alone is not enough)', () => {
+        const { download: _download, ...noDownload } = asset();
+        expect(validateSources({ assets: [noDownload] }).join('\n')).toContain('download: required');
+        expect(validateSources({ assets: [asset({ license: 'MIT' })] }).join('\n')).toContain('allow list');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Per-platform records
+// ---------------------------------------------------------------------------
+
+describe('records for other systems (platforms)', () => {
+    const mac = 'darwin-arm64';
+    const textOutput = (overrides: Partial<AssetOutput> = {}): AssetOutput => ({ path: 'scene.gltf', sha256: sha256('CRLF\r\n'), bytes: 6, ...overrides });
+
+    it('names this system by Node platform and processor', () => {
+        expect(platformKey('darwin', 'arm64')).toBe('darwin-arm64');
+        expect(platformKey('win32', 'x64')).toBe('win32-x64');
+        expect(platformKey()).toBe(`${process.platform}-${process.arch}`);
+    });
+
+    it('uses the platform entry over the base where there is one, and the base everywhere else', () => {
+        const output = textOutput({ platforms: { [mac]: { sha256: sha256('LF\n'), bytes: 3 } } });
+        expect(outputForPlatform(output, mac)).toEqual({ path: 'scene.gltf', sha256: sha256('LF\n'), bytes: 3 });
+        expect(outputForPlatform(output, 'linux-x64')).toEqual(textOutput());
+        expect(outputForPlatform(output, null)).toEqual(textOutput());
+        // Applying it twice changes nothing: the result has no platforms left to apply.
+        expect(outputForPlatform(outputForPlatform(output, mac), 'linux-x64')).toEqual(outputForPlatform(output, mac));
+    });
+
+    it('keeps reproducible, varyingAttributes and dielectric from the base', () => {
+        const output: AssetOutput = {
+            path: 'room.glb',
+            sha256: 'a'.repeat(64),
+            bytes: 100,
+            reproducible: false,
+            jsonSha256: 'b'.repeat(64),
+            binBytes: 60,
+            bufferViewHashes: 'tools/assets/glb-views/room.json',
+            varyingAttributes: ['TANGENT'],
+            dielectric: true,
+            platforms: {
+                [mac]: { sha256: 'c'.repeat(64), bytes: 96, jsonSha256: 'd'.repeat(64), binBytes: 56, bufferViewHashes: 'tools/assets/glb-views/room.darwin-arm64.json' },
+            },
+        };
+        const merged = outputForPlatform(output, mac);
+        expect(merged).toMatchObject({ reproducible: false, varyingAttributes: ['TANGENT'], dielectric: true, bytes: 96, binBytes: 56 });
+        expect(merged.bufferViewHashes).toBe('tools/assets/glb-views/room.darwin-arm64.json');
+    });
+
+    it('puts a platform record file beside the base one', () => {
+        expect(platformViewsPath('tools/assets/glb-views/bistro-exterior.json', mac)).toBe('tools/assets/glb-views/bistro-exterior.darwin-arm64.json');
+    });
+
+    it('sources.json takes platform entries with the base fields, and says what is wrong with a bad one', () => {
+        const valid = (platforms: unknown, base: Record<string, unknown> = { ...textOutput() }) =>
+            validateSources({ assets: [rawAsset({ outputs: [{ ...base, platforms }] })] }).join('\n');
+        expect(valid({ [mac]: { sha256: 'c'.repeat(64), bytes: 3 } })).toBe('');
+        expect(valid({ [mac]: { sha256: 'c'.repeat(64), bytes: 3 }, 'win32-arm64': { sha256: 'd'.repeat(64), bytes: 4 } })).toBe('');
+
+        expect(valid({})).toContain('platforms: must be an object of platform records');
+        expect(valid('darwin')).toContain('platforms: must be an object of platform records');
+        expect(valid({ macOS: { sha256: 'c'.repeat(64), bytes: 3 } })).toContain('"macOS" is not a platform key');
+        expect(valid({ [mac]: 'yes' })).toContain(`platforms.${mac}: must be an object`);
+        const missing = valid({ [mac]: {} });
+        expect(missing).toContain(`platforms.${mac}.sha256: required`);
+        expect(missing).toContain(`platforms.${mac}.bytes: required`);
+        // A whole-file output has no piece-by-piece fields, and nothing else may be set per platform.
+        expect(valid({ [mac]: { sha256: 'c'.repeat(64), bytes: 3, jsonSha256: 'd'.repeat(64) } })).toContain(`platforms.${mac}.jsonSha256: not a platform field`);
+        expect(valid({ [mac]: { sha256: 'c'.repeat(64), bytes: 3, dielectric: false } })).toContain(`platforms.${mac}.dielectric: not a platform field`);
+    });
+
+    it('a piece-by-piece (.glb) output needs its own JSON hash, BIN length and record file per platform', () => {
+        const glb = {
+            path: 'a.glb',
+            sha256: 'b'.repeat(64),
+            bytes: 40,
+            reproducible: false,
+            jsonSha256: 'c'.repeat(64),
+            binBytes: 16,
+            bufferViewHashes: 'tools/assets/glb-views/a.json',
+            varyingAttributes: ['TANGENT'],
+        };
+        const valid = (entry: unknown) => validateSources({ assets: [rawAsset({ outputs: [{ ...glb, platforms: { [mac]: entry } }] })] }).join('\n');
+        const complete = { sha256: 'd'.repeat(64), bytes: 36, jsonSha256: 'e'.repeat(64), binBytes: 12, bufferViewHashes: 'tools/assets/glb-views/a.darwin-arm64.json' };
+        expect(valid(complete)).toBe('');
+        const bare = valid({ sha256: 'd'.repeat(64), bytes: 36 });
+        expect(bare).toContain(`platforms.${mac}.jsonSha256: required with reproducible false`);
+        expect(bare).toContain(`platforms.${mac}.binBytes: required with reproducible false`);
+        expect(bare).toContain(`platforms.${mac}.bufferViewHashes: required with reproducible false`);
+        expect(valid({ ...complete, bufferViewHashes: glb.bufferViewHashes })).toContain('must be a file of its own, not the base record');
+        expect(valid({ ...complete, bufferViewHashes: '../a.json' })).toContain(`platforms.${mac}.bufferViewHashes`);
+        expect(valid({ ...complete, varyingAttributes: [] })).toContain(`platforms.${mac}.varyingAttributes: not a platform field`);
+    });
+
+    it('checkOutputs checks against the platform entry on that platform, and against the base elsewhere', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-platform-check-'));
+        await writeFile(join(directory, 'scene.gltf'), 'LF\n');
+        const output = textOutput({ platforms: { [mac]: { sha256: sha256('LF\n'), bytes: 3 } } });
+        expect(await checkOutputs(directory, [output], () => undefined, convertWith(), { platform: mac })).toEqual([]);
+        const onWindows = await checkOutputs(directory, [output], () => undefined, convertWith(), { platform: 'win32-x64' });
+        expect(onWindows[0]).toContain('size differs: scene.gltf (expected 6 bytes, got 3)');
+        expect(await checkOutputs(directory, [output], () => undefined, convertWith(), { platform: null })).toHaveLength(1);
+        // A mismatch says which record it was compared with, and how to record one for this system.
+        await writeFile(join(directory, 'scene.gltf'), 'lf\n');
+        const changed = await checkOutputs(directory, [output], () => undefined, convertWith(), { platform: mac });
+        expect(changed[0]).toContain(`(expected ${sha256('LF\n')} (the ${mac} record), got ${sha256('lf\n')})`);
+        expect(changed[0]).toContain('--record-platform');
+        await rm(directory, { recursive: true, force: true });
+    });
+});
+
+describe("recording this system's entries (--record-platform)", () => {
+    const mac = 'darwin-arm64';
+    let downloads: string;
+    let repo: string;
+    let messages: string[] = [];
+    let warnings: string[] = [];
+    const record = (assets: AssetEntry[]) =>
+        recordPlatformEntries(assets, {
+            downloadsDirectory: downloads,
+            repoRoot: repo,
+            platform: mac,
+            log: (message) => messages.push(message),
+            warn: (message) => warnings.push(message),
+        });
+
+    beforeAll(async () => {
+        downloads = await mkdtemp(join(tmpdir(), 'ddgi-record-downloads-'));
+        repo = await mkdtemp(join(tmpdir(), 'ddgi-record-repo-'));
+        await mkdir(join(repo, 'glb-views'));
+    });
+    afterAll(async () => {
+        await rm(downloads, { recursive: true, force: true });
+        await rm(repo, { recursive: true, force: true });
+    });
+
+    /** An asset folder holding `files`, and the entry whose base record says what Windows wrote. */
+    async function assetWith(id: string, files: Record<string, string | Buffer>, outputs: AssetOutput[]): Promise<AssetEntry> {
+        for (const [path, content] of Object.entries(files)) {
+            await mkdir(dirname(join(downloads, id, path)), { recursive: true });
+            await writeFile(join(downloads, id, path), content);
+        }
+        return asset({ id, convert: convertWith(), outputs });
+    }
+
+    async function structureOf(glb: Buffer) {
+        const path = join(repo, 'structure.glb');
+        await writeFile(path, glb);
+        return readGlbStructure(path);
+    }
+
+    it('records only the outputs that fail the base check, and leaves the base untouched', async () => {
+        messages = [];
+        warnings = [];
+        const same = { path: 'textures/a.png', sha256: sha256('same everywhere'), bytes: bytesOf('same everywhere') };
+        const differs = { path: 'scene.gltf', sha256: sha256('{\r\n}\r\n'), bytes: 6 };
+        const entry = await assetWith('two-files', { 'textures/a.png': 'same everywhere', 'scene.gltf': '{\n}\n' }, [{ ...same }, { ...differs }]);
+
+        expect(await record([entry])).toEqual({ recorded: 1, removed: 0, failures: 0 });
+        expect(entry.outputs[0]).toEqual(same);
+        expect(entry.outputs[1]).toEqual({ ...differs, platforms: { [mac]: { sha256: sha256('{\n}\n'), bytes: 4 } } });
+        expect(validateSources({ assets: [entry] })).toEqual([]);
+        expect(await checkOutputs(join(downloads, 'two-files'), entry.outputs, () => undefined, null, { platform: mac })).toEqual([]);
+        expect(await checkOutputs(join(downloads, 'two-files'), entry.outputs, () => undefined, null, { platform: null })).toHaveLength(1);
+        expect(messages.join('\n')).toContain(`two-files: scene.gltf: recorded for ${mac}: 4 bytes (base 6)`);
+        expect(warnings).toEqual([]);
+    });
+
+    it('takes out a stale entry once the file matches the base again', async () => {
+        messages = [];
+        const output = {
+            path: 'x.bin',
+            sha256: sha256('base'),
+            bytes: 4,
+            platforms: { [mac]: { sha256: sha256('old!'), bytes: 4 }, 'linux-x64': { sha256: sha256('linx'), bytes: 4 } },
+        };
+        const entry = await assetWith('stale', { 'x.bin': 'base' }, [output]);
+        expect(await record([entry])).toEqual({ recorded: 0, removed: 1, failures: 0 });
+        expect(entry.outputs[0].platforms).toEqual({ 'linux-x64': { sha256: sha256('linx'), bytes: 4 } });
+        expect(messages.join('\n')).toContain('no longer needed');
+
+        const only = await assetWith('stale-only', { 'x.bin': 'base' }, [{ path: 'x.bin', sha256: sha256('base'), bytes: 4, platforms: { [mac]: { sha256: sha256('old!'), bytes: 4 } } }]);
+        await record([only]);
+        expect('platforms' in only.outputs[0]).toBe(false);
+    });
+
+    it('records a non-reproducible .glb piece by piece, with its own bufferView file, and says what differs from the base', async () => {
+        messages = [];
+        warnings = [];
+        // The base: the scene as Windows wrote it, with its record in glb-views/scene.json.
+        const windows = sceneGlb();
+        const structure = await structureOf(windows);
+        const base: AssetOutput = {
+            path: 'model.glb',
+            sha256: sha256(windows),
+            bytes: windows.length,
+            reproducible: false,
+            jsonSha256: structure.jsonSha256,
+            binBytes: structure.binBytes,
+            bufferViewHashes: 'glb-views/scene.json',
+            varyingAttributes: ['TANGENT'],
+        };
+        await writeFile(join(repo, 'glb-views', 'scene.json'), formatGlbViewRecord(makeGlbViewRecord('scene', base, structure)));
+        const baseRecordText = await readFile(join(repo, 'glb-views', 'scene.json'), 'utf8');
+
+        // This system writes other normals, like the courtyard tree on the Mac.
+        const macFile = sceneGlb({ ...sceneData(), normal: Buffer.from('NORMALS--12?') });
+        const entry = await assetWith('scene', { 'model.glb': macFile }, [{ ...base }]);
+        expect(await record([entry])).toEqual({ recorded: 1, removed: 0, failures: 0 });
+
+        expect(entry.outputs[0].platforms?.[mac]).toEqual({
+            sha256: sha256(macFile),
+            bytes: macFile.length,
+            jsonSha256: structure.jsonSha256,
+            binBytes: structure.binBytes,
+            bufferViewHashes: 'glb-views/scene.darwin-arm64.json',
+        });
+        expect(await readFile(join(repo, 'glb-views', 'scene.json'), 'utf8')).toBe(baseRecordText);
+        const written = await readGlbViewRecord(join(repo, 'glb-views', 'scene.darwin-arm64.json'));
+        expect(written.bufferViews[1]).toBe(sha256(Buffer.from('NORMALS--12?')));
+        expect(messages.join('\n')).toContain('same JSON chunk and BIN length as the base; 1 pinned bufferView(s) differ (used for NORMAL)');
+        expect(validateSources({ assets: [entry] })).toEqual([]);
+
+        // The file on disk now passes on this system, against its own record; the base still fails it.
+        expect(await checkOutputs(join(downloads, 'scene'), entry.outputs, () => undefined, null, { repoRoot: repo, platform: mac })).toEqual([]);
+        expect(await checkOutputs(join(downloads, 'scene'), entry.outputs, () => undefined, null, { repoRoot: repo, platform: null })).toHaveLength(1);
+    });
+
+    it('refuses to record a dielectric scene with metal in it, whatever its hashes', async () => {
+        warnings = [];
+        const metal = makeGlb(
+            {
+                asset: { version: '2.0' },
+                buffers: [{ byteLength: 4 }],
+                bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 4 }],
+                accessors: [{ bufferView: 0 }],
+                materials: [{ name: 'Paint', pbrMetallicRoughness: {} }],
+                meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+            },
+            Buffer.from('DATA'),
+        );
+        const output = { path: 'room.glb', sha256: sha256('what Windows wrote'), bytes: 10, dielectric: true };
+        const entry = await assetWith('metal-room', { 'room.glb': metal }, [{ ...output }]);
+        expect(await record([entry])).toEqual({ recorded: 0, removed: 0, failures: 1 });
+        expect(entry.outputs[0]).toEqual(output);
+        expect(warnings[0]).toMatch(/metal-room: room\.glb: not recorded, because this scene must have no metal: 1 material\(s\) can be metal.*"Paint"/);
+    });
+
+    it('refuses a missing output and a .glb with stray bytes in its padding, and passes over a skipped asset', async () => {
+        warnings = [];
+        messages = [];
+        const missing = await assetWith('missing', {}, [{ path: 'gone.bin', sha256: 'a'.repeat(64), bytes: 1 }]);
+        const padded = sceneGlb(sceneData(), 0x7f);
+        const badPadding = await assetWith('padded', { 'model.glb': padded }, [
+            {
+                path: 'model.glb',
+                sha256: 'a'.repeat(64),
+                bytes: padded.length,
+                reproducible: false,
+                jsonSha256: 'b'.repeat(64),
+                binBytes: 1,
+                bufferViewHashes: 'glb-views/padded.json',
+                varyingAttributes: [],
+            },
+        ]);
+        const skipped = asset({ id: 'on-hold', skip: true, skipReason: 'License question is open.' });
+        expect(await record([missing, badPadding, skipped])).toEqual({ recorded: 0, removed: 0, failures: 2 });
+        expect(warnings[0]).toBe('missing: gone.bin is missing; fetch or convert it first');
+        expect(warnings[1]).toContain('padding byte(s) are not zero');
+        expect(badPadding.outputs[0].platforms).toBeUndefined();
+        expect(messages).toContain('on-hold: skipped: License question is open.');
+    });
+});
+
+describe('writing sources.json', () => {
+    it('writes the real file back exactly as it is, so a recording only shows what it added', async () => {
+        const text = await readFile(join(resolve(__dirname, '..', '..'), 'tools', 'assets', 'sources.json'), 'utf8');
+        expect(formatSourcesJson(JSON.parse(text))).toBe(text);
+    });
+
+    it('puts lists of plain values on one line and everything else one field per line', () => {
+        expect(formatSourcesJson({ a: [], b: ['x', 1, null], c: [{ d: {} }], e: undefined })).toBe(
+            ['{', '  "a": [],', '  "b": ["x", 1, null],', '  "c": [', '    {', '      "d": {}', '    }', '  ]', '}', ''].join('\n'),
+        );
+    });
+});
+
+/** A zip of stored (uncompressed) files whose names are marked as UTF-8 (general purpose flag bit 11), as in Intel's pkg_b_ivy1.zip. */
+function utf8NamedZip(files: Array<{ name: string; content: Buffer }>): Buffer {
+    const crc32 = (data: Buffer): number => {
+        let crc = 0xffffffff;
+        for (const byte of data) {
+            crc ^= byte;
+            for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+        }
+        return (crc ^ 0xffffffff) >>> 0;
+    };
+    const LOCAL_HEADER_SIGNATURE = 0x04034b50;
+    const CENTRAL_HEADER_SIGNATURE = 0x02014b50;
+    const END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+    const ZIP_VERSION_2_0 = 20; // the host byte stays 0, MS-DOS, like the Intel zip
+    const NAME_IS_UTF8 = 0x0800;
+    const DOS_DATE_1980_01_01 = 0x0021;
+    const locals: Buffer[] = [];
+    const centrals: Buffer[] = [];
+    let offset = 0;
+    for (const file of files) {
+        const name = Buffer.from(file.name, 'utf8');
+        const crc = crc32(file.content);
+        // Local file header: method 0 (stored), time 0, no extra field.
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(LOCAL_HEADER_SIGNATURE, 0);
+        local.writeUInt16LE(ZIP_VERSION_2_0, 4);
+        local.writeUInt16LE(NAME_IS_UTF8, 6);
+        local.writeUInt16LE(DOS_DATE_1980_01_01, 12);
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(file.content.length, 18);
+        local.writeUInt32LE(file.content.length, 22);
+        local.writeUInt16LE(name.length, 26);
+        locals.push(local, name, file.content);
+
+        // Central directory header: the same, plus where the local header is; no extra field, comment or attributes.
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(CENTRAL_HEADER_SIGNATURE, 0);
+        central.writeUInt16LE(ZIP_VERSION_2_0, 4);
+        central.writeUInt16LE(ZIP_VERSION_2_0, 6);
+        central.writeUInt16LE(NAME_IS_UTF8, 8);
+        central.writeUInt16LE(DOS_DATE_1980_01_01, 14);
+        central.writeUInt32LE(crc, 16);
+        central.writeUInt32LE(file.content.length, 20);
+        central.writeUInt32LE(file.content.length, 24);
+        central.writeUInt16LE(name.length, 28);
+        central.writeUInt32LE(offset, 42);
+        centrals.push(central, name);
+        offset += local.length + name.length + file.content.length;
+    }
+    const centralDirectory = Buffer.concat(centrals);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(END_OF_CENTRAL_DIRECTORY_SIGNATURE, 0);
+    end.writeUInt16LE(files.length, 8);
+    end.writeUInt16LE(files.length, 10);
+    end.writeUInt32LE(centralDirectory.length, 12);
+    end.writeUInt32LE(offset, 16);
+    return Buffer.concat([...locals, centralDirectory, end]);
+}
+
+// macOS's own unzip fails on such a name when the zip says it came from MS-DOS, as this one does ("Illegal byte sequence", exit 50);
+// getting it right there is why extractZip uses bsdtar on macOS.
+describe.skipIf(process.platform !== 'darwin')('unpacking a zip with a UTF-8 file name on macOS', () => {
+    it('gets every file out, the non-ASCII name included', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'ddgi-zip-utf8-'));
+        const archive = join(directory, 'pack.zip');
+        const destination = join(directory, 'out');
+        await mkdir(destination);
+        await writeFile(
+            archive,
+            utf8NamedZip([
+                { name: 'pkg/textures/Fortress-Kaštel-4K.hdr', content: Buffer.from('#?RADIANCE') },
+                { name: 'pkg/textures/IvyLeaf_BaseColor.png', content: Buffer.from('PNG!') },
+            ]),
+        );
+        await extractZip(archive, destination);
+        const names = (await readdir(join(destination, 'pkg', 'textures'))).map((name) => name.normalize('NFC')).sort();
+        expect(names).toEqual(['Fortress-Kaštel-4K.hdr', 'IvyLeaf_BaseColor.png']);
+        expect(await readFile(join(destination, 'pkg', 'textures', 'IvyLeaf_BaseColor.png'), 'utf8')).toBe('PNG!');
+        expect(await readFile(join(destination, 'pkg', 'textures', 'Fortress-Kaštel-4K.hdr'), 'utf8')).toBe('#?RADIANCE');
+        await rm(directory, { recursive: true, force: true });
     });
 });

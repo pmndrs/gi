@@ -14,8 +14,10 @@
  *    - `mrt`: the pass with `mrt({ output, giAlbedo, normal })` and the
  *      composite's mark (no per-fragment GI), showing its colour;
  *    - `composite`: that pass and `ddgi` without occlusion;
- *    - `composite+gtao`: the composite with its default occlusion (three's
- *      GTAO on the GI term, 1 m radius, full resolution): the default path;
+ *    - `composite+gtao`: the composite with three's GTAO on the GI term
+ *      (1 m radius, full resolution): the default path when this page was
+ *      written (M1; the composite has no occlusion by default since
+ *      2026-11-18, DECISIONS), and still the name of the bar's delta;
  *    - `composite+gtao-half`: the same at half resolution;
  *    - `forward`: GI per fragment (today's path), on a pass with the same
  *      MRT outputs as `mrt` but no mark, so `forward − mrt` is what GI per
@@ -198,7 +200,7 @@ async function timing(context: ThreePageContext, scene: CompositeScene): Promise
             return pipelineOf(routes.composite);
         };
         const composite = pipelineFor({ occlusion: false });
-        // The composite's default occlusion: its own GTAO at 1 m.
+        // The composite's own GTAO at 1 m, full resolution (M1's default; opt-in since 2026-11-18).
         const compositeGtao = pipelineFor({ occlusion: {} });
         const compositeGtaoHalf = pipelineFor({ occlusion: { resolutionScale: 0.5 } });
 

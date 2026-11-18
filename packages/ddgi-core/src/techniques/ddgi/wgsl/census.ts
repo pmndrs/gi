@@ -40,7 +40,7 @@ fn ddgiCountStates(
     let probeIndex = (group.x + group.y * groups.x) * DDGI_CENSUS_WORKGROUP_SIZE + thread;
     if (probeIndex < counts.x * counts.y * counts.z) {
         let probe = ddgiProbeCoordinates(probeIndex, counts);
-        let state = min(ddgiReadProbeData(ddgiProbeData, probe).state, DDGI_STATE_COUNT - 1u);
+        let state = min(ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe).state, DDGI_STATE_COUNT - 1u);
         atomicAdd(&ddgiStateCounts[state], 1u);
     }
     workgroupBarrier();

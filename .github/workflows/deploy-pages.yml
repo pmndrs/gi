@@ -1,0 +1,57 @@
+name: Deploy examples to Pages
+
+# Builds the examples site (examples/, `pnpm examples:build`) and publishes it
+# to GitHub Pages. The library is read straight from source through the
+# examples' vite aliases, so no separate library build is needed. PAGES_BASE
+# makes links and assets resolve under the project site's subdirectory:
+# /gi/, for https://pmndrs.github.io/gi/.
+#
+# Nothing deploys until Pages is enabled for the repository, with
+# "GitHub Actions" as its source (Settings > Pages). The GPU checks of the
+# built site (`pnpm test:gpu --filter examples-site`) need a real GPU and
+# run on the target devices, not here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege for a Pages deploy with GITHUB_TOKEN.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push replaces one still running.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the examples site
+        run: pnpm examples:build
+        env:
+          PAGES_BASE: /gi/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: examples/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

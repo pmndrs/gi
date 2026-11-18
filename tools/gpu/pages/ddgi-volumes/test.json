@@ -1,0 +1,4 @@
+{
+    "description": "T3.5: two DDGI volumes in one technique on two-room (a dense 0.25 m volume inside the coarse 0.5 m one, the partition wall in its fade band). Checks the priority blend against each volume alone, the frame-to-frame change across the fade band within the stability threshold (mean ≤ 0.1%, p95 ≤ 0.5%), and 0 recompiles; records the sampling cost at 1440p. Draws the two-volume picture for the eye.",
+    "timeoutMs": 600000
+}

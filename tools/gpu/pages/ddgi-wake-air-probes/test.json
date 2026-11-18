@@ -1,0 +1,4 @@
+{
+    "description": "T3.4 items 3 and 5: Cornell, a ball rays don't see (a receiver) moved through the box's open middle at 256 probes a frame; the air probes around it wake, warm over exactly 2 blended updates, and the ball's GI follows a field with every probe on (mean within 15%, colour correlation >= 0.9). Every frame every active probe has k >= 2; after the ball leaves, every woken probe goes back to sleep. The screenshot shows the ball woken, against the reference, and with the air probes asleep.",
+    "timeoutMs": 300000
+}

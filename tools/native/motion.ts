@@ -39,7 +39,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { deflateSync } from 'node:zlib';
-import { motionState, parseManifest, type ManifestMotion, type SceneManifest, type Vec3 } from '../../scenes/src/manifest.ts';
+import { motionState, motionTarget, parseManifest, type ManifestMotion, type SceneManifest, type Vec3 } from '../../scenes/src/manifest.ts';
 import { encodeHalfExr } from '../../scenes/src/sky/exr-half.ts';
 import { buildSkyImage } from '../../scenes/src/sky/sky-image.ts';
 
@@ -67,6 +67,11 @@ function findMotion(manifest: SceneManifest, motionId: string): ManifestMotion {
 
 /** The light a motion targets: its label, which is the harness light's name. */
 export function motionTargetLabel(manifest: SceneManifest, motion: ManifestMotion): string {
+    // Object and camera motions (T3.8) are the viewer's: the harness has no scene objects to move by name, nor a camera path.
+    const target = motionTarget(motion);
+    if (target && target.kind !== 'light') {
+        throw new Error(`${manifest.id} motion ${motion.id}: target "${motion.target}" is a${target.kind === 'object' ? 'n object' : ' camera'} motion, which only the viewer plays; the native harness plays light motions ("light:<label>")`);
+    }
     const label = /^light:(.+)$/.exec(motion.target)?.[1];
     const lights = manifest.lights.filter((light) => label !== undefined && light.label === label);
     // The manifest validator (T2.8) rejects these too; the harness must never guess which light moves.

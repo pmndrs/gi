@@ -1,0 +1,4 @@
+{
+    "description": "T5.3: Cornell (point light) lit by the exported LightProbeGrid against live GI: the test view's mean within 15%, an exact JSON round trip, the export following a light group's weight; screenshot side by side.",
+    "timeoutMs": 300000
+}

@@ -39,7 +39,7 @@
  * the environment.
  *
  * **The render-time update** (T1.14): with `onRender` set (`ThreeGI` sets it
- * for `updateOnRender`, which `GIVolume.start` uses), the node runs the GI
+ * for `updateOnRender`, which `DDGIVolume.start` uses), the node runs the GI
  * frame from its own render-time update, as three's `LightProbeGridNode`
  * updates itself, so the host has no per-frame call. In r187 a light node's
  * `RENDER` update runs inside the render pass's encoder lifetime: after
@@ -152,7 +152,7 @@ export class GILight extends Light {
      */
     onRender: ((camera: Camera) => void) | null = null;
     /** Where an error from `onRender` goes (once); the render-time update stops after it. Default `console.error`. */
-    onRenderError: (error: unknown) => void = (error) => console.error('@pmndrs/ddgi/three: the GI frame failed during a render; GI stops updating.', error);
+    onRenderError: (error: unknown) => void = (error) => console.error('@pmndrs/gi/three: the GI frame failed during a render; GI stops updating.', error);
     /** True once `onRender` threw: the render-time update stays off. */
     renderUpdateFailed = false;
     /** Whether `onRender` already ran in the current JavaScript task (without an animation loop). */

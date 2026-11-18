@@ -18,7 +18,7 @@ import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/d
 import { DEFAULT_WARM_UP_PASSES, type DDGISettingsInput } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import type { MeshTreeOptions } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
+import { loadScene, type LoadedScene, type LoadSceneOptions } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 
@@ -80,9 +80,11 @@ export async function startViewerScene(
         readonly settings?: Omit<DDGISettingsInput, 'volume'>;
         /** How the platform makes mesh trees (T2.12); its defaults otherwise. */
         readonly meshTrees?: MeshTreeOptions;
+        /** How the files are loaded (a texture cap, say); the viewer loader's defaults otherwise. */
+        readonly load?: LoadSceneOptions;
     },
 ): Promise<ViewerScene> {
-    const loaded = await loadScene(manifest, () => {});
+    const loaded = await loadScene(manifest, () => {}, options.load);
     // A page's own additions (a lamp to switch on later) go in before the adapter's first sync.
     options.prepareScene?.(loaded);
     const bookmark = manifest.cameras[0];

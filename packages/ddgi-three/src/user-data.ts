@@ -20,16 +20,28 @@
  *   how probes find out they sit inside geometry (scene contract,
  *   `doubleSided`), and most glTF materials are `FrontSide`.
  * - `material.userData.giBlocksLight` (boolean, on a *material*): `true` makes
- *   a material three draws see-through (alpha-blended, `transmission`, low
- *   `opacity`) block and bounce light for GI like an opaque one. Without it,
- *   such materials let light through (convert.ts, `materialDescriptor`), and
- *   a mesh made only of them is left out of GI's rays (scene-sync.ts). Only
+ *   a material three draws see-through block and bounce light for GI like an
+ *   opaque one: glass (`transmission`) blocks, and an alpha-blended material
+ *   is opaque instead of stochastic (convert.ts, `materialDescriptor`). Alpha
+ *   cutouts keep their holes. The material colour overrides (`giAlbedo`,
+ *   `giAlbedoMap`, `giEmissive`) are described at the end of this file. Only
  *   `true` is read.
+ * - `userData.giDeforming` (boolean, on a mesh): whether GI follows the
+ *   mesh's changing shape (deforming.ts). A `SkinnedMesh` or a mesh with
+ *   morph targets deforms by default once it contributes to GI; `false` keeps
+ *   it in its bind pose. `true` on a plain mesh says its position attribute
+ *   is animated on the CPU, so each edit is sent as a pose instead of a new
+ *   shape.
+ * - `userData.giDeformBounds` (a three `Box3`, or `{ min: [x, y, z], max:
+ *   [x, y, z] }`, on a deforming mesh): a box in the mesh's own space that
+ *   every pose stays inside. Without it the adapter estimates one
+ *   (deforming.ts).
  *
  * The flag is read from the object itself, not inherited from its parents.
  */
 
-import type { Object3D } from 'three';
+import type { Aabb } from '@pmndrs/ddgi-core';
+import type { Color, Object3D, Texture } from 'three';
 
 export const GI_USER_DATA = {
     contributes: 'giContributes',
@@ -37,6 +49,8 @@ export const GI_USER_DATA = {
     castsShadows: 'giCastsShadows',
     singleSided: 'giSingleSided',
     blocksLight: 'giBlocksLight',
+    deforming: 'giDeforming',
+    deformBounds: 'giDeformBounds',
 } as const;
 
 /** Light groups the platform has (scene contract: 0..3). */
@@ -72,4 +86,95 @@ export function castsShadowsForGI(light: Object3D): boolean {
 export function lightGroup(object: Object3D): number {
     const value = object.userData[GI_USER_DATA.lightGroup];
     return Number.isInteger(value) && value >= 0 && value < LIGHT_GROUP_COUNT ? (value as number) : 0;
+}
+
+/** `userData.giDeforming` when it is a boolean, otherwise undefined (the mesh's kind decides). */
+export function deformingFlag(object: Object3D): boolean | undefined {
+    const value = object.userData[GI_USER_DATA.deforming];
+    return typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * `userData.giDeformBounds` as the platform's box, or undefined when absent
+ * or not a box of finite numbers. Accepts a three `Box3` (`min` and `max` as
+ * `Vector3`) or plain `[x, y, z]` triples.
+ */
+export function deformBoundsFlag(object: Object3D): Aabb | undefined {
+    const value = object.userData[GI_USER_DATA.deformBounds] as { min?: unknown; max?: unknown } | undefined;
+    if (!value || typeof value !== 'object') return undefined;
+    const min = triple(value.min);
+    const max = triple(value.max);
+    return min && max ? { min, max } : undefined;
+}
+
+function triple(value: unknown): [number, number, number] | undefined {
+    if (Array.isArray(value)) {
+        const numbers = value as unknown[];
+        if (numbers.length === 3 && numbers.every((number) => typeof number === 'number' && Number.isFinite(number))) return [numbers[0] as number, numbers[1] as number, numbers[2] as number];
+        return undefined;
+    }
+    const vector = value as { x?: unknown; y?: unknown; z?: unknown } | null;
+    if (vector && typeof vector === 'object' && [vector.x, vector.y, vector.z].every((number) => typeof number === 'number' && Number.isFinite(number))) {
+        return [vector.x as number, vector.y as number, vector.z as number];
+    }
+    return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Material colour overrides (M4, T4.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * What GI sees of a material, said by the host when the adapter can't work
+ * it out (a `colorNode` graph or a `ShaderMaterial`), or should see
+ * something else. Each replaces one input of convert.ts's
+ * `materialDescriptor`, on the *material*:
+ *
+ * - `material.userData.giAlbedo`: the albedo colour, instead of `color`. The
+ *   albedo map and metalness still apply.
+ * - `material.userData.giAlbedoMap` (a three `Texture`): the albedo texture,
+ *   instead of `map`, sampled with its own uv mapping.
+ * - `material.userData.giEmissive`: the emissive colour, instead of
+ *   `emissive`. `emissiveIntensity` and `emissiveMap` still apply.
+ *
+ * A colour is a three `Color` (linear, as three keeps it), an `[r, g, b]`
+ * array (linear), or anything `new Color(value)` takes (a hex number or a
+ * CSS string, both sRGB, as three reads them). Anything else is ignored.
+ */
+export const GI_MATERIAL_USER_DATA = {
+    albedo: 'giAlbedo',
+    albedoMap: 'giAlbedoMap',
+    emissive: 'giEmissive',
+} as const;
+
+/** A userData colour into `target` (see {@link GI_MATERIAL_USER_DATA}), or null when the value isn't a colour. */
+function readColorValue(value: unknown, target: Color): Color | null {
+    if (value === undefined || value === null) return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? target.setHex(value) : null;
+    if (typeof value === 'string') return value.trim() === '' ? null : target.setStyle(value);
+    if (Array.isArray(value)) {
+        if (value.length !== 3 || !value.every((channel) => typeof channel === 'number' && Number.isFinite(channel))) return null;
+        return target.setRGB(value[0], value[1], value[2]);
+    }
+    const color = value as { r?: unknown; g?: unknown; b?: unknown };
+    if (typeof color === 'object' && [color.r, color.g, color.b].every((channel) => typeof channel === 'number' && Number.isFinite(channel))) {
+        return target.setRGB(color.r as number, color.g as number, color.b as number);
+    }
+    return null;
+}
+
+/** `userData.giAlbedo` written into `target` (linear), or null when absent. */
+export function giAlbedoOverride(userData: Record<string, unknown>, target: Color): Color | null {
+    return readColorValue(userData[GI_MATERIAL_USER_DATA.albedo], target);
+}
+
+/** `userData.giEmissive` written into `target` (linear), or null when absent. */
+export function giEmissiveOverride(userData: Record<string, unknown>, target: Color): Color | null {
+    return readColorValue(userData[GI_MATERIAL_USER_DATA.emissive], target);
+}
+
+/** `userData.giAlbedoMap` when it is a three texture, otherwise null. */
+export function giAlbedoMapOverride(userData: Record<string, unknown>): Texture | null {
+    const value = userData[GI_MATERIAL_USER_DATA.albedoMap] as { isTexture?: boolean } | undefined;
+    return value && typeof value === 'object' && value.isTexture === true ? (value as Texture) : null;
 }

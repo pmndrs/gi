@@ -17,11 +17,15 @@
  * For comparing hysteresis rules (T1.12), two optional variables:
  * `VITE_DDGI_HYSTERESIS` (one rule from ddgi-shared/hysteresis-modes.ts, for
  * example `fixed:0.97`) and `VITE_DDGI_FRAMES` (instead of FRAMES).
+ *
+ * Under a quality preset (T5.1): `VITE_DDGI_PRESET=low|medium|high` runs it
+ * with that preset's rays, tile sizes and texture store (ddgi-shared/page-preset.ts).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import { createDdgiScene, FieldProbe, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
+import { pagePreset, presetReport } from '../ddgi-shared/page-preset.ts';
 import { FURNACE_EXPECTED_RADIANCE, FURNACE_SIZE_M } from '../../../../scenes/src/procedural/furnace-room.ts';
 
 const env = import.meta.env as Record<string, unknown>;
@@ -36,6 +40,8 @@ const env = import.meta.env as Record<string, unknown>;
  */
 const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 1800;
 /** The hysteresis rule, when a run names one; otherwise the technique's defaults. */
+/** The quality preset, when a run names one (T5.1). */
+const PRESET = pagePreset();
 const HYSTERESIS = typeof env.VITE_DDGI_HYSTERESIS === 'string' && env.VITE_DDGI_HYSTERESIS !== '' ? parseHysteresisMode(env.VITE_DDGI_HYSTERESIS) : null;
 /** The check: the mean relative error, over every point and channel. */
 const MEAN_TOLERANCE = 0.02;
@@ -107,7 +113,7 @@ function surfacePoints(blocks: readonly Box[]): SurfacePoint[] {
 await runGpuTest(
     async ({ device, log }) => {
         releaseDeviceOnPageHide(device);
-        const scene = await createDdgiScene(device, 'furnace-room', HYSTERESIS?.settings ?? {});
+        const scene = await createDdgiScene(device, 'furnace-room', { ...PRESET?.ddgi, ...HYSTERESIS?.settings }, { textureLayerSize: PRESET?.textureLayerSize });
         const field = scene.ddgi.field;
         assert(field, 'DDGI has no field after prepare');
         const probeCount = field.grid.probeCount;
@@ -147,6 +153,7 @@ await runGpuTest(
 
         assert(meanError <= MEAN_TOLERANCE, `mean |E/pi - 0.5| / 0.5 is ${(meanError * 100).toFixed(3)}%, over the ${MEAN_TOLERANCE * 100}% limit`);
         return {
+            ...presetReport(PRESET),
             frames: FRAMES,
             hysteresis: HYSTERESIS?.name ?? 'default',
             probesPerFrame: probeCount,

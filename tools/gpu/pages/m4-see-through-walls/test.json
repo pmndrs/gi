@@ -1,0 +1,4 @@
+{
+    "description": "M4 T4.4/T4.5: alpha-checker and glass-wall through the GPU test harness with their materials. Gated: room B gets open > checker > closed, and more through the glass pane than through it made opaque; with the wall closed (checker opaque, pane opaque) room B is at most 1% of room A. Reported: the checker's and the glass's share of the open wall.",
+    "timeoutMs": 900000
+}

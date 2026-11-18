@@ -1,0 +1,5 @@
+{
+    "description": "T3.0 spike, question 2: the cost of the updateMatrixWorld override (tools/spikes/m3-t3.0/matrix-watch.ts) on Bistro interior in real frames (three renders every frame), as ns per object, and that it finds an unmarked move in the same frame. Rough, no timing gate; needs the downloaded Bistro. Run by hand under the bench lock (--cpu-timed).",
+    "timeoutMs": 600000,
+    "manual": true
+}

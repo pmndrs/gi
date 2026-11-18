@@ -1,0 +1,53 @@
+name: CI
+
+# Checks every pull request and every push to main, on Ubuntu and Windows.
+# Adapted from @pmndrs/upscaler's ci.yml.
+#
+# No GPU checks run here: GitHub's hosted runners have no GPU, so WebGPU can't
+# start. The GPU suite (`pnpm test:gpu`) runs on the target and correctness
+# devices instead (docs/releasing.md, "What CI checks"). Everything below runs
+# without a GPU: lint, types, the unit tests, the build, and the packed-package
+# check, which installs the tarball in a fresh project as a user would.
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+permissions:
+    contents: read
+
+jobs:
+    verify:
+        strategy:
+            fail-fast: false
+            matrix:
+                os: [ubuntu-latest, windows-latest]
+        runs-on: ${{ matrix.os }}
+        steps:
+            # Submodules aren't fetched: the only one is the native comparison
+            # harness (native/rtxgi-ddgi), which nothing here builds.
+            - uses: actions/checkout@v4
+            # Version comes from package.json `packageManager`.
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  # The repository's tools run as TypeScript straight from Node
+                  # (`node tools/....ts`), which needs Node 22.18 or later.
+                  node-version: 24
+                  cache: pnpm
+            # The same npm as publish.yml: the packed check runs `npm pack` and
+            # `npm install`, whose output and behaviour vary by npm major.
+            - run: npm install -g npm@^11.5.1
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm lint
+            - run: pnpm typecheck
+            - run: pnpm test
+            # publish.yml's steps, run against throwaway git repositories with a
+            # pretend npm and GitHub. Ubuntu only: publish.yml runs on Ubuntu.
+            - if: runner.os == 'Linux'
+              run: pnpm test:release
+            - run: pnpm build
+            # The tarball in a fresh project with only three and @webgpu/types, and
+            # /core again with three absent (tools/release/verify-packed.ts).
+            - run: pnpm verify:packed --skip-build

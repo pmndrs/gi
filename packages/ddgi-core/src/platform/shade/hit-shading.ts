@@ -8,8 +8,11 @@
  * when the scene has more point and spot lights than `exactLightLimit`. The
  * module's resources are allocated once, except the light grid's picks
  * texture, which is made when a scene first needs the grid and grows with
- * its cells; the module's `version` follows it, so kernels rebuild their bind
- * group only then. The sky-change module (`sky-change.ts`) never changes.
+ * its cells; the module's `version` follows it, so kernels rebuild their
+ * bind group only then. The texture store's array and sampler are bound by
+ * the store's sampling module (textures/texture-sampling-wgsl.ts), which
+ * this module depends on and which follows the array's growth itself. The sky-change module
+ * (`sky-change.ts`) never changes.
  */
 
 import type { Aabb } from '../contract/math.ts';
@@ -17,6 +20,7 @@ import type { EnvironmentDescriptor } from '../contract/scene.ts';
 import type { HitShading, HitShadingSettings } from '../contract/shade.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { BindingSlot, KernelBuilder, WgslModule } from '../contract/wgsl.ts';
+import type { TextureLayerStore } from '../textures/texture-store.ts';
 import { PlatformSky, type PlatformSkyOptions } from '../sky/platform-sky.ts';
 import { PlatformDeferredDirect } from './direct.ts';
 import { LIGHT_FALLOFF_MODULE } from './light-falloff.ts';
@@ -31,6 +35,7 @@ export const DEFAULT_HIT_SHADING_SETTINGS: Readonly<HitShadingSettings> = {
     exactLightLimit: 8,
     lightGridMaxCells: 2048,
     lightGridShadowedLightsPerHit: 1,
+    sampleTextures: true,
 };
 
 /** What hit shading needs to know of the scene's lights each frame, for the light grid. */
@@ -82,7 +87,19 @@ export class PlatformHitShading implements HitShading {
     private readonly lightGridWords = new ArrayBuffer(LIGHT_GRID_LOOKUP_BYTES);
     private disposed = false;
 
-    constructor(device: GPUDevice, kernels: KernelBuilder, sceneModule: WgslModule, raysModule: WgslModule, options: PlatformHitShadingOptions = {}) {
+    /**
+     * `textures` is the texture store hit shading samples at hits (the
+     * platform's, which the scene copy fills): the module depends on its
+     * sampling module, the same object the walk's alpha test lists.
+     */
+    constructor(
+        device: GPUDevice,
+        kernels: KernelBuilder,
+        sceneModule: WgslModule,
+        raysModule: WgslModule,
+        textures: Pick<TextureLayerStore, 'samplingModule'>,
+        options: PlatformHitShadingOptions = {},
+    ) {
         const label = options.label ?? 'gi';
         this.device = device;
         this.sky = new PlatformSky(device, { label, warn: options.warn, reduction: options.skyReduction });
@@ -112,11 +129,12 @@ export class PlatformHitShading implements HitShading {
         const fixedResources: readonly GPUBindingResource[] = [{ buffer: this.uniforms }, this.radianceMapView, this.skySampler];
         this.module = {
             name: 'gi-shade',
-            dependencies: [sceneModule, raysModule, LIGHT_FALLOFF_MODULE],
+            dependencies: [sceneModule, raysModule, textures.samplingModule(sceneModule), LIGHT_FALLOFF_MODULE],
             code: (slot: BindingSlot) => shadeModuleWgsl(slot),
             entries: SHADE_MODULE_ENTRIES,
             resources: () => [...fixedResources, lightGrid.view],
-            // Only the light grid's texture is ever reallocated (when a scene first needs it, or its cells grow).
+            // Only the light grid's texture is ever reallocated here (when a scene first needs it,
+            // or its cells grow); the texture store's array is the sampling module's.
             get version() {
                 return lightGrid.version;
             },
@@ -159,7 +177,7 @@ export class PlatformHitShading implements HitShading {
      * technique. Without `lights` the grid is off.
      */
     encode(encoder: GPUCommandEncoder, environment: EnvironmentDescriptor, environmentVersion: number, timer?: GpuTimerScope, lights?: HitShadingLights): void {
-        if (this.disposed) throw new Error('@pmndrs/ddgi: hit shading was disposed');
+        if (this.disposed) throw new Error('@pmndrs/gi: hit shading was disposed');
         this.uploadSettings();
         this.sky.encode(encoder, environment, environmentVersion, { buffer: this.uniforms, offset: SHADE_UNIFORM_LAYOUT.skyHarmonics }, timer);
         const lookup = lights
@@ -202,12 +220,14 @@ export class PlatformHitShading implements HitShading {
         // At least one shadowed local light per hit, or the stochastic choice would have nothing to pick.
         const maxShadowedLights = Math.max(1, Math.floor(finiteOr(this.settings.maxShadowedLightsPerHit, DEFAULT_HIT_SHADING_SETTINGS.maxShadowedLightsPerHit)));
         const albedoCap = Math.max(0, finiteOr(this.settings.bounceAlbedoCap, DEFAULT_HIT_SHADING_SETTINGS.bounceAlbedoCap));
-        const key = `${maxShadowedLights}/${albedoCap}`;
+        const sampleTextures = this.settings.sampleTextures !== false;
+        const key = `${maxShadowedLights}/${albedoCap}/${sampleTextures}`;
         if (key === this.uploadedSettings) return;
         const data = new ArrayBuffer(8);
         new Uint32Array(data, 0, 1)[0] = maxShadowedLights;
         new Float32Array(data, 4, 1)[0] = albedoCap;
         this.device.queue.writeBuffer(this.uniforms, SHADE_UNIFORM_LAYOUT.maxShadowedLightsPerHit, data);
+        this.device.queue.writeBuffer(this.uniforms, SHADE_UNIFORM_LAYOUT.sampleTextures, new Uint32Array([sampleTextures ? 1 : 0]));
         this.uploadedSettings = key;
     }
 

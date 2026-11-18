@@ -144,6 +144,8 @@ class RegionColumns {
     private readonly reasons = new Uint8Array(MAX_DIRTY_REGIONS);
     private readonly moved = new Float32Array(MAX_DIRTY_REGIONS);
     private readonly instances = new Int32Array(MAX_DIRTY_REGIONS);
+    /** 1 where the region's instance gives off light (`DirtyRegion.emits`). */
+    private readonly emits = new Uint8Array(MAX_DIRTY_REGIONS);
     /** Handles are positive integers (handles.ts); NO_VALUE when there is none. */
     private readonly sources = new Float64Array(MAX_DIRTY_REGIONS);
     /** Past MAX_DIRTY_REGIONS: one running box per reason (min then max), the largest move, and whether every region was a move. */
@@ -152,14 +154,15 @@ class RegionColumns {
     private readonly mergedLargestMove = new Float64Array(REASONS.length);
     private readonly mergedAllMoves = new Uint8Array(REASONS.length);
     private readonly mergedPresent = new Uint8Array(REASONS.length);
+    private readonly mergedEmits = new Uint8Array(REASONS.length);
 
     /** A region whose box is the 6 numbers from `boxAt` in `box`. */
-    add(box: ArrayLike<number>, boxAt: number, reason: ChangeReason, source: number | undefined, moved: number | undefined, instance: number | undefined): void {
+    add(box: ArrayLike<number>, boxAt: number, reason: ChangeReason, source: number | undefined, moved: number | undefined, instance: number | undefined, emits: boolean): void {
         const code = reasonCode(reason);
         const movedValue = moved ?? NO_VALUE;
         if (!this.merging && this.count === MAX_DIRTY_REGIONS) this.startMerging();
         if (this.merging) {
-            this.fold(box, boxAt, code, movedValue);
+            this.fold(box, boxAt, code, movedValue, emits);
             return;
         }
         const index = this.count++;
@@ -169,6 +172,7 @@ class RegionColumns {
         this.moved[index] = movedValue;
         this.instances[index] = instance ?? NO_VALUE;
         this.sources[index] = source ?? NO_VALUE;
+        this.emits[index] = emits ? 1 : 0;
     }
 
     /** The regions as the contract has them, merged by reason when there were more than MAX_DIRTY_REGIONS. */
@@ -191,6 +195,7 @@ class RegionColumns {
                 ...(source !== NO_VALUE ? { source: source as InstanceHandle | LightHandle } : {}),
                 ...(moved >= 0 ? { moved } : {}),
                 ...(instance !== NO_VALUE ? { instance } : {}),
+                ...(this.emits[index] ? { emits: true } : {}),
             });
         }
         return regions;
@@ -206,17 +211,19 @@ class RegionColumns {
         this.mergedLargestMove.fill(0);
         this.mergedAllMoves.fill(1);
         this.mergedPresent.fill(0);
-        for (let index = 0; index < this.count; index++) this.fold(this.boxes, index * 6, this.reasons[index], this.moved[index]);
+        this.mergedEmits.fill(0);
+        for (let index = 0; index < this.count; index++) this.fold(this.boxes, index * 6, this.reasons[index], this.moved[index], this.emits[index] === 1);
         this.count = 0;
     }
 
-    private fold(box: ArrayLike<number>, at: number, reason: number, moved: number): void {
+    private fold(box: ArrayLike<number>, at: number, reason: number, moved: number, emits: boolean): void {
         const base = reason * 6;
         for (let axis = 0; axis < 3; axis++) {
             if (box[at + axis] < this.mergedBoxes[base + axis]) this.mergedBoxes[base + axis] = box[at + axis];
             if (box[at + 3 + axis] > this.mergedBoxes[base + 3 + axis]) this.mergedBoxes[base + 3 + axis] = box[at + 3 + axis];
         }
         this.mergedPresent[reason] = 1;
+        if (emits) this.mergedEmits[reason] = 1;
         if (moved >= 0) {
             if (moved > this.mergedLargestMove[reason]) this.mergedLargestMove[reason] = moved;
         } else {
@@ -227,37 +234,114 @@ class RegionColumns {
     /**
      * One box per reason. A merged geometry region carries the largest move
      * when every region in it was a move, and none (a whole change) when any
-     * wasn't; it names no instance.
+     * wasn't; it names no instance, and emits if any region in it did.
      */
     private merged(): DirtyRegion[] {
         const regions: DirtyRegion[] = [];
         for (let reason = 0; reason < REASONS.length; reason++) {
             if (!this.mergedPresent[reason]) continue;
             const box = this.mergedBoxes.subarray(reason * 6, reason * 6 + 6);
-            regions.push({ bounds: toAabb(box), reason: REASONS[reason], ...(this.mergedAllMoves[reason] ? { moved: this.mergedLargestMove[reason] } : {}) });
+            regions.push({
+                bounds: toAabb(box),
+                reason: REASONS[reason],
+                ...(this.mergedAllMoves[reason] ? { moved: this.mergedLargestMove[reason] } : {}),
+                ...(this.mergedEmits[reason] ? { emits: true } : {}),
+            });
         }
         return regions;
     }
 }
 
+/**
+ * Past this many receiver boxes in one frame, they are merged into one box
+ * (`SceneChanges.receivers`). A crowd of characters moving every frame would
+ * otherwise list thousands, while a technique only needs to know roughly
+ * where receivers are.
+ */
+export const MAX_RECEIVER_BOXES = 256;
+
+/**
+ * A frame's receiver boxes in one flat typed array, so logging one allocates
+ * nothing: `setTransforms` can move thousands of receivers a frame. Past
+ * MAX_RECEIVER_BOXES the boxes are folded into one running box.
+ */
+class ReceiverBoxes {
+    private count = 0;
+    private readonly boxes = new Float32Array(MAX_RECEIVER_BOXES * 6);
+    private merging = false;
+    /** Past MAX_RECEIVER_BOXES: the running box, min then max. */
+    private readonly mergedBox = new Float64Array(6);
+
+    /** A box: the 6 numbers from `boxAt` in `box`, min then max. */
+    add(box: ArrayLike<number>, boxAt: number): void {
+        if (!this.merging && this.count === MAX_RECEIVER_BOXES) this.startMerging();
+        if (this.merging) {
+            this.fold(box, boxAt);
+            return;
+        }
+        const at = this.count++ * 6;
+        for (let value = 0; value < 6; value++) this.boxes[at + value] = box[boxAt + value];
+    }
+
+    take(): Aabb[] {
+        const boxes: Aabb[] = [];
+        if (this.merging) {
+            boxes.push(toAabb(this.mergedBox));
+        } else {
+            for (let index = 0; index < this.count; index++) boxes.push(toAabb(this.boxes.subarray(index * 6, index * 6 + 6)));
+        }
+        this.count = 0;
+        this.merging = false;
+        return boxes;
+    }
+
+    private startMerging(): void {
+        this.merging = true;
+        this.mergedBox.fill(Infinity, 0, 3);
+        this.mergedBox.fill(-Infinity, 3, 6);
+        for (let index = 0; index < this.count; index++) this.fold(this.boxes, index * 6);
+        this.count = 0;
+    }
+
+    private fold(box: ArrayLike<number>, at: number): void {
+        for (let axis = 0; axis < 3; axis++) {
+            if (box[at + axis] < this.mergedBox[axis]) this.mergedBox[axis] = box[at + axis];
+            if (box[at + 3 + axis] > this.mergedBox[3 + axis]) this.mergedBox[3 + axis] = box[at + 3 + axis];
+        }
+    }
+}
+
+/** Receiver boxes merged into one, as a frame's are past MAX_RECEIVER_BOXES. */
+function mergeReceivers(boxes: readonly Aabb[]): Aabb[] {
+    const merged = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    for (const box of boxes) {
+        for (let axis = 0; axis < 3; axis++) {
+            merged[axis] = Math.min(merged[axis], box.min[axis]);
+            merged[axis + 3] = Math.max(merged[axis + 3], box.max[axis]);
+        }
+    }
+    return [toAabb(merged)];
+}
+
 export class ChangeLog {
     private readonly regions = new RegionColumns();
     private readonly global = new Set<GlobalChange>();
-    private movedReceivers = 0;
+    private readonly receivers = new ReceiverBoxes();
     /** Each light touched this frame, with its state before the frame's first change (null: created this frame). In first-touched order. */
     private readonly lightsBefore = new Map<LightHandle, LightDescriptor | null>();
 
     /** A region; `moved` and `instance` as `DirtyRegion` has them, its box the 6 numbers from `boxAt` in `box` (positional, so logging one allocates nothing). */
-    addRegion(box: ArrayLike<number>, reason: ChangeReason, source?: InstanceHandle | LightHandle, moved?: number, instance?: number, boxAt = 0): void {
-        this.regions.add(box, boxAt, reason, source, moved, instance);
+    addRegion(box: ArrayLike<number>, reason: ChangeReason, source?: InstanceHandle | LightHandle, moved?: number, instance?: number, boxAt = 0, emits = false): void {
+        this.regions.add(box, boxAt, reason, source, moved, instance, emits);
     }
 
     addGlobal(change: GlobalChange): void {
         this.global.add(change);
     }
 
-    addMovedReceiver(): void {
-        this.movedReceivers++;
+    /** A receiver's world box where it is now (`SceneChanges.receivers`): the 6 numbers from `boxAt` in `box`. */
+    addReceiver(box: ArrayLike<number>, boxAt = 0): void {
+        this.receivers.add(box, boxAt);
     }
 
     /**
@@ -279,12 +363,11 @@ export class ChangeLog {
         const changes: SceneChanges = {
             regions: this.regions.take(),
             global: [...this.global],
-            movedReceivers: this.movedReceivers,
+            receivers: this.receivers.take(),
             lights: lightsOverflowed ? [] : lightChanges,
             lightsOverflowed,
         };
         this.global.clear();
-        this.movedReceivers = 0;
         this.lightsBefore.clear();
         return changes;
     }
@@ -365,10 +448,12 @@ export function mergeSceneChanges(earlier: SceneChanges, later: SceneChanges): S
     if (lightsOverflowed) global.add('lights');
     let regions = [...earlier.regions, ...later.regions];
     if (regions.length > MAX_DIRTY_REGIONS) regions = mergeByReason(regions);
+    let receivers = [...earlier.receivers, ...later.receivers];
+    if (receivers.length > MAX_RECEIVER_BOXES) receivers = mergeReceivers(receivers);
     return {
         regions,
         global: [...global],
-        movedReceivers: earlier.movedReceivers + later.movedReceivers,
+        receivers,
         lights: lightsOverflowed ? [] : [...lights.values()],
         lightsOverflowed,
     };

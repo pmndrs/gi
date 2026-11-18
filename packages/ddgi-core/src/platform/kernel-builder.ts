@@ -44,10 +44,10 @@ export function orderModules(modules: readonly WgslModule[]): WgslModule[] {
 
     const visit = (module: WgslModule): void => {
         if (done.has(module)) return;
-        if (inProgress.has(module)) throw new Error(`@pmndrs/ddgi: WGSL module '${module.name}' depends on itself`);
+        if (inProgress.has(module)) throw new Error(`@pmndrs/gi: WGSL module '${module.name}' depends on itself`);
         const sameName = byName.get(module.name);
         if (sameName && sameName !== module) {
-            throw new Error(`@pmndrs/ddgi: two different WGSL modules are both called '${module.name}'`);
+            throw new Error(`@pmndrs/gi: two different WGSL modules are both called '${module.name}'`);
         }
         byName.set(module.name, module);
         inProgress.add(module);
@@ -160,7 +160,7 @@ export class PlatformKernelBuilder implements KernelBuilder {
                 compute: { module: shaderModule, entryPoint: options.entryPoint, constants: options.constants },
             });
         } catch (error) {
-            throw new Error(`@pmndrs/ddgi: compute kernel '${label}' failed to compile: ${await describeCompileFailure(shaderModule, error)}`);
+            throw new Error(`@pmndrs/gi: compute kernel '${label}' failed to compile: ${await describeCompileFailure(shaderModule, error)}`);
         }
 
         // Group 0 is rebuilt only when a module reallocated a resource (its `version` changed).

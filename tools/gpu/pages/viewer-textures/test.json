@@ -1,0 +1,5 @@
+{
+    "description": "T3.12: a scene in the viewer's own code with its model textures compressed at load (BC7/BC5 through gputex) or not: every planned texture is a CompressedTexture with its mip chain (BC5 for normal maps), no GPU errors; DDGI settles at a bookmark, rough frame times are recorded and the picture is returned as a PNG for comparison.",
+    "timeoutMs": 900000,
+    "manual": true
+}

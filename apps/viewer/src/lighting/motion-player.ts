@@ -1,74 +1,91 @@
 /**
- * Plays a manifest's scripted light motions (docs/design/m2-lights.md §7,
- * `motions`): the built-in `light-sweep` (a lamp gliding at 1 m/s and back)
- * and `light-step` (the same lamp jumping every 3 s), or any other motion a
- * manifest lists. Each frame it sets the target light's position, intensity
- * and colour to `motionState` at the motion's time, the same function the
- * native harness plays them with (T2.7), so both play a motion alike.
+ * Plays a manifest's scripted motions (`motions`; docs/design/m2-lights.md
+ * §7 for lights, m3-moving.md §8 for objects and the camera): the built-in
+ * `light-sweep` (a lamp gliding at 1 m/s and back) and `light-step` (the
+ * same lamp jumping every 3 s), a door swinging shut, a cabinet sliding, a
+ * tree swaying in the wind, a flight down a street, or any other motion a
+ * manifest lists. Each frame it sets the target to `motionState` at the
+ * motion's time, the same function the native harness plays light motions
+ * with (T2.7), so both play them alike.
  *
- * A motion's light is moved in three only: the three adapter sees the change
- * in the same frame and sends it to GI (the first 64 lights are checked every
- * frame). A light the scene loaded switched off (Sponza's arcade lamp, kept
- * out of the scene until a motion plays it: `LoadedScene.offLights`) joins
- * the scene when its motion starts and leaves it when the motion stops,
- * which makes three compile its materials once, each time.
+ * What a motion moves, and how, is its driver's (`motion-drivers.ts`): a
+ * light, an object (moved, turned about a pivot, or swayed by its wind
+ * weight; a manifest prop joins the scene while its motion plays), or the
+ * camera (only when the viewer hands the player its camera).
  *
- * Stopping puts the light back as it was before the motion started.
+ * A motion's light or object is moved in three only: the three adapter sees
+ * the change and sends it to GI (the first 64 lights are checked every frame;
+ * objects through T3.7's change tracking). A light the scene loaded switched
+ * off (Sponza's arcade lamp, kept out of the scene until a motion plays it:
+ * `LoadedScene.offLights`) joins the scene when its motion starts and leaves
+ * it when the motion stops, which makes three compile its materials once,
+ * each time.
  *
- * A moved light's world matrix is brought up to date at once
- * (`updateLightMatrices`): the adapter reads world matrices as three's last
- * render left them, so without it GI would see each move a frame late, and
- * the response meter would count that frame.
+ * Stopping puts the target back as it was before the motion started.
  */
 
 import type { Light, Object3D } from 'three';
-import { motionState, type ManifestMotion } from '../../../../scenes/src/manifest';
+import { motionState, motionTarget, type ManifestMotion } from '../../../../scenes/src/manifest';
 import type { LoadedScene } from '../scene/load-scene';
+import { DEFAULT_WIND_STRENGTH } from '../ui/url-state';
+import { CameraDriver, LightDriver, makeProp, ObjectDriver, type CameraControl, type MotionDriver } from './motion-drivers';
 
-/** A light's state a motion can change, to put it back afterwards. */
-export interface SavedLight {
-    position: [number, number, number];
-    intensity: number;
-    color: [number, number, number];
-    inScene: boolean;
-}
+export { addToScene, restoreLight, saveLight, updateLightMatrices, MAX_WIND_REACH_M, type SavedLight } from './motion-drivers';
 
-/** What a motion (or the response meter's step) may change on a light. */
-export function saveLight(light: Light): SavedLight {
-    return {
-        position: [light.position.x, light.position.y, light.position.z],
-        intensity: light.intensity,
-        color: [light.color.r, light.color.g, light.color.b],
-        inScene: light.parent !== null,
-    };
-}
-
-/** Puts a light back as `saveLight` found it (out of the scene again if it was out). */
-export function restoreLight(light: Light, saved: SavedLight): void {
-    light.position.set(...saved.position);
-    light.intensity = saved.intensity;
-    light.color.setRGB(...saved.color);
-    updateLightMatrices(light);
-    if (!saved.inScene) light.removeFromParent();
+export interface MotionPlayerOptions {
+    /** The viewing camera, for camera motions (a fly-through). Without it, camera motions aren't offered. */
+    readonly camera?: CameraControl;
 }
 
 export class MotionPlayer {
-    private current: { motion: ManifestMotion; light: Light; saved: SavedLight; startedAt: number } | null = null;
+    private current: { motion: ManifestMotion; driver: MotionDriver; saved: unknown; startedAt: number } | null = null;
     /** Seconds into the motion when it was paused, or null while it plays. */
     private pausedAt: number | null = null;
+    /** One driver per target, shared by the motions that name it, so they all start from the same rest. */
+    private readonly drivers = new Map<string, MotionDriver | null>();
+    private windStrengthValue = DEFAULT_WIND_STRENGTH;
 
-    constructor(private readonly loaded: LoadedScene) {}
-
-    /** The scene's motions whose light exists. */
-    get motions(): readonly ManifestMotion[] {
-        return (this.loaded.manifest.motions ?? []).filter((motion) => this.lightFor(motion) !== null);
+    constructor(
+        private readonly loaded: LoadedScene,
+        private readonly options: MotionPlayerOptions = {},
+    ) {
+        // Swaying meshes are marked deforming now, before GI copies the scene (motion-drivers.ts).
+        for (const motion of loaded.manifest.motions ?? []) {
+            const driver = this.driverFor(motion);
+            if (driver instanceof ObjectDriver && motion.keyframes.some((keyframe) => keyframe.sway !== undefined)) driver.prepareSway();
+        }
     }
 
-    /** The light a motion moves (`light:<label>`), or null when the scene has no such light. */
+    /** The scene's motions whose target exists (and, for a sway, whose object has a wind weight). */
+    get motions(): readonly ManifestMotion[] {
+        return (this.loaded.manifest.motions ?? []).filter((motion) => {
+            const driver = this.driverFor(motion);
+            if (!driver) return false;
+            const sways = motion.keyframes.some((keyframe) => keyframe.sway !== undefined);
+            return !sways || (driver instanceof ObjectDriver && driver.canSway);
+        });
+    }
+
+    /** The light a motion moves (`light:<label>`), or null when it moves something else or the scene has no such light. */
     lightFor(motion: ManifestMotion): Light | null {
-        const label = /^light:(.+)$/.exec(motion.target)?.[1];
-        const index = this.loaded.manifest.lights.findIndex((light) => light.label === label);
-        return index >= 0 ? (this.loaded.manifestLights[index] ?? null) : null;
+        const driver = this.driverFor(motion);
+        return driver instanceof LightDriver ? driver.light : null;
+    }
+
+    /** True when some motion of the scene sways a tree, so the wind slider means something. */
+    get hasWind(): boolean {
+        return this.motions.some((motion) => motion.keyframes.some((keyframe) => keyframe.sway !== undefined));
+    }
+
+    /** The wind slider: the share of `MAX_WIND_REACH_M` a sway of 1 moves the crown, 0 to 1. */
+    get windStrength(): number {
+        return this.windStrengthValue;
+    }
+
+    set windStrength(strength: number) {
+        this.windStrengthValue = Math.min(1, Math.max(0, strength));
+        // A tree held still (paused, or left leaning by the meter) shows the new strength at once.
+        for (const driver of this.drivers.values()) if (driver instanceof ObjectDriver) driver.refreshSway();
     }
 
     /** The motion playing (or paused), or null. */
@@ -87,20 +104,28 @@ export class MotionPlayer {
         return this.pausedAt ?? (now - current.startedAt) / 1000;
     }
 
+    /** What GI should be told a motion moved (`markChanged`), or null (the camera). */
+    changedBy(motion: ManifestMotion): Object3D | null {
+        return this.driverFor(motion)?.changed ?? null;
+    }
+
     /** Starts `motionId` from its beginning, stopping any other first. */
     play(motionId: string, now: number): void {
         this.stop();
         const motion = this.motions.find((candidate) => candidate.id === motionId);
         if (!motion) return;
-        const light = this.lightFor(motion)!;
-        const saved = saveLight(light);
-        this.current = { motion, light, saved, startedAt: now };
+        const driver = this.driverFor(motion);
+        // The validator can't know a scene's object names, so a motion may name an object this scene doesn't have.
+        if (!driver) {
+            console.warn(`Motion "${motion.id}": nothing in this scene is "${motion.target}"; it does not play.`);
+            return;
+        }
+        this.current = { motion, driver, saved: driver.save(), startedAt: now };
         this.pausedAt = null;
-        addToScene(this.loaded, light);
         this.update(now);
     }
 
-    /** Holds the motion where it is (the light stays there). */
+    /** Holds the motion where it is (its target stays there). */
     pause(now: number): void {
         if (!this.current || this.pausedAt !== null) return;
         this.pausedAt = this.seconds(now);
@@ -112,58 +137,78 @@ export class MotionPlayer {
         this.pausedAt = null;
     }
 
-    /** Stops the motion and puts its light back as it was. */
+    /** Stops the motion and puts its target back as it was. */
     stop(): void {
         const current = this.current;
         this.current = null;
         this.pausedAt = null;
         if (!current) return;
-        restoreLight(current.light, current.saved);
+        current.driver.restore(current.saved);
     }
 
-    /** Sets the light to the motion's state at `now`. Call once a frame, before GI's update. */
+    /** Sets the target to the motion's state at `now`. Call once a frame, before GI's update. */
     update(now: number): void {
         const current = this.current;
         if (!current) return;
-        applyState(current.light, motionState(current.motion, this.seconds(now)));
+        current.driver.apply(motionState(current.motion, this.seconds(now)), current.motion);
     }
 
     /**
-     * Sets a motion's light to its state at `seconds` without playing it (the
-     * response meter's step), adding it to the scene if it was left out.
-     * Returns the light, or null when the motion has none.
+     * Sets a motion's target to its state at `seconds` without playing it (the
+     * response meter's step), adding a light or prop left out of the scene.
+     * Returns what GI should be told moved, or null.
      */
-    pose(motion: ManifestMotion, seconds: number): Light | null {
-        const light = this.lightFor(motion);
-        if (!light) return null;
-        addToScene(this.loaded, light);
-        applyState(light, motionState(motion, seconds));
-        return light;
+    pose(motion: ManifestMotion, seconds: number): Object3D | null {
+        const driver = this.driverFor(motion);
+        if (!driver) return null;
+        driver.apply(motionState(motion, seconds), motion);
+        return driver.changed;
     }
-}
 
-function applyState(light: Light, state: ReturnType<typeof motionState>): void {
-    if (state.position) light.position.set(...state.position);
-    if (state.intensity !== undefined) light.intensity = state.intensity;
-    // Manifest colours are linear, three's working colour space.
-    if (state.color) light.color.setRGB(...state.color);
-    updateLightMatrices(light);
-}
+    /** How a motion's target is now, for `restore` (the response meter puts it back after its step). */
+    save(motion: ManifestMotion): unknown {
+        return this.driverFor(motion)?.save() ?? null;
+    }
 
-/**
- * Brings a moved light's world matrix (and its target's) up to date now, so
- * GI's update in this frame sees the move: the three adapter reads world
- * matrices as three's last render left them (three-gi.ts), one frame late.
- */
-export function updateLightMatrices(light: Light): void {
-    light.updateMatrixWorld();
-    (light as unknown as { target?: Object3D }).target?.updateMatrixWorld();
-}
+    restore(motion: ManifestMotion, saved: unknown): void {
+        if (saved !== null) this.driverFor(motion)?.restore(saved);
+    }
 
-/** Adds a light left out of the scene (an off light, `LoadedScene.offLights`), with its target. */
-export function addToScene(loaded: LoadedScene, light: Light): void {
-    if (light.parent) return;
-    loaded.scene.add(light);
-    const target = (light as unknown as { target?: Object3D }).target;
-    if (target && !target.parent) loaded.scene.add(target);
+    /** Stops any motion and lets go of the props it made. */
+    dispose(): void {
+        this.stop();
+        for (const driver of this.drivers.values()) if (driver instanceof ObjectDriver) driver.disposeProp();
+        this.drivers.clear();
+    }
+
+    /** The driver for a motion's target, made the first time it is asked for; null when the target isn't there. */
+    private driverFor(motion: ManifestMotion): MotionDriver | null {
+        const known = this.drivers.get(motion.target);
+        if (known !== undefined) return known;
+        const driver = this.makeDriver(motion);
+        this.drivers.set(motion.target, driver);
+        return driver;
+    }
+
+    private makeDriver(motion: ManifestMotion): MotionDriver | null {
+        const target = motionTarget(motion);
+        if (!target) return null;
+        const loaded = this.loaded;
+        switch (target.kind) {
+            case 'light': {
+                const index = loaded.manifest.lights.findIndex((light) => light.label === target.name);
+                const light = index >= 0 ? loaded.manifestLights[index] : undefined;
+                return light ? new LightDriver(loaded, light) : null;
+            }
+            case 'object': {
+                const strength = () => this.windStrengthValue;
+                const prop = loaded.manifest.props?.find((candidate) => candidate.name === target.name);
+                if (prop) return new ObjectDriver(makeProp(prop), loaded.content, strength);
+                const object = loaded.content.getObjectByName(target.name);
+                return object ? new ObjectDriver(object, null, strength) : null;
+            }
+            case 'camera':
+                return this.options.camera ? new CameraDriver(this.options.camera) : null;
+        }
+    }
 }

@@ -108,8 +108,9 @@ export async function loadCompositeScene(device: GPUDevice, sceneId: string, opt
 
 /**
  * Replaces every material of the model with the constant one the GI
- * platform received (SceneSync.sentMaterial: albedo = colour × texture
- * average × (1 − metalness), emission), as the Sponza accuracy page's GI
+ * platform received (SceneSync.sentMaterial: albedo = colour ×
+ * (1 − metalness), emission; since T4.3 without textures, which GI now
+ * samples itself), as the Sponza accuracy page's GI
  * material table and the untextured Cycles reference use. Roughness keeps
  * the material's own factor; side, transparency and opacity are kept.
  * Returns how many materials were replaced.
@@ -121,7 +122,9 @@ export function useGiMaterialTable(scene: CompositeScene): number {
         if (existing) return existing;
         const descriptor: MaterialDescriptor | undefined = scene.threeGI.sync.sentMaterial(source);
         if (!descriptor) return source;
-        const albedo = descriptor.albedo ?? [1, 1, 1];
+        // Since T4.3 the adapter sends metalness apart (the platform applies it): fold it here, as the platform does without a map.
+        const diffuse = 1 - (descriptor.metalness ?? 0);
+        const albedo = (descriptor.albedo ?? [1, 1, 1]).map((channel) => channel * diffuse);
         const emissive = descriptor.emissive ?? [0, 0, 0];
         const intensity = descriptor.emissiveIntensity ?? 1;
         const lit = source as Material & { roughness?: number };

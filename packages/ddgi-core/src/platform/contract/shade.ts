@@ -25,16 +25,21 @@ import type { WgslModule } from './wgsl';
  *     position: vec3f,       // world space, on the triangle (moved 64 rounding steps in from its edges, so a shadow ray can't start outside a closed shell)
  *     normal: vec3f,         // shading normal (interpolated vertex normal if the mesh has one), facing the ray's origin side
  *     geometricNormal: vec3f, // the triangle's own normal; used for front/back decisions
- *     uv: vec2f,
- *     albedo: vec3f,         // diffuse albedo, cutout already applied, capped per channel at bounceAlbedoCap
- *     emission: vec3f,       // emitted radiance
+ *     uv: vec2f,             // uv set 0 (texture lookups use each texture's own mapping)
+ *     albedo: vec3f,         // colour x albedo texture x (1 - metalness x metalness texture), capped per channel at bounceAlbedoCap
+ *     emission: vec3f,       // emitted radiance: emissive x intensity x emissive texture
  *     material: u32,
  *     instance: u32,
  *     frontFace: bool,
  * }
  *
- * // Reconstruct the surface at a hit from the scene copy.
+ * // Reconstruct the surface at a hit from the scene copy. Textures are read
+ * // at the mip a ray cone's footprint covers (ray cones, Ray Tracing Gems
+ * // ch. 20): log2(spread x t / max(|cos|, 0.1) x texels per metre). A
+ * // technique passes its rays' spread, sqrt(4 pi / rays per sphere) (DDGI:
+ * // 0.22 radians at 256 rays); giSurfaceAt uses that 0.22. Spread 0 reads mip 0.
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
+ * fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface
  *
  * // Direct light arriving at the surface from the lights whose group bit is
  * // set in `groupMask` (bits 0-3), as irradiance (shadow rays included).
@@ -303,6 +308,15 @@ export interface HitShadingSettings {
      * cost per probe, for a little more noise). At least 1. Defaults to 1.
      */
     lightGridShadowedLightsPerHit: number;
+    /**
+     * Whether ray hits read their materials' textures where they hit (albedo,
+     * emissive and metalness maps, M4). Off, each texture is read at its last
+     * mip, its mean, the same over the whole surface: the flat colours of
+     * before M4 (the adapter's folded averages), for comparisons. Changing it
+     * doesn't log a scene change; call
+     * `resetHistory` to see the difference at once. Defaults to true.
+     */
+    sampleTextures: boolean;
 }
 
 /**

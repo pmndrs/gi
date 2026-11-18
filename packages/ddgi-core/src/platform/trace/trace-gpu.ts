@@ -8,6 +8,7 @@
 
 import { GILimitError } from '../contract/errors.ts';
 import type { BindingSlot, ModuleBindingEntry, WgslModule } from '../contract/wgsl.ts';
+import { NO_MATERIALS_WGSL } from './material-test-wgsl.ts';
 import type { TraceSceneData } from './scene-assembly.ts';
 import { BATCH_WORKGROUP_SIZE, batchKernelWgsl, TRACE_MODULE_ENTRIES, traceModuleWgsl } from './wgsl.ts';
 
@@ -76,6 +77,8 @@ export function uploadTraceScene(device: GPUDevice, scene: TraceSceneData, label
 /**
  * The trace code and its three bindings as a platform module, so a technique's
  * kernel can include it and call `giTraceClosest` / `giTraceAny` inline.
+ * There is no scene copy here, so no materials: every triangle blocks
+ * (`NO_MATERIALS_WGSL`). The platform's own `rays` module honours materials.
  */
 export function createTraceModule(
     getBuffers: () => TraceSceneBuffers,
@@ -84,7 +87,8 @@ export function createTraceModule(
     return {
         name: 'gi-trace',
         dependencies: [],
-        code: (slot: BindingSlot) => traceModuleWgsl(slot),
+        code: (slot: BindingSlot) => `${traceModuleWgsl(slot)}
+${NO_MATERIALS_WGSL}`,
         entries: TRACE_MODULE_ENTRIES as readonly ModuleBindingEntry[],
         resources: () => {
             const buffers = getBuffers();

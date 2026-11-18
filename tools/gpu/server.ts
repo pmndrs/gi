@@ -3,8 +3,11 @@
  * TypeScript (including the shared client helper) with no build step.
  */
 
-import { resolve } from 'node:path';
-import { createServer, type ViteDevServer } from 'vite';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { extname, join, relative, resolve, sep } from 'node:path';
+import type { ServerResponse } from 'node:http';
+import { createServer, type Connect, type ViteDevServer } from 'vite';
+import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES } from './contract.ts';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
 export const SITE_ROOT = import.meta.dirname;
@@ -15,6 +18,55 @@ export interface TestSiteServer {
     close(): Promise<void>;
 }
 
+/** Where `pnpm examples:build` writes the examples site. */
+const EXAMPLES_DIST = resolve(SITE_ROOT, '../../examples/dist');
+
+const CONTENT_TYPES: Readonly<Record<string, string>> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json',
+    '.wasm': 'application/wasm',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.svg': 'image/svg+xml',
+};
+
+/** Every file under `directory`, with its size; empty when the directory doesn't exist. */
+function listFiles(directory: string): Array<{ path: string; bytes: number }> {
+    if (!existsSync(directory)) return [];
+    const files: Array<{ path: string; bytes: number }> = [];
+    const walk = (folder: string): void => {
+        for (const entry of readdirSync(folder, { withFileTypes: true })) {
+            const path = join(folder, entry.name);
+            if (entry.isDirectory()) walk(path);
+            else files.push({ path: relative(directory, path).split(sep).join('/'), bytes: statSync(path).size });
+        }
+    };
+    walk(directory);
+    return files;
+}
+
+/**
+ * Serves the files of `directory` as a static host does: a folder's
+ * index.html for a path ending in `/`, 404 for anything missing (which the
+ * browser logs, so the runner fails the page). No vite transforms: the
+ * built files are served as they are.
+ */
+function serveStatic(directory: string): Connect.NextHandleFunction {
+    return (request, response: ServerResponse) => {
+        const urlPath = decodeURIComponent((request.url ?? '/').split('?')[0]);
+        const path = resolve(directory, `.${urlPath.endsWith('/') ? `${urlPath}index.html` : urlPath}`);
+        if (!path.startsWith(directory + sep) || !existsSync(path) || !statSync(path).isFile()) {
+            response.statusCode = 404;
+            response.end('Not found');
+            return;
+        }
+        response.setHeader('Content-Type', CONTENT_TYPES[extname(path)] ?? 'application/octet-stream');
+        response.end(readFileSync(path));
+    };
+}
+
 export async function startTestSite(): Promise<TestSiteServer> {
     const server: ViteDevServer = await createServer({
         root: SITE_ROOT,
@@ -23,11 +75,11 @@ export async function startTestSite(): Promise<TestSiteServer> {
         logLevel: 'warn',
         appType: 'mpa',
         // The published names, pointed at the source as the examples' own config does, so a page can
-        // run examples/three as a user writes it (`@pmndrs/ddgi/three`).
+        // run examples/three as a user writes it (`@pmndrs/gi/three`).
         resolve: {
             alias: [
-                { find: /^@pmndrs\/ddgi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
-                { find: /^@pmndrs\/ddgi\/(core|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+                { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
+                { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
             ],
         },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.
@@ -42,6 +94,17 @@ export async function startTestSite(): Promise<TestSiteServer> {
             watch: null,
         },
         plugins: [
+            {
+                // The built examples site, as a static subdirectory (contract.ts, EXAMPLES_SITE_BASE).
+                name: 'examples-site',
+                configureServer(devServer) {
+                    devServer.middlewares.use(EXAMPLES_SITE_FILES, (_request, response) => {
+                        response.setHeader('Content-Type', 'application/json');
+                        response.end(JSON.stringify(listFiles(EXAMPLES_DIST)));
+                    });
+                    devServer.middlewares.use(EXAMPLES_SITE_BASE, serveStatic(EXAMPLES_DIST));
+                },
+            },
             {
                 // Chrome asks for /favicon.ico on every page and logs a 404 as a
                 // console error, which the runner would count as a failure.

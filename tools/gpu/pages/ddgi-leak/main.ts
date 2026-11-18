@@ -17,11 +17,15 @@
  * For comparing hysteresis rules (T1.12), two optional variables:
  * `VITE_DDGI_HYSTERESIS` (one rule from ddgi-shared/hysteresis-modes.ts, for
  * example `fixed:0.97`) and `VITE_DDGI_FRAMES` (instead of FRAMES).
+ *
+ * Under a quality preset (T5.1): `VITE_DDGI_PRESET=low|medium|high` runs it
+ * with that preset's rays, tile sizes and texture store (ddgi-shared/page-preset.ts).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
 import { createDdgiScene, imageMean, runFrames, TestView, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
+import { pagePreset, presetReport } from '../ddgi-shared/page-preset.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 
@@ -36,6 +40,8 @@ const env = import.meta.env as Record<string, unknown>;
  */
 const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDGI_FRAMES)) : 3000;
 /** The hysteresis rule, when a run names one; otherwise the technique's defaults. */
+/** The quality preset, when a run names one (T5.1). */
+const PRESET = pagePreset();
 const HYSTERESIS = typeof env.VITE_DDGI_HYSTERESIS === 'string' && env.VITE_DDGI_HYSTERESIS !== '' ? parseHysteresisMode(env.VITE_DDGI_HYSTERESIS) : null;
 const WIDTH = 640;
 const HEIGHT = 360;
@@ -75,7 +81,7 @@ await runGpuTest(
         const results: Record<string, unknown> = {};
         let twoRoomLeak = Number.NaN;
         for (const leakCase of CASES) {
-            const scene = await createDdgiScene(device, leakCase.scene, HYSTERESIS?.settings ?? {}, { ignoreLightRange: true });
+            const scene = await createDdgiScene(device, leakCase.scene, { ...PRESET?.ddgi, ...HYSTERESIS?.settings }, { ignoreLightRange: true, textureLayerSize: PRESET?.textureLayerSize });
             const field = scene.ddgi.field;
             assert(field, 'no field after prepare');
             await runFrames(device, scene.platform, FRAMES, field.grid.probeCount);
@@ -110,7 +116,7 @@ await runGpuTest(
             }
         }
         assert(twoRoomLeak <= LEAK_LIMIT, `the two-room leak is ${(twoRoomLeak * 100).toFixed(3)}% of the lit room, over the ${LEAK_LIMIT * 100}% limit`);
-        return { frames: FRAMES, hysteresis: HYSTERESIS?.name ?? 'default', ...results };
+        return { ...presetReport(PRESET), frames: FRAMES, hysteresis: HYSTERESIS?.name ?? 'default', ...results };
     },
     { optionalFeatures: ['texture-formats-tier1', 'subgroups'] },
 );

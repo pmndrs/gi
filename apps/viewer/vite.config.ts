@@ -57,13 +57,13 @@ function recordingsList(): Plugin {
 
 // The viewer consumes the library straight from source so shader and pass
 // edits hot-reload. Exact-match per subpath: a plain string key is a prefix
-// alias and would send '@pmndrs/ddgi/core' to 'index.ts/core'.
+// alias and would send '@pmndrs/gi/core' to 'index.ts/core'.
 export default defineConfig({
     root: __dirname,
     resolve: {
         alias: [
-            { find: /^@pmndrs\/ddgi$/, replacement: resolve(__dirname, '../../packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/ddgi\/(core|three|radiance-cache)$/, replacement: resolve(__dirname, '../../packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(__dirname, '../../packages/ddgi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(__dirname, '../../packages/ddgi/src/$1.ts') },
         ],
     },
     define: {

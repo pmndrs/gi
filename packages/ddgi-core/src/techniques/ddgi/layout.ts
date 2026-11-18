@@ -6,7 +6,6 @@
  */
 
 import { GILimitError } from '../../platform/contract/errors.ts';
-import type { ProbeGrid } from './settings.ts';
 
 /** One texel of border on every side of a tile, so bilinear filtering never reads a neighbour's tile. */
 export const TILE_BORDER = 1;
@@ -54,10 +53,19 @@ export interface AtlasSize {
     readonly tile: number;
 }
 
+/**
+ * Probe tiles in an atlas, ordered as `ProbeGrid.counts`: across a layer,
+ * layers, down a layer. One volume's grid is its own atlas; several volumes
+ * share one (`VolumePlan.atlasCounts`, volumes.ts).
+ */
+export interface AtlasTiles {
+    readonly counts: readonly [number, number, number];
+}
+
 /** A layer per probe row `y`; inside a layer, probe `(x, z)` owns tile `(x, z)`. */
-export function atlasSize(grid: ProbeGrid, interiorTexels: number): AtlasSize {
+export function atlasSize(tiles: AtlasTiles, interiorTexels: number): AtlasSize {
     const tile = interiorTexels + 2 * TILE_BORDER;
-    return { width: grid.counts[0] * tile, height: grid.counts[2] * tile, layers: grid.counts[1], tile };
+    return { width: tiles.counts[0] * tile, height: tiles.counts[2] * tile, layers: tiles.counts[1], tile };
 }
 
 export interface FieldLayout {
@@ -77,13 +85,13 @@ export interface FieldLayout {
     readonly layeredIrradiance: AtlasSize;
 }
 
-export function fieldLayout(grid: ProbeGrid, irradianceTexels: number, distanceTexels: number, distanceFormat: DistanceFormat, irradianceLayers = 1): FieldLayout {
-    const irradiance = atlasSize(grid, irradianceTexels);
+export function fieldLayout(tiles: AtlasTiles, irradianceTexels: number, distanceTexels: number, distanceFormat: DistanceFormat, irradianceLayers = 1): FieldLayout {
+    const irradiance = atlasSize(tiles, irradianceTexels);
     return {
         irradiance,
-        distance: atlasSize(grid, distanceTexels),
+        distance: atlasSize(tiles, distanceTexels),
         // One texel per probe, no border.
-        probeData: { width: grid.counts[0], height: grid.counts[2], layers: grid.counts[1], tile: 1 },
+        probeData: { width: tiles.counts[0], height: tiles.counts[2], layers: tiles.counts[1], tile: 1 },
         distanceFormat,
         irradianceLayers,
         layeredIrradiance: { ...irradiance, width: irradiance.width * irradianceLayers },
@@ -218,9 +226,11 @@ export const UNIFORM_WORD = {
     propagation: 90,
     holdFineProbes: 91,
     sunLight: 92,
+    probeBase: 96,
+    volumeWindow: 100,
 } as const;
-/** 96 words, a whole number of the struct's 16-byte alignment. */
-export const UNIFORM_WORDS = 96;
+/** 104 words: probeBase padded to the next vec4f, then the window. */
+export const UNIFORM_WORDS = 104;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
     UNIFORM_WORD.frustumLeft,
@@ -274,7 +284,13 @@ export const RAY_RECORD_BYTES = 8;
  *   update's mean estimate and the stored mean (a half float; T2.4b's
  *   feedback rule reads it). Written by every blend; `ddgi/mark` divides a
  *   light's change by the mean;
- * - `wakeUntil`: M3 (m3-moving.md 5.3, woken air probes);
+ * - `wakeUntil` (T3.4, m3-moving.md §5.3, woken air probes): the frame
+ *   until which the probe stays awake, compared modulo 2^32; 0 when it was
+ *   never woken or its wake has run out. `ddgi/mark` sets it to the frame
+ *   plus WAKE_FRAMES for probes near a receiver or a moved or posed object. While
+ *   it is awake, classification doesn't switch it off for "no surface
+ *   nearby", so a moving object in mid-air gets GI there. `ddgi/blend`
+ *   clears it at the first update after it ran out;
  * - `keysReceived`: for a fine probe awaiting a change (T2.4c, m2-lights.md
  *   §4.5), which of its up to 8 key neighbours have passed it their change
  *   since its own last update, in the low 8 bits (bit j: key neighbour j,
@@ -590,7 +606,8 @@ export const SCHEDULE_STATE_WORDS = SCHEDULE_STATE_WORD.histogram + PRIORITY_BUC
  * sum of the boxes before it, so a thread finds its entry by binary search.
  *
  * An entry: box min (3 u32) and kind ({@link MARK_KIND}), box size (3 u32)
- * and first thread, the global change r and 3 spare words, then the light
+ * and first thread, the global change r, the entry's flags
+ * ({@link MARK_ENTRY_FLAG}) and 2 spare words, then the light
  * before and after, `MARK_LIGHT_WORDS` each ({@link MARK_LIGHT_WORD}), then
  * the geometry block (T2.M1, {@link MARK_GEOMETRY_WORD}): a changed
  * region's world box, how far it moved and its mover bit.
@@ -603,10 +620,22 @@ export const MARK_ENTRY_WORD = {
     boxSize: 4,
     firstThread: 7,
     globalChange: 8,
+    flags: 9,
     before: 12,
     after: 12 + MARK_LIGHT_WORDS,
     geometry: 12 + 2 * MARK_LIGHT_WORDS,
 } as const;
+/** Bits of an entry's `flags` word. */
+export const MARK_ENTRY_FLAG = {
+    /**
+     * A geometry entry whose object gives off light (`DirtyRegion.emits`,
+     * T3.4): its far set takes every active probe within reach, not only
+     * those that can see the box, since its light reaches the others through
+     * bounces (wgsl/mark.ts, ddgiMarkGeometry).
+     */
+    emitter: 1 << 0,
+} as const;
+
 /** The geometry block of an entry (MARK_KIND.geometry), from MARK_ENTRY_WORD.geometry. */
 export const MARK_GEOMETRY_WORD = {
     /** The region's world box min (3 f32)... */
@@ -647,6 +676,13 @@ export const MARK_KIND = {
      * set by how much of their view it covers.
      */
     geometry: 4,
+    /**
+     * A receiver is here now (`SceneChanges.receivers`, T3.4; m3-moving.md
+     * §5.3): an object rays don't see, so nothing about the light changed,
+     * but it needs GI where it is. Probes near its box are woken (switched
+     * on even with no surface nearby); nothing is marked as changed.
+     */
+    receiver: 5,
 } as const;
 
 /**

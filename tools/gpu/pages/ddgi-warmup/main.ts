@@ -33,7 +33,9 @@ const HEIGHT = 180;
 
 async function platformFor(device: GPUDevice, sceneId: string, warmUpPasses: number | undefined) {
     const manifest = loadManifest(sceneId);
-    const platform = new GIPlatformImpl(device, { label: `warm-up ${sceneId}`, gpuTiming: true });
+    // Both runs keep their first (GPU) trees through the warm-up: tinybvh's trees replace them whenever its worker
+    // finishes, a different frame in each run, so without the hold the two fields could be traced on different trees.
+    const platform = new GIPlatformImpl(device, { label: `warm-up ${sceneId}`, gpuTiming: true, meshTrees: { holdRefinements: true } });
     describeScene(platform, manifest);
     const volume = { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing };
     const ddgi = platform.addTechnique(new DDGITechnique(warmUpPasses === undefined ? { volume } : { volume, warmUpPasses }));
@@ -85,10 +87,15 @@ await runGpuTest(
             // technique waited for the trees, so both warm up on the same frame numbers (rays are
             // seeded by the frame), and the fields can be compared value for value.
             const viewer = await platformFor(device, sceneId, 0);
+            // The meshes reach the ray queries (and start their trees) at the first frame, so `whenBuilt` is awaited
+            // only after it: awaited before any frame it resolves at once, and when the host's trees took a single
+            // frame (waitFrames 1) the replica then warmed up on trees still building (an atlas of 0, or too dark;
+            // T3.5's review). The next frame's update places the built trees before the technique traces, as
+            // the host's first warming frame does.
             const waitFrames = hostFrames - 1 - warmFrames;
-            for (let frame = 0; frame < waitFrames - 1; frame++) runFrame(device, viewer.platform, { paused: true });
+            assert(waitFrames >= 1, `${sceneId}: the host warmed up in its first frame, before any tree could be built`);
+            for (let frame = 0; frame < waitFrames; frame++) runFrame(device, viewer.platform, { paused: true });
             await viewer.platform.rays.whenBuilt();
-            runFrame(device, viewer.platform, { paused: true });
             const field = viewer.ddgi.field;
             assert(field, 'no field');
             const probeCount = field.grid.probeCount;

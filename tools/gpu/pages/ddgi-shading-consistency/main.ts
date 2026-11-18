@@ -5,8 +5,9 @@
  *
  * 1. **The module's shape:** textures, samplers and `vec4f` uniforms only, at
  *    most 6 textures, each sampler named `<texture>Sampler` and belonging to a
- *    filterable texture, no `@group` in `code`, `writeUniforms` equal to the
- *    field's sampling parameters, `version` unchanged by frames.
+ *    filterable texture, no `@group` in `code`, the volume table's one row
+ *    (read back) equal to the field's sampling parameters (since T3.5 the
+ *    volume is in the table, not in uniforms), `version` unchanged by frames.
  * 2. **The parameter path** (how an engine such as three's `wgslFn` calls
  *    it): compute kernels declare the module's resources under their own
  *    names and call the entry points with them in parameter order.
@@ -23,7 +24,7 @@
  *    forward renderer, `globalsCode(1)` bound as globals, GI-only view
  *    (`albedo / π × giIrradianceAt(...)`, rasterized), against the test
  *    view's indirect image (primary rays) at the same camera and size. They
- *    share `ddgiSampleIrradiance`, so they differ only where rasterization
+ *    share `ddgiSampleVolumes`, so they differ only where rasterization
  *    and ray tracing disagree about which surface a pixel centre sees.
  *    Tolerances: `MEAN_TOLERANCE`, `PIXEL_TOLERANCE`, `MAX_DIFFERING_SHARE`.
  * 4. **The debug views,** rasterized by the hello renderer, each against what
@@ -45,10 +46,12 @@ import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-
 import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
+import { FIXED_VOLUME_FADE, VOLUME_TABLE_ROW_FLOATS, VOLUME_TABLE_TEXEL } from '../../../../packages/ddgi-core/src/techniques/ddgi/volumes.ts';
 import { COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT, DDGI_DEBUG_COLORS, DDGI_DEBUG_VIEW } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/shading.ts';
 import { ForwardRenderer, type RenderView } from '../../../../examples/webgpu/hello/src/renderer.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
-import { imageMean, readProbeData, releaseDeviceOnPageHide, runFrames, TestView, type ProbeRecord } from '../ddgi-shared/harness.ts';
+import { DDGI_SHADING_PARAMETER_NAMES } from '../../../../packages/ddgi-core/src/techniques/ddgi/shading.ts';
+import { imageMean, readProbeData, readTextureBytes, releaseDeviceOnPageHide, runFrames, TestView, type ProbeRecord } from '../ddgi-shared/harness.ts';
 import { createHelloScene, readRgba32FloatAsRgb } from '../ddgi-shading-shared/hello-scene.ts';
 
 const SCENE = 'cornell-box-point';
@@ -143,8 +146,11 @@ class ParameterPath {
         const layoutEntries: GPUBindGroupLayoutEntry[] = [];
         const callArguments: string[] = [];
         const uniformFields: string[] = [];
+        // The engine's name for each module parameter, for calls that pass some of them (the point kernel).
+        const engineNames = new Map<string, string>();
         for (const parameter of shading.parameters) {
             const engineName = `engineResource${callArguments.length}`;
+            engineNames.set(parameter.name, engineName);
             if (parameter.kind === 'vec4f') {
                 uniformFields.push(`${engineName}: vec4f,`);
                 callArguments.push(`engineUniforms.${engineName}`);
@@ -152,7 +158,8 @@ class ParameterPath {
             }
             const binding = layoutEntries.length;
             if (parameter.kind === 'texture') {
-                declarations.push(`@group(1) @binding(${binding}) var ${engineName}: texture_2d_array<f32>;`);
+                const type = parameter.dimension === '2d-array' ? 'texture_2d_array<f32>' : 'texture_2d<f32>';
+                declarations.push(`@group(1) @binding(${binding}) var ${engineName}: ${type};`);
                 layoutEntries.push({ binding, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: parameter.sampleType, viewDimension: parameter.dimension } });
             } else {
                 declarations.push(`@group(1) @binding(${binding}) var ${engineName}: sampler;`);
@@ -160,17 +167,23 @@ class ParameterPath {
             }
             callArguments.push(engineName);
         }
+        // WGSL has no empty structs: a uniform buffer only when the module has vec4f parameters (DDGI's has none since T3.5).
         const uniformBinding = layoutEntries.length;
-        layoutEntries.push({ binding: uniformBinding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } });
+        if (uniformFields.length > 0) layoutEntries.push({ binding: uniformBinding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } });
         const resources = callArguments.join(', ');
+        const uniformDeclarations =
+            uniformFields.length > 0
+                ? `struct EngineUniforms {\n    ${uniformFields.join('\n    ')}\n}\n@group(1) @binding(${uniformBinding}) var<uniform> engineUniforms: EngineUniforms;`
+                : '';
         const engineDeclarations = /* wgsl */ `
 ${shading.code}
 ${declarations.join('\n')}
-struct EngineUniforms {
-    ${uniformFields.join('\n    ')}
-}
-@group(1) @binding(${uniformBinding}) var<uniform> engineUniforms: EngineUniforms;
+${uniformDeclarations}
 `;
+        // The summed probe weight the coverage fades by, from the one volume's (the table's row 0) field, seen head-on.
+        const names = DDGI_SHADING_PARAMETER_NAMES;
+        const atlasArguments = [names.irradiance, names.irradianceSampler, names.distance, names.distanceSampler, names.probeData].map((name) => engineNames.get(name)).join(', ');
+        const firstVolume = `ddgiTableVolume(${engineNames.get(names.volumeTable)}, 0u)`;
         const ownGroups = [{ label: 'engine resources', entries: layoutEntries }, IO_GROUP];
 
         const pixelKernel = await platform.kernels.computeKernel({
@@ -243,7 +256,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let point = testPoints[id.x];
     let normal = normalize(point.normal.xyz);
     let coverage = giCoverage(point.position.xyz, normal, ${resources});
-    let field = ddgiAccumulateField(point.position.xyz, normal, -normal, ${resources});
+    let field = ddgiAccumulateVolume(${firstVolume}, point.position.xyz, normal, -normal, ${atlasArguments});
     testResults[id.x] = vec2f(coverage, field.weight);
 }
 `,
@@ -254,18 +267,18 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     /** The module's resources, the way an engine would wrap them (group 1). */
-    private resourceGroup(layout: GPUBindGroupLayout): { group: GPUBindGroup; uniformBuffer: GPUBuffer } {
+    private resourceGroup(layout: GPUBindGroupLayout): { group: GPUBindGroup; uniformBuffer: GPUBuffer | null } {
         const device = this.device;
         const uniformFloats = new Float32Array(this.shading.parameters.filter((parameter) => parameter.kind === 'vec4f').length * 4);
         this.shading.writeUniforms(uniformFloats);
-        const uniformBuffer = device.createBuffer({ size: uniformFloats.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        device.queue.writeBuffer(uniformBuffer, 0, uniformFloats);
+        const uniformBuffer = uniformFloats.length > 0 ? device.createBuffer({ size: uniformFloats.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }) : null;
+        if (uniformBuffer) device.queue.writeBuffer(uniformBuffer, 0, uniformFloats);
         const entries: GPUBindGroupEntry[] = [];
         for (const parameter of this.shading.parameters) {
             if (parameter.kind === 'texture') entries.push({ binding: entries.length, resource: parameter.texture().createView({ dimension: parameter.dimension }) });
             else if (parameter.kind === 'sampler') entries.push({ binding: entries.length, resource: device.createSampler({ magFilter: parameter.filtering, minFilter: parameter.filtering, addressModeU: parameter.addressMode, addressModeV: parameter.addressMode }) });
         }
-        entries.push({ binding: entries.length, resource: { buffer: uniformBuffer } });
+        if (uniformBuffer) entries.push({ binding: entries.length, resource: { buffer: uniformBuffer } });
         return { group: device.createBindGroup({ layout, entries }), uniformBuffer };
     }
 
@@ -297,7 +310,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         await readback.mapAsync(GPUMapMode.READ);
         const result = readback.getMappedRange().slice(0);
         readback.unmap();
-        for (const gpuBuffer of [uniformBuffer, inputBuffer, output, readback]) gpuBuffer.destroy();
+        for (const gpuBuffer of [inputBuffer, output, readback]) gpuBuffer.destroy();
+        uniformBuffer?.destroy();
         return result;
     }
 
@@ -476,12 +490,20 @@ await runGpuTest(
             await runFrames(device, platform, FRAMES, field.grid.probeCount);
             assert(shading.version === versionBefore, 'version changed although nothing changed shape');
 
-            // 1. Shape, and the uniforms against the field's own parameters.
+            // 1. Shape, and the volume table (what the module reads the volume from) against the field's own parameters.
             const shape = checkModuleShape(shading);
-            const uniforms = new Float32Array(16);
-            shading.writeUniforms(uniforms);
+            const tableTexture = shading.parameters.find((parameter) => parameter.name === DDGI_SHADING_PARAMETER_NAMES.volumeTable);
+            assert(tableTexture?.kind === 'texture', 'the module has no volume table');
+            const tableRow = new Float32Array((await readTextureBytes(device, tableTexture.texture(), 16)).buffer);
             const fieldParameters = ddgi.field!.sampleParameters;
-            assert(uniforms.every((value, index) => value === fieldParameters[index]), `writeUniforms ${[...uniforms]} differs from the field's ${[...fieldParameters]}`);
+            // A row: the four sampling vec4s, then the window (0 for a fixed volume), the fade (half a spacing) and the valid extent (its first and last probes); T3.6.
+            assert(tableRow.length === VOLUME_TABLE_ROW_FLOATS, `the volume table holds ${tableRow.length} floats, a row is ${VOLUME_TABLE_ROW_FLOATS}`);
+            const sampling = tableRow.subarray(0, fieldParameters.length);
+            assert(sampling.every((value, index) => value === fieldParameters[index]), `the volume table ${[...sampling]} differs from the field's ${[...fieldParameters]}`);
+            const counts = field.grid.counts;
+            const windowAndExtent = [...tableRow.subarray(VOLUME_TABLE_TEXEL.window * 4)];
+            const expectedWindowAndExtent = [0, 0, 0, 0, ...FIXED_VOLUME_FADE, 0, 0, 0, 0, 0, counts[0] - 1, counts[1] - 1, counts[2] - 1, 0];
+            assert(windowAndExtent.every((value, index) => value === expectedWindowAndExtent[index]), `a fixed volume's window and extent read ${windowAndExtent}, not ${expectedWindowAndExtent}`);
             for (const parameter of shading.parameters) {
                 if (parameter.kind === 'vec4f') assert(parameter.value() === parameter.value(), `${parameter.name}.value() should return the same array each time`);
             }

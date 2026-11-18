@@ -10,24 +10,45 @@
 import {
     BufferAttribute,
     BufferGeometry,
+    ClampToEdgeWrapping,
     Color,
+    DataTexture,
     DirectionalLight,
     DoubleSide,
     FrontSide,
     Group,
     InstancedMesh,
+    LinearFilter,
+    LinearMipmapLinearFilter,
     Matrix4,
     Mesh,
+    MeshPhysicalMaterial,
     MeshStandardMaterial,
+    MirroredRepeatWrapping,
+    NoColorSpace,
     PointLight,
     RectAreaLight,
+    RepeatWrapping,
+    RGBAFormat,
     SpotLight,
+    SRGBColorSpace,
+    UnsignedByteType,
     Vector3,
     type Light,
     type Object3D,
+    type Wrapping,
 } from 'three';
 import type { LightSetFile, LightSetPart } from './manifest';
-import type { ProceduralScene, SceneLightData, SceneMaterialData, SceneMeshData, Vector3Tuple } from './scene-data';
+import type {
+    ProceduralScene,
+    SceneLightData,
+    SceneMaterialData,
+    SceneMeshData,
+    SceneTextureData,
+    SceneTextureReference,
+    SceneUvWrap,
+    Vector3Tuple,
+} from './scene-data';
 
 function linearColor(rgb: readonly [number, number, number]): Color {
     // setRGB with no colour space argument takes the values as the working
@@ -40,35 +61,93 @@ function meshToGeometry(mesh: SceneMeshData): BufferGeometry {
     geometry.setAttribute('position', new BufferAttribute(mesh.positions, 3));
     geometry.setAttribute('normal', new BufferAttribute(mesh.normals, 3));
     geometry.setAttribute('uv', new BufferAttribute(mesh.uvs, 2));
+    // three's name for uv set 1, which a texture with `channel = 1` reads (GLTFLoader's TEXCOORD_1).
+    if (mesh.uvs1) geometry.setAttribute('uv1', new BufferAttribute(mesh.uvs1, 2));
     geometry.setIndex(new BufferAttribute(mesh.indices, 1));
+    for (const group of mesh.groups ?? []) geometry.addGroup(group.start, group.count, group.materialSlot);
     geometry.name = mesh.name;
     return geometry;
 }
 
-function materialToThree(material: SceneMaterialData): MeshStandardMaterial {
+const THREE_WRAPPING: Readonly<Record<SceneUvWrap, Wrapping>> = {
+    repeat: RepeatWrapping,
+    clamp: ClampToEdgeWrapping,
+    mirror: MirroredRepeatWrapping,
+};
+
+/**
+ * A procedural texture as a three `DataTexture`, sampled the way `reference`
+ * says. `flipY` stays false (DataTexture's default), so row 0 is v = 0, as in
+ * glTF (scene-data.ts). Filtering and mips as GLTFLoader sets up a glTF
+ * texture: linear, with mipmaps.
+ */
+function textureToThree(texture: SceneTextureData, reference: SceneTextureReference): DataTexture {
+    const threeTexture = new DataTexture(texture.data, texture.width, texture.height, RGBAFormat, UnsignedByteType);
+    threeTexture.name = texture.name;
+    threeTexture.colorSpace = texture.srgb ? SRGBColorSpace : NoColorSpace;
+    threeTexture.magFilter = LinearFilter;
+    threeTexture.minFilter = LinearMipmapLinearFilter;
+    threeTexture.generateMipmaps = true;
+    const uv = reference.uv ?? {};
+    threeTexture.wrapS = THREE_WRAPPING[uv.wrapU ?? 'repeat'];
+    threeTexture.wrapT = THREE_WRAPPING[uv.wrapV ?? 'repeat'];
+    threeTexture.offset.set(...(uv.offset ?? [0, 0]));
+    threeTexture.repeat.set(...(uv.repeat ?? [1, 1]));
+    threeTexture.rotation = uv.rotation ?? 0;
+    // Rotation about the uv origin, as glTF's KHR_texture_transform (scene-data.ts, SceneUvMapping).
+    threeTexture.center.set(0, 0);
+    threeTexture.channel = uv.channel ?? 0;
+    threeTexture.needsUpdate = true;
+    return threeTexture;
+}
+
+function materialToThree(material: SceneMaterialData, textures: readonly SceneTextureData[]): MeshStandardMaterial {
     const peak = Math.max(...material.emissive);
-    return new MeshStandardMaterial({
+    const map = material.albedoMap ? textureToThree(textures[material.albedoMap.texture], material.albedoMap) : null;
+    if (material.metalnessMap && material.metalnessMap.channel !== 'b') {
+        throw new Error(`material ${material.name}: metalnessMap.channel '${material.metalnessMap.channel}': three reads metalness from the blue channel only`);
+    }
+    const metalnessMap = material.metalnessMap ? textureToThree(textures[material.metalnessMap.texture], material.metalnessMap) : null;
+    const alphaMode = material.alphaMode ?? (material.alphaCutoff !== undefined ? 'cutout' : 'opaque');
+    const parameters = {
         name: material.name,
         color: linearColor(material.albedo),
-        // Fully rough and non-metallic: the platform only models diffuse albedo.
+        map,
+        // Fully rough: the platform models diffuse albedo only. Metals keep their
+        // metalness, which is how three (and GI's albedo × (1 - metalness)) darken them.
         roughness: 1,
-        metalness: 0,
+        metalness: material.metalness ?? (metalnessMap ? 1 : 0),
+        metalnessMap,
+        opacity: material.opacity ?? 1,
+        // Blended (glTF BLEND), as GLTFLoader sets it up; GI reads it as stochastic.
+        transparent: alphaMode === 'stochastic',
+        depthWrite: alphaMode !== 'stochastic',
         // Emission above 1 is kept as colour times intensity, as three.js expects.
         emissive: peak > 0 ? new Color().setRGB(material.emissive[0] / peak, material.emissive[1] / peak, material.emissive[2] / peak) : new Color(0, 0, 0),
         emissiveIntensity: peak > 0 ? peak : 1,
+        // A cutout: three discards fragments whose alpha is below alphaTest, as GLTFLoader sets up glTF's MASK mode.
+        alphaTest: alphaMode === 'cutout' ? (material.alphaCutoff ?? 0.5) : 0,
         side: material.doubleSided ? DoubleSide : FrontSide,
-    });
+    };
+    const transmission = material.transmission ?? 0;
+    if (transmission > 0) {
+        // Clear glass, as GLTFLoader makes of KHR_materials_transmission: a physical material,
+        // smooth so it reads as a pane. The three adapter takes transmission > 0 as see-through for GI.
+        return new MeshPhysicalMaterial({ ...parameters, roughness: 0.05, transmission, ior: 1.5, thickness: 0 });
+    }
+    return new MeshStandardMaterial(parameters);
 }
 
-/** One Mesh per instance, sharing geometries and materials. */
+/** One Mesh per instance, sharing geometries and materials. A mesh with groups gets one material per slot. */
 export function proceduralSceneToThree(scene: ProceduralScene, name: string): Group {
     const root = new Group();
     root.name = name;
     const geometries = scene.meshes.map(meshToGeometry);
-    const materials = scene.materials.map(materialToThree);
+    const materials = scene.materials.map((material) => materialToThree(material, scene.textures ?? []));
 
     for (const instance of scene.instances) {
-        const mesh = new Mesh(geometries[instance.mesh], materials[instance.material]);
+        const slotMaterials = instance.materials?.map((material) => materials[material]);
+        const mesh = new Mesh(geometries[instance.mesh], slotMaterials ?? materials[instance.material]);
         mesh.name = instance.name;
         mesh.matrixAutoUpdate = false;
         mesh.matrix.fromArray(instance.transform as number[]);
