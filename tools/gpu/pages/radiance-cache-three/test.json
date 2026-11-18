@@ -1,4 +1,4 @@
 {
-    "description": "RC2.2: the radiance cache first image through the three adapter (screenInputs, the composite with its shading module by screenUV) beside DDGI, on cornell-box, two-room and sponza at 1280x720, single bounce: no negative or NaN values in the picture or the irradiance, the screen stage once per picture; a contact sheet for the screenshot. Correctness only.",
+    "description": "RC2.2: the radiance cache first image through the three adapter (screenInputs, the composite with its shading module by screenUV) beside DDGI, on cornell-box, two-room and sponza at 1280x720, single bounce through the world cache: no negative, infinite or NaN values in the picture or the irradiance after frames 1, 30 and 60, the screen stage once per picture; a contact sheet for the screenshot. Correctness only.",
     "timeoutMs": 600000
 }

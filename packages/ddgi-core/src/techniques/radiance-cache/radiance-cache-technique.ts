@@ -295,7 +295,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         };
     }
 
-    /** No world-space work in phase 2 (the world cache is phase 3): every unit is left unused. */
+    /**
+     * No world-space work: the world cache runs in `encodeScreen`, where the
+     * probe rays are (Capsaicin updates it from the screen probes' hits), so
+     * every unit is left unused.
+     */
     encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number {
         void encoder;
         void frame;

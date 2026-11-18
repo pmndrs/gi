@@ -288,7 +288,7 @@ export function viewForward(camera: Pick<FrameCamera, 'view'>): [number, number,
     const y = -view[6];
     const z = -view[10];
     const length = Math.hypot(x, y, z);
-    if (!(length > 0)) throw new Error('@pmndrs/ddgi: the radiance cache needs a camera view with a rotation');
+    if (!(length > 0)) throw new Error('@pmndrs/gi: the radiance cache needs a camera view with a rotation');
     return [x / length, y / length, z / length];
 }
 

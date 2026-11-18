@@ -287,7 +287,7 @@ export const SH_CELL_SOLID_ANGLE = (2 * Math.PI) / (PROBE_SIZE * PROBE_SIZE);
 /** Capsaicin's weight per cell in `ProjectScreenProbes`: `1 / probe_size` (gi1.comp:1468), 4/π times the solid angle. */
 export const CAPSAICIN_SH_CELL_WEIGHT = 1 / PROBE_SIZE;
 
-/** The world direction of a probe cell's centre about `normal` (`ProjectScreenProbes`, gi1.comp:1468-1473). */
+/** The world direction of a probe cell's centre about `normal` (`ProjectScreenProbes`, gi1.comp:1466-1474). */
 export function probeCellDirection(cell: number, normal: Direction): Direction {
     const { b1, b2 } = getOrthoVectors(normal);
     const [x, y, z] = mapToHemiOctahedron(((cell % PROBE_SIZE) + 0.5) / PROBE_SIZE, (Math.floor(cell / PROBE_SIZE) + 0.5) / PROBE_SIZE);
@@ -301,7 +301,7 @@ export const SH_CELL_SUBSAMPLES = 4;
  * A probe cell's mean SH basis about `normal`: the basis averaged over
  * `subsamples²` points spread evenly over the cell in the hemi-octahedral
  * square (equal-area, so evenly over its solid angle too). With 1 it is the
- * basis at the cell centre, as Capsaicin takes it (gi1.comp:1468-1473).
+ * basis at the cell centre, as Capsaicin takes it (gi1.comp:1466-1474).
  */
 export function probeCellSH(cell: number, normal: Direction, subsamples = SH_CELL_SUBSAMPLES): number[] {
     const { b1, b2 } = getOrthoVectors(normal);

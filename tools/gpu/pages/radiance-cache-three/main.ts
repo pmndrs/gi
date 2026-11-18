@@ -1,8 +1,8 @@
 /**
  * RC2.2: the radiance cache's first image through the three adapter, beside
  * DDGI's, on `cornell-box`, `two-room` and `sponza` (with curtains) from each
- * scene's first bookmark at 1280 × 720, single bounce (phase 2 has no world
- * cache).
+ * scene's first bookmark at 1280 × 720: screen probes lit through the world
+ * cache (RC3.2), single bounce until RC3.3.
  *
  * One platform per scene, the viewer's loader and `ThreeGI` (the shared
  * composite harness), with DDGI as the output technique (warmed for 120
@@ -18,9 +18,10 @@
  * stage's `encodeScreen`).
  *
  * Checks, by readback: the radiance cache's picture and its irradiance image
- * hold no negative, infinite or NaN value; its irradiance is not black on
- * surfaces (some light arrives); the screen stage ran once per picture; no
- * device error (the harness).
+ * hold no negative, infinite or NaN value after its frames 1, 30 and 60 (the
+ * world cache fills over frames); its irradiance is not black on surfaces
+ * (some light arrives); the screen stage ran once per picture; no device
+ * error (the harness). The sheet shows frame 60.
  *
  * The contact sheet the runner's screenshot captures: per scene, DDGI, the
  * radiance cache, the radiance cache's E / π (what a white surface would
@@ -47,8 +48,10 @@ const SCENES = ['cornell-box', 'two-room', 'sponza'] as const;
 /** DDGI's warm-up, as the composite pages (three-composite, three-composite-sponza). */
 const GI_FRAMES = 120;
 const PROBES_PER_FRAME = 4096;
-/** Frames of the radiance cache before the picture that counts (phase 2 keeps no history, so one would do). */
+/** DDGI's pictures before the one that counts (its field is already warm). */
 const WARM_FRAMES = 3;
+/** The radiance cache's frames at which its picture and irradiance are scanned; the last is the sheet's. */
+const SCAN_FRAMES = [1, 30, 60] as const;
 /** Contact sheet thumbnails, CSS pixels. */
 const THUMBNAIL_WIDTH = 300;
 /** The sheet's exposure puts DDGI's mean surface luminance here before tone mapping. */
@@ -68,6 +71,24 @@ interface SceneResult {
     readonly backupHints: number;
     readonly screenStages: number;
     readonly probes: number;
+    /** NaN or infinite, and negative, values per scanned frame: picture, then irradiance. */
+    readonly scans: readonly { frame: number; meanIrradiance: number; pictureNonFinite: number; pictureNegative: number; irradianceNonFinite: number; irradianceNegative: number }[];
+}
+
+/** NaN or infinite values (any channel) and negative ones (rgb) in an RGBA float image, and its mean rgb over every pixel. */
+function countBad(values: Float32Array): { nonFinite: number; negative: number; meanRgb: number } {
+    let nonFinite = 0;
+    let negative = 0;
+    let sum = 0;
+    for (let index = 0; index < values.length; index++) {
+        const value = values[index];
+        if (!Number.isFinite(value)) nonFinite++;
+        else if (index % 4 !== 3) {
+            if (value < 0) negative++;
+            sum += value;
+        }
+    }
+    return { nonFinite, negative, meanRgb: sum / ((values.length / 4) * 3) };
 }
 
 /**
@@ -136,14 +157,27 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         for (let warm = 0; warm < WARM_FRAMES; warm++) await frame(ddgiComposite);
         const ddgi = await frame(ddgiComposite);
         const stagesBefore = stage.stages;
-        for (let warm = 0; warm < WARM_FRAMES; warm++) await frame(rcComposite);
-        const picture = await frame(rcComposite);
+        const scans: SceneResult['scans'][number][] = [];
+        let picture: Float32Array = new Float32Array(0);
+        let irradiance: Float32Array = new Float32Array(0);
+        for (let rcFrame = 1; rcFrame <= SCAN_FRAMES[SCAN_FRAMES.length - 1]; rcFrame++) {
+            picture = await frame(rcComposite);
+            if (!(SCAN_FRAMES as readonly number[]).includes(rcFrame)) continue;
+            const probes = radianceCache.probes;
+            if (!probes) throw new Error(`${sceneId}: the radiance cache has no probes after its screen stages`);
+            irradiance = halves(await readTexture(device, probes.irradiance, 8, SIZE.width, SIZE.height));
+            const pictureBad = countBad(picture);
+            const irradianceBad = countBad(irradiance);
+            scans.push({ frame: rcFrame, meanIrradiance: irradianceBad.meanRgb, pictureNonFinite: pictureBad.nonFinite, pictureNegative: pictureBad.negative, irradianceNonFinite: irradianceBad.nonFinite, irradianceNegative: irradianceBad.negative });
+            assert(pictureBad.nonFinite === 0 && pictureBad.negative === 0, `${sceneId} frame ${rcFrame}: the radiance cache's picture has ${pictureBad.nonFinite} values not finite and ${pictureBad.negative} negative`);
+            assert(irradianceBad.nonFinite === 0 && irradianceBad.negative === 0, `${sceneId} frame ${rcFrame}: the irradiance image has ${irradianceBad.nonFinite} values not finite and ${irradianceBad.negative} negative`);
+        }
         const screenStages = stage.stages - stagesBefore;
-        assert(screenStages === WARM_FRAMES + 1, `${sceneId}: ${screenStages} screen stages for ${WARM_FRAMES + 1} pictures`);
+        const pictures = SCAN_FRAMES[SCAN_FRAMES.length - 1];
+        assert(screenStages === pictures, `${sceneId}: ${screenStages} screen stages for ${pictures} pictures`);
 
         const probes = radianceCache.probes;
         if (!probes) throw new Error(`${sceneId}: the radiance cache has no probes after its screen stages`);
-        const irradiance = halves(await readTexture(device, probes.irradiance, 8, SIZE.width, SIZE.height));
         const probeCount = new Uint32Array(await readProbeCount(device, probes.probeSpawn))[0];
 
         // Surfaces, from the radiance cache's pass as it last drew (no new frame).
@@ -196,7 +230,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         row.style.gap = '4px';
         sheet.append(row);
         addThumbnail(row, `${sceneId}: DDGI`, toDisplay(ddgi, exposure));
-        addThumbnail(row, `${sceneId}: radiance cache (1 bounce)`, toDisplay(picture, exposure));
+        addThumbnail(row, `${sceneId}: radiance cache (1 bounce, frame ${pictures})`, toDisplay(picture, exposure));
         const whiteSurface = Float32Array.from(irradiance, (value, index) => (index % 4 === 3 ? 1 : value / Math.PI));
         addThumbnail(row, `${sceneId}: radiance cache E / pi`, toDisplay(whiteSurface, exposure));
         const debugTarget = device.createTexture({ size: [SIZE.width, SIZE.height], format: 'rgba8unorm', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC });
@@ -223,6 +257,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             backupHints,
             screenStages,
             probes: probeCount,
+            scans,
         };
     } finally {
         reader.dispose();

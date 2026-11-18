@@ -222,7 +222,7 @@ ${WORKGROUP_INDEX_WGSL}
 // the radiance, c_i = the integral of L Y_i over the hemisphere, here a sum over 64 equal-area
 // cells of the cell's radiance times the integral of Y_i over the cell: its solid angle times
 // the basis averaged over the cell, from RC_SH_CELL_SUBSAMPLES^2 points spread evenly over it.
-// Capsaicin takes 1 / probe_size and the basis at the cell centre (gi1.comp:1468-1473): 4 / pi
+// Capsaicin takes 1 / probe_size and the basis at the cell centre (gi1.comp:1466-1474): 4 / pi
 // times the solid angle, and a centre point that leans towards the normal, so a constant sky
 // of radiance L reads about 4.08 L where irradiance is pi L (1.30 x). The cell-mean basis reads
 // within 0.2% of pi L (screen-irradiance.test.ts).

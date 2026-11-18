@@ -7,18 +7,26 @@
  *   GI only and GI off;
  * - each of its debug views (probe atlas, probe mask, probe SH) draws;
  * - the split wipe against DDGI draws, DDGI warmed up the viewer's way;
- * - no device error, nothing logged as an error, the technique never fails,
- *   and its platform compiles nothing after `prepare` (`stats.recompiles`).
+ * - no device error, nothing logged as an error, the technique never fails;
+ * - with GI on from the first frame after it starts, its per-pixel output
+ *   (the interpolated irradiance E, which the composite adds as
+ *   `giAlbedo × E / π`) and its probe atlas hold no NaN, infinite or negative
+ *   value after frames 1, 30 and 60 (RC3.2's deferred check, through the
+ *   viewer's own path: the world cache lights the probe rays since RC3.2).
  *
- * The page ends on Sponza's wipe (radiance cache left, DDGI right, GI on)
- * for the runner's screenshot. The picture's values are checked by the
- * adapter page (radiance-cache-three); this one checks the viewer's wiring.
+ * The page ends on the last scene's radiance cache, GI on, for the runner's
+ * screenshot. The composited picture's values are checked by the adapter
+ * page (radiance-cache-three) too; this one checks the viewer's wiring.
  *
- * Correctness only (DECISIONS 2026-11-09):
- * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc2.2 viewer" -- pnpm test:gpu --filter radiance-cache-viewer --gpu nvidia --out bench/screenshots/rc2.2`.
+ * `VITE_RC_VIEWER_SCENES` picks the scenes (comma-separated; default all
+ * three), so a run per scene leaves a screenshot per scene.
+ *
+ * Correctness only (DECISIONS 2026-11-09), through the lock, e.g.:
+ * `VITE_RC_VIEWER_SCENES=sponza node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-viewer --out bench/screenshots/rc2.2/sponza`.
  */
 
 import { reportGpuTest, summarizeAdapterInfo } from '../../client.ts';
+import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { ViewerCore, type ViewLayout } from '../../../../apps/viewer/src/core/viewer-core.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
@@ -26,7 +34,11 @@ import type { GiMode } from '../../../../apps/viewer/src/scene/layers.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
-const SCENES = ['cornell-box', 'two-room', 'sponza'];
+const env = import.meta.env as Record<string, unknown>;
+const ALL_SCENES = ['cornell-box', 'two-room', 'sponza'];
+const SCENES = typeof env.VITE_RC_VIEWER_SCENES === 'string' && env.VITE_RC_VIEWER_SCENES.trim() !== '' ? env.VITE_RC_VIEWER_SCENES.split(',').map((id) => id.trim()) : ALL_SCENES;
+/** Frames after the start, GI on, at which the output is scanned for NaN, infinite and negative values. */
+const SCAN_FRAMES = [1, 30, 60];
 /** Frames drawn for each view checked. */
 const FRAMES_PER_VIEW = 4;
 /** How long the techniques get to start, per scene. */
@@ -60,6 +72,23 @@ async function showReady(core: ViewerCore, layout: Partial<ViewLayout>): Promise
     }
 }
 
+/** NaN, infinite and negative values in a texture of four halves a texel (rgba16float); alpha is checked for finite only. */
+async function scanHalves(device: GPUDevice, texture: GPUTexture): Promise<{ nonFinite: number; negative: number; meanRgb: number }> {
+    const values = halves(await readTexture(device, texture, 8, texture.width, texture.height));
+    let nonFinite = 0;
+    let negative = 0;
+    let sum = 0;
+    for (let index = 0; index < values.length; index++) {
+        const value = values[index];
+        if (!Number.isFinite(value)) nonFinite++;
+        else if (index % 4 !== 3) {
+            if (value < 0) negative++;
+            sum += value;
+        }
+    }
+    return { nonFinite, negative, meanRgb: sum / ((values.length / 4) * 3) };
+}
+
 const failures: string[] = [];
 const data: Record<string, unknown> = {};
 let core: ViewerCore | null = null;
@@ -67,9 +96,12 @@ try {
     const canvas = document.createElement('canvas');
     canvas.width = WIDTH;
     canvas.height = HEIGHT;
-    canvas.style.width = `${WIDTH}px`;
-    canvas.style.height = `${HEIGHT}px`;
+    // Drawn at 1280 × 720 (resize below); shown scaled to fit the runner's window, so the screenshot holds all of it.
+    canvas.style.display = 'block';
+    canvas.style.width = `min(100vw, calc(100vh * ${WIDTH} / ${HEIGHT}))`;
+    canvas.style.aspectRatio = `${WIDTH} / ${HEIGHT}`;
     document.body.style.margin = '0';
+    document.body.style.overflow = 'hidden';
     document.body.append(canvas);
     core = await ViewerCore.create(canvas);
     core.resize(WIDTH, HEIGHT);
@@ -92,6 +124,27 @@ try {
         await showReady(core, { left: 'rc', right: null, giMode: 'on' });
         const technique = core.getTechnique('rc');
         if (!(technique instanceof RadianceCacheViewerTechnique)) throw new Error('the rc technique is not the radiance cache');
+
+        // The scan: frames 1, 30 and 60 after the start, GI on.
+        const scans: Record<string, unknown>[] = [];
+        let drawn = 0;
+        for (const frame of SCAN_FRAMES) {
+            await drawFrames(core, frame - drawn);
+            drawn = frame;
+            const probes = technique.radianceCache?.probes;
+            if (!probes) {
+                failures.push(`${sceneId}: no probes after frame ${frame}`);
+                continue;
+            }
+            const irradiance = await scanHalves(core.device, probes.irradiance);
+            const atlas = await scanHalves(core.device, probes.probeAtlas);
+            scans.push({ frame, frameIndex: probes.frameIndex, irradiance, probeAtlas: atlas });
+            for (const [name, scan] of [['irradiance', irradiance], ['probe atlas', atlas]] as const) {
+                if (scan.nonFinite > 0 || scan.negative > 0) failures.push(`${sceneId} frame ${frame}: the ${name} has ${scan.nonFinite} values not finite and ${scan.negative} negative`);
+            }
+            if (!(irradiance.meanRgb > 0)) failures.push(`${sceneId} frame ${frame}: no irradiance anywhere`);
+        }
+
         const views: string[] = [];
         for (const mode of ['on', 'only', 'off', 'on'] as GiMode[]) {
             core.setLayout({ giMode: mode });
@@ -112,10 +165,15 @@ try {
         if (newErrors.length > 0) failures.push(`${sceneId}: device errors: ${newErrors.slice(0, 3).join(' | ')}`);
         if (technique.failed) failures.push(`${sceneId}: the radiance cache failed: ${technique.failed}`);
         const status = core.statusLines();
-        data[sceneId] = { views, status, gpuErrors: newErrors.length };
+        data[sceneId] = { views, scans, status, gpuErrors: newErrors.length };
         log(`${sceneId}: ${status.join(' / ')}`);
-        // Leave Sponza's wipe on screen for the screenshot.
-        if (sceneId !== SCENES[SCENES.length - 1]) core.unloadScene();
+        if (sceneId !== SCENES[SCENES.length - 1]) {
+            core.unloadScene();
+        } else {
+            // The radiance cache alone, GI on, for the runner's screenshot.
+            core.setLayout({ left: 'rc', right: null, giMode: 'on' });
+            await drawFrames(core, FRAMES_PER_VIEW);
+        }
     }
     if (consoleErrors.length > 0) failures.push(`logged errors: ${consoleErrors.slice(0, 3).join(' | ')}`);
     reportGpuTest({

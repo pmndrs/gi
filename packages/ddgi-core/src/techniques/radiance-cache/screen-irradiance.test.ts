@@ -114,7 +114,7 @@ describe('the projection and its units (ProjectScreenProbes, InterpolateScreenPr
             // The basis at the cell centre alone leans towards the normal: 2.1% high even with the solid angle.
             const centres = shIrradiance(projectProbe(() => radiance, normal, SH_CELL_SOLID_ANGLE, 1), normal);
             expect(centres / (Math.PI * radiance)).toBeCloseTo(1.021, 3);
-            // Capsaicin: 1 / probe_size and the centre (gi1.comp:1468-1473): 4 / pi times that again, 4.08 L.
+            // Capsaicin: 1 / probe_size and the centre (gi1.comp:1466-1474): 4 / pi times that again, 4.08 L.
             const capsaicin = shIrradiance(projectProbe(() => radiance, normal, CAPSAICIN_SH_CELL_WEIGHT, 1), normal);
             expect(capsaicin / centres).toBeCloseTo(4 / Math.PI, 9);
             expect(capsaicin / radiance).toBeCloseTo(4.084, 2);

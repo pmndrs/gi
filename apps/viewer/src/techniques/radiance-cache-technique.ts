@@ -1,5 +1,6 @@
 /**
- * The radiance cache (AMD GI-1.0/1.2, phase 2: single bounce, no history),
+ * The radiance cache (AMD GI-1.0/1.2: screen probes and the world cache,
+ * single bounce until RC3.3, no history until phase 4),
  * through the three.js adapter, the way a three user builds a screen-space
  * technique (docs/api/three.md):
  *
@@ -119,7 +120,8 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         // Chrome sends the compile requests when this JavaScript task ends (ThreeGI's file comment).
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (this.disposed) return;
-        // The radiance cache has no world-space budget in phase 2: its work is the screen stage.
+        // The radiance cache has no world-space budget: all of its work, the world cache's
+        // included, is the screen stage.
         const threeGI = new ThreeGI(platform, loaded.scene, { preparing, budget: { units: 0 }, environment: environmentFor(loaded.manifest), warn: (message) => this.warn(message) });
         this.threeGI = threeGI;
         // Only this technique's camera sees its GI light; the adapter keeps the layers when it replaces the light.
@@ -177,6 +179,11 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         return this.failure;
     }
 
+    /** The core technique once started (its probes and irradiance, for checks and readbacks), or null. */
+    get radianceCache(): RadianceCacheTechnique | null {
+        return this.technique;
+    }
+
     setGiMode(mode: GiMode): void {
         this.giMode = mode;
         this.applyLayers();
@@ -214,7 +221,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
                 return `Could not start: ${this.failure}`;
             case 'ready': {
                 const tiles = this.technique?.counters['spawn tiles'] ?? 0;
-                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each; one bounce, no history yet (phase 2)`;
+                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each, lit through the world cache (hash grid); one bounce, no history yet`;
             }
         }
     }
