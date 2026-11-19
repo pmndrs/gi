@@ -83,6 +83,13 @@
  *    and screen records' mean targets and the share of screen records with a
  *    zero target (rays that missed: no sky in the targets).
  *
+ * 10. **A sky and no sun** (the corner, floor and wall albedo 0.5, a sky of
+ *    radiance 1, 120 frames): before RC3.4 a cache cell gets no sky light
+ *    (register D33), so GI-1.2's hit rays read 0, and so must the tail's: its
+ *    screen records take only what the cache holds at a ray's hit, and a
+ *    miss is a 0 (a target with the sky in it would light the second hits).
+ *    Hit rays' mean under 1% of the lit value.
+ *
  * No glossy case: the platform's materials are diffuse (register D8), so
  * GI-1.1's reflections, where the pathtracer found the network halves the
  * converged error, can't be checked here yet.
@@ -159,7 +166,7 @@ const GI1: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache:
 const TAIL: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail' };
 const TAIL_NO_SCREEN: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail', neural: { screenStride: 0 } };
 
-type SceneKind = 'litPlane' | 'corner' | 'furnace' | 'strips';
+type SceneKind = 'litPlane' | 'corner' | 'skyCorner' | 'furnace' | 'strips';
 type Surface = 'floor' | 'wall' | 'ceiling' | 'other';
 
 interface ProbeRay {
@@ -210,6 +217,11 @@ function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
     }
     quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
     quad(platform, 'wall', [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]], [0, 0, 1], kind === 'litPlane' ? 0 : ALBEDO);
+    if (kind === 'skyCorner') {
+        // Section 10: no sun, a sky of radiance 1.
+        platform.scene.setEnvironment({ type: 'color', color: [1, 1, 1], intensity: 1 });
+        return CORNER_CAMERA;
+    }
     platform.scene.createLight({ type: 'directional', direction: SUN_TRAVEL, color: [1, 1, 1], intensity: SUN_INTENSITY, label: 'sun' });
     platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
     return CORNER_CAMERA;
@@ -984,6 +996,17 @@ try {
         if (rays.inUse !== 'gi1-rays' || !rays.gateOpen || rays.warnings !== 0) {
             fail(`with DDGI stacked, 'gi1-rays': the second bounce from ${rays.inUse}, gate ${rays.gateOpen ? 'open' : 'shut'}, ${rays.warnings} warnings (expected gi1-rays, open, 0)`);
         }
+    }
+
+    // 10. A sky and no sun: the tail brings no sky (screen records are the hits only).
+    if (runs(10)) {
+        const hitJudge: Judge = (ray) => (ray.hitT >= 0 && (ray.surface === 'floor' || ray.surface === 'wall') ? 0 : null);
+        const [gi1] = await runScenario(device, 'skyCorner', GI1, 120, [hitJudge]);
+        const [tail] = await runScenario(device, 'skyCorner', TAIL, 120, [hitJudge]);
+        // meanError is the hit rays' mean over the lit value (0.9): a sky of 1 counted at the second hits would give tenths.
+        data.skyOnly = { gi1HitMeanOverLit: Number(final(gi1).toFixed(5)), tail: summary(tail), judged: tail.judged };
+        if (!(final(tail) < 0.01)) fail(`sky only: the tail's hit rays read ${(final(tail) * LIT_RADIANCE).toFixed(4)} on average (expected 0: a cell has no sky light before RC3.4, so the tail must bring none)`);
+        if (tail.judged < 1000 || !tail.tailGateOpen) fail(`sky only: ${tail.judged} judged rays, gate ${tail.tailGateOpen ? 'open' : 'shut'}`);
     }
 
     // 7. The f32 fallback on a default-limits device (16 KiB of workgroup memory, no shader-f16).
