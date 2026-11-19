@@ -41,6 +41,11 @@
  *    L_f1 / (1 − ρ² / 2) = 0.7276 and the ceiling's ρ / 2 × that = 0.1819.
  *    Same tolerances.
  *
+ * 6b. **Every ray bypasses** (cells of 900 pixels, wider than the gap, as
+ *    radiance-cache-world-cache's section 14): a probe ray shorter than its
+ *    cell reads no cell, so with DDGI's bounce off it reads 0.3183 only through
+ *    the bypass routing (the value added to its own probe ray). Within 3%.
+ *
  * 7. **What runs:** with 'ddgi-volume' the frame has no second-bounce entry
  *    and no second-bounce shadow ray, and the cache reports 'ddgi-volume' in
  *    use; asked for 'ddgi-volume' with nothing stacked under it, the cache
@@ -367,6 +372,8 @@ interface AccuracyCase {
     readonly ddgiBounce: number;
     readonly expected: number;
     readonly tolerance: number;
+    /** More radiance-cache settings for the case. */
+    readonly extra?: Partial<RadianceCacheSettings>;
 }
 
 const ACCURACY_CASES: readonly AccuracyCase[] = [
@@ -376,12 +383,24 @@ const ACCURACY_CASES: readonly AccuracyCase[] = [
     { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: 0.02 },
     { name: '5 strips, ddgi-volume, DDGI bounce off (second bounce)', strips: true, mode: 'ddgi-volume', ddgiBounce: 0, expected: EXPECTED.stripsSecondBounce, tolerance: 0.03 },
     { name: '6 strips, ddgi-volume, DDGI bounce on (every bounce)', strips: true, mode: 'ddgi-volume', ddgiBounce: 1, expected: EXPECTED.stripsEveryBounce, tolerance: 0.03 },
+    // Cells of 900 pixels (3.7 m a metre away, wider than the 3 m gap): nearly every probe ray is
+    // shorter than its cell, reads no cell, and gets its indirect light only through the bypass
+    // routing (register D38), so a ray reading 0 there would pull the mean down.
+    {
+        name: '6b furnace, every ray bypasses, ddgi-volume, DDGI bounce off (second bounce)',
+        strips: false,
+        mode: 'ddgi-volume',
+        ddgiBounce: 0,
+        expected: EXPECTED.secondBounce,
+        tolerance: 0.03,
+        extra: { hashGridCacheCellSize: 900 },
+    },
 ];
 
 async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: string[]): Promise<Record<string, unknown>> {
     const scenario = await startScenario(device, testCase.name, {
         scene: { kind: 'furnace', strips: testCase.strips },
-        settings: { secondBounce: testCase.mode },
+        settings: { secondBounce: testCase.mode, ...testCase.extra },
         // gi1-rays runs DDGI too (stacked but not read), so both sides carry the same scene and passes.
         ddgi: { ...DDGI_ACCURACY, bounceEnergy: testCase.ddgiBounce },
     });
