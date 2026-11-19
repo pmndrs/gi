@@ -850,7 +850,7 @@ fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLi
 // offers it as its environment light's cosine mode (light_sampling.hlsl:164-182;
 // its default draws the hemisphere uniformly, pdf 1 / (2 pi): the same mean,
 // noisier). A host sky with a sharp sun painted in would want the map's
-// brightness drawn too (the radiance cache's register D59, its way forward).
+// brightness drawn too (the radiance cache's register D62, its way forward).
 
 // The sky's weight among giDirectChooseLight's candidates, in the same units
 // as a light's (the luminance of unshadowed irradiance): the sky's irradiance

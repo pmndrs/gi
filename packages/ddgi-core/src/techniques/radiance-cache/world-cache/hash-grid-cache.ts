@@ -727,7 +727,7 @@ export class HashGridCache implements WorldCache {
         floats[word.maxMultibounceSampleCount] = secondBounce === 'fallback' ? options.fallbackIndirectSampleCount : options.hashGridCacheMaxMultibounceSampleCount;
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
         words[word.useMultibounce] = options.useMultibounce ? 1 : 0;
-        // RC3.4's sky light (register D59), left out in E10's fallback mode: the fallback's field
+        // RC3.4's sky light (register D62), left out in E10's fallback mode: the fallback's field
         // already holds the sky that reaches a hit (radiance-cache-ddgi-bounce's sky section).
         words[word.environmentLightEnable] = hashGridCacheSamplesSky(options, secondBounce) ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);

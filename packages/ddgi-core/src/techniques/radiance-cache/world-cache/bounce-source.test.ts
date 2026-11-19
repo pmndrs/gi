@@ -81,7 +81,7 @@ describe("experiment E10: the world cache's second bounce from a stacked techniq
         expect(hashGridCacheSamplesSky({ environmentLightEnable: true }, 'gi1-rays')).toBe(true);
         expect(hashGridCacheSamplesSky({ environmentLightEnable: true }, 'fallback')).toBe(false);
         expect(hashGridCacheSamplesSky({ environmentLightEnable: false }, 'gi1-rays')).toBe(false);
-        // RC3.4's default: the sky is a light (register D59), except with the fallback.
+        // RC3.4's default: the sky is a light (register D62), except with the fallback.
         expect(hashGridCacheSamplesSky(DEFAULT_HASH_GRID_CACHE_OPTIONS, 'gi1-rays')).toBe(true);
         expect(hashGridCacheSamplesSky(DEFAULT_HASH_GRID_CACHE_OPTIONS, 'fallback')).toBe(false);
     });

@@ -424,7 +424,7 @@ const ACCURACY_CASES: readonly AccuracyCase[] = [
     { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02 },
     { name: '2 furnace, fallback, DDGI bounce off (second bounce)', strips: false, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.secondBounce, tolerance: 0.03 },
     { name: '3 furnace, fallback, DDGI bounce on (every bounce)', strips: false, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.everyBounce, tolerance: 0.03 },
-    // 4%: since register D60 the ceiling's unlit hits count, so a far strip-floor cell that shares a
+    // 4%: since register D63 the ceiling's unlit hits count, so a far strip-floor cell that shares a
     // hash column with the ceiling reads the strips' light times its floor share, and GI-1.2's rays
     // landing there bring less (measured 0.973 here, 0.973 in radiance-cache-world-cache's strips,
     // whose 1% analytic gate on landings in floor tiles under 2 m holds the cells' own values).
@@ -515,7 +515,7 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
 /**
  * 6d. **The sky, counted once** (RC3.4's sky light with E10): the open floor under a constant
  * sky L, no other light, `environmentLightEnable` on (its default). With GI-1.2's rays the sky
- * reaches a floor hit through the hit's own light sample (register D59) and the second bounce's
+ * reaches a floor hit through the hit's own light sample (register D62) and the second bounce's
  * misses add nothing; with the fallback the cache's light choice leaves the sky out
  * (`hashGridCacheSamplesSky`) and DDGI's field, which holds the sky (E = πL on the open floor),
  * brings it as the hit's indirect light. Either way a floor probe ray reads ρ L (the patch hides

@@ -180,7 +180,7 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         }
     }
 
-    // The frame's reservoirs: how many drew the sky as their light (RC3.4, register D59).
+    // The frame's reservoirs: how many drew the sky as their light (RC3.4, register D62).
     const lists = cache.rayLists;
     const counters = new Uint32Array(await readRange(device, cache.buffers.tileWords, 0, 64 * 4));
     const shadowRays = counters[HASH_GRID_COUNTER.visibilityRayCount];
