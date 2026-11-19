@@ -26,6 +26,7 @@
     "devDependencies": {
         "@babylonjs/core": "9.33.2",
         "@eslint/js": "^9.18.0",
+        "@pmndrs/denoiser-ffx": "link:../pmndrs-denoiser/packages/denoiser-ffx",
         "@pmndrs/upscaler": "0.5.0",
         "@types/node": "24.19.2",
         "@types/three": "0.187.0",

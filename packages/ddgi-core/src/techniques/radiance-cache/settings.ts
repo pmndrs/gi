@@ -75,6 +75,12 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * The image-space GI denoiser (`ReprojectGI`, `FilterGI` × 2; RC4.3, gi-denoiser.ts) runs
+     * on the interpolated irradiance and the composite reads its output. On by default: Capsaicin
+     * always runs it (gi1.cpp:2881-2926). Off shows the raw interpolation. Read every frame.
+     */
+    denoiser: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -94,6 +100,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    denoiser: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

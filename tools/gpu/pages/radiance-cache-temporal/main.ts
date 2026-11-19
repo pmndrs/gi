@@ -14,7 +14,8 @@
  *    frame 1 and 0.87 at steady state; with Capsaicin's empty-cell rule this
  *    page reads 0.68 by frame 30 and fails. The share of probe cells no ray
  *    reached is reported (about 40% with history, from sampling with
- *    replacement).
+ *    replacement). RC4.3: the GI denoiser's output on the same floor (the
+ *    term the composite reads) must read πL within 1% too, every frame.
  * 2. **The sums can't wrap** (register D40; the RC4.1 done-when from RC2.1's
  *    review): a sky of 60,000 above 65° elevation and black below, so ray
  *    guiding piles a probe's rays into the few bright cells. Every cell's hit
@@ -255,11 +256,16 @@ function screenGeometry(readback: ScreenReadback, camera: PageCamera): { world: 
     };
 }
 
-/** The floor pixels' E / (πL): the mean, the 95th percentile of |ratio − 1|, and bad values. */
-async function floorRatios(device: GPUDevice, run: Run, isSky: (pixel: number) => boolean, expected: number): Promise<{ mean: number; p95: number; worst: number; bad: number }> {
+/**
+ * The floor pixels' E / (πL): the mean, the 95th percentile of |ratio − 1|, and bad values.
+ * `denoised`: the GI denoiser's output (RC4.3) instead of the interpolated irradiance.
+ */
+async function floorRatios(device: GPUDevice, run: Run, isSky: (pixel: number) => boolean, expected: number, denoised = false): Promise<{ mean: number; p95: number; worst: number; bad: number }> {
     const probes = run.technique.probes;
     if (!probes) throw new Error('no probes after encodeScreen');
-    const irradiance = halvesFast(await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT));
+    const source = denoised ? probes.denoisedIrradiance : probes.irradiance;
+    if (!source) throw new Error('no denoised irradiance: the GI denoiser is off');
+    const irradiance = halvesFast(await readTexture(device, source, 8, WIDTH, HEIGHT));
     const errors: number[] = [];
     let sum = 0;
     let bad = 0;
@@ -312,6 +318,11 @@ async function checkConstantSky(device: GPUDevice, fail: (message: string) => vo
         let worstMean = 0;
         let worstP95 = 0;
         let bad = 0;
+        // RC4.3: the same floor through the GI denoiser (the term the composite reads): a constant
+        // field must pass through unchanged, still and moving (its disocclusions at the screen edge).
+        let denoisedWorstMean = 0;
+        let denoisedWorstP95 = 0;
+        const denoisedPerFrame: Array<{ frame: number; moving: boolean; mean: number; p95: number }> = [];
         const reportFrames = new Set([1, 2, 3, 4, 8, 16, 32, 48, 64, 96, 128, 200, 300, STILL_FRAMES, STILL_FRAMES + 1, STILL_FRAMES + 30, STILL_FRAMES + MOVING_FRAMES]);
         const coverageFrames = new Set([1, 2, 10, 100, STILL_FRAMES]);
         for (let frame = 1; frame <= STILL_FRAMES + MOVING_FRAMES; frame++) {
@@ -326,6 +337,13 @@ async function checkConstantSky(device: GPUDevice, fail: (message: string) => vo
             if (!(Math.abs(ratios.mean - 1) <= LAMBERT_TOLERANCE)) fail(`constant sky, frame ${frame}${moving ? ' (moving)' : ''}: mean E / (pi L) is ${ratios.mean.toFixed(4)}`);
             if (!(ratios.p95 <= LAMBERT_TOLERANCE)) fail(`constant sky, frame ${frame}${moving ? ' (moving)' : ''}: 95th percentile |E / (pi L) - 1| is ${(ratios.p95 * 100).toFixed(3)}%`);
             if (reportFrames.has(frame)) perFrame.push({ frame, moving, mean: Number(ratios.mean.toFixed(5)), p95: Number(ratios.p95.toFixed(5)) });
+            const denoised = await floorRatios(device, run, (pixel) => depth[pixel] === 1, expected, true);
+            bad += denoised.bad;
+            denoisedWorstMean = Math.max(denoisedWorstMean, Math.abs(denoised.mean - 1));
+            denoisedWorstP95 = Math.max(denoisedWorstP95, denoised.p95);
+            if (!(Math.abs(denoised.mean - 1) <= LAMBERT_TOLERANCE)) fail(`constant sky, denoised, frame ${frame}${moving ? ' (moving)' : ''}: mean E / (pi L) is ${denoised.mean.toFixed(4)}`);
+            if (!(denoised.p95 <= LAMBERT_TOLERANCE)) fail(`constant sky, denoised, frame ${frame}${moving ? ' (moving)' : ''}: 95th percentile |E / (pi L) - 1| is ${(denoised.p95 * 100).toFixed(3)}%`);
+            if (reportFrames.has(frame)) denoisedPerFrame.push({ frame, moving, mean: Number(denoised.mean.toFixed(5)), p95: Number(denoised.p95.toFixed(5)) });
             if (coverageFrames.has(frame)) {
                 const cells = await rayCells(device, run, () => up);
                 let empty = 0;
@@ -338,7 +356,16 @@ async function checkConstantSky(device: GPUDevice, fail: (message: string) => vo
             }
         }
         if (bad > 0) fail(`constant sky: ${bad} floor pixels not finite or negative`);
-        return { skyRadiance: CONSTANT_SKY, stillFrames: STILL_FRAMES, movingFrames: MOVING_FRAMES, worstMeanError: worstMean, worstP95Error: worstP95, perFrame, unreachedCells: unreached };
+        return {
+            skyRadiance: CONSTANT_SKY,
+            stillFrames: STILL_FRAMES,
+            movingFrames: MOVING_FRAMES,
+            worstMeanError: worstMean,
+            worstP95Error: worstP95,
+            perFrame,
+            unreachedCells: unreached,
+            denoised: { worstMeanError: denoisedWorstMean, worstP95Error: denoisedWorstP95, perFrame: denoisedPerFrame },
+        };
     } finally {
         run.dispose();
         await device.queue.onSubmittedWorkDone();

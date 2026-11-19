@@ -16,7 +16,10 @@
  * Each with the interpolation's jitter on (the product) and off (RC4.1 review: the jitter is
  * meant for the GI denoiser, RC4.3), and with the screen probes' history on (RC4.1) and off (the history
  * dropped before every frame, so each frame runs as the first does; the world
- * cache keeps its cells in both). After `CONVERGE_FRAMES` frames, over
+ * cache keeps its cells in both). Those eight measure the raw interpolated irradiance (the
+ * denoiser off). RC4.3 adds the denoised irradiance, the term the composite reads (Capsaicin's
+ * `ReprojectGI` and `FilterGI`, gi-denoiser.ts): still and moving, history on, jitter on and off,
+ * after `DENOISED_CONVERGE_FRAMES` (the denoiser keeps up to 64 frames). After `CONVERGE_FRAMES` frames, over
  * `MEASURE_FRAMES` frames, per surface pixel: the relative change of the
  * interpolated irradiance E from the previous frame, |E_t − E_t−1| /
  * max(E_t−1, 5% of the frame's mean E), as the mean and the 95th percentile
@@ -48,16 +51,19 @@ const HEIGHT = 720;
 /** Frames before the warm world cache is measured on, then frames per configuration to settle, then to measure. */
 const WARM_FRAMES = 60;
 const CONVERGE_FRAMES = 30;
+const DENOISED_CONVERGE_FRAMES = 90;
 const MEASURE_FRAMES = 40;
 /** The moving camera: metres and degrees per frame (0.5 m/s and 3 degrees/s at 60 frames a second). */
 const SLIDE_PER_FRAME = 0.5 / 60;
 const TURN_PER_FRAME = 3 / 60;
 /** Camera motion and screen-probe history, each measured with the interpolation jitter on and off. */
 const CONFIGURATIONS = [
-    ['still', 'on'],
-    ['still', 'off'],
-    ['moving', 'on'],
-    ['moving', 'off'],
+    ['still', 'on', 'raw'],
+    ['still', 'off', 'raw'],
+    ['moving', 'on', 'raw'],
+    ['moving', 'off', 'raw'],
+    ['still', 'on', 'denoised'],
+    ['moving', 'on', 'denoised'],
 ] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
@@ -217,10 +223,12 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         platform.encodeScreen(encoder, screen.screen);
         device.queue.submit([encoder.finish()]);
     };
-    const readFrame = async (withVelocity: boolean): Promise<FrameImage> => {
+    const readFrame = async (withVelocity: boolean, denoised: boolean): Promise<FrameImage> => {
         const probes = technique.probes;
         if (!probes) throw new Error('no probes after encodeScreen');
-        const irradiance = halvesFast(await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT));
+        const source = denoised ? probes.denoisedIrradiance : probes.irradiance;
+        if (!source) throw new Error('no denoised irradiance with the denoiser on');
+        const irradiance = halvesFast(await readTexture(device, source, 8, WIDTH, HEIGHT));
         const e = new Float32Array(WIDTH * HEIGHT);
         for (let pixel = 0; pixel < e.length; pixel++) e[pixel] = (irradiance[pixel * 4] + irradiance[pixel * 4 + 1] + irradiance[pixel * 4 + 2]) / 3;
         const depth = new Float32Array((await readTexture(device, screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
@@ -238,8 +246,10 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         }
         const results: Record<string, Measurement> = {};
         for (const jitter of [true, false]) {
-            for (const [motion, history] of CONFIGURATIONS) {
+            for (const [motion, history, term] of CONFIGURATIONS) {
+                const denoised = term === 'denoised';
                 technique.settings.interpolationJitter = jitter;
+                technique.settings.denoiser = denoised;
                 technique.resetScreenHistory();
                 let step = 0;
                 const advance = (): void => {
@@ -248,12 +258,12 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                     frame();
                 };
                 camera = base;
-                for (let index = 0; index < CONVERGE_FRAMES; index++) {
+                for (let index = 0; index < (denoised ? DENOISED_CONVERGE_FRAMES : CONVERGE_FRAMES); index++) {
                     advance();
                     if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
                 }
                 await device.queue.onSubmittedWorkDone();
-                let previous = await readFrame(motion === 'moving');
+                let previous = await readFrame(motion === 'moving', denoised);
                 const tally = new ChangeTally();
                 let leftOut = 0;
                 let eSum = 0;
@@ -262,7 +272,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 for (let index = 0; index < MEASURE_FRAMES; index++) {
                     advance();
                     await device.queue.onSubmittedWorkDone();
-                    const current = await readFrame(motion === 'moving');
+                    const current = await readFrame(motion === 'moving', denoised);
                     for (let pixel = 0; pixel < current.e.length; pixel++) {
                         if (current.depth[pixel] === 1) continue;
                         const value = current.e[pixel];
@@ -275,7 +285,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                     leftOut += changes(previous, current, tally).leftOut;
                     previous = current;
                 }
-                results[`${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
+                results[`${denoised ? 'denoised, ' : ''}${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
                     meanChange: Number((tally.sum / Math.max(tally.count, 1)).toFixed(5)),
                     p95Change: Number(tally.percentile(0.95).toFixed(4)),
                     meanE: Number((eSum / Math.max(eCount, 1)).toPrecision(5)),
@@ -286,6 +296,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
             }
         }
         technique.settings.interpolationJitter = true;
+        technique.settings.denoiser = true;
         return results;
     } finally {
         screen.dispose();
