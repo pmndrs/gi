@@ -99,6 +99,31 @@ export interface HashGridCacheRayLists {
     readonly layout: HashGridCacheRayListLayout;
 }
 
+/** What the hash grid hands a tail (P6.4's neural tail, register E11) inside its frame. */
+export interface HashGridTailFrame {
+    readonly frame: WorldCacheFrame;
+    /** The probe rays of this screen, and the per-ray lists over them (with the tail's list). */
+    readonly rays: WorldCacheProbeRays;
+    readonly rayLists: HashGridCacheRayListLayout;
+    readonly listWords: GPUBuffer;
+    /** Entries for a bind group of the hash grid (`HASH_GRID_CACHE_GROUP_ENTRIES`' layout) and of the ray data (`RAY_DATA_GROUP_ENTRIES`'). */
+    readonly cacheEntries: readonly GPUBindGroupEntry[];
+    readonly rayDataEntries: readonly GPUBindGroupEntry[];
+}
+
+/**
+ * Work that runs inside the hash grid's frame with its data (P6.4): after
+ * `UpdateTiles` (the cells' values this frame) and before
+ * `UpdateMultibounceCells` (which reads its answers when `active`), with
+ * multibounce on only. The grid makes its per-ray lists with the tail's list
+ * (`neuralTailBuffer`) while it has one.
+ */
+export interface HashGridTail {
+    /** Read when the frame's constants are written: sets `use_neural_tail`. */
+    readonly active: boolean;
+    encode(encoder: GPUCommandEncoder, frame: HashGridTailFrame): void;
+}
+
 /** The population and resolve passes: a kernel and its indirect arguments each. */
 interface PopulationPass {
     readonly kernel: ComputeKernel;
@@ -143,6 +168,7 @@ interface RayData {
     readonly rays: WorldCacheProbeRays;
     readonly layout: HashGridCacheRayListLayout;
     readonly listWords: GPUBuffer;
+    readonly entries: readonly GPUBindGroupEntry[];
     readonly groups: Readonly<Record<PopulationPassName, GPUBindGroup>>;
 }
 
@@ -159,6 +185,8 @@ export class HashGridCache implements WorldCache {
     private lastFramePingPong: number | null = null;
     /** The options whose change empties the cache, as the last `encodeFrame` read them; null before the first. */
     private lastClearOptions: HashGridCacheClearOptions | null = null;
+    /** P6.4's neural tail (register E11), set by the technique; null runs GI-1.2's two bounces. */
+    tail: HashGridTail | null = null;
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
     constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
@@ -437,6 +465,10 @@ export class HashGridCache implements WorldCache {
         if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'generateMultibounceReservoirs', 'GenerateMultibounceReservoirs');
         this.encodePopulationPass(encoder, prepared, rayData, 'populateCells', 'PopulateRadianceCache');
         this.encodePopulationPass(encoder, prepared, rayData, 'updateTiles', 'UpdateRadianceCache');
+        // P6.4: the neural tail gathers its records and answers the second hits here, before UpdateMultibounceCells reads them.
+        if (useMultibounce && this.tail) {
+            this.tail.encode(encoder, { frame, rays, rayLists: rayData.layout, listWords: rayData.listWords, cacheEntries: groupEntries(prepared.buffers), rayDataEntries: rayData.entries });
+        }
         if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'updateMultibounceCells', 'UpdateMultibounceCells');
         this.encodePopulationPass(encoder, prepared, rayData, 'resolveCells', 'ResolveCells');
 
@@ -482,10 +514,11 @@ export class HashGridCache implements WorldCache {
      */
     private rayDataFor(prepared: Prepared, rays: WorldCacheProbeRays): RayData {
         const current = this.rayData;
-        if (current && sameRays(current.rays, rays)) return current;
+        const withTail = this.tail !== null;
+        if (current && sameRays(current.rays, rays) && (current.layout.neuralTailBuffer !== 0) === withTail) return current;
         this.releaseRayData();
         const { device } = prepared;
-        const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells);
+        const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells, withTail);
         // The lists grow with the screen: a device that can't bind them gets GILimitError before anything is made (D14).
         checkHashGridRayListLimits(layout, device.limits);
         const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
@@ -505,6 +538,7 @@ export class HashGridCache implements WorldCache {
                 layout.multibounceRayBuffer,
                 layout.firstBounceBypassBuffer,
                 layout.multibounceDirectBuffer,
+                layout.neuralTailBuffer,
             ]),
         );
         const entries: GPUBindGroupEntry[] = [
@@ -519,6 +553,7 @@ export class HashGridCache implements WorldCache {
             rays,
             layout,
             listWords,
+            entries,
             groups: {
                 populateScreenProbes: group('populateScreenProbes'),
                 populateMultibounceCells: group('populateMultibounceCells'),
@@ -570,6 +605,7 @@ export class HashGridCache implements WorldCache {
         floats[word.maxMultibounceSampleCount] = options.hashGridCacheMaxMultibounceSampleCount;
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
         words[word.useMultibounce] = options.useMultibounce ? 1 : 0;
+        words[word.useNeuralTail] = options.useMultibounce && this.tail?.active ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }
 

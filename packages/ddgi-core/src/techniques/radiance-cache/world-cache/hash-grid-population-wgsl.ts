@@ -119,11 +119,14 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: RAY_DATA_BINDING.listWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
-/** Bytes of `HashGridCacheRayLists`: ten words, padded to 16 bytes. */
-export const RAY_LISTS_UNIFORM_BYTES = 48;
+/** Bytes of `HashGridCacheRayLists`: thirteen words, padded to 16 bytes. */
+export const RAY_LISTS_UNIFORM_BYTES = 64;
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
 export const RESERVOIR_WORDS = 3;
+
+/** Words of a second-bounce entry's neural-tail answer (P6.4, register E11): rgb and a valid flag as four halves. */
+export const NEURAL_TAIL_WORDS = 2;
 
 /** Words of a second-bounce entry's `MultibounceInfoBuffer` value: BRDF and pdf as four halves (`HashGridCache_PackBRDF`). */
 export const MULTIBOUNCE_INFO_WORDS = 2;
@@ -196,6 +199,13 @@ export interface HashGridCacheRayListLayout {
     readonly firstBounceBypassBuffer: number;
     /** Ours (register D38): per second-bounce entry, its own direct light where its segment bypasses the cache. */
     readonly multibounceDirectBuffer: number;
+    /**
+     * P6.4 (register E11): per second-bounce entry, the neural tail's answer
+     * (`NEURAL_TAIL_WORDS`), which `UpdateMultibounceCells` adds to the second
+     * hit's light when the tail is in use. Only made with a tail: without
+     * one it is 0 and holds no words.
+     */
+    readonly neuralTailBuffer: number;
     readonly bytes: number;
 }
 
@@ -208,7 +218,7 @@ export interface HashGridCacheRayListLayout {
  * entry (at most one per first-bounce entry, so `max_ray_count`) its BRDF and
  * pdf (`MultibounceInfoBuffer`) and its ray (ours, register D36).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number): HashGridCacheRayListLayout {
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, neuralTail = false): HashGridCacheRayListLayout {
     // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
     const maxCombinedRayCount = 2 * maxRayCount;
     const updateTileBuffer = 0;
@@ -221,7 +231,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount;
     const firstBounceBypassBuffer = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount;
     const multibounceDirectBuffer = firstBounceBypassBuffer + maxRayCount;
-    const words = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
+    const tailStart = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
+    const words = tailStart + (neuralTail ? NEURAL_TAIL_WORDS * maxRayCount : 0);
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -235,6 +246,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         multibounceRayBuffer,
         firstBounceBypassBuffer,
         multibounceDirectBuffer,
+        neuralTailBuffer: neuralTail ? tailStart : 0,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -271,6 +283,7 @@ struct HashGridCacheRayLists {
     multibounce_ray_buffer: u32,    // ours (register D36): each second-bounce entry's ray, a WorldCacheProbeRay in 12 words
     first_bounce_bypass_buffer: u32,  // ours (register D38): 1 where a first-bounce entry's probe ray bypasses the cache
     multibounce_direct_buffer: u32,   // ours (register D38): a bypassing second-bounce entry's own direct light, 2 words
+    neural_tail_buffer: u32,          // P6.4 (register E11): the neural tail's answer per second-bounce entry, 2 words
 }
 
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.rayLists}) var<uniform> g_HashGridCache_RayLists: HashGridCacheRayLists;
@@ -379,7 +392,7 @@ fn HashGridCache_VisibilityRay(visibility_index: u32) -> WorldCacheProbeRay {
  * Capsaicin rebuilds it from its packed visibility the same way
  * (`fetchVerticesNormUV`, `interpolate`; gi1.comp:2412-2427, 2050-2062).
  */
-const PROBE_RAY_SURFACE_WGSL = /* wgsl */ `
+export const HASH_GRID_PROBE_RAY_SURFACE_WGSL = /* wgsl */ `
 fn HashGridCache_ProbeRay(probe_ray: WorldCacheProbeRay) -> GiRay {
     return GiRay(probe_ray.origin, 0.0, worldCacheProbeRayDirection(probe_ray), max(probe_ray.hitT, 0.0));
 }
@@ -397,8 +410,12 @@ fn HashGridCache_WorkgroupIndex(workgroup: vec3u, workgroups: vec3u) -> u32 {
 }
 `;
 
-/** The shared head of every population kernel: the hash grid (group 1) and the ray data (group 2). */
-function populationHeadWgsl(layout: HashGridCacheBufferLayout): string {
+/**
+ * The shared head of every population kernel: the hash grid (group 1) and
+ * the ray data (group 2). Exported for kernels that run inside the grid's
+ * frame with its data (P6.4's neural tail).
+ */
+export function hashGridPopulationHeadWgsl(layout: HashGridCacheBufferLayout): string {
     return `${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout)}\n${RAY_DATA_WGSL}\n${LINEAR_WORKGROUP_WGSL}`;
 }
 
@@ -414,7 +431,7 @@ function populationHeadWgsl(layout: HashGridCacheBufferLayout): string {
 export function populateScreenProbesWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.populateScreenProbes;
     return /* wgsl */ `
-${populationHeadWgsl(layout)}
+${hashGridPopulationHeadWgsl(layout)}
 
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.populateScreenProbes}(
@@ -498,8 +515,8 @@ export function generateReservoirsWgsl(layout: HashGridCacheBufferLayout): strin
     const size = POPULATION_WORKGROUP_SIZE.generateReservoirs;
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
-${populationHeadWgsl(layout)}
-${PROBE_RAY_SURFACE_WGSL}
+${hashGridPopulationHeadWgsl(layout)}
+${HASH_GRID_PROBE_RAY_SURFACE_WGSL}
 
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
 
@@ -606,8 +623,8 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
 export function populateCellsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.populateCells;
     return /* wgsl */ `
-${populationHeadWgsl(layout)}
-${PROBE_RAY_SURFACE_WGSL}
+${hashGridPopulationHeadWgsl(layout)}
+${HASH_GRID_PROBE_RAY_SURFACE_WGSL}
 
 // INV_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
@@ -712,7 +729,7 @@ export function updateTilesPerWorkgroup(tileCellRatio: number): number {
 export function updateTilesWgsl(layout: HashGridCacheBufferLayout): string {
     const side = POPULATION_WORKGROUP_SIZE.updateTilesSide;
     return /* wgsl */ `
-${populationHeadWgsl(layout)}
+${hashGridPopulationHeadWgsl(layout)}
 
 const UPDATE_TILES_GROUP_X: u32 = ${side}u;
 const UPDATE_TILES_GROUP_Y: u32 = ${side}u;
@@ -885,7 +902,7 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
 export function resolveCellsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.resolveCells;
     return /* wgsl */ `
-${populationHeadWgsl(layout)}
+${hashGridPopulationHeadWgsl(layout)}
 
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.resolveCells}(
@@ -1011,8 +1028,8 @@ export function populateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout):
     const size = POPULATION_WORKGROUP_SIZE.populateMultibounceCells;
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
-${populationHeadWgsl(layout)}
-${PROBE_RAY_SURFACE_WGSL}
+${hashGridPopulationHeadWgsl(layout)}
+${HASH_GRID_PROBE_RAY_SURFACE_WGSL}
 ${MULTIBOUNCE_SAMPLING_WGSL}
 
 fn PopulateMultibounceCellsHandleHit(did: u32, brdf: vec3f, pdf: f32, ray: GiRay, hit: GiHit) {
@@ -1158,8 +1175,8 @@ export function generateMultibounceReservoirsWgsl(layout: HashGridCacheBufferLay
     const size = POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs;
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
-${populationHeadWgsl(layout)}
-${PROBE_RAY_SURFACE_WGSL}
+${hashGridPopulationHeadWgsl(layout)}
+${HASH_GRID_PROBE_RAY_SURFACE_WGSL}
 
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
 
@@ -1255,7 +1272,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
 export function updateMultibounceCellsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.updateMultibounceCells;
     return /* wgsl */ `
-${populationHeadWgsl(layout)}
+${hashGridPopulationHeadWgsl(layout)}
 
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
@@ -1291,6 +1308,16 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
         } else {
             let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
             second_radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
+        }
+        // P6.4 (register E11): the neural tail's answer for the second hit, the light it reflects
+        // from indirect light (every later bounce, as the network has learned the grid's indirect
+        // values), so the first-bounce cell's indirect value carries every bounce in expectation.
+        if (g_HashGridCacheConstants.use_neural_tail != 0u) {
+            let tail_base = g_HashGridCache_RayLists.neural_tail_buffer + ${NEURAL_TAIL_WORDS}u * did;
+            let tail = vec4f(unpack2x16float(HashGridCache_RayListWord(tail_base, 0u)), unpack2x16float(HashGridCache_RayListWord(tail_base, 1u)));
+            if (tail.w > 0.0) {
+                second_radiance += tail.rgb;
+            }
         }
         radiance = (second_radiance * brdf) / pdf;
     }

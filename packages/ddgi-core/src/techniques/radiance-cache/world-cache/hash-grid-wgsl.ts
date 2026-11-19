@@ -101,6 +101,8 @@ export const HASH_GRID_CONSTANTS_WORD = {
     maxMultibounceSampleCount: 28,
     useDirectLighting: 29,
     useMultibounce: 30,
+    /** P6.4 (register E11): `UpdateMultibounceCells` adds the neural tail's answer to the second hit's light. */
+    useNeuralTail: 31,
 } as const;
 
 /** Bytes of `HashGridCacheConstants`. */
@@ -145,7 +147,7 @@ struct HashGridCacheConstants {
     max_multibounce_sample_count: f32,
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
     use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D35)
-    padding2: u32,
+    use_neural_tail: u32,           // P6.4 (register E11): add the neural tail's answer to each second hit's light
 }
 `;
 

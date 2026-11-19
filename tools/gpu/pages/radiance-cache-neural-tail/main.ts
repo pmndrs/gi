@@ -1,0 +1,707 @@
+/**
+ * P6.4 (register E11): the neural tail, pmndrs/pathtracer's network
+ * (`@pathtracer/mlp`) as the second bounce's tail behind the GI-1.2 hash grid
+ * (`neuralCache: 'tail'`), against analytic answers, with GI-1.2's
+ * multibounce (`neuralCache: 'off'`, the default) run through the same checks
+ * beside it (A/B). GI-1.2's own gates are `radiance-cache-world-cache`'s; here
+ * its numbers are recorded and only the tail's fail the page.
+ *
+ * Each check reads the probe rays the screen cache traced and the radiance the
+ * world cache wrote into them, every frame from an empty cache and a fresh
+ * network, so it also gives the warm-up: the first frame from which the
+ * judged rays' mean stays within 5% and within 2% of the answer. The tail's
+ * gate opens after `warmupSteps` (256) training steps at 16 a frame, so from
+ * frame 17; until then the frame is GI-1.2's. Scenes as
+ * `radiance-cache-world-cache`'s (black sky, albedo 0.5, 1280 × 720, the
+ * screen drawn by primary rays through the platform's tracer):
+ *
+ * 1. **Lit plane** (a 400 m floor, albedo 0.5, and a black wall, albedo 0,
+ *    the sun along (0, -1, -1), intensity 8; multibounce on, 300 frames): the
+ *    floor's light is albedo / π × E (E = 8 cos 45°) and nothing else, since
+ *    its bounce rays find only the black wall or the black sky; the wall
+ *    reflects nothing. So with the tail on, the floor hits' mean is within 2%
+ *    of the lit value and 95% of them within 2% each, and the wall hits read
+ *    under 1% of it: the network must answer 0 where nothing is lit, and the
+ *    direct light must come through as it is.
+ * 2. **Furnace, every bounce** (a floor facing up and a ceiling facing down
+ *    3 m above, 400 m wide, a sun straight down of irradiance 4 that casts no
+ *    shadow; 300 frames): GI-1.2 reads the second bounce ρ² E / π = 0.3183;
+ *    with the tail the ceiling settles at every bounce, ρ (ρE/π) / (1 − ρ²) =
+ *    0.4244 (`furnaceCeiling`): mean within 2% at the last frame. Judged:
+ *    ceiling hits whose GI-1.2 tile is under 2 m (beyond, its tiles hold floor
+ *    and ceiling hits together; NOTES). Also recorded: the tail without screen
+ *    records (`screenStride: 0`), which can't learn the floor here (every
+ *    probe is on it, every probe ray goes up, so no cell record is a floor's).
+ * 3. **Strips** (the furnace's floor as 5 cm strips every 10 cm: half of a
+ *    ceiling bounce ray misses; 300 frames): GI-1.2 0.1592, every bounce
+ *    `furnaceCeiling(..., 1/2)` = 0.1819; the tail's near ceiling rays'
+ *    mean within 2%.
+ * 4. **Lag and flicker** (the corner, floor and wall albedo 0.5, multibounce;
+ *    the sun doubled after 150 frames, 200 frames after): frames until the
+ *    mean irradiance E over the screen, and the mean hit-ray radiance, stay
+ *    within 5% and 1% of twice their value before the change, and the
+ *    flicker of E over the 30 still frames before it (per pixel
+ *    |ΔE| / max(E, 5% of the mean), mean and p95; radiance-cache-stability's
+ *    measure). GI-1.2, the tail's defaults, the tail without the EMA, the
+ *    tail at 4 steps a frame. Recorded, and the tail's E must settle within
+ *    5% (some frame count, not a race with GI-1.2's).
+ * 5. **NaN scan** (the tail's defaults on `cornell-box`, `two-room` and
+ *    `sponza` with curtains, from the first bookmark, 100 frames): every probe
+ *    ray's radiance, every tail answer and every training target finite and
+ *    at least 0 after frames 1, 50 and 100, with the gate open by frame 50.
+ *
+ * No glossy case: the platform's materials are diffuse (register D8), so
+ * GI-1.1's reflections, where the pathtracer found the network halves the
+ * converged error, can't be checked here yet.
+ *
+ * Correctness only; GPU time and memory are `radiance-cache-neural-timing`'s.
+ * Through the lock:
+ * `node tools/reference/bench-lock.ts run --no-cool-wait --what "p6.4 neural tail" -- pnpm test:gpu --filter radiance-cache-neural-tail --gpu nvidia`.
+ */
+
+import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
+import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { furnaceCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
+import { NEURAL_TAIL_COUNT_WORD, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
+import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+import { NEURAL_TAIL_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
+import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
+import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
+import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
+import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { readTexture } from '../radiance-cache-probes/readback.ts';
+import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
+
+const WIDTH = 1280;
+const HEIGHT = 720;
+const TOLERANCE = 0.02;
+const ALBEDO = 0.5;
+/** Frames of each analytic check: the gate opens at frame 17, the fixed point needs a few hundred more. */
+const CHECK_FRAMES = 300;
+
+const CORNER_CAMERA: PageCamera = { position: [0, 2, 6], target: [0, 1, 0], fovYDeg: 60, near: 0.05, far: 1000 };
+const SUN_INTENSITY = 8;
+const SUN_TRAVEL: Vec3 = [0, -1, -1];
+/** albedo / π × E, E = 8 cos 45° on the floor. */
+const LIT_RADIANCE = (ALBEDO / Math.PI) * SUN_INTENSITY * Math.SQRT1_2;
+
+const FURNACE_CAMERA: PageCamera = { position: [0, 2, 0], target: [0, 0, -2], fovYDeg: 60, near: 0.05, far: 1000 };
+const CEILING_Y = 3;
+const FURNACE_SUN_IRRADIANCE = 4;
+const FURNACE_SUN: LightDescriptor = { type: 'directional', direction: [0, -1, 0], color: [1, 1, 1], intensity: FURNACE_SUN_IRRADIANCE, castsShadows: false, label: 'furnace sun' };
+const SECOND_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'second-bounce');
+const EVERY_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'every-bounce');
+const STRIPS = { width: 0.05, period: 0.1, halfLength: 100, fill: 0.5 } as const;
+const STRIPS_SECOND_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'second-bounce', STRIPS.fill);
+const STRIPS_EVERY_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'every-bounce', STRIPS.fill);
+
+/** The GI-1.2 grid's cell-size constant at Capsaicin's defaults (32 px, min 0.1 m, tiles of 8 cells), for the judged-ray filters. */
+const GI1_CELL_CONSTANTS = { cellSize: hashGridCacheCellSizeConstant(verticalFieldOfView(frameCamera(CORNER_CAMERA, WIDTH, HEIGHT).projection), WIDTH, HEIGHT, 32), minCellSize: 0.1 };
+const GI1_TILE_CELLS = 8;
+
+const GI1: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'off' };
+const TAIL: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail' };
+const TAIL_NO_SCREEN: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail', neural: { screenStride: 0 } };
+
+type SceneKind = 'litPlane' | 'corner' | 'furnace' | 'strips';
+type Surface = 'floor' | 'wall' | 'ceiling' | 'other';
+
+interface ProbeRay {
+    readonly direction: Vec3;
+    readonly hitT: number;
+    readonly hit: Vec3;
+    readonly surface: Surface;
+}
+
+// ---- Scenes ---------------------------------------------------------------------------------------
+
+function quad(platform: GIPlatformImpl, label: string, corners: readonly Vec3[], normal: Vec3, albedo = ALBEDO): void {
+    const scene = platform.scene;
+    const mesh = scene.createMesh({ positions: new Float32Array(corners.flat()), normals: new Float32Array([...normal, ...normal, ...normal, ...normal]), indices: new Uint32Array([0, 1, 2, 0, 2, 3]), label });
+    const material = scene.createMaterial({ albedo: [albedo, albedo, albedo], label });
+    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
+}
+
+function stripFloor(platform: GIPlatformImpl): void {
+    const { width, period, halfLength } = STRIPS;
+    const count = Math.round((2 * halfLength) / period);
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    for (let strip = 0; strip < count; strip++) {
+        const z0 = -halfLength + strip * period;
+        const z1 = z0 + width;
+        const base = strip * 4;
+        positions.push(-halfLength, 0, z1, halfLength, 0, z1, halfLength, 0, z0, -halfLength, 0, z0);
+        normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    const scene = platform.scene;
+    const mesh = scene.createMesh({ positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices), label: 'strip floor' });
+    const material = scene.createMaterial({ albedo: [ALBEDO, ALBEDO, ALBEDO], label: 'strip floor' });
+    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'strip floor' });
+}
+
+function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
+    const half = 200;
+    if (kind === 'furnace' || kind === 'strips') {
+        if (kind === 'furnace') quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
+        else stripFloor(platform);
+        quad(platform, 'ceiling', [[-half, CEILING_Y, -half], [half, CEILING_Y, -half], [half, CEILING_Y, half], [-half, CEILING_Y, half]], [0, -1, 0]);
+        platform.scene.createLight(FURNACE_SUN);
+        platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+        return FURNACE_CAMERA;
+    }
+    quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
+    quad(platform, 'wall', [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]], [0, 0, 1], kind === 'litPlane' ? 0 : ALBEDO);
+    platform.scene.createLight({ type: 'directional', direction: SUN_TRAVEL, color: [1, 1, 1], intensity: SUN_INTENSITY, label: 'sun' });
+    platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+    return CORNER_CAMERA;
+}
+
+function classify(hit: Vec3, kind: SceneKind): Surface {
+    if (kind === 'furnace' || kind === 'strips') return Math.abs(hit[1] - CEILING_Y) < 1e-3 ? 'ceiling' : Math.abs(hit[1]) < 1e-3 ? 'floor' : 'other';
+    if (Math.abs(hit[1]) < 1e-3) return 'floor';
+    if (Math.abs(hit[2]) < 1e-3) return 'wall';
+    return 'other';
+}
+
+// ---- Running a scenario ---------------------------------------------------------------------------
+
+async function readRange(device: GPUDevice, source: GPUBuffer, offset: number, byteLength: number): Promise<ArrayBuffer> {
+    const size = Math.max(4, Math.ceil(byteLength / 4) * 4);
+    const readback = device.createBuffer({ label: 'neural tail page readback', size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const encoder = device.createCommandEncoder({ label: 'neural tail page readback' });
+    encoder.copyBufferToBuffer(source, offset, readback, 0, size);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const copy = readback.getMappedRange().slice(0, byteLength);
+    readback.unmap();
+    readback.destroy();
+    return copy;
+}
+
+interface FrameState {
+    readonly rays: ProbeRay[];
+    /** Per ray: rgb and the hit distance, as halves unpacked. */
+    readonly radiance: Float32Array;
+}
+
+async function readFrame(device: GPUDevice, technique: RadianceCacheTechnique, kind: SceneKind): Promise<FrameState> {
+    const probes = technique.probes;
+    if (!probes) throw new Error('no probes after encodeScreen');
+    const count = new Uint32Array(await readRange(device, probes.probeRays, 0, 4))[0];
+    const words = new Uint32Array(await readRange(device, probes.probeRays, 0, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + count * WORLD_CACHE_PROBE_RAY_BYTES));
+    const floats = new Float32Array(words.buffer);
+    const rays: ProbeRay[] = [];
+    for (let ray = 0; ray < count; ray++) {
+        const base = (WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + ray * WORLD_CACHE_PROBE_RAY_BYTES) / 4;
+        const origin: Vec3 = [floats[base], floats[base + 1], floats[base + 2]];
+        const direction = unpackHalf3([words[base + 4], words[base + 5]]);
+        const hitT = floats[base + 6];
+        const hit: Vec3 = [origin[0] + hitT * direction[0], origin[1] + hitT * direction[1], origin[2] + hitT * direction[2]];
+        rays.push({ direction, hitT, hit, surface: hitT >= 0 ? classify(hit, kind) : 'other' });
+    }
+    const results = probes.rayScratch.rayResults;
+    const packed = new Uint32Array(await readRange(device, results.buffer, results.offset ?? 0, count * 8));
+    const radiance = new Float32Array(count * 4);
+    for (let index = 0; index < packed.length; index++) {
+        radiance[index * 2] = halfBitsToFloat(packed[index] & 0xffff);
+        radiance[index * 2 + 1] = halfBitsToFloat(packed[index] >>> 16);
+    }
+    return { rays, radiance };
+}
+
+/** A judged ray's expected value, or null to leave it out. */
+type Judge = (ray: ProbeRay) => number | null;
+
+interface Run {
+    /** Per frame: the judged rays' mean relative error (signed; against the lit value where the expectation is 0) and the share within 2%. */
+    readonly meanError: number[];
+    readonly withinShare: number[];
+    readonly judged: number;
+    readonly tailSteps: number;
+    readonly tailGateOpen: boolean;
+}
+
+/** The first frame (1-based) from which every later frame's value passes; null if the last doesn't. */
+function warmFrame(passes: readonly boolean[]): number | null {
+    let first: number | null = null;
+    for (let index = 0; index < passes.length; index++) {
+        if (passes[index]) first ??= index + 1;
+        else first = null;
+    }
+    return first;
+}
+
+function rayValue(state: FrameState, index: number): number {
+    return (state.radiance[index * 4] + state.radiance[index * 4 + 1] + state.radiance[index * 4 + 2]) / 3;
+}
+
+/** One scenario, each frame judged by every judge (one `Run` each). */
+async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial<RadianceCacheSettings>, frames: number, judges: readonly Judge[]): Promise<Run[]> {
+    const platform = new GIPlatformImpl(device, { label: `neural tail page ${kind}` });
+    const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
+    platform.setOutput(technique);
+    await platform.prepare();
+    const camera = describe(platform, kind);
+    const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+    const frame = (): void => {
+        const encoder = device.createCommandEncoder({ label: `neural tail page ${kind}` });
+        platform.encode(encoder, input);
+        screen.encode(encoder, camera);
+        platform.encodeScreen(encoder, screen.screen);
+        device.queue.submit([encoder.finish()]);
+    };
+    try {
+        frame();
+        await platform.rays.whenBuilt();
+        frame();
+        await device.queue.onSubmittedWorkDone();
+        technique.resetHistory();
+        const meanError = judges.map((): number[] => []);
+        const withinShare = judges.map((): number[] => []);
+        const judged = judges.map(() => 0);
+        for (let index = 0; index < frames; index++) {
+            frame();
+            await device.queue.onSubmittedWorkDone();
+            const state = await readFrame(device, technique, kind);
+            judges.forEach((judge, judgeIndex) => {
+                let sum = 0;
+                let expectedSum = 0;
+                let within = 0;
+                let count = 0;
+                state.rays.forEach((ray, rayIndex) => {
+                    const expected = judge(ray);
+                    if (expected === null) return;
+                    count++;
+                    const value = rayValue(state, rayIndex);
+                    sum += value;
+                    expectedSum += expected;
+                    if (Math.abs(value - expected) <= TOLERANCE * Math.max(expected, LIT_RADIANCE * 0.05)) within++;
+                });
+                judged[judgeIndex] = count;
+                meanError[judgeIndex].push(expectedSum > 0 ? (sum - expectedSum) / expectedSum : sum / Math.max(count, 1) / LIT_RADIANCE);
+                withinShare[judgeIndex].push(within / Math.max(count, 1));
+            });
+        }
+        const tail = technique.neuralTail;
+        return judges.map((_, judgeIndex) => ({ meanError: meanError[judgeIndex], withinShare: withinShare[judgeIndex], judged: judged[judgeIndex], tailSteps: tail?.steps ?? 0, tailGateOpen: tail?.active ?? false }));
+    } finally {
+        screen.dispose();
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+function summary(run: Run): Record<string, unknown> {
+    return {
+        judgedRays: run.judged,
+        finalMeanError: Number(run.meanError[run.meanError.length - 1].toFixed(5)),
+        finalWithinShare: Number(run.withinShare[run.withinShare.length - 1].toFixed(4)),
+        framesTo5: warmFrame(run.meanError.map((error) => Math.abs(error) <= 0.05)),
+        framesTo2: warmFrame(run.meanError.map((error) => Math.abs(error) <= TOLERANCE)),
+        raysWarmFrames: warmFrame(run.withinShare.map((share) => share >= 0.95)),
+        tailSteps: run.tailSteps,
+        tailGateOpen: run.tailGateOpen,
+    };
+}
+
+const final = (run: Run): number => run.meanError[run.meanError.length - 1];
+const finalShare = (run: Run): number => run.withinShare[run.withinShare.length - 1];
+
+// ---- Judges ----------------------------------------------------------------------------------------
+
+function gi1TileSize(hit: Vec3, camera: PageCamera): number {
+    return hashGridCacheGetCellSize(hit, camera.position, GI1_CELL_CONSTANTS) * GI1_TILE_CELLS;
+}
+
+/** The furnace's ceiling rays whose GI-1.2 tile is under 2 m. */
+function ceilingJudge(expected: number): Judge {
+    return (ray) => (ray.hitT >= 0 && ray.surface === 'ceiling' && ray.direction[1] > 0 && gi1TileSize(ray.hit, FURNACE_CAMERA) < 2 ? expected : null);
+}
+
+/** Section 1: floor hits under 2 m tiles read the lit value (a far tile can hold wall hits too). */
+const litFloorJudge: Judge = (ray) => (ray.hitT >= 0 && ray.surface === 'floor' && gi1TileSize(ray.hit, CORNER_CAMERA) < 2 ? LIT_RADIANCE : null);
+const blackWallJudge: Judge = (ray) => (ray.hitT >= 0 && ray.surface === 'wall' && gi1TileSize(ray.hit, CORNER_CAMERA) < 2 ? 0 : null);
+
+// ---- Section 4: lag and flicker ---------------------------------------------------------------------
+
+const HALF_TABLE = Float32Array.from({ length: 65536 }, (_, bits) => halfBitsToFloat(bits));
+
+interface LagResult {
+    readonly flickerMean: number;
+    readonly flickerP95: number;
+    readonly irradianceFramesTo5: number | null;
+    readonly irradianceFramesTo1: number | null;
+    readonly rayFramesTo5: number | null;
+    readonly rayFramesTo1: number | null;
+    /** E's mean over the last frame, over twice its mean before the change. */
+    readonly finalIrradianceRatio: number;
+    /** E's mean before the change, over the screen. */
+    readonly irradianceBefore: number;
+}
+
+/** The first frame after the change (1-based) from which every later frame is within `tolerance` of the target. */
+function settledAfter(values: readonly number[], target: number, tolerance: number): number | null {
+    return warmFrame(values.map((value) => Math.abs(value / target - 1) <= tolerance));
+}
+
+async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings>): Promise<LagResult> {
+    const BEFORE = 150;
+    const AFTER = 200;
+    const STILL = 30;
+    const platform = new GIPlatformImpl(device, { label: 'neural tail page lag' });
+    const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
+    platform.setOutput(technique);
+    await platform.prepare();
+    const camera = describe(platform, 'corner');
+    const sun = platform.scene.createLight({ type: 'directional', direction: SUN_TRAVEL, color: [1, 1, 1], intensity: SUN_INTENSITY, label: 'lag sun' });
+    const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+    const frame = (): void => {
+        const encoder = device.createCommandEncoder({ label: 'neural tail page lag' });
+        platform.encode(encoder, input);
+        screen.encode(encoder, camera);
+        platform.encodeScreen(encoder, screen.screen);
+        device.queue.submit([encoder.finish()]);
+    };
+    // describe() makes the corner's sun; a second one along the same direction, dark until the change and
+    // then as bright, doubles the light (a change the platform reports as global, like a sun change).
+    platform.scene.updateLight(sun, { intensity: 0 });
+    try {
+        frame();
+        await platform.rays.whenBuilt();
+        frame();
+        await device.queue.onSubmittedWorkDone();
+        technique.resetHistory();
+        const depth = new Float32Array(WIDTH * HEIGHT);
+        const readE = async (): Promise<Float32Array> => {
+            const probes = technique.probes;
+            if (!probes) throw new Error('lag: no probes');
+            const bytes = await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT);
+            const halves = new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+            const e = new Float32Array(WIDTH * HEIGHT);
+            for (let pixel = 0; pixel < e.length; pixel++) e[pixel] = (HALF_TABLE[halves[pixel * 4]] + HALF_TABLE[halves[pixel * 4 + 1]] + HALF_TABLE[halves[pixel * 4 + 2]]) / 3;
+            return e;
+        };
+        const surfaceMean = (e: Float32Array): number => {
+            let sum = 0;
+            let count = 0;
+            for (let pixel = 0; pixel < e.length; pixel++) {
+                if (depth[pixel] === 1) continue;
+                sum += e[pixel];
+                count++;
+            }
+            return sum / Math.max(count, 1);
+        };
+        const rayMean = async (): Promise<number> => {
+            const state = await readFrame(device, technique, 'corner');
+            let sum = 0;
+            let count = 0;
+            state.rays.forEach((ray, index) => {
+                if (ray.hitT < 0) return;
+                sum += rayValue(state, index);
+                count++;
+            });
+            return sum / Math.max(count, 1);
+        };
+        // Relative changes pooled over pixels and frames as a histogram (steps of 0.0005 up to 5), as
+        // radiance-cache-stability tallies them: millions of values, so no array to sort.
+        const bins = new Uint32Array(10001);
+        let changeSum = 0;
+        let changeCount = 0;
+        let previous: Float32Array | null = null;
+        let beforeE = 0;
+        let beforeRay = 0;
+        for (let index = 0; index < BEFORE; index++) {
+            frame();
+            if (index < BEFORE - STILL) {
+                if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+                continue;
+            }
+            await device.queue.onSubmittedWorkDone();
+            if (index === BEFORE - STILL) depth.set(new Float32Array((await readTexture(device, screen.screen.depth, 4, WIDTH, HEIGHT)).buffer));
+            const e = await readE();
+            const mean = surfaceMean(e);
+            beforeE += mean / STILL;
+            beforeRay += (await rayMean()) / STILL;
+            if (previous) {
+                const floor = 0.05 * mean;
+                for (let pixel = 0; pixel < e.length; pixel++) {
+                    if (depth[pixel] === 1) continue;
+                    const change = Math.abs(e[pixel] - previous[pixel]) / Math.max(previous[pixel], floor);
+                    if (!Number.isFinite(change)) continue;
+                    changeSum += change;
+                    changeCount++;
+                    bins[Math.min(Math.floor(change / 0.0005), bins.length - 1)]++;
+                }
+            }
+            previous = e;
+        }
+        platform.scene.updateLight(sun, { intensity: SUN_INTENSITY });
+        const eAfter: number[] = [];
+        const rayAfter: number[] = [];
+        for (let index = 0; index < AFTER; index++) {
+            frame();
+            await device.queue.onSubmittedWorkDone();
+            eAfter.push(surfaceMean(await readE()));
+            rayAfter.push(await rayMean());
+        }
+        let p95 = NaN;
+        for (let bin = 0, running = 0; bin < bins.length; bin++) {
+            running += bins[bin];
+            if (running >= 0.95 * changeCount) {
+                p95 = (bin + 1) * 0.0005;
+                break;
+            }
+        }
+        return {
+            flickerMean: Number((changeSum / Math.max(changeCount, 1)).toFixed(5)),
+            flickerP95: Number(p95.toFixed(4)),
+            irradianceFramesTo5: settledAfter(eAfter, 2 * beforeE, 0.05),
+            irradianceFramesTo1: settledAfter(eAfter, 2 * beforeE, 0.01),
+            rayFramesTo5: settledAfter(rayAfter, 2 * beforeRay, 0.05),
+            rayFramesTo1: settledAfter(rayAfter, 2 * beforeRay, 0.01),
+            finalIrradianceRatio: Number((eAfter[eAfter.length - 1] / (2 * beforeE)).toFixed(4)),
+            irradianceBefore: Number(beforeE.toPrecision(5)),
+        };
+    } finally {
+        screen.dispose();
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+// ---- Section 5: the NaN scan ---------------------------------------------------------------------
+
+async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<() => void> {
+    const loaded = await loadScene(manifest, () => {});
+    const content = new Set<object>();
+    loaded.content.traverse((object) => content.add(object));
+    loaded.scene.traverse((object) => {
+        if ((object as { isMesh?: boolean }).isMesh && !content.has(object)) object.userData.giContributes = false;
+    });
+    loaded.scene.updateMatrixWorld();
+    const sync = new SceneSync(platform.scene, { device, warn: () => {} });
+    sync.environment = platformSkyEnvironment(manifest);
+    return () => sync.update(loaded.scene);
+}
+
+interface Scan {
+    readonly frame: number;
+    readonly probeRays: number;
+    readonly rayValuesBad: number;
+    readonly tailAnswers: number;
+    readonly tailAnswersBad: number;
+    readonly meanTailAnswer: number;
+    readonly trainingRecords: number;
+    readonly trainingTargetsBad: number;
+    readonly gateOpen: boolean;
+    readonly meanRayRadiance: number;
+}
+
+const isGood = (value: number): boolean => Number.isFinite(value) && value >= 0;
+
+async function scanScene(device: GPUDevice, id: string, loader: 'manifest' | 'viewer'): Promise<Scan[]> {
+    const manifest = loadManifest(id);
+    const bookmark = manifest.cameras[0];
+    const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
+    const platform = new GIPlatformImpl(device, { label: `neural tail page scan ${id}` });
+    const technique = platform.addTechnique(new RadianceCacheTechnique(TAIL));
+    platform.setOutput(technique);
+    await platform.prepare();
+    let beforeFrame = (): void => {};
+    if (loader === 'viewer') beforeFrame = await describeLoaded(platform, device, manifest);
+    else describeScene(platform, manifest);
+    const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+    const frame = (): void => {
+        beforeFrame();
+        const encoder = device.createCommandEncoder({ label: `neural tail page scan ${id}` });
+        platform.encode(encoder, input);
+        screen.encode(encoder, camera);
+        platform.encodeScreen(encoder, screen.screen);
+        device.queue.submit([encoder.finish()]);
+    };
+    try {
+        frame();
+        await platform.rays.whenBuilt();
+        technique.resetHistory();
+        const scans: Scan[] = [];
+        for (let index = 1; index <= 100; index++) {
+            frame();
+            if (index % 8 === 0) await device.queue.onSubmittedWorkDone();
+            if (index !== 1 && index !== 50 && index !== 100) continue;
+            await device.queue.onSubmittedWorkDone();
+            const probes = technique.probes;
+            const cache = technique.worldCache;
+            const tail = technique.neuralTail;
+            const tailBuffers = tail?.buffers;
+            const lists = cache?.rayLists;
+            if (!probes || !cache || !tail || !tailBuffers || !lists) throw new Error(`${id}: no probes, cache or neural tail`);
+            const count = new Uint32Array(await readRange(device, probes.probeRays, 0, 4))[0];
+            const packed = new Uint32Array(await readRange(device, probes.rayScratch.rayResults.buffer, probes.rayScratch.rayResults.offset ?? 0, count * 8));
+            let rayValuesBad = 0;
+            let raySum = 0;
+            for (let ray = 0; ray < count; ray++) {
+                const rgb = [halfBitsToFloat(packed[ray * 2] & 0xffff), halfBitsToFloat(packed[ray * 2] >>> 16), halfBitsToFloat(packed[ray * 2 + 1] & 0xffff)];
+                if (!rgb.every(isGood)) rayValuesBad++;
+                else raySum += (rgb[0] + rgb[1] + rgb[2]) / 3;
+            }
+            // The tail's answers this frame (the second-bounce entries'), written once the gate is open.
+            const secondBounce = new Uint32Array(await readRange(device, cache.buffers.tileWords, HASH_GRID_COUNTER.visibilityCount1 * 4, 4))[0];
+            let tailAnswersBad = 0;
+            let tailAnswers = 0;
+            let tailSum = 0;
+            if (tail.active && secondBounce > 0) {
+                const answers = new Uint32Array(await readRange(device, lists.buffer, lists.layout.neuralTailBuffer * 4, secondBounce * NEURAL_TAIL_WORDS * 4));
+                for (let entry = 0; entry < secondBounce; entry++) {
+                    const rgbw = [halfBitsToFloat(answers[entry * 2] & 0xffff), halfBitsToFloat(answers[entry * 2] >>> 16), halfBitsToFloat(answers[entry * 2 + 1] & 0xffff), halfBitsToFloat(answers[entry * 2 + 1] >>> 16)];
+                    if (rgbw[3] === 0) continue;
+                    tailAnswers++;
+                    if (!rgbw.slice(0, 3).every(isGood)) tailAnswersBad++;
+                    else tailSum += (rgbw[0] + rgbw[1] + rgbw[2]) / 3;
+                }
+            }
+            const records = Math.min(new Uint32Array(await readRange(device, tailBuffers.counts, NEURAL_TAIL_COUNT_WORD.records * 4, 4))[0], tailBuffers.setCapacity);
+            const set = new Float32Array(await readRange(device, tailBuffers.set, 0, records * NEURAL_TAIL_RECORD_VEC4 * 16));
+            let trainingTargetsBad = 0;
+            for (let record = 0; record < records; record++) {
+                const base = (record * NEURAL_TAIL_RECORD_VEC4 + 3) * 4;
+                if (![set[base], set[base + 1], set[base + 2]].every(isGood)) trainingTargetsBad++;
+            }
+            scans.push({
+                frame: index,
+                probeRays: count,
+                rayValuesBad,
+                tailAnswers,
+                tailAnswersBad,
+                meanTailAnswer: Number((tailSum / Math.max(tailAnswers, 1)).toPrecision(5)),
+                trainingRecords: records,
+                trainingTargetsBad,
+                gateOpen: tail.active,
+                meanRayRadiance: Number((raySum / Math.max(count, 1)).toPrecision(5)),
+            });
+        }
+        return scans;
+    } finally {
+        screen.dispose();
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+// ---- The page ----------------------------------------------------------------------------------------
+
+const startTime = performance.now();
+let deviceErrors: string[] = [];
+try {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
+    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    releaseDeviceOnPageHide(device);
+    deviceErrors = watchDevice(device);
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        failures.push(message);
+    };
+    const data: Record<string, unknown> = { glossy: 'no glossy case: the platform has diffuse materials only (register D8)' };
+    const env = import.meta.env as Record<string, unknown>;
+    /** `VITE_NEURAL_TAIL_SECTIONS`: a comma-separated subset of the section numbers (all by default), for mutation runs. */
+    const sections = typeof env.VITE_NEURAL_TAIL_SECTIONS === 'string' ? new Set(env.VITE_NEURAL_TAIL_SECTIONS.split(',').map((section) => Number(section.trim()))) : null;
+    const runs = (section: number): boolean => sections === null || sections.has(section);
+
+    // 1. Lit plane with a black wall: the direct light as it is, nothing added.
+    if (runs(1)) {
+        const results: Record<string, unknown> = { expected: LIT_RADIANCE };
+        for (const [name, settings] of [['gi1', GI1], ['tail', TAIL]] as const) {
+            const [floor, wall] = await runScenario(device, 'litPlane', settings, CHECK_FRAMES, [litFloorJudge, blackWallJudge]);
+            results[name] = { floor: summary(floor), wallMeanOverLit: Number(final(wall).toFixed(5)), wallRays: wall.judged };
+            if (name !== 'tail') continue;
+            if (Math.abs(final(floor)) > TOLERANCE) fail(`lit plane: the tail's floor rays average ${(final(floor) * 100).toFixed(2)}% off ${LIT_RADIANCE.toFixed(4)}`);
+            if (finalShare(floor) < 0.95) fail(`lit plane: only ${(finalShare(floor) * 100).toFixed(1)}% of the tail's floor rays within 2%`);
+            if (!(final(wall) < 0.01)) fail(`lit plane: the tail's black-wall rays read ${(final(wall) * 100).toFixed(2)}% of the lit value (expected 0)`);
+            if (floor.judged < 1000 || wall.judged < 1000) fail(`lit plane: too few judged rays (${floor.judged} floor, ${wall.judged} wall)`);
+            if (!floor.tailGateOpen) fail('lit plane: the tail\'s gate never opened');
+        }
+        data.litPlane = results;
+    }
+
+    // 2. Furnace: GI-1.2's two bounces against the tail's every bounce.
+    if (runs(2)) {
+        const [gi1] = await runScenario(device, 'furnace', GI1, CHECK_FRAMES, [ceilingJudge(SECOND_BOUNCE)]);
+        const [tail] = await runScenario(device, 'furnace', TAIL, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
+        const [noScreen] = await runScenario(device, 'furnace', TAIL_NO_SCREEN, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
+        data.furnace = {
+            secondBounce: SECOND_BOUNCE,
+            everyBounce: EVERY_BOUNCE,
+            gi1: { ...summary(gi1), meanErrorAgainstEveryBounce: Number(((1 + final(gi1)) * (SECOND_BOUNCE / EVERY_BOUNCE) - 1).toFixed(5)) },
+            tail: summary(tail),
+            tailWithoutScreenRecords: summary(noScreen),
+        };
+        if (Math.abs(final(tail)) > TOLERANCE) fail(`furnace, every bounce: the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames`);
+        if (tail.judged < 1000) fail(`furnace: only ${tail.judged} judged ceiling rays`);
+    }
+
+    // 3. Strips: half the bounce rays miss.
+    if (runs(3)) {
+        const [gi1] = await runScenario(device, 'strips', GI1, CHECK_FRAMES, [ceilingJudge(STRIPS_SECOND_BOUNCE)]);
+        const [tail] = await runScenario(device, 'strips', TAIL, CHECK_FRAMES, [ceilingJudge(STRIPS_EVERY_BOUNCE)]);
+        data.strips = { secondBounce: STRIPS_SECOND_BOUNCE, everyBounce: STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail) };
+        if (Math.abs(final(tail)) > TOLERANCE) fail(`strips, every bounce: the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)}`);
+    }
+
+    // 4. Lag and flicker.
+    if (runs(4)) {
+        const configurations: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
+            ['gi1 multibounce', GI1],
+            ['tail', TAIL],
+            ['tail, no EMA', { ...TAIL, neural: { ema: 'off' } }],
+            ['tail, 4 steps a frame', { ...TAIL, neural: { stepsPerFrame: 4 } }],
+        ];
+        const lag: Record<string, LagResult> = {};
+        for (const [name, settings] of configurations) lag[name] = await runLag(device, settings);
+        data.lag = lag;
+        if (lag.tail.irradianceFramesTo5 === null) fail(`lag: the tail's E never settles within 5% of twice its value after the sun doubles (last frame ${lag.tail.finalIrradianceRatio} of it)`);
+    }
+
+    // 5. NaN scan.
+    if (runs(5)) {
+        const scans: Record<string, Scan[]> = {};
+        for (const [id, loader] of [['cornell-box', 'manifest'], ['two-room', 'manifest'], ['sponza', 'viewer']] as const) {
+            scans[id] = await scanScene(device, id, loader);
+            for (const scan of scans[id]) {
+                if (scan.rayValuesBad + scan.tailAnswersBad + scan.trainingTargetsBad > 0) {
+                    fail(`${id} after frame ${scan.frame}: ${scan.rayValuesBad} ray values, ${scan.tailAnswersBad} tail answers and ${scan.trainingTargetsBad} training targets are NaN, infinite or negative`);
+                }
+                if (scan.probeRays === 0 || scan.trainingRecords === 0) fail(`${id} after frame ${scan.frame}: ${scan.probeRays} probe rays and ${scan.trainingRecords} training records; nothing to scan`);
+                if (scan.frame >= 50 && (!scan.gateOpen || scan.tailAnswers === 0)) fail(`${id} after frame ${scan.frame}: the gate is ${scan.gateOpen ? 'open' : 'closed'} with ${scan.tailAnswers} tail answers`);
+            }
+        }
+        data.nanScan = scans;
+    }
+
+    await drainDevice(device);
+    reportGpuTest({
+        status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
+        message: failures.length === 0 ? undefined : failures.join(' | '),
+        data,
+        adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
+        deviceErrors,
+        startTime,
+    });
+} catch (error) {
+    reportGpuTest({ status: 'fail', message: error instanceof Error ? (error.stack ?? error.message) : String(error), deviceErrors, startTime });
+}

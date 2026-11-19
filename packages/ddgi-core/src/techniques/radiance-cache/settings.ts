@@ -15,6 +15,8 @@
  * configuration").
  */
 
+import type { NeuralCacheMode, NeuralTailSettings } from './neural-cache/neural-tail-settings.ts';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -75,6 +77,16 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * Phase 6 experiment P6.4 (register E11): `tail` adds a neural network
+     * (pmndrs/pathtracer's `@pathtracer/mlp`) as the second bounce's tail, so
+     * GI-1.2's multibounce carries every bounce; the hash grid stays the near
+     * cache. `off` (the default) is GI-1.2. Needs `useMultibounce`. Read at
+     * `prepare`.
+     */
+    neuralCache: NeuralCacheMode;
+    /** The neural tail's settings over its defaults (`DEFAULT_NEURAL_TAIL_SETTINGS`), with `neuralCache: 'tail'`. Read at `prepare`. */
+    neural: Partial<NeuralTailSettings>;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -94,6 +106,8 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    neuralCache: 'off',
+    neural: Object.freeze({}),
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

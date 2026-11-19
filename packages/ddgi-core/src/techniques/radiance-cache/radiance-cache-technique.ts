@@ -54,6 +54,7 @@ import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES, ScreenPro
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
+import { NeuralTail } from './neural-cache/neural-tail.ts';
 import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
 import {
@@ -226,6 +227,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private cache: HashGridCache | null = null;
     /** `resetHistory` empties the cache at the next `encodeScreen` (it has no encoder of its own). */
     private worldCacheResetPending = false;
+    /** P6.4's neural tail (register E11), with `neuralCache: 'tail'`; null otherwise. */
+    private tail: NeuralTail | null = null;
     private screenResources: ScreenResources | null = null;
     private inputGroups: ScreenInputGroups | null = null;
     /** SH projection and per-pixel interpolation (RC2.2): made in `prepare`. */
@@ -406,6 +409,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
         // 7: the mask's mips, the SH and the irradiance per pixel (RC2.2).
         this.encodeIrradiance(encoder, frame, prepared, resources);
+        // P6.4: the neural tail trains on this frame's records (the grid's, gathered in its frame, and the screen's irradiance).
+        const irradianceTexture = this.irradiance?.irradiance;
+        if (this.tail && irradianceTexture) this.tail.encodeTraining(encoder, { irradiance: irradianceTexture, width: layout.width, height: layout.height });
 
         // 6 and 8: the cache's LRU order for the next frame, and this frame's depth and normals kept.
         history.encodeReorder(encoder, screen);
@@ -513,6 +519,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         };
     }
 
+    /** P6.4's neural tail once prepared (`neuralCache: 'tail'`), for tests and pages; null otherwise. */
+    get neuralTail(): NeuralTail | null {
+        return this.tail;
+    }
+
     /** The world cache (Capsaicin's hash grid) once prepared, for tests and debug views; null before `prepare`. */
     get worldCache(): HashGridCache | null {
         return this.cache;
@@ -523,7 +534,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // What the CPU knows without a readback: the spawned count stays on the GPU. The world
         // cache adds its capacity and memory (its per-frame counts stay on the GPU too).
         const screen: Record<string, number> = layout ? { 'spawn tiles': layout.maxProbeSpawnCount, 'probe rays at most': layout.maxRayCount } : {};
-        return { ...screen, ...worldCacheCounters(this.cache) };
+        const tail: Record<string, number> = {};
+        for (const [name, value] of Object.entries(this.tail?.stats ?? {})) tail[`neural tail ${name}`] = value;
+        return { ...screen, ...worldCacheCounters(this.cache), ...tail };
     }
 
     /** GPU bytes: the screen probes' buffers and the world cache's (about 1 GiB at Capsaicin's default capacity). */
@@ -532,7 +545,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (!prepared) return 0;
         const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + prepared.history.memoryBytes + (this.screenResources?.bytes ?? 0);
         const screenIrradiance = this.irradiance?.memoryBytes ?? 0;
-        return screenProbes + screenIrradiance + (this.cache?.memoryBytes ?? 0);
+        return screenProbes + screenIrradiance + (this.cache?.memoryBytes ?? 0) + (this.tail?.memoryBytes ?? 0);
     }
 
     /**
@@ -557,6 +570,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     dispose(): void {
         this.releaseScreen();
         this.releasePrepared();
+        this.tail?.dispose();
+        this.tail = null;
         this.cache?.dispose();
         this.cache = null;
         this.disposed = true;
@@ -571,6 +586,15 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private async prepareWorldCache(context: TechniqueContext): Promise<HashGridCache> {
         const cache = this.cache ?? new HashGridCache(this.settings);
         await cache.prepare(context);
+        // P6.4 (register E11): the neural tail runs inside the grid's frame, so it is made after the grid.
+        this.tail?.dispose();
+        this.tail = null;
+        if (this.settings.neuralCache === 'tail') {
+            const tail = new NeuralTail(this.settings.neural);
+            await tail.prepare(context, cache);
+            this.tail = tail;
+        }
+        cache.tail = this.tail;
         this.worldCacheResetPending = false;
         return cache;
     }
@@ -586,6 +610,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (!cache) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         if (this.worldCacheResetPending) {
             cache.reset(encoder);
+            this.tail?.reset();
             this.worldCacheResetPending = false;
         }
         const rays: WorldCacheProbeRays = {

@@ -1,0 +1,5 @@
+{
+    "description": "P6.4: GPU time per frame of the neural tail's inference, training and gathering beside the GI-1.2 hash grid's passes and the whole radiance cache, and their GPU memory, for GI-1.2's multibounce, the tail (compact network) and the tail with the default network, on sponza and bistro-exterior at 1280x720, the camera still, 120 timed frames after 60. Recorded, not gated; run under the GPU lock with its cool wait (VALID verdict) and VITE_DDGI_MAX_TEXTURE_SIZE=1024 on a 6 GB GPU.",
+    "timeoutMs": 1800000,
+    "manual": true
+}
