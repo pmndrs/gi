@@ -19,9 +19,9 @@
  *    this frame is listed once, its sample drawn uniformly from its hits. The
  *    claim puts the cell in a priority class and a random sub-bin, and
  *    counts the bin.
- * 2. `PrioritizeCells` (one thread): the bins' counts become their first
- *    slots (a counting sort by priority over 256 bins, 4 classes × 64 random
- *    sub-bins, too few for a scan kernel), the cells lit this frame are
+ * 2. `PrioritizeCells` (one workgroup, a thread per bin): the bins' counts
+ *    become their first slots (a counting sort by priority over 256 bins, 4
+ *    classes × 64 random sub-bins, a workgroup scan), the cells lit this frame are
  *    min(candidates, budget), and the
  *    period of the settled cells' turns is set for the next frame.
  * 3. `ScatterCells` (over the candidates): each takes the next slot of its
@@ -63,7 +63,7 @@
  */
 
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
-import type { HashGridCacheBufferLayout } from './capacity.ts';
+import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_SALT } from './cell-shading-common.ts';
 import { ALL_LIGHT_GROUPS, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
 
@@ -193,20 +193,30 @@ fn HashGridCache_MarkChanged(cell_index: u32) {
     g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = HashGridCache_PackRadiance(marked);
 }
 
-fn HashGridCache_ClaimCell(visibility_index: u32) {
+// The claim of one visibility entry: whether it claimed its cell (flags), and then the cell's
+// candidate word (a word can be 0: entry 0 in bin 0, so the claim is a flag of its own).
+const HASHGRIDCACHE_CELL_CLAIMED: u32 = 1u;
+
+struct HashGridCache_Claim {
+    flags: u32,
+    word: u32,
+}
+
+fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
+    var none: HashGridCache_Claim;
     let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, visibility_index);
     if (cell_index == kGI1_InvalidId) {
-        return; // a second-bounce ray that missed: no cell
+        return none; // a second-bounce ray that missed: no cell
     }
 
     // The entry that offered the cell's largest key claims it. Two entries with the same key (one
     // pair in billions) are told apart by the exchange: the first one there wins.
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
     if (atomicLoad(&g_HashGridCache_UpdateScratch[scratch + 0u]) != HashGridCache_CellSampleKey(visibility_index)) {
-        return;
+        return none;
     }
     if (atomicExchange(&g_HashGridCache_UpdateScratch[scratch + 1u], 1u) != 0u) {
-        return;
+        return none;
     }
 
     let ray = HashGridCache_VisibilityRay(visibility_index);
@@ -238,9 +248,33 @@ fn HashGridCache_ClaimCell(visibility_index: u32) {
     let bin = priority * HASHGRIDCACHE_CELL_SUB_BINS + rcRandIntBelow(&random, HASHGRIDCACHE_CELL_SUB_BINS);
     atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + bin], 1u);
 
-    let candidate = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT], 1u);
     let changed_bit = select(0u, HASHGRIDCACHE_CELL_CHANGED_BIT, changed);
-    HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_candidate_buffer, candidate, visibility_index | changed_bit | (bin << HASHGRIDCACHE_CELL_BIN_SHIFT));
+    return HashGridCache_Claim(HASHGRIDCACHE_CELL_CLAIMED, visibility_index | changed_bit | (bin << HASHGRIDCACHE_CELL_BIN_SHIFT));
+}
+
+// The workgroup's claims go on the candidate list with one global atomic: each claim takes a place
+// in the group's count, then one thread adds the count to the list's (on the GPU, one atomic per
+// claim on one word was most of ClaimCells' 1 ms on Sponza). Every thread reaches the barriers.
+var<workgroup> lds_ClaimCells_Count: atomic<u32>;
+var<workgroup> lds_ClaimCells_First: u32;
+
+fn HashGridCache_AppendClaims(claim: HashGridCache_Claim, local_index: u32) {
+    if (local_index == 0u) {
+        atomicStore(&lds_ClaimCells_Count, 0u);
+    }
+    workgroupBarrier();
+    var place = 0u;
+    if (claim.flags != 0u) {
+        place = atomicAdd(&lds_ClaimCells_Count, 1u);
+    }
+    workgroupBarrier();
+    if (local_index == 0u) {
+        lds_ClaimCells_First = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT], atomicLoad(&lds_ClaimCells_Count));
+    }
+    let first = workgroupUniformLoad(&lds_ClaimCells_First);
+    if (claim.flags != 0u) {
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_candidate_buffer, first + place, claim.word);
+    }
 }
 
 @compute @workgroup_size(${size})
@@ -250,10 +284,11 @@ fn ${CELL_SHADING_ENTRY_POINT.claimFirstBounceCells}(
     @builtin(local_invocation_index) local_index: u32,
 ) {
     let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
-    if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0])) {
-        return; // out of bounds
+    var claim: HashGridCache_Claim;
+    if (did < atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0])) {
+        claim = HashGridCache_ClaimCell(did);
     }
-    HashGridCache_ClaimCell(did);
+    HashGridCache_AppendClaims(claim, local_index);
 }
 
 @compute @workgroup_size(${size})
@@ -263,46 +298,59 @@ fn ${CELL_SHADING_ENTRY_POINT.claimSecondBounceCells}(
     @builtin(local_invocation_index) local_index: u32,
 ) {
     let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
-    if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1])) {
-        return; // out of bounds
+    var claim: HashGridCache_Claim;
+    if (did < atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1])) {
+        claim = HashGridCache_ClaimCell(atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0]) + did);
     }
-    HashGridCache_ClaimCell(atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_VISIBILITYCOUNTBUFFER0]) + did);
+    HashGridCache_AppendClaims(claim, local_index);
 }
 `;
 }
 
 /**
- * `PrioritizeCells`: one thread turns the bins' counts into their first
- * slots (an exclusive prefix sum over 256 words), sets the frame's lit count
+ * `PrioritizeCells`: a workgroup of a thread per bin turns the bins' counts
+ * into their first slots (an exclusive prefix sum over 256 words; one thread
+ * looping over them took about 0.25 ms), sets the frame's lit count
  * and the next frame's turn period. CPU twin `prioritizeCells` (cell-shading-cpu.ts).
  */
 export function prioritizeCellsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${cellShadingHeadWgsl(layout)}
 
-@compute @workgroup_size(1)
-fn ${CELL_SHADING_ENTRY_POINT.prioritizeCells}() {
-    let candidates = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT]);
-    let budget = g_HashGridCache_CellShading.budget;
+var<workgroup> lds_PrioritizeCells_Sums: array<u32, HASHGRIDCACHE_CELL_BINS>;
 
-    var first_slot = 0u;
-    var urgent = 0u; // candidates new, changed or converging
-    for (var bin = 0u; bin < HASHGRIDCACHE_CELL_BINS; bin++) {
-        let count = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin);
-        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin, first_slot);
-        first_slot += count;
-        if (bin < ${CELL_PRIORITY_CLASS.turn}u * HASHGRIDCACHE_CELL_SUB_BINS) {
-            urgent += count;
+@compute @workgroup_size(${CELL_SHADING_BINS})
+fn ${CELL_SHADING_ENTRY_POINT.prioritizeCells}(@builtin(local_invocation_index) bin: u32) {
+    // An inclusive scan of the bins' counts in the group's memory (Hillis-Steele: 8 steps for 256).
+    let count = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin);
+    lds_PrioritizeCells_Sums[bin] = count;
+    workgroupBarrier();
+    for (var offset = 1u; offset < HASHGRIDCACHE_CELL_BINS; offset <<= 1u) {
+        var before = 0u;
+        if (bin >= offset) {
+            before = lds_PrioritizeCells_Sums[bin - offset];
         }
+        workgroupBarrier();
+        lds_PrioritizeCells_Sums[bin] += before;
+        workgroupBarrier();
     }
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], min(candidates, budget));
+    // Each bin's first slot: the candidates in the bins before it.
+    HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin, lds_PrioritizeCells_Sums[bin] - count);
 
-    // The settled cells take what the urgent ones leave of the budget; a period of settled / left
-    // frames gives each its turn once in that many frames (the turns' expected count is then at
-    // most what is left). With nothing left this frame, a turn comes once in 'settled' frames.
-    let settled = candidates - urgent;
-    let left = max(budget - min(budget, urgent), 1u);
-    atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSCHEDULEPERIOD], max((settled + left - 1u) / left, 1u));
+    if (bin == 0u) {
+        let candidates = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT]);
+        let budget = g_HashGridCache_CellShading.budget;
+        atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], min(candidates, budget));
+
+        // The settled cells take what the urgent ones (new, changed, converging) leave of the budget;
+        // a period of settled / left frames gives each its turn once in that many frames (the turns'
+        // expected count is then at most what is left). With nothing left this frame, a turn comes
+        // once in 'settled' frames.
+        let urgent = lds_PrioritizeCells_Sums[${CELL_PRIORITY_CLASS.turn}u * HASHGRIDCACHE_CELL_SUB_BINS - 1u];
+        let settled = candidates - urgent;
+        let left = max(budget - min(budget, urgent), 1u);
+        atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSCHEDULEPERIOD], max((settled + left - 1u) / left, 1u));
+    }
 }
 `;
 }
