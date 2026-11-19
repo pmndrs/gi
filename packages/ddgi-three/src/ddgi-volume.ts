@@ -194,7 +194,9 @@ export class DDGIVolume extends Light {
      *   light (two updates).
      * - `{}` or no argument: nothing happens. Each flag defaults to false.
      *
-     * Takes effect in the next render. `DDGITechnique.resetProbes` in
+     * Takes effect in the next render. Throws before `start` has finished,
+     * like {@link restart} (the technique itself ignores a call before
+     * `prepare`). `DDGITechnique.resetProbes` in
      * ddgi-core says exactly what happens to each probe.
      */
     resetProbes(what: ProbeResetRequest = {}): void {

@@ -257,6 +257,7 @@ async function checkResets(device: GPUDevice, scene: DdgiScene, fail: (message: 
                 wrongTexels++;
                 if (wrongTexels <= 4) fail(`reset ${reset.name}: probe ${probeIndex} reads ${record.state}@${record.offset.join(',')}, expected ${expected.state}@${expected.offset.join(',')}`);
             }
+            // Both cases are fixed volumes, so a slot is its window probe (a camera-following one would need its window here).
             const grid = [probeIndex % counts[0], Math.floor(probeIndex / (counts[0] * counts[2])), Math.floor(probeIndex / counts[0]) % counts[2]];
             const position = [0, 1, 2].map((axis) => origin[axis] + (grid[axis] + record.offset[axis]) * spacing[axis]);
             const point = points.subarray(probeIndex * 4, probeIndex * 4 + 4);
