@@ -27,15 +27,25 @@
  *    3 m above, 400 m wide, a sun straight down of irradiance 4 that casts no
  *    shadow; 300 frames): GI-1.2 reads the second bounce ρ² E / π = 0.3183;
  *    with the tail the ceiling settles at every bounce, ρ (ρE/π) / (1 − ρ²) =
- *    0.4244 (`furnaceCeiling`): mean within 2% at the last frame. Judged:
- *    ceiling hits whose GI-1.2 tile is under 2 m (beyond, its tiles hold floor
- *    and ceiling hits together; NOTES). Also recorded: the tail without screen
- *    records (`screenStride: 0`), which can't learn the floor here (every
- *    probe is on it, every probe ray goes up, so no cell record is a floor's).
+ *    0.4244 (`furnaceCeiling`). Judged: ceiling hits whose GI-1.2 tile is
+ *    under 2 m (beyond, its tiles hold floor and ceiling hits together; NOTES),
+ *    their mean at the last frame: within 2% with 8 px cells, within 6% at
+ *    Capsaicin's 32 px. At 32 px the far tiles' columns put the floor's direct
+ *    light into ceiling rays at grazing angles, so the floor's screen
+ *    irradiance reads about 13% over π × the ceiling, the screen records teach
+ *    the network that, and the fixed point settles 4-5% over; at 8 px the
+ *    columns are out of reach and the floor's records read ρ × the ceiling.
+ *    Also recorded: the tail without screen records (`screenStride: 0`),
+ *    which can't learn the floor here (every probe is on it, every probe ray
+ *    goes up, so no cell record is a floor's), and the tail's answers and
+ *    training targets by surface.
  * 3. **Strips** (the furnace's floor as 5 cm strips every 10 cm: half of a
  *    ceiling bounce ray misses; 300 frames): GI-1.2 0.1592, every bounce
  *    `furnaceCeiling(..., 1/2)` = 0.1819; the tail's near ceiling rays'
- *    mean within 2%.
+ *    mean within 2% at 32 px cells, within 6% at 8 px (the strips' own
+ *    screen irradiance reads about 20% low at 8 px: probes start under thin
+ *    strips, register D17). Also recorded: GI-1.2 at 8 px for both scenes
+ *    (its second bounce doesn't read the floor's irradiance).
  * 4. **Lag and flicker** (the corner, floor and wall albedo 0.5, multibounce;
  *    the sun doubled after 150 frames, 200 frames after): frames until the
  *    mean irradiance E over the screen, and the mean hit-ray radiance, stay
@@ -44,7 +54,9 @@
  *    |ΔE| / max(E, 5% of the mean), mean and p95; radiance-cache-stability's
  *    measure). GI-1.2, the tail's defaults, the tail without the EMA, the
  *    tail at 4 steps a frame. Recorded, and the tail's E must settle within
- *    5% (some frame count, not a race with GI-1.2's).
+ *    1% within the 200 frames (some frame count, not a race with GI-1.2's;
+ *    1%, since the tail is a few per cent of E: a network that stopped
+ *    learning would still settle within 5%).
  * 5. **NaN scan** (the tail's defaults on `cornell-box`, `two-room` and
  *    `sponza` with curtains, from the first bookmark, 100 frames): every probe
  *    ray's radiance, every tail answer and every training target finite and
@@ -85,6 +97,15 @@ import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-prob
 const WIDTH = 1280;
 const HEIGHT = 720;
 const TOLERANCE = 0.02;
+/**
+ * The every-bounce checks take the floor's light from the screen's irradiance (screen records),
+ * so they inherit its errors, each judged within 2% where the floor's irradiance is clean and
+ * within this where it isn't (P6.4): the furnace at Capsaicin's 32 px cells reads 4-5% over
+ * (far ceiling tiles are columns that also hold floor hits, NOTES), clean at 8 px; the strips at
+ * 8 px read 4-5% under (the strips' screen irradiance reads about 20% under ρ × the ceiling
+ * there; probes start under thin strips, register D17), clean at 32 px.
+ */
+const COLUMN_TOLERANCE = 0.06;
 const ALBEDO = 0.5;
 /** Frames of each analytic check: the gate opens at frame 17, the fixed point needs a few hundred more. */
 const CHECK_FRAMES = Number((import.meta.env as Record<string, unknown>).VITE_NEURAL_TAIL_FRAMES ?? 300);
@@ -373,7 +394,8 @@ function ceilingJudge(expected: number): Judge {
 
 /** Section 1: floor hits under 2 m tiles read the lit value (a far tile can hold wall hits too). */
 const litFloorJudge: Judge = (ray) => (ray.hitT >= 0 && ray.surface === 'floor' && gi1TileSize(ray.hit, CORNER_CAMERA) < 2 ? LIT_RADIANCE : null);
-const blackWallJudge: Judge = (ray) => (ray.hitT >= 0 && ray.surface === 'wall' && gi1TileSize(ray.hit, CORNER_CAMERA) < 2 ? 0 : null);
+/** Section 1: wall hits above 3 m (their tiles, under 3 m across there, can't reach the floor) read 0. */
+const blackWallJudge: Judge = (ray) => (ray.hitT >= 0 && ray.surface === 'wall' && ray.hit[1] > 3 && gi1TileSize(ray.hit, CORNER_CAMERA) < 3 ? 0 : null);
 
 // ---- Section 4: lag and flicker ---------------------------------------------------------------------
 
@@ -684,6 +706,7 @@ try {
         const [tail] = await runScenario(device, 'furnace', TAIL, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
         const [noScreen] = await runScenario(device, 'furnace', TAIL_NO_SCREEN, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
         const [fineCells] = await runScenario(device, 'furnace', { ...TAIL, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
+        const [gi1FineCells] = await runScenario(device, 'furnace', { ...GI1, hashGridCacheCellSize: 8 }, 60, [ceilingJudge(SECOND_BOUNCE)]);
         data.furnace = {
             secondBounce: SECOND_BOUNCE,
             everyBounce: EVERY_BOUNCE,
@@ -691,8 +714,10 @@ try {
             tail: summary(tail),
             tailWithoutScreenRecords: summary(noScreen),
             tailWithCellsOf8Pixels: summary(fineCells),
+            gi1WithCellsOf8Pixels: summary(gi1FineCells),
         };
-        if (Math.abs(final(tail)) > TOLERANCE) fail(`furnace, every bounce: the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames`);
+        if (Math.abs(final(fineCells)) > TOLERANCE) fail(`furnace, every bounce (8 px cells): the tail's ceiling rays average ${(final(fineCells) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames`);
+        if (Math.abs(final(tail)) > COLUMN_TOLERANCE) fail(`furnace, every bounce (Capsaicin's 32 px cells): the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames (over ${COLUMN_TOLERANCE * 100}%)`);
         if (tail.judged < 1000) fail(`furnace: only ${tail.judged} judged ceiling rays`);
     }
 
@@ -700,8 +725,11 @@ try {
     if (runs(3)) {
         const [gi1] = await runScenario(device, 'strips', GI1, CHECK_FRAMES, [ceilingJudge(STRIPS_SECOND_BOUNCE)]);
         const [tail] = await runScenario(device, 'strips', TAIL, CHECK_FRAMES, [ceilingJudge(STRIPS_EVERY_BOUNCE)]);
-        data.strips = { secondBounce: STRIPS_SECOND_BOUNCE, everyBounce: STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail) };
-        if (Math.abs(final(tail)) > TOLERANCE) fail(`strips, every bounce: the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)}`);
+        const [fineCells] = await runScenario(device, 'strips', { ...TAIL, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(STRIPS_EVERY_BOUNCE)]);
+        const [gi1FineCells] = await runScenario(device, 'strips', { ...GI1, hashGridCacheCellSize: 8 }, 60, [ceilingJudge(STRIPS_SECOND_BOUNCE)]);
+        data.strips = { secondBounce: STRIPS_SECOND_BOUNCE, everyBounce: STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail), tailWithCellsOf8Pixels: summary(fineCells), gi1WithCellsOf8Pixels: summary(gi1FineCells) };
+        if (Math.abs(final(tail)) > TOLERANCE) fail(`strips, every bounce (32 px cells): the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)}`);
+        if (Math.abs(final(fineCells)) > COLUMN_TOLERANCE) fail(`strips, every bounce (8 px cells): the tail's ceiling rays average ${(final(fineCells) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)} (over ${COLUMN_TOLERANCE * 100}%)`);
     }
 
     // 4. Lag and flicker.
@@ -715,7 +743,8 @@ try {
         const lag: Record<string, LagResult> = {};
         for (const [name, settings] of configurations) lag[name] = await runLag(device, settings);
         data.lag = lag;
-        if (lag.tail.irradianceFramesTo5 === null) fail(`lag: the tail's E never settles within 5% of twice its value after the sun doubles (last frame ${lag.tail.finalIrradianceRatio} of it)`);
+        // The tail's share of E is a few per cent, so a network that stopped learning would still settle within 5%: judged at 1%.
+        if (lag.tail.irradianceFramesTo1 === null) fail(`lag: the tail's E never settles within 1% of twice its value after the sun doubles (last frame ${lag.tail.finalIrradianceRatio} of it)`);
     }
 
     // 5. NaN scan.
