@@ -96,6 +96,16 @@
  * the big-change verdict lives in layer 0's alpha. With one layer (groups
  * off) this is the kernel as it was.
  *
+ * RTXGI's back-face rule (TU.5, DV-01 in docs/divergence.md;
+ * `settings.backFaceRayThreshold`): blended rays that hit a back face are
+ * left out of the irradiance average instead of counting as black samples,
+ * and an update whose blended rays hit back faces too often
+ * (`ddgiTooManyBackFaces`) isn't blended at all: its irradiance tiles and its
+ * history stay as they were (`DDGI_UPDATE_SKIPPED`), while its distances blend
+ * as usual, as RTXGI's separate distance pass does. RTXGI's blend simply
+ * returns there; a skipped update here also keeps a probe in state 3 and
+ * takes one owed update off.
+ *
  * Bindings (group 1; no platform module): uniforms, the update list, the ray
  * buffer, the scratch buffer, the census buffer, the probe history, the
  * feedback requests and the key deltas (7 storage buffers), the mover table
@@ -106,6 +116,7 @@
 import {
     MOVER_TABLE_CAPACITY,
     SCRATCH_PROBE_DATA_WORD,
+    CENSUS_BACK_FACE_SKIPS_TOTAL,
     CENSUS_CHANGE_CLOCK,
     CENSUS_FEEDBACK_FIRED,
     CENSUS_FEEDBACK_FIRED_TOTAL,
@@ -340,6 +351,8 @@ const DDGI_UPDATE_FIRST: u32 = 0u;   // state 3: the history starts again, noise
 const DDGI_UPDATE_QUIET: u32 = 1u;   // no change reported: feeds the noise, and may trip the feedback rule
 const DDGI_UPDATE_MARKED: u32 = 2u;  // a reported change, or still taking one in: the noise is kept as it was
 const DDGI_UPDATE_HELD: u32 = 3u;    // the test mode holdFineProbes: a fine probe waiting for its keys keeps its tiles and its change
+const DDGI_UPDATE_SKIPPED: u32 = 4u; // RTXGI's back-face rule: too many blended rays hit back faces, so the irradiance and history are kept
+const DDGI_CENSUS_BACK_FACE_SKIPS_TOTAL: u32 = ${CENSUS_BACK_FACE_SKIPS_TOTAL}u;
 
 // Phase B rules (Majercik et al. 2021, section 5).
 // More than this share of fixed rays hitting back faces means the probe is inside something.
@@ -429,6 +442,8 @@ var<workgroup> ddgiFarthestFrontFace: atomic<u32>;
 var<workgroup> ddgiFrontFacesInReach: atomic<u32>;
 // The mover bits this update's blended rays hit (ddgiMoverBits), for the probe's mover mask.
 var<workgroup> ddgiMoverHits: atomic<u32>;
+// How many of this update's blended rays hit back faces (RTXGI's back-face rule, ddgiTooManyBackFaces).
+var<workgroup> ddgiBlendedBackFaces: atomic<u32>;
 // Thread 0's verdicts, read by everyone with workgroupUniformLoad.
 var<workgroup> ddgiBlendThisUpdate: u32;
 var<workgroup> ddgiUpdateHysteresis: f32;
@@ -854,16 +869,59 @@ fn ddgiChangeLimit(pendingChange: f32, flags: u32, promised: f32) -> f32 {
     return limit;
 }
 
+// Whether RTXGI's back-face rule is on (settings.backFaceRayThreshold; negative is off).
+fn ddgiBackFaceRuleOn() -> bool {
+    return ddgi.backFaceRayThreshold >= 0.0;
+}
+
+// RTXGI's test (ProbeBlendingCS.hlsl): with N blended rays and threshold t,
+// its blend stops at the back face that brings the count to uint(N * t), so
+// an update is skipped when at least that many of its blended rays hit back
+// faces, and at the first back face when N * t is under 1. About 10% (t = 0.1)
+// is more than a probe beside a surface sees: part of the probe's view is
+// the inside of something.
+fn ddgiTooManyBackFaces(backFaces: u32, blendedRays: u32) -> bool {
+    if (!ddgiBackFaceRuleOn()) {
+        return false;
+    }
+    let most = u32(f32(blendedRays) * ddgi.backFaceRayThreshold);
+    return backFaces >= max(most, 1u);
+}
+
+// A probe's record after an update skipped for back faces: nothing was
+// blended, so it is kept as it was (sample count, clock stamp, change, mean
+// and noise), except that one owed update is taken off, with the urgency and
+// the taking-a-change flag going with the last of them. Otherwise a probe that
+// keeps skipping would stay at the front of the scheduler for ever.
+fn ddgiSkippedHistory(history: DdgiProbeHistory) -> DdgiProbeHistory {
+    let owed = (history.updates >> DDGI_OWED_SHIFT) & DDGI_OWED_MASK;
+    let nextOwed = owed - min(owed, 1u);
+    var next = history;
+    next.updates = (history.updates & ~(DDGI_OWED_MASK << DDGI_OWED_SHIFT)) | (nextOwed << DDGI_OWED_SHIFT);
+    next.urgency = select(0.0, history.urgency, nextOwed > 0u);
+    if (nextOwed == 0u) {
+        next.scheduleAndFlags = history.scheduleAndFlags & ~DDGI_FLAG_TAKING_CHANGE;
+    }
+    return next;
+}
+
 // The cosine-weighted mean radiance of the blended rays around one
 // irradiance texel's direction in one layer, times pi: the texel's new
-// estimate of E.
+// estimate of E. With RTXGI's back-face rule on, rays that hit a back face
+// are left out (neither radiance nor weight): they saw the inside of
+// something, not light the probe should carry. With it off they count as
+// black samples (the trace stores them black).
 fn ddgiEstimateIrradianceTexel(slot: u32, layer: u32, texelIndex: u32, blendedRays: u32) -> vec3f {
     let texel = vec2u(texelIndex % DDGI_IRRADIANCE_TEXELS, texelIndex / DDGI_IRRADIANCE_TEXELS);
     let normal = ddgiTexelDirection(texel, DDGI_IRRADIANCE_TEXELS);
+    let leaveOutBackFaces = ddgiBackFaceRuleOn();
     var radianceSum = vec3f(0.0);
     var weightSum = 0.0;
     for (var blended = 0u; blended < blendedRays; blended++) {
         let ray = DDGI_FIXED_RAYS + blended;
+        if (leaveOutBackFaces && ddgiRayDirectionDistance[ray].w < 0.0) {
+            continue;
+        }
         let weight = max(0.0, dot(normal, ddgiRayDirectionDistance[ray].xyz));
         let packed = ${layered ? 'ddgiRays[ddgiRayResult(slot, ray, layer)]' : 'ddgiRayRadiance[ray]'};
         radianceSum += weight * vec3f(unpack2x16float(packed.x), unpack2x16float(packed.y).x);
@@ -880,8 +938,9 @@ fn ddgiEstimateIrradianceTexel(slot: u32, layer: u32, texelIndex: u32, blendedRa
 fn ddgiWriteIrradianceTexel(slot: u32, probeIndex: u32, state: u32, layer: u32, texelIndex: u32, probeHysteresis: f32, fastHysteresis: bool, changedNow: bool, passChange: bool) {
     let base = slot * DDGI_SCRATCH_STRIDE + DDGI_SCRATCH_IRRADIANCE + layer * DDGI_SCRATCH_IRRADIANCE_LAYER_WORDS + 2u * texelIndex;
     let item = layer * DDGI_IRRADIANCE_TEXEL_COUNT + texelIndex;
-    if (ddgiUpdateKind == DDGI_UPDATE_HELD) {
-        // The test mode: the old texel as it is, alpha included (exact half floats pack exactly).
+    if (ddgiUpdateKind == DDGI_UPDATE_HELD || ddgiUpdateKind == DDGI_UPDATE_SKIPPED) {
+        // The test mode, or an update skipped for back faces: the old texel
+        // as it is, alpha included (exact half floats pack exactly).
         let kept = ddgiTexelOld[item];
         ddgiScratch[base] = pack2x16float(kept.rg);
         ddgiScratch[base + 1u] = pack2x16float(kept.ba);
@@ -1112,10 +1171,12 @@ fn ddgiBlend(
         atomicStore(&ddgiFarthestFrontFace, DDGI_KEY_NONE_MAX);
         atomicStore(&ddgiFrontFacesInReach, 0u);
         atomicStore(&ddgiMoverHits, 0u);
+        atomicStore(&ddgiBlendedBackFaces, 0u);
         atomicAdd(&ddgiCensus[DDGI_CENSUS_RAYS_TRACED], tracedRays);
     }
     let origin = ddgiProbePosition(probe, probeData.offset);
     var moverBits = 0u;
+    var blendedBackFaces = 0u;
     for (var rayIndex = thread; rayIndex < tracedRays; rayIndex += DDGI_BLEND_WORKGROUP_SIZE) {
         // Layer 0's result, which carries the hit distance (and is the only one with groups off).
         let record = ddgiRays[ddgiRayResult(slot, rayIndex, 0u)];
@@ -1126,6 +1187,7 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         // Blended rays only: the mask says what the probe's light came from.
         if (rayIndex >= DDGI_FIXED_RAYS) {
             moverBits |= ddgiMoverBits(origin, directionDistance);
+            blendedBackFaces += select(0u, 1u, signedDistance < 0.0);
         }
     }
     workgroupBarrier();
@@ -1136,6 +1198,10 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
     // operations), and after the first barrier, so thread 0 has cleared them first.
     if (moverBits != 0u) {
         atomicOr(&ddgiMoverHits, moverBits);
+    }
+    // The blended back faces join the same way (thread 0 cleared them before the first barrier).
+    if (blendedBackFaces != 0u) {
+        atomicAdd(&ddgiBlendedBackFaces, blendedBackFaces);
     }
     workgroupBarrier();
     if (thread == 0u) {
@@ -1162,17 +1228,34 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
             }
             let changeClock = atomicLoad(&ddgiCensus[DDGI_CENSUS_CHANGE_CLOCK]);
             let step = ddgiHysteresisStep(history, state, changeClock);
+            // RTXGI's back-face rule (the file comment): with too many
+            // blended back faces the irradiance isn't blended. The distances
+            // still blend at this update's hysteresis.
+            let skipped = step.kind != DDGI_UPDATE_HELD && ddgiTooManyBackFaces(atomicLoad(&ddgiBlendedBackFaces), blendedRays);
             ddgiUpdateHysteresis = step.hysteresis;
             ddgiNextHistory = step.history;
+            if (skipped) {
+                ddgiNextHistory = ddgiSkippedHistory(history);
+            }
             ddgiNextHistory.moverMask = atomicLoad(&ddgiMoverHits);
             // A wake that has run out is cleared, so the stored frame never comes round again as the counter wraps.
             ddgiNextHistory.wakeUntil = select(0u, history.wakeUntil, awake);
-            ddgiUpdateKind = step.kind;
+            ddgiUpdateKind = select(step.kind, DDGI_UPDATE_SKIPPED, skipped);
             if (step.kind == DDGI_UPDATE_HELD) {
                 // Its record without the owed updates; nothing else of it changes (ddgiWriteHistory is skipped).
                 ddgiProbeHistory[probeIndex] = step.history;
             }
-            if (step.kind != DDGI_UPDATE_HELD && ddgiPassesChange(probe, history, state)) {
+            if (skipped) {
+                // Nothing blended, so a probe in state 3 stays there: it is
+                // used in shading only after two blended updates.
+                if (state == DDGI_STATE_NOT_UPDATED_YET) {
+                    newState = DDGI_STATE_NOT_UPDATED_YET;
+                }
+                // ddgiWriteHistory is skipped too, so the record is written here.
+                ddgiProbeHistory[probeIndex] = ddgiNextHistory;
+                atomicAdd(&ddgiCensus[DDGI_CENSUS_BACK_FACE_SKIPS_TOTAL], 1u);
+            }
+            if (step.kind != DDGI_UPDATE_HELD && !skipped && ddgiPassesChange(probe, history, state)) {
                 // The header of this slot's key-delta entry, and the flag
                 // ddgi/propagate finds it by (valid in this frame, the frame
                 // of the probe's scheduled stamp).
@@ -1241,8 +1324,8 @@ ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         // The same share applies to the sums as to the means.
         let ruleOn = ddgi.irradianceChangeThreshold >= 0.0;
         ddgiChangedNow = select(0u, 1u, ruleOn && any(abs(estimateSum - oldSum) > ddgi.irradianceChangeThreshold * oldSum));
-        // A held probe (the test mode) keeps its record as it is.
-        if (ddgiUpdateKind != DDGI_UPDATE_HELD) {
+        // A held probe (the test mode) keeps its record as it is; a skipped one's was written in phase B.
+        if (ddgiUpdateKind != DDGI_UPDATE_HELD && ddgiUpdateKind != DDGI_UPDATE_SKIPPED) {
             ddgiWriteHistory(probeIndex, probe, estimateSum, oldSum, hysteresis, fastHysteresis);
         }
     }

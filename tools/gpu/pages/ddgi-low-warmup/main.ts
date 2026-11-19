@@ -3,7 +3,9 @@
  * technique's own warm-up, the host's budget as `low` gives it (1 ms). Each frame
  * is waited on, so a frame's wall time is its GPU time plus a little. A device
  * loss is reported, not thrown away. `VITE_WARMUP_MAX` sets `maxProbesPerFrame`
- * (the default is 4,096), `VITE_DDGI_PRESET` the preset (default low).
+ * (default: the preset's, 1,024 for low since TU.1; it was 4,096 for every
+ * preset when the 2026-11-19 runs were made), `VITE_DDGI_PRESET` the preset
+ * (default low).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
@@ -27,7 +29,7 @@ await runGpuTest(async ({ device, log: logLine }) => {
     const sceneId = typeof env.VITE_WARMUP_SCENE === 'string' ? env.VITE_WARMUP_SCENE : 'two-room';
     const divisor = Number(env.VITE_WARMUP_SPACING_DIVISOR ?? 1);
     const base = loadManifest(sceneId).volume;
-    const maxProbes = Number(env.VITE_WARMUP_MAX ?? 4096);
+    const maxProbes = env.VITE_WARMUP_MAX !== undefined ? Number(env.VITE_WARMUP_MAX) : preset.ddgi.maxProbesPerFrame;
     const scene = await createDdgiScene(device, sceneId, { ...preset.ddgi, volume: { center: base.center, size: base.size, spacing: base.probeSpacing / divisor }, warmUpPasses: 16, maxProbesPerFrame: maxProbes }, { gpuTiming: true, textureLayerSize: preset.textureLayerSize });
     const probes = scene.ddgi.field?.grid.probeCount ?? 0;
     const frames: { ms: number; updated: number; passes: number }[] = [];

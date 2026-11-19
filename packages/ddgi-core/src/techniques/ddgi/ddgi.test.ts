@@ -16,7 +16,7 @@ import {
 } from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
-import { blendSettings, CHANGE_RULE_OFF, clockStep, FIXED_RAYS, MAX_CLOCK_STEP_SECONDS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
+import { blendSettings, CHANGE_RULE_OFF, clockStep, FIXED_RAYS, MAX_CLOCK_STEP_SECONDS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, RTXGI_BACK_FACE_RAY_THRESHOLD, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
 import { cameraWeight, frustumPlanes } from './camera.ts';
 import { priorityBucket, priorityCount, scheduleOnCpu, scrambleStride } from './schedule.ts';
 import { scheduleKernelWgsl } from './wgsl/schedule.ts';
@@ -72,6 +72,17 @@ describe('settings', () => {
         expect(blendSettings(settings).irradianceChangeThreshold).toBe(CHANGE_RULE_OFF);
         expect(blendSettings({ ...settings, irradianceChangeThreshold: 0.25 }).irradianceChangeThreshold).toBe(0.25);
         expect(blendSettings({ ...settings, irradianceChangeThreshold: Number.NaN }).irradianceChangeThreshold).toBe(CHANGE_RULE_OFF);
+    });
+
+    it("gives the kernel RTXGI's back-face threshold as a share, or a negative value for the old black-sample rule", () => {
+        const settings = withDefaults({ volume: { center: [0, 0, 0], size: [1, 1, 1], spacing: 1 } });
+        expect(blendSettings({ ...settings, backFaceRayThreshold: null }).backFaceRayThreshold).toBeLessThan(0);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: RTXGI_BACK_FACE_RAY_THRESHOLD }).backFaceRayThreshold).toBe(0.1);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: 0.25 }).backFaceRayThreshold).toBe(0.25);
+        // A share: kept to 0..1, and nonsense falls back to RTXGI's default rather than switching the rule off.
+        expect(blendSettings({ ...settings, backFaceRayThreshold: 3 }).backFaceRayThreshold).toBe(1);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: -0.5 }).backFaceRayThreshold).toBe(0);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: Number.NaN }).backFaceRayThreshold).toBe(RTXGI_BACK_FACE_RAY_THRESHOLD);
     });
 
     it('gives the kernel 1 / tau for the memory time, 0 for never forgetting, and the default for nonsense', () => {

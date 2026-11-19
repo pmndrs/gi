@@ -210,6 +210,19 @@ export interface DDGISettings {
     warmUpMaxSeconds: number;
     /** ...but not before every probe was updated this many times, so no probe is left black. */
     warmUpMinPasses: number;
+    /**
+     * How a probe's update treats its rays that hit back faces (TU.5, DV-01 in
+     * docs/divergence.md). A number is RTXGI's rule, its
+     * `probeRandomRayBackfaceThreshold` (`ProbeBlendingCS.hlsl`): back-face rays
+     * are left out of the irradiance average, and once at least this share of
+     * the blended rays hit back faces (rounded down, at least one ray) the
+     * probe is taken to be partly inside something and its irradiance isn't
+     * updated at all (the distances still are, as in RTXGI). 0..1; RTXGI's
+     * default is {@link RTXGI_BACK_FACE_RAY_THRESHOLD}. `null`: every back-face
+     * ray counts in the average as a black sample (our rule before TU.5), so a
+     * probe near or partly inside geometry is darkened by them.
+     */
+    backFaceRayThreshold: number | null;
     /** Largest change one update may make, as a multiple of the old value (fireflies). */
     maxBrightnessChange: number;
     /** Exponent of the cosine weight when blending distances. */
@@ -474,6 +487,18 @@ const RAMP_UPDATES_ENDLESS = 1e9;
 /** The largest ramp the kernel takes: beyond it a probe would stay noisy for thousands of updates. */
 const MAX_UPDATES_PER_SAMPLE = 64;
 
+/**
+ * RTXGI's `probeRandomRayBackfaceThreshold` default (`DDGIVolume.h`): a probe
+ * whose blended rays hit back faces this often or more isn't blended
+ * ({@link DDGISettings.backFaceRayThreshold}). RTXGI packs it into 16 bits on
+ * the GPU (0.099992), which differs from 0.1 only where 0.1 × the blended rays
+ * is a whole number (480 rays: 47 back faces there, 48 here).
+ */
+export const RTXGI_BACK_FACE_RAY_THRESHOLD = 0.1;
+
+/** What the kernel reads as "back-face rays are black samples" (`backFaceRayThreshold: null`). */
+const BACK_FACE_RULE_OFF = -1;
+
 /** What a host must give, a volume or a list of them; everything else has a default. */
 export type DDGISettingsInput = Partial<DDGISettings> & ({ readonly volume: DDGIVolumeSettings } | { readonly volumes: readonly DDGIVolumeSettings[] });
 
@@ -504,6 +529,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume' | 'volu
     warmUpPasses: DEFAULT_WARM_UP_PASSES,
     warmUpMaxSeconds: DEFAULT_WARM_UP_MAX_SECONDS,
     warmUpMinPasses: DEFAULT_WARM_UP_MIN_PASSES,
+    backFaceRayThreshold: null,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
     normalBias: 'auto',
@@ -703,6 +729,8 @@ export function blendSettings(settings: DDGISettings): {
     keyProbeUpdates: number;
     holdFineProbes: boolean;
     feedback: boolean;
+    /** The share of blended back-face rays that skips an update, 0..1; negative: back-face rays are black samples. */
+    backFaceRayThreshold: number;
 } {
     const defaults = DEFAULT_DDGI_SETTINGS;
     const memorySeconds = settings.hysteresisMemorySeconds;
@@ -738,6 +766,9 @@ export function blendSettings(settings: DDGISettings): {
         keyProbeUpdates: Math.round(clamp(settings.keyProbeUpdates, 1, MAX_OWED_UPDATES, defaults.keyProbeUpdates)),
         holdFineProbes: settings.holdFineProbes === true,
         feedback: settings.feedback !== false,
+        // null (or anything not a number) keeps the old rule; a number is RTXGI's, NaN falling back to its default.
+        backFaceRayThreshold:
+            typeof settings.backFaceRayThreshold === 'number' ? clamp(settings.backFaceRayThreshold, 0, 1, RTXGI_BACK_FACE_RAY_THRESHOLD) : BACK_FACE_RULE_OFF,
     };
 }
 

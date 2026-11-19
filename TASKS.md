@@ -530,17 +530,19 @@ Status: **signed off by Dennis 2026-11-18 (DECISIONS 2026-11-18)**, on `main`. S
 
 ## Tuning pass (after the M3-M5 sign-off)
 
-Status: **in progress** (TU.2 and TU.4 done, TU.1 in part, 2026-11-19). Dennis's picks on the close-out page (2026-11-18): these five are "next", in this order; GI behind glass in the composite and timing on the target GPUs are "later" (TASKS Later). Timing runs are deferred (Dennis, 2026-11-18: "defer timing runs for another time"). Prototype rules still hold: numbers recorded, not gated, except the correctness bars.
+Status: **in progress** (TU.2, TU.4 and TU.5 done, TU.1's Intel half done, 2026-11-19; what is left is Mac work: TU.1's iPad half [#13](https://github.com/pmndrs/gi/issues/13) and TU.3 [#14](https://github.com/pmndrs/gi/issues/14)). Dennis's picks on the close-out page (2026-11-18): these five are "next", in this order; GI behind glass in the composite and timing on the target GPUs are "later" (TASKS Later). Timing runs are deferred (Dennis, 2026-11-18: "defer timing runs for another time"). Prototype rules still hold: numbers recorded, not gated, except the correctness bars.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| TU.1 | `low` on its devices: run the `low` preset on the iPad and the Intel UHD (furnace, leak, recompiles, the viewer), and size its warm-up batch (`maxProbesPerFrame` is 4,096 under every preset today) | gpu-tester, then implementer | S | the Windows laptop and an iPad | todo (Intel half done 2026-11-19: `low` passes furnace (E/π 0.4985), leak (two-room 0.87%) and recompiles (0) on the Intel UHD. Warm-up on `ddgi-low-warmup` (two-room refined to 25,194 probes): 4,096 probes a frame gives 47-70 ms frames and a 3.6 s warm-up, no hang; 1,024 gives about 20 ms frames and 4.6 s. **Proposal: `maxProbesPerFrame` 1,024 for `low`**, not yet in code. Open: the iPad half, then the change. PROGRESS 2026-11-19) |
+| TU.1 | `low` on its devices: run the `low` preset on the iPad and the Intel UHD (furnace, leak, recompiles, the viewer), and size its warm-up batch (`maxProbesPerFrame`, 4,096 under every preset until 2026-11-19) | gpu-tester, then implementer | S | the Windows laptop and an iPad | todo, the iPad half: [#13](https://github.com/pmndrs/gi/issues/13) (Intel half done 2026-11-19: `low` passes furnace (E/π 0.4985), leak (two-room 0.87%) and recompiles (0) on the Intel UHD. Warm-up on `ddgi-low-warmup` (two-room refined to 25,194 probes): 4,096 probes a frame gives 47-70 ms frames and a 3.6 s warm-up, no hang; 1,024 gives about 20 ms frames and 4.6 s. **`low`'s `maxProbesPerFrame` is 1,024 since 2026-11-19** (the proposal, made a lead call: DECISIONS 2026-11-19; `medium` and `high` keep 4,096). Open: the iPad half. PROGRESS 2026-11-19) |
 | TU.2 | Re-run `trace-oracle`, `trace-materials` and `trace-bench-quick` on the RTX and the Intel after the Metal shared-edge fix (`giEdgeFunction`, 2026-11-10) | gpu-tester | XS | the Windows laptop | done (2026-11-19: all three pass on the RTX 3060 and the Intel UHD; 0 slipped rays in all 8 variants of 2M shared-edge rays, 0 mismatches. PROGRESS 2026-11-19) |
-| TU.3 | Safari on the M5 Pro: the GPU suite's correctness pages and the viewer, as SPEC's target browser | gpu-tester | S | none | todo |
-| TU.4 | Accuracy against Cycles: M4's remaining table (Bistro exterior and interior, courtyard tree, alpha checker, sponza-full, FLIP), the door and cabinet end states, and the furnished scenes again on today's no-GTAO default (`m4-textured-accuracy` still turns GTAO on unless given `--no-occlusion`: switch it to the default first). Bistro's dark side street is judged here | gpu-tester + implementer | M | the Cycles references from the NAS | done (2026-11-19: the door and cabinet end states ran, and the page's default is now no GTAO; sponza-full diagnosed, not fixed, below; M4's remaining table done on the RTX 2026-11-19, with and without GTAO, the furnished scenes included: [M3-M4.md](docs/milestones/M3-M4.md). Bistro's side street is −3.8% with GTAO and +4.4% without, and as dark in Cycles, so it isn't the GI. Door and cabinet (Cycles end states, 128 spp CPU, 69 min of rendering; [M3-M4.md](docs/milestones/M3-M4.md)): door shut +2.4/+2.1%, door open +2.8/+2.4/+4.3% (the dark-room view's FLIP 0.184 is mostly the reference's 5% block noise), cabinet −4.4%, FLIP 0.09. **sponza-full at −16% without GTAO (FLIP 0.72)**, colour-shifted: ours over the reference per channel R 0.85, G 0.62, B 1.47, worst where the cypress foliage fills the view. Not reference noise (8x8 block noise 6.9%), and courtyard-tree is within 3%. **Verdict: our side.** The Cycles cypress leaf is glTF BLEND rendered with the glTF's materials (green lit leaves, the reference is right); ours draws the blended leaf cards nearly black, and with our blended materials alpha-tested instead (`--material-variant cutout`) the mean goes to +47.7%. It is the one scene with blended foliage (courtyard tree is masked, within 3%). Left open as its own fix, for the composite's blended path or the stochastic trace; see M3-M4.md) |
-| TU.5 | The cheap items from the DDGI vs RTXGI comparison ([docs/divergence.md](docs/divergence.md)): DV-01 (back-face rays, may matter for Sponza) and DV-03 (the irradiance probe view), then whatever else Dennis picks there | implementer | S each | none | todo |
+| TU.3 | Safari on the M5 Pro: the GPU suite's correctness pages and the viewer, as SPEC's target browser | gpu-tester | S | none | todo: [#14](https://github.com/pmndrs/gi/issues/14) |
+| TU.4 | Accuracy against Cycles: M4's remaining table (Bistro exterior and interior, courtyard tree, alpha checker, sponza-full, FLIP), the door and cabinet end states, and the furnished scenes again on today's no-GTAO default (`m4-textured-accuracy` still turns GTAO on unless given `--no-occlusion`: switch it to the default first). Bistro's dark side street is judged here | gpu-tester + implementer | M | the Cycles references from the NAS | done (2026-11-19: the door and cabinet end states ran, and the page's default is now no GTAO; sponza-full diagnosed, not fixed, below; M4's remaining table done on the RTX 2026-11-19, with and without GTAO, the furnished scenes included: [M3-M4.md](docs/milestones/M3-M4.md). Bistro's side street is −3.8% with GTAO and +4.4% without, and as dark in Cycles, so it isn't the GI. Door and cabinet (Cycles end states, 128 spp CPU, 69 min of rendering; [M3-M4.md](docs/milestones/M3-M4.md)): door shut +2.4/+2.1%, door open +2.8/+2.4/+4.3% (the dark-room view's FLIP 0.184 is mostly the reference's 5% block noise), cabinet −4.4%, FLIP 0.09. **sponza-full at −16% without GTAO (FLIP 0.72)**, colour-shifted: ours over the reference per channel R 0.85, G 0.62, B 1.47, worst where the cypress foliage fills the view. Not reference noise (8x8 block noise 6.9%), and courtyard-tree is within 3%. **Verdict: our side.** The Cycles cypress leaf is glTF BLEND rendered with the glTF's materials (green lit leaves, the reference is right); ours draws the blended leaf cards nearly black, and with our blended materials alpha-tested instead (`--material-variant cutout`) the mean goes to +47.7%. It is the one scene with blended foliage (courtyard tree is masked, within 3%). Left open as its own fix, for the composite's blended path or the stochastic trace; see M3-M4.md. The fix is [#6](https://github.com/pmndrs/gi/issues/6)) |
+| TU.5 | The cheap items from the DDGI vs RTXGI comparison ([docs/divergence.md](docs/divergence.md)): DV-01 (back-face rays, may matter for Sponza) and DV-03 (the irradiance probe view), then whatever else Dennis picks there | implementer | S each | none | done (2026-11-19, merged in #2: DV-01 built as `backFaceRayThreshold`, **off by default**: leak, furnace and change-still unchanged on the RTX, Sponza against Cycles worse (+25.46 → +31.50% colonnade, +21.77 → +22.99% gallery), DECISIONS 2026-11-19. DV-03 done: probes shaded by their own light in the core (`giProbeIrradiance`, the `points` view's `irradianceFunction`) and the viewer (`probecolor=irradiance`), screenshots looked at on two-room and Sponza. PROGRESS 2026-11-19. The other DV items are issues [#16](https://github.com/pmndrs/gi/issues/16)-[#20](https://github.com/pmndrs/gi/issues/20)) |
 
 ## Carried to M2 (collected during M1)
+
+_Historical: each item was done in M2 or M3, or is now an issue (see Later)._
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
 - A texture sky in the native harness's miss shader (DECISIONS 2026-11-04).
@@ -553,6 +555,8 @@ Status: **in progress** (TU.2 and TU.4 done, TU.1 in part, 2026-11-19). Dennis's
 
 ## Carried to M3 (collected during M1)
 
+_Historical: each item was done in M2 or M3, or is now an issue (see Later)._
+
 - Probes in empty space are switched off by classification ("no surface nearby"; 347 of Cornell's 1,728). Moving objects in mid-air then get no GI. M3 (moving objects) needs those probes active near receivers, or a fallback.
 - The three adapter's change-detection latency (up to 41 frames on Bistro without `markChanged`).
 - The main-thread scene copy (1.3 s Sponza, 4.1 s Bistro exterior at load) moves off the main thread.
@@ -561,41 +565,45 @@ Status: **in progress** (TU.2 and TU.4 done, TU.1 in part, 2026-11-19). Dennis's
 
 ## Later
 
-M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN.md#later-milestones-outline).
+From 2026-11-19 the open follow-ups are GitHub issues on [pmndrs/gi](https://github.com/pmndrs/gi/issues) (Dennis, 2026-11-19: "the tuning and cleanup can be tracked as issues for later"). Each issue holds the details that were here. This list only maps them. Labels: `ddgi`, `tuning`, `needs-mac`, `needs-windows`, `chore`.
 
-### Follow-ups after the M3-M5 sign-off (2026-11-19)
+**Bugs**
+- [#6](https://github.com/pmndrs/gi/issues/6) sponza-full's blended cypress foliage draws nearly black (TU.4's verdict).
+- [#7](https://github.com/pmndrs/gi/issues/7) Intel UHD: `DXGI_ERROR_DEVICE_HUNG` in multi-page GPU batches (T3.19).
+- [#8](https://github.com/pmndrs/gi/issues/8) Unit tests time out at 5 s under CPU load (T3.19).
+- [#9](https://github.com/pmndrs/gi/issues/9) `recommendPreset` gives every Mac `high` (Chrome reports no chip name).
 
-- **`giRadiance`, DDGI's rough-only fallback** (Dennis, 2026-11-19: "yeah it can wait. just note it somewhere as a follow up"). Moved out of v1 (DECISIONS 2026-11-18). Comes with the three adapter's blend with environment specular, since the fallback is only right at roughness 1. Goes with the reflections work after v1.
-- **Rename the workspace from `ddgi` to `gi`** (folders and private package names: `packages/ddgi`, `packages/ddgi-core`, `@pmndrs/ddgi-core`, ...; DECISIONS 2026-11-10). Waits on the radiance-cache branch merging, since it works inside those folders. Doesn't block a release: the published name is already `@pmndrs/gi`.
-- **The old repo** `DennisSmolek/webgpu-ddgi`: Dennis picked "archive" (2026-11-18). A README pointing to pmndrs/gi first, if he wants one, then he archives it.
+**Accuracy and tuning**
+- [#10](https://github.com/pmndrs/gi/issues/10) Sponza is 22–25% brighter than Cycles (the curtains; nested finer volumes; DV-01 ruled out).
+- [#11](https://github.com/pmndrs/gi/issues/11) The other outliers over ±10% without GTAO: the alpha-checker floor and Bistro exterior.
+- [#12](https://github.com/pmndrs/gi/issues/12) GI behind glass in the three composite.
+- [#15](https://github.com/pmndrs/gi/issues/15) Timing on the target GPUs, the re-timing of M2's clock-sensitive checks, the `04-moving-objects` spike, and the saved bake's start-up win.
+- [#21](https://github.com/pmndrs/gi/issues/21) Trim DDGI buffers grown by doubling (T3.13).
+- [#22](https://github.com/pmndrs/gi/issues/22) Budget v2 calibration on Bistro, and the change cost model (T3.14, T3.15).
+- [#23](https://github.com/pmndrs/gi/issues/23) Scene-copy follow-ups (T3.16).
+- [#24](https://github.com/pmndrs/gi/issues/24) Native RTXGI parity on Sponza (T3.17).
+- [#26](https://github.com/pmndrs/gi/issues/26) Whether the tinybvh swap is still needed.
 
-### From the Windows checks (2026-11-19)
+**The tuning pass's Mac half**
+- [#13](https://github.com/pmndrs/gi/issues/13) TU.1: `low` on the iPad.
+- [#14](https://github.com/pmndrs/gi/issues/14) TU.3: Safari on the M5 Pro.
 
-- **The Intel batch hang (T3.19) on the 2nd page of a batch:** `ddgi-leak` after `ddgi-change-still` hit `DXGI_ERROR_DEVICE_HUNG` at 15 s; the same page passed alone. Until now it had only come later in a batch.
-- **Accuracy out of ±10% without GTAO** (M3-M4.md's table): Sponza +22 to +25% (the curtains), alpha-checker's dark-room floor +10.8%, Bistro exterior across the street +10.4%, and glass-wall's dark views (the known no-GI-behind-glass composite gap, below). sponza-full is diagnosed in TU.4 (our blended foliage; the item below).
+**RTXGI divergence experiments** ([docs/divergence.md](docs/divergence.md))
+- [#16](https://github.com/pmndrs/gi/issues/16) DV-02: stop updating settled probes.
+- [#17](https://github.com/pmndrs/gi/issues/17) DV-04 and DV-05: gamma-5 blending, then 10-bit irradiance.
+- [#18](https://github.com/pmndrs/gi/issues/18) DV-09: rotated volumes.
+- [#19](https://github.com/pmndrs/gi/issues/19) DV-10 and DV-11: normal maps at hits, and blending in place.
+- [#20](https://github.com/pmndrs/gi/issues/20) The XS items: DV-06, DV-07, DV-08, DV-12, and the §6 doc errors.
 
-### From the Mac move and the coverage pass (2026-11-10)
+**Features after v1**
+- [#25](https://github.com/pmndrs/gi/issues/25) `userData.giRange` in the three adapter (T3.18).
+- [#29](https://github.com/pmndrs/gi/issues/29) Area lights on the platform.
+- [#30](https://github.com/pmndrs/gi/issues/30) A public "acceleration structures built" signal.
+- [#31](https://github.com/pmndrs/gi/issues/31) `giRadiance`, the rough-only reflection fallback.
 
-- ~~The door and cabinet against Cycles renders of their end states~~ (done in TU.4, 2026-11-19).
-- **sponza-full's blended cypress foliage** (TU.4's verdict): the leaf cards draw nearly black in the composite's GI term (−16% mean, FLIP 0.72). Separate the composite's blended-surface path from the stochastic trace (one variant keeps the trace stochastic and draws the leaves opaque, or the reverse), then fix. Library code, not the reference.
-- **Chrome on the Mac reports no chip name,** so `recommendPreset` gives every Mac `high`, base M chips included. (`low`'s warm-up batch is TU.1.)
-- **Small leftover from T5.4** (the rest done in T5.8): the hello example draws cut-outs solid and glass opaque (GI sees both right; only its picture is simple).
-- **GI behind glass in the composite** (Dennis's pick, "later", 2026-11-18): three's glass pixels carry no GI albedo, so the composite shows no GI through glass; the per-fragment path is fine. When a host needs the composite with glass.
-- **Timing on the target GPUs** (Dennis's pick, "later", 2026-11-18: "defer timing runs for another time"): the RTX 3060 and the M5 Pro back to the M1/M2 time targets, after the tuning pass.
-- **From T5.6 and T5.7 (2026-11-10):** `04-moving-objects` showed 34.6 ms of GI GPU time once (2.0 ms the next run), not looked into; on two-room, starting from a saved bake (0.5-2.2 s) was no faster than warming up (0.6-2.6 s), so the bake's start-up win is for big scenes and wasn't shown on one; upgrade vitest to 4.1.12+ and typescript-eslint to clear GitHub's dev-only security alerts (none ship in the package); `test:release` not yet run on Windows.
-- ~~**Asset hashes are Windows-only**~~ done 2026-11-18 (`assets-mac`: per-platform records, Blender*.app search, bsdtar unpack; `--verify-only` passes all 10 on the M5 Pro). Was: on the Mac every Blender conversion and the generated wind tree come out with other hashes. The `.gltf` files differ by exactly their line count (CRLF on Windows), and Bistro's `.glb`, the courtyard tree's normals and the wind tree by small binary amounts (not yet looked at). `pnpm assets:fetch` reports them failed, though they load. Normalise line endings in the convert step and record per-platform hashes, or check the GLB's views as `--record-glb-views` already does.
-
-### From M2, moved here when M3 became a prototype (2026-11-09)
-
-Polish and follow-ups, picked up when a working feature needs them. Earlier IDs in brackets.
-- DDGI memory: trim buffers grown by doubling once a scene settles (about 237 MB unused on Bistro, T2.17) (T3.13).
-- Bistro's calibration: Budget v2 lands at 14-116 probes, and `ddgi/trace` has a 1-1.5 ms fixed cost at 16 probes; the budget page's check breaks when the frame rate is learned (T3.14).
-- The change cost model counts `gi/direct`'s lit hits, to win back the frame-15 margin on Sponza's sun turn, with the sun layer on and off, on both GPUs (T2.18, T2.8, the Intel miss) (T3.15).
-- Scene-copy follow-ups from T2.13's review: H-PLOC reading the packing's staging buffers, GPU tests of the packing fallbacks, the main-thread bar (T3.16). The texture-average items are dropped: M4's textured hits remove the averages (m4-materials.md).
-- Native parity: native's Sponza GI about 8× Cycles' (the sun's units first), native's 1 m falloff clamp, a native sweep on our grid for Sponza (T3.17).
-- `userData.giRange` in the three adapter (a host-facing API; designed by the main session first) (T3.18).
-- Test flakes: unit tests timing out at 5 s under CPU load; the Intel hanging on the 4th page of a batch (T3.19).
-- Nested finer volumes around thin cloth (Sponza's curtains; carried from M1).
-- Re-timing M2's clock-sensitive gates if the clock comes back (the light grid with its run-boundary check, Sponza's lamp step, the cost after a change).
-- Whether the tinybvh swap is still needed (GPU trees trace at 0.981× tinybvh's on Bistro, T2.10).
-- Area lights on the platform (Dennis: "lets not abandon them").
+**Housekeeping and release**
+- [#27](https://github.com/pmndrs/gi/issues/27) Upgrade vitest and typescript-eslint.
+- [#28](https://github.com/pmndrs/gi/issues/28) The hello example draws cutouts solid and glass opaque.
+- [#32](https://github.com/pmndrs/gi/issues/32) Rename the workspace from `ddgi` to `gi`, after the radiance-cache branch merges.
+- [#33](https://github.com/pmndrs/gi/issues/33) Release 0.1.0.
+- The old repo, `DennisSmolek/webgpu-ddgi`: Dennis picked "archive" (2026-11-18). That's his step.

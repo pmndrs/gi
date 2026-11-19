@@ -28,6 +28,7 @@ import { assert, runGpuTest } from '../../client.ts';
 import { DDGI_PRESET_NAMES, ddgiPreset, type DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets.ts';
 import { effectiveRaysPerProbe, probeGrid } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
 import { createDdgiScene, frameInput, imageMean, releaseDeviceOnPageHide, runFrames, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
+import { everyProbeEveryFrame } from '../ddgi-shared/page-preset.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 
@@ -134,7 +135,8 @@ interface PresetResult {
 }
 
 async function runPreset(device: GPUDevice, presetCase: PresetCase, name: DDGIPresetName, log: (line: string) => void): Promise<PresetResult> {
-    const preset = ddgiPreset(name);
+    // Every probe every frame, so the default batch cap, not low's 1,024 (page-preset.ts).
+    const preset = everyProbeEveryFrame(ddgiPreset(name));
     const scene = await createDdgiScene(device, presetCase.scene, { ...preset.ddgi }, { gpuTiming: true, textureLayerSize: preset.textureLayerSize });
     try {
         const field = scene.ddgi.field;

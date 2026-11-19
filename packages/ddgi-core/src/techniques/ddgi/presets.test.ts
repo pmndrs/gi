@@ -35,6 +35,10 @@ describe('quality presets (m5-coverage.md §1)', () => {
         expect(low.budget.gpuMs).toBeLessThan(medium.budget.gpuMs);
         expect(medium.budget.gpuMs).toBeLessThan(high.budget.gpuMs);
         expect(low.probeSpacing).toBeGreaterThan(medium.probeSpacing);
+        // The warm-up batch: smaller on low, so warm-up frames stay short on its devices (TU.1); medium keeps high's.
+        expect(low.ddgi.maxProbesPerFrame).toBe(1024);
+        expect(low.ddgi.maxProbesPerFrame).toBeLessThan(medium.ddgi.maxProbesPerFrame);
+        expect(medium.ddgi.maxProbesPerFrame).toBe(high.ddgi.maxProbesPerFrame);
         expect(storeLayout(low.textureLayerSize).layerBytes).toBeLessThan(storeLayout(high.textureLayerSize).layerBytes);
     });
 
