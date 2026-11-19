@@ -58,7 +58,7 @@ export interface SharcSettings {
      * Where the scene changed (the technique's changed boxes, or everything
      * for the sun or the sky), a cell keeps at most `changeKeepSamples` of
      * sample weight, so the samples taken after the change outweigh the old
-     * ones at once (register E8). Off: the 32-frame mean alone, about 80
+     * ones at once (register E7a). Off: the 32-frame mean alone, about 80
      * frames to settle within 5% after the sun doubles.
      */
     changeReset: boolean;

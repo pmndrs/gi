@@ -91,7 +91,7 @@ export function sharcLightMask(options: Pick<SharcCacheOptions, 'environmentLigh
 /**
  * The share of probe rays the path lists hold beyond `updateFraction`: rays in
  * probes not updating this frame that still need their own estimate (shorter
- * than their cell, or no cell with samples; register E9). Measured on Sponza
+ * than their cell, or no cell with samples; register E7b). Measured on Sponza
  * and Bistro exterior (PROGRESS, P6.1); a ray past the lists is refused and
  * counted (`refusedPaths`).
  */
@@ -499,7 +499,7 @@ function sameRays(a: WorldCacheProbeRays, b: WorldCacheProbeRays): boolean {
     );
 }
 
-/** The change words of `SharcParams` (register E8): more boxes than it holds count as everything. */
+/** The change words of `SharcParams` (register E7a): more boxes than it holds count as everything. */
 function writeChanges(floats: Float32Array, words: Uint32Array, changes: WorldCacheChanges | undefined, reset: boolean, keepSamples: number): void {
     const word = SHARC_PARAMS_WORD;
     const boxes = changes?.boxes ?? [];

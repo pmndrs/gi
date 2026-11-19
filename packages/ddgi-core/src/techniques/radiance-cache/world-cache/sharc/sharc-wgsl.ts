@@ -940,7 +940,7 @@ fn ${SHARC_ENTRY_POINT.resolve}(
     let count = atomicLoad(&g_SharcAccum[word + 3u]);
     // A cell the scene changed in (a moved object's or a light's box, or everything for the sun or the
     // sky) keeps at most changeKeepSamples of history, so this frame's samples, taken in the changed
-    // scene, outweigh what it learned before (the cache's version of D46's reset; register E8).
+    // scene, outweigh what it learned before (the cache's version of D46's reset; register E7a).
     var previous = g_SharcResolved[slot];
     if (g_Sharc.changeReset != 0u && previous.w > g_Sharc.changeKeepSamples && sharcSlotChanged(word)) {
         previous.w = g_Sharc.changeKeepSamples;
