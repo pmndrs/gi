@@ -42,6 +42,9 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/shade/wgsl.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -114,6 +117,9 @@ interface Scan {
     /** The same over the rays that hit something (a miss's distance is the largest half, 65,504). */
     readonly meanHitRayRadiance: number;
     readonly hitRays: number;
+    /** This frame's shadow rays (first and second bounce), and how many drew the sky (RC3.4). */
+    readonly shadowRays: number;
+    readonly skyDrawn: number;
     readonly firstBad: string | null;
 }
 
@@ -167,9 +173,21 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         }
     }
 
+    // The frame's reservoirs: how many drew the sky as their light (RC3.4, register D39).
+    const lists = cache.rayLists;
+    const counters = new Uint32Array(await readRange(device, cache.buffers.tileWords, 0, 64 * 4));
+    const shadowRays = counters[HASH_GRID_COUNTER.visibilityRayCount];
+    let skyDrawn = 0;
+    if (lists && shadowRays > 0) {
+        const reservoirs = new Uint32Array(await readRange(device, lists.buffer, lists.layout.reservoirBuffer * 4, shadowRays * RESERVOIR_WORDS * 4));
+        for (let ray = 0; ray < shadowRays; ray++) if (reservoirs[ray * RESERVOIR_WORDS] === DIRECT_SKY_LIGHT) skyDrawn++;
+    }
+
     return {
         frame,
         probeRays: rayCount,
+        shadowRays,
+        skyDrawn,
         rayValuesBad: rays.bad,
         atlasValuesBad: atlas.bad,
         liveTiles,
