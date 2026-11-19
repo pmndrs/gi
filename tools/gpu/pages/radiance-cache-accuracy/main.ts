@@ -110,8 +110,8 @@ const ALL_CONFIGURATIONS: readonly Configuration[] = [
 const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
 const CONFIGURATIONS = configurationNames ? ALL_CONFIGURATIONS.filter((configuration) => configurationNames.includes(configuration.name)) : ALL_CONFIGURATIONS;
 
-/** Contact-sheet thumbnails, pixels across. */
-const THUMBNAIL_WIDTH = 384;
+/** Contact-sheet thumbnails, pixels across: four fit the runner's window (about 1,258 CSS pixels, NOTES). */
+const THUMBNAIL_WIDTH = 300;
 /** The sheet's exposure puts the reference GI's mean here before tone mapping. */
 const SHEET_KEY = 0.35;
 
