@@ -27,8 +27,10 @@
  *    2335-2528, here after the trace: `encodeWorldCache`);
  * 6. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas, the mask and
  *    the cache, then `ReorderScreenProbes` (gi1.comp:1334) of the cache's LRU;
- * 7. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
- *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts (RC2.2);
+ * 7. the platform's SSGI (`gi/ssgi`, Capsaicin's SSGI technique, RC4.2), then
+ *    `FilterProbeMask` (gi1.comp:249), `FilterScreenProbes` twice
+ *    (gi1.comp:1357, RC4.2), `ProjectScreenProbes` (gi1.comp:1446) and
+ *    `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts (RC2.2);
  * 8. the screen's depth and normals copied for the next frame's reprojection.
  *
  * Capsaicin dispatches the per-ray passes over every possible ray

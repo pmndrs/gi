@@ -43,8 +43,11 @@
  * (docs/design/radiance-cache.md): the near-field light is scaled by π to be
  * irradiance (D52), its projected-normal weight is applied once per slice
  * (D53), the occluder-thickness step works around the eye as h3r2tic's
- * view-space original does (D54), and the per-pixel random numbers are white
- * noise (D27's reason). The arithmetic runs in view space (rotations and
+ * view-space original does (D54), the per-pixel random numbers are white
+ * noise (D55), a depth sample is rebuilt at its texel's centre (D56), and
+ * the slices are taken relative to the same slices with nothing in the way
+ * (D57).
+ * The arithmetic runs in view space (rotations and
  * dot products are the same; positions are relative to the eye, which keeps
  * them small) and the bent normal is stored signed (Capsaicin's 0..1
  * encoding in a float texture changes nothing).
@@ -242,6 +245,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var ambientOcclusion = 0.0;
     var bentNormal = vec3f(0.0);
     var globalLighting = vec3f(0.0);
+    // What the same slices give with nothing in the way: the visibility and bent normal are taken
+    // relative to them (register D57).
+    var openVisibility = 0.0;
+    var openBentNormal = vec3f(0.0);
     let sliceCount = giSsgi.sliceCount;
     let stepCount = giSsgi.stepCount;
     for (var sliceIndex = 0u; sliceIndex < sliceCount; sliceIndex++) {
@@ -271,7 +278,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                 let sampleStep = (f32(stepIndex) + noise.y) / f32(stepCount);
                 let sampleUvOffset = sampleStep * sliceUvDir;
 
-                let sampleUv = uv + sideSign * sampleUvOffset;
+                // The sample is rebuilt at the centre of the texel whose depth it reads, where that
+                // depth was drawn (register D56: Capsaicin rebuilds it at the unsnapped uv, which puts
+                // it off the surface by up to half a texel's depth change, and a grazing floor then
+                // occludes itself).
+                let sampleUv = (vec2f(giSsgiTexel(uv + sideSign * sampleUvOffset)) + 0.5) / vec2f(giSsgi.size);
                 let sampleDepth = giSsgiDepthAt(sampleUv);
                 let samplePos = giSsgiViewPosition(sampleUv, sampleDepth);
 
@@ -321,17 +332,34 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
         // Bent normal.
         bentNormal += projNormalLen * giSsgiIntegrateBentNormal(horizonAngles[0], horizonAngles[1], projNormalAngle, eyeDir, sliceViewDir);
+
+        // The open slice: horizons at the normal's own hemisphere boundary.
+        let openAngle0 = projNormalAngle + GI_SSGI_HALF_PI;
+        let openAngle1 = projNormalAngle - GI_SSGI_HALF_PI;
+        openVisibility += projNormalLen * (giSsgiIntegrateHalfArc(openAngle0, projNormalAngle) + giSsgiIntegrateHalfArc(openAngle1, projNormalAngle));
+        openBentNormal += projNormalLen * giSsgiIntegrateBentNormal(openAngle0, openAngle1, projNormalAngle, eyeDir, sliceViewDir);
     }
 
-    ambientOcclusion /= f32(sliceCount);
-    // A pixel whose every slice had no projected normal keeps its own normal.
-    let bentLength = length(bentNormal);
-    let bentView = select(normal, bentNormal / bentLength, bentLength > 0.0);
+    // Capsaicin averages the slices (ambient_occlusion / SLICE_COUNT, normalize(bent_normal)), which is
+    // right only on average over slice angles: one slice (the default) of an open surface reads
+    // len (cos n + n sin n), anywhere from 0 to above 1, and leans the bent normal towards the eye,
+    // and the SH cone lookup is not linear in either. Ours: the slices' visibility over what the
+    // same slices give open, and the bent normal as the pixel's normal moved by what the occluders
+    // took away, so an open surface reads 1 and its own normal in every frame (register D57).
+    var visibility = 1.0;
+    var bentView = normal;
+    if (openVisibility > 0.0) {
+        visibility = saturate(ambientOcclusion / openVisibility);
+        let moved = normal * length(openBentNormal) + (bentNormal - openBentNormal);
+        let movedLength = length(moved);
+        bentView = select(normal, moved / movedLength, movedLength > 0.0);
+    }
     // The arcs are shares of the cosine-weighted hemisphere (pi), so the light they carry is E / pi:
-    // times pi it is irradiance, which the GI it is added to is (register D52).
-    globalLighting *= GI_SSGI_PI / f32(sliceCount);
+    // times pi it is irradiance, which the GI it is added to is (register D52). Taken over the same
+    // open total as the visibility (D57), so far field and near field share one hemisphere.
+    globalLighting *= GI_SSGI_PI / max(openVisibility, 1e-8);
 
-    textureStore(giSsgiOcclusion, did, vec4f(giSsgiToWorld(bentView), ambientOcclusion));
+    textureStore(giSsgiOcclusion, did, vec4f(giSsgiToWorld(bentView), visibility));
     textureStore(giSsgiNearField, did, vec4f(globalLighting, 0.0));
 }
 `;

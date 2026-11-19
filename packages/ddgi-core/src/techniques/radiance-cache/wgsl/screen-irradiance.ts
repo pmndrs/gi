@@ -1,6 +1,6 @@
 /*
  * Ported from AMD Capsaicin v1.3 (914b915): src/core/src/render_techniques/gi1/gi1.comp
- * (FilterProbeMask, ProjectScreenProbes, InterpolateScreenProbes) and
+ * (FilterProbeMask, FilterScreenProbes, ProjectScreenProbes, InterpolateScreenProbes) and
  * src/core/src/render_techniques/gi1/screen_probes.hlsl (ScreenProbes_FindClosestProbe).
  *
  * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
@@ -40,17 +40,20 @@
  *    (gi1.frag:76-150) turns into reflected light with `albedo / pi`, as
  *    three's composite does.
  *
- * Capsaicin runs `FilterScreenProbes` between the mask and the projection;
- * it arrives with phase 4 (RC4.2), as does the GI denoiser that reads the
- * interpolated image (RC4.3). Until then the shading module reads this
- * kernel's output directly (the design doc's phase 2 notes).
+ * Since RC4.2, `FilterScreenProbes` (gi1.comp:1356-1442, at the end of this
+ * file) runs twice between the mask and the projection, across then down,
+ * and the interpolation reads the platform's SSGI (Capsaicin's
+ * `HAS_OCCLUSION` branch). The GI denoiser that reads the interpolated image
+ * is RC4.3; until then the shading module reads this kernel's output.
  *
  * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
  * the projection weight is a cell's solid angle (D25) and the basis the
  * cell's mean (D34), the SH live in a
  * texture (D26), the interpolation's jitter is white noise (D27), SH
- * coefficients are clamped to the half range (D28). Without SSGI (phase 4)
- * the interpolation runs Capsaicin's `#ifndef HAS_OCCLUSION` branch, below.
+ * coefficients are clamped to the half range (D28), the filter keeps every
+ * finite neighbour value (D49) and leaves backup fills fills (D50), and the
+ * interpolation writes the lit image next frame's SSGI reads (D51). Without
+ * SSGI it runs Capsaicin's `#ifndef HAS_OCCLUSION` branch.
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
