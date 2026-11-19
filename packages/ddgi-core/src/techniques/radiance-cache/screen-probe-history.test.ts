@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cameraRelativeViewProjection } from './camera.ts';
+import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES } from './screen-probe-history.ts';
 import { PROBE_CELLS } from './settings.ts';
 import {
     blendProbeCells,
@@ -17,7 +18,7 @@ import {
     temporalBlendFactor,
     unpackNormal,
 } from './screen-probe-history-cpu.ts';
-import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_SAMPLE_CAP as WGSL_HISTORY_SAMPLE_CAP, RAY_GUIDING_UNIFORM_SHARE as WGSL_RAY_GUIDING_UNIFORM_SHARE, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
+import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, HISTORY_SAMPLE_CAP as WGSL_HISTORY_SAMPLE_CAP, RAY_GUIDING_UNIFORM_SHARE as WGSL_RAY_GUIDING_UNIFORM_SHARE, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
 
 describe("BlendScreenProbes' biased hysteresis (gi1.comp:1262-1268)", () => {
     it('keeps nothing of the past when the new value is darker or under twice as bright', () => {
@@ -203,5 +204,27 @@ describe('noisy rays with history (register D46): the running mean against the h
         expect(values[3]).toBeCloseTo((2 + 3) / 2, 12);
         expect(next[3]).toBe(0);
         expect(HISTORY_SAMPLE_CAP).toBe(WGSL_HISTORY_SAMPLE_CAP);
+    });
+});
+
+describe('scene changes for the running means (D46)', () => {
+    const box = (x: number) => ({ min: [x, 0, 0] as const, max: [x + 1, 1, 1] as const });
+    const changes = (regions: number, global: ('sun' | 'environment' | 'lights')[] = []) =>
+        ({ regions: Array.from({ length: regions }, (_, index) => ({ bounds: box(index), reason: 'light' as const })), global, receivers: [], lights: [], lightsOverflowed: false }) as const;
+
+    it('collects the dirty regions as boxes, and a change with no bounds or too many boxes as everything', () => {
+        const two = mergeHistoryChanges(NO_HISTORY_CHANGES, changes(2));
+        expect(two).toEqual({ everything: false, boxes: [box(0), box(1)] });
+        expect(mergeHistoryChanges(two, changes(0, ['sun'])).everything).toBe(true);
+        expect(mergeHistoryChanges(NO_HISTORY_CHANGES, changes(MAX_HISTORY_CHANGE_BOXES + 1)).everything).toBe(true);
+        expect(mergeHistoryChanges(NO_HISTORY_CHANGES, changes(0))).toBe(NO_HISTORY_CHANGES);
+    });
+
+    it('writes RcHistoryChanges: the count, the flag, then each box as min and max', () => {
+        const words = historyChangesWords({ everything: false, boxes: [box(3)] });
+        expect(words.byteLength).toBe(HISTORY_CHANGES_BYTES);
+        expect(Array.from(new Uint32Array(words, 0, 2))).toEqual([1, 0]);
+        expect(Array.from(new Float32Array(words, 16, 8))).toEqual([3, 0, 0, 0, 4, 1, 1, 0]);
+        expect(Array.from(new Uint32Array(historyChangesWords({ everything: true, boxes: [] }), 0, 2))).toEqual([0, 1]);
     });
 });
