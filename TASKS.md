@@ -692,6 +692,14 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
   - **Phase 4's by-eye check is Dennis's** (the plan's done-when: steady by eye on Cornell and Sponza, no popping on a fly-through). The viewer is made ready for it and the check is listed in PROGRESS "Next"; it doesn't block the track.
   - Moving the module into `pmndrs/denoiser` (a PR there) needs Dennis's go-ahead: listed in PROGRESS "Next".
 
+### radiance-cache phase 6: levers and experiments
+
+Our experiments are first-class (DECISIONS 2026-11-19): each behind a setting beside GI-1.2, judged by accuracy against analytic references and the path tracer, stability, memory and GPU time (timing recorded, not gated). Register rows in the E series.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| P6.2 | Experiment B, id Tech 8's "shade cells, not hits" on the GI-1.2 hash grid (register E8): `cellShading: 'per-hit' \| 'budgeted'` (default per-hit) and `cellShadingBudget`; hits only find their cells, a budget of cells a frame lit by priority (new or changed, converging, its turn, the rest), counting sort on the GPU; bypass and second bounce settled; GPU checks (lit plane, furnace, strips converge; queue; lag 5k/20k/80k vs per hit), stability, GPU ms on Sponza and Bistro exterior at 720p | implementer | M | RC4.1 | review (2026-11-19; branch `p6-idcells`; RTX 3060; `radiance-cache-cell-shading` passes, five mutations caught; lag after a sun change 37 frames per hit, 24/8/6 at 5k/20k/80k; world cache 12.3 → 11.0/11.8/13.2 ms on Sponza, 15.5 → 13.4/14.3/16.7 on Bistro exterior, timing INVALID (thermal); stability unchanged; see PROGRESS) |
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
