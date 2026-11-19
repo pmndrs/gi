@@ -49,8 +49,9 @@ const SETTLE_FRAMES = 30;
 const TIMED_FRAMES = 60;
 /**
  * Per hit, then each budget (cells lit a frame); then, for E9's box test
- * (P6.2b), per hit with a point light changing every frame (16 change boxes
- * in the window), E9 off and on. A scene with no point light skips those.
+ * (P6.2b), per hit with a dim point light the page adds changing every
+ * frame (a dirty box each frame: 16 in the window, E9's worst case), E9 off
+ * and on.
  */
 interface CostSetting {
     readonly name: string;
@@ -80,8 +81,8 @@ const WORLD_CACHE_SECTIONS = [
     'ResolveCells',
 ] as const;
 
-/** The loaded scene's update, and a way to nudge its first point light's intensity (null without one). */
-async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<{ update: () => void; nudge: ((on: boolean) => void) | null }> {
+/** The loaded scene's update, and a way to nudge the intensity of a dim point light the page adds in front of the camera. */
+async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<{ update: () => void; nudge: (on: boolean) => void }> {
     const loaded = await loadScene(manifest, () => {});
     const content = new Set<object>();
     loaded.content.traverse((object) => content.add(object));
@@ -91,15 +92,14 @@ async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manif
     loaded.scene.updateMatrixWorld();
     const sync = new SceneSync(platform.scene, { device, warn: () => {} });
     sync.environment = platformSkyEnvironment(manifest);
-    let nudge: ((on: boolean) => void) | null = null;
-    loaded.scene.traverse((object) => {
-        const light = object as unknown as { isPointLight?: boolean; intensity: number };
-        if (!light.isPointLight || nudge) return;
-        const base = light.intensity;
-        nudge = (on) => {
-            light.intensity = on ? base * 1.01 : base;
-        };
-    });
+    const bookmark = manifest.cameras[0];
+    const position: [number, number, number] = [
+        (bookmark.position[0] + bookmark.target[0]) / 2,
+        (bookmark.position[1] + bookmark.target[1]) / 2,
+        (bookmark.position[2] + bookmark.target[2]) / 2,
+    ];
+    const lamp = platform.scene.createLight({ type: 'point', position, range: 6, color: [1, 1, 1], intensity: 0.5, label: 'cost page lamp' });
+    const nudge = (on: boolean): void => platform.scene.updateLight(lamp, { intensity: on ? 0.505 : 0.5 });
     return { update: () => sync.update(loaded.scene), nudge };
 }
 
@@ -135,7 +135,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
     const described = await describeLoaded(platform, device, manifest);
     let lightChanging = false;
     const beforeFrame = (): void => {
-        if (lightChanging) described.nudge?.(frameNumber % 2 === 0);
+        if (lightChanging) described.nudge(frameNumber % 2 === 0);
         described.update();
     };
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
@@ -164,7 +164,6 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
         if (!cache) throw new Error('no world cache');
         const results: Record<string, unknown> = {};
         for (const setting of SETTINGS) {
-            if (setting.lightChanging && !described.nudge) continue;
             Object.assign(technique.settings, setting.settings);
             lightChanging = setting.lightChanging;
             for (let index = 0; index < SETTLE_FRAMES; index++) {

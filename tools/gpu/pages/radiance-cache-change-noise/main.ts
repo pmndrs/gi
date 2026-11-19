@@ -8,8 +8,8 @@
  * Scenes as radiance-cache-stability loads them, at 1280 × 720 from their
  * first bookmark, the camera still, screen-probe history on, the
  * interpolation jitter off: Sponza (with curtains, through the viewer's
- * loader) with its sun doubled and, separately, its point light doubled;
- * two-room with its lamp doubled.
+ * loader) with its sun doubled (its manifest's point light has intensity 0);
+ * two-room with its lamp (a point light) doubled.
  *
  * Per case and setting: `SETTLE_FRAMES` frames at the light's own intensity
  * (past E9's 16-frame window), `BASELINE_FRAMES` frames read, the light
@@ -137,8 +137,8 @@ async function load(device: GPUDevice, id: string): Promise<Loaded> {
         sync.environment = platformSkyEnvironment(manifest);
         beforeFrame = () => sync.update(loaded.scene);
         loaded.scene.traverse((object) => {
-            const light = object as unknown as { isDirectionalLight?: boolean; isPointLight?: boolean; intensity: number };
-            const kind = light.isDirectionalLight ? 'sun' : light.isPointLight ? 'point' : null;
+            const light = object as unknown as { isDirectionalLight?: boolean; intensity: number };
+            const kind = light.isDirectionalLight ? 'sun' : null;
             if (!kind || lights[kind]) return;
             const base = light.intensity;
             lights[kind] = (scale) => {
@@ -274,7 +274,7 @@ try {
     deviceErrors = watchDevice(device);
     const results: Record<string, Record<string, Record<string, number>>> = {};
     const failures: string[] = [];
-    for (const [id, cases] of [['sponza', ['sun', 'point']], ['two-room', ['point']]] as const) {
+    for (const [id, cases] of [['sponza', ['sun']], ['two-room', ['point']]] as const) {
         const scene = await load(device, id);
         try {
             for (const light of cases) {
