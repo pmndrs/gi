@@ -37,7 +37,9 @@ const siblings = Object.entries(manifest.linkedSiblings ?? {});
 const fetch = process.argv.includes('--fetch');
 
 function run(command: readonly string[], cwd: string): void {
-    execFileSync(command[0], command.slice(1), { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+    // No git LFS objects: the build needs none (pmndrs/denoiser keeps weights and scene assets in LFS).
+    const env = { ...process.env, GIT_LFS_SKIP_SMUDGE: '1' };
+    execFileSync(command[0], command.slice(1), { cwd, stdio: 'inherit', shell: process.platform === 'win32', env });
 }
 
 const problems: string[] = [];
@@ -47,7 +49,9 @@ for (const [name, sibling] of siblings) {
     const isBuilt = (): boolean => sibling.built.every((file) => existsSync(join(packageDir, file)));
     if (fetch && !existsSync(clone)) {
         console.log(`linked-siblings: cloning ${sibling.repo} at ${sibling.commit} into ${clone}`);
-        run(['git', 'clone', '--quiet', sibling.repo, clone], dirname(clone));
+        // Long paths: the denoiser repo has research files past Windows' 260-character limit.
+        run(['git', '-c', 'core.longpaths=true', 'clone', '--quiet', '--no-checkout', sibling.repo, clone], dirname(clone));
+        run(['git', 'config', 'core.longpaths', 'true'], clone);
         run(['git', 'checkout', '--quiet', sibling.commit], clone);
     }
     if (fetch && existsSync(clone) && !isBuilt()) {
