@@ -2717,7 +2717,26 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
         else if (Math.abs(sumRatio - 1) > 0.03) fail(`the ${surface}'s indirect values near the corner sum to ${sumRatio.toFixed(4)} x the second bounce's (standard error ${sumRatioError.toFixed(4)})`);
         else if (sumRatioError > 0.01) fail(`the ${surface}'s indirect sum is too noisy to judge (standard error ${sumRatioError.toFixed(4)})`);
     }
-    return { failures, data: { contourCheck, reservoirs, cells: judgement, bySurface, indirect: indirectRatios, indirectByDistance, cornerIndirectExamples: { floorAt0_5m: cornerIndirect([0, 0, 0.5], 'floor'), wallAt0_5m: cornerIndirect([0, 0.5, 0], 'wall') } } };
+    // Where the second bounce loses its percent, for the record: this frame's second-bounce
+    // samples of the near first hits, as the cache made them (the landing cell's filtered direct
+    // value, `secondBounceSamples`) against ρ × the landing point's own ρ L (1 − F) (a miss 0).
+    const samples = await secondBounceSamples(device, scenario, state);
+    const landing: Record<string, { throughCache: number; atPoint: number; entries: number }> = {};
+    state.multibounceQuery.forEach((query, entry) => {
+        const ray = state.rays[state.visibilityQuery[query]];
+        if ((ray.surface !== 'floor' && ray.surface !== 'wall') || Math.abs(ray.hit[0]) > CORNER_TABLE.halfX || ray.hit[1] > CORNER_TABLE.reach || ray.hit[2] > CORNER_TABLE.reach) return;
+        const record = landing[ray.surface] ?? { throughCache: 0, atPoint: 0, entries: 0 };
+        record.entries++;
+        record.throughCache += samples[entry];
+        if (state.multibounceCell[entry] !== MULTIBOUNCE_MISS_CELL) {
+            const hit = multibounceHit(state, entry);
+            const surface = ray.surface === 'floor' ? CORNER_WALL_SURFACE : CORNER_FLOOR;
+            record.atPoint += SKY_ALBEDO * constantSkyDirect(hit, surface);
+        }
+        landing[ray.surface] = record;
+    });
+    const secondBounceLanding = Object.fromEntries(Object.entries(landing).map(([surface, { throughCache, atPoint, entries }]) => [surface, { entries, throughCacheOverAtPoint: throughCache / Math.max(atPoint, 1e-30) }]));
+    return { failures, data: { contourCheck, reservoirs, cells: judgement, bySurface, indirect: indirectRatios, indirectByDistance, secondBounceLanding, cornerIndirectExamples: { floorAt0_5m: cornerIndirect([0, 0, 0.5], 'floor'), wallAt0_5m: cornerIndirect([0, 0.5, 0], 'wall') } } };
 }
 
 // ---- Section 19: hits with no light count (register D50) --------------------------------------------
