@@ -98,6 +98,13 @@ export interface ShadingModule {
         readonly radiance: boolean;
     };
     /**
+     * True when the irradiance already carries the technique's own
+     * short-range occlusion (the radiance cache's SSGI, RC4.2), so a host
+     * should not apply its own AO to the GI term as well (three's composite
+     * warns if its `occlusion` is on). Absent or false: none.
+     */
+    readonly occludesIrradiance?: boolean;
+    /**
      * Declarations plus parameterless wrappers (`giIrradianceAt(p, n, v, uv)`,
      * `giDebugColorAt(p, n, view, uv)` and so on) for hosts that bind globals, written at the given group with
      * bindings from 0. Uniforms become one uniform buffer the host fills from

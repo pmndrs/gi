@@ -203,6 +203,12 @@ export interface ScreenSpaceGISettings {
     readonly viewRadius: number;
     /** `ssgi_falloff_range_` (default 0.05): the share of the radius over which an occluder fades out. */
     readonly falloffRange: number;
+    /**
+     * Frames the slices' sums are kept over, as running means reprojected
+     * from frame to frame (register D60; Capsaicin uses one frame's, which
+     * `1` gives back). Default 16.
+     */
+    readonly historyFrames: number;
 }
 
 /** Capsaicin's defaults (ssgi.h:47-50). */
@@ -211,6 +217,7 @@ export const DEFAULT_SCREEN_SPACE_GI_SETTINGS: Readonly<ScreenSpaceGISettings> =
     stepCount: 2,
     viewRadius: 0.2,
     falloffRange: 0.05,
+    historyFrames: 16,
 });
 
 /** What {@link GpuScreenSpaceGI.encode} reads. */
@@ -228,6 +235,13 @@ export interface ScreenSpaceGIInputs {
      */
     readonly lighting: GPUTexture | null;
     readonly settings: ScreenSpaceGISettings;
+    /**
+     * The previous frame's depth and normals (`createScreenHistory`), for
+     * carrying the running means over (D60); null keeps none.
+     */
+    readonly history: ScreenHistoryTextures | null;
+    /** Timestamps for the pass (`TechniqueContext.timer.computePass`). */
+    readonly timestampWrites?: GPUComputePassTimestampWrites;
 }
 
 /** The two images {@link GpuScreenSpaceGI} makes, `rgba16float`, the screen's size. */
@@ -261,6 +275,8 @@ export interface GpuScreenSpaceGI {
     texturesFor(width: number, height: number): ScreenSpaceGITextures;
     /** Records the pass into `encoder`, its own compute pass, and returns the images it writes. */
     encode(encoder: GPUCommandEncoder, inputs: ScreenSpaceGIInputs): ScreenSpaceGITextures;
+    /** Drops the running means: the next encode starts from that frame alone (a cut). */
+    reset(): void;
     /** GPU bytes of the two images and the uniforms. */
     readonly memoryBytes: number;
     dispose(): void;

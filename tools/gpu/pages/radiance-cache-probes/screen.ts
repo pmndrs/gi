@@ -78,6 +78,9 @@ struct PageCamera {
     right: vec4f,     // xyz: unit right; w: width / height
     up: vec4f,        // xyz: unit up
     size: vec4u,
+    // x: a normal map's tilt in radians (0: none), y: its wavelength along world x, in metres. The
+    // written normal turns about world z by x * sin(2 pi hit.x / y), as a normal map would; depth stays.
+    normalBump: vec4f,
 }
 @group(1) @binding(0) var<uniform> pageCamera: PageCamera;
 @group(1) @binding(1) var pageDepth: texture_storage_2d<r32float, write>;
@@ -127,6 +130,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         depth = min(clip.z / clip.w, PAGE_DEPTH_BELOW_FAR);
         velocity = clip.xy / clip.w - previousClip.xy / previousClip.w;
         normal = select(-surface.geometricNormal, surface.geometricNormal, dot(surface.geometricNormal, direction) < 0.0);
+        if (pageCamera.normalBump.x != 0.0) {
+            let tilt = pageCamera.normalBump.x * sin(6.28318530717959 * point.x / pageCamera.normalBump.y);
+            normal = vec3f(cos(tilt) * normal.x - sin(tilt) * normal.y, sin(tilt) * normal.x + cos(tilt) * normal.y, normal.z);
+        }
     }
     textureStore(pageDepth, id.xy, vec4f(depth, 0.0, 0.0, 0.0));
     textureStore(pageNormal, id.xy, vec4f(normal, 0.0));
@@ -158,8 +165,8 @@ fn shade(@builtin(global_invocation_id) id: vec3u) {
 `;
 
 const STAGE_COMPUTE = 0x4;
-/** Bytes of `PageCamera`: two matrices, four vec4s, the size. */
-const UNIFORM_BYTES = 208;
+/** Bytes of `PageCamera`: two matrices, four vec4s, the size, the normal map. */
+const UNIFORM_BYTES = 224;
 
 const SCREEN_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'radiance-cache-probes screen group 1',
@@ -190,6 +197,8 @@ export class PageScreen {
     private previousViewProjection: number[] | null = null;
     /** Frames drawn: the direct light's random numbers change with it. */
     private frames = 0;
+    /** A normal map on every surface, for tests (`normalBump` in the WGSL): tilt in radians and wavelength in metres; 0 for none. */
+    normalBump: { readonly tilt: number; readonly wavelength: number } = { tilt: 0, wavelength: 1 };
 
     private constructor(
         private readonly device: GPUDevice,
@@ -247,6 +256,7 @@ export class PageScreen {
         floats.set(this.previousViewProjection ?? viewProjection, 16);
         floats.set([...camera.position, 0, ...forward, Math.tan((camera.fovYDeg * Math.PI) / 360), ...right, width / height, ...up, 0], 32);
         new Uint32Array(words, 192, 4).set([width, height, this.frames++, 0]);
+        new Float32Array(words, 208, 4).set([this.normalBump.tilt, this.normalBump.wavelength, 0, 0]);
         this.previousViewProjection = viewProjection;
         this.device.queue.writeBuffer(this.uniforms, 0, words);
         const pass = encoder.beginComputePass({ label: 'radiance-cache-probes screen' });

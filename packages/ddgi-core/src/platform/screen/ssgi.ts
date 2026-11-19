@@ -37,12 +37,17 @@
  *
  * In the platform, not a technique: it reads only `FrameScreen` and the
  * camera, and DDGI could narrow its own lookup with the same occlusion. One
- * kernel, `Main` (ssgi.comp:132-252), a thread per pixel, Capsaicin's 8 × 8.
+ * kernel, `Main` (ssgi.comp:132-252), a thread per pixel, Capsaicin's 8 × 8,
+ * here split in two: `main` traces this frame's slices and adds their sums
+ * to running means per pixel, reprojected through the platform's screen
+ * history; `resolve` turns the means into the visibility, bent normal and
+ * near-field light (register D60: Capsaicin uses one frame's slices).
  *
  * Differences from Capsaicin, in the radiance cache's register
  * (docs/design/radiance-cache.md): the near-field light is scaled by π to be
  * irradiance (D52), its projected-normal weight is applied once per slice
- * (D53), the occluder-thickness step works around the eye as h3r2tic's
+ * (D53), the slice angles are uniform on the image plane with the same radius
+ * every way (D58), the occluder-thickness step works around the eye as h3r2tic's
  * view-space original does (D54), the per-pixel random numbers are white
  * noise (D55), a depth sample is rebuilt at its texel's centre (D56), and
  * the slices are taken relative to the same slices with nothing in the way
@@ -64,49 +69,78 @@ const TEXEL_BYTES = 8;
 /** `[numthreads(8, 8, 1)]` (ssgi.comp:132). */
 const WORKGROUP = 8;
 /** Bytes of `GiSsgi`. */
-const UNIFORM_BYTES = 176;
+const UNIFORM_BYTES = 400;
 
 /** Byte offsets of `GiSsgi`'s fields (WGSL layout; a `mat4x4f` is 64 bytes). */
 export const SSGI_UNIFORM_OFFSETS = {
     inverseProjection: 0,
     view: 64,
-    size: 128,
-    frameIndex: 136,
-    sliceCount: 140,
-    stepCount: 144,
-    uvRadius: 148,
-    falloffMul: 152,
-    falloffAdd: 156,
-    normalUnorm: 160,
-    reversedDepth: 164,
-    hasLighting: 168,
+    previousView: 128,
+    previousProjection: 192,
+    previousInverseProjection: 256,
+    eyeDelta: 320,
+    frameIndex: 332,
+    size: 336,
+    projectionScale: 344,
+    sliceCount: 352,
+    stepCount: 356,
+    radius: 360,
+    falloffMul: 364,
+    falloffAdd: 368,
+    normalUnorm: 372,
+    reversedDepth: 376,
+    hasLighting: 380,
+    historyValid: 384,
+    historyCap: 388,
 } as const;
 
-export const SSGI_WGSL = /* wgsl */ `
-// SSGIConstants (ssgi_shared.h:34-50), the matrices in view space (file comment).
+/** The uniforms and the screen both kernels read. */
+const SSGI_COMMON_WGSL = /* wgsl */ `
+// SSGIConstants (ssgi_shared.h:34-50), the matrices in view space (file comment), and the previous
+// frame's camera for the running means (D60).
 struct GiSsgi {
-    inverseProjection: mat4x4f, // inverse of this frame's (jittered) projection: NDC to view space
-    view: mat4x4f,              // world to view: its rotation turns normals into view space, its transpose back
-    size: vec2u,                // buffer_dimensions
-    frameIndex: u32,            // frame_index
-    sliceCount: u32,            // slice_count
-    stepCount: u32,             // step_count
-    uvRadius: f32,              // uv_radius: view_radius * 0.5 * max(P[0][0], P[1][1]) (ssgi.cpp:132-133)
-    falloffMul: f32,            // falloff_mul: -1 / falloff_range (ssgi.cpp:134-137)
-    falloffAdd: f32,            // falloff_add: falloff_from / falloff_range + 1
-    normalUnorm: u32,           // 1: FrameScreen's normals are 0..1 encoded
-    reversedDepth: u32,         // 1: depth 1 is near, so the sky is at 0
-    hasLighting: u32,           // 0: no lighting image, the near-field light is zero
-    pad: u32,
+    inverseProjection: mat4x4f,         // inverse of this frame's (jittered) projection: NDC to view space
+    view: mat4x4f,                      // world to view: its rotation turns normals into view space, its transpose back
+    previousView: mat4x4f,              // last frame's world-to-view rotation (no translation)
+    previousProjection: mat4x4f,        // last frame's (jittered) projection
+    previousInverseProjection: mat4x4f,
+    eyeDelta: vec3f,                    // this frame's eye minus last frame's
+    frameIndex: u32,                    // frame_index
+    size: vec2u,                        // buffer_dimensions
+    projectionScale: vec2f,             // P[0][0] and P[1][1]: the image plane to NDC, each way (D58)
+    sliceCount: u32,                    // slice_count
+    stepCount: u32,                     // step_count
+    radius: f32,                        // view_radius (ssgi.cpp:131)
+    falloffMul: f32,                    // falloff_mul: -1 / falloff_range (ssgi.cpp:134-137)
+    falloffAdd: f32,                    // falloff_add: falloff_from / falloff_range + 1
+    normalUnorm: u32,                   // 1: FrameScreen's normals are 0..1 encoded
+    reversedDepth: u32,                 // 1: depth 1 is near, so the sky is at 0
+    hasLighting: u32,                   // 0: no lighting image, the near-field light is zero
+    historyValid: u32,                  // 1: last frame's means and screen are there to reproject from
+    historyCap: u32,                    // the running means' longest memory, in frames
+    pad0: u32,
+    pad1: u32,
 }
 @group(0) @binding(0) var<uniform> giSsgi: GiSsgi;
 @group(0) @binding(1) var giSsgiDepth: texture_2d<f32>;
 @group(0) @binding(2) var giSsgiNormal: texture_2d<f32>;
+`;
+
+export const SSGI_WGSL = /* wgsl */ `
+${SSGI_COMMON_WGSL}
 // g_LightingBuffer: Capsaicin binds last frame's combined image (PrevCombinedIllumination, ssgi.cpp:150-151).
 @group(0) @binding(3) var giSsgiLighting: texture_2d<f32>;
-// g_OcclusionAndBentNormalBuffer and g_NearFieldGlobalIlluminationBuffer.
-@group(0) @binding(4) var giSsgiOcclusion: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(5) var giSsgiNearField: texture_storage_2d<rgba16float, write>;
+// The platform's screen history: last frame's depth and decoded normals, for the reprojection (D60).
+@group(0) @binding(4) var giSsgiPreviousDepth: texture_2d<f32>;
+@group(0) @binding(5) var giSsgiPreviousNormal: texture_2d<f32>;
+// Last frame's running means (D60), and this frame's: (occluded sum, open sum, open bent normal's
+// length, frames), (bent normal moved by the occluders, world space), (near-field light).
+@group(0) @binding(6) var giSsgiPreviousMeans: texture_2d<f32>;
+@group(0) @binding(7) var giSsgiPreviousBent: texture_2d<f32>;
+@group(0) @binding(8) var giSsgiPreviousLight: texture_2d<f32>;
+@group(0) @binding(9) var giSsgiMeans: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(10) var giSsgiBent: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(11) var giSsgiLight: texture_storage_2d<rgba16float, write>;
 
 const GI_SSGI_PI: f32 = 3.14159265358979;
 const GI_SSGI_HALF_PI: f32 = 1.57079632679490;
@@ -216,7 +250,33 @@ fn giSsgiAcos(cosine: f32) -> f32 {
     return acos(clamp(cosine, -1.0, 1.0));
 }
 
-// Main (ssgi.comp:132-252).
+// The view-space position the depth gives at a texel's centre.
+fn giSsgiPositionAtTexel(texel: vec2i) -> vec3f {
+    let clamped = vec2u(clamp(texel, vec2i(0), vec2i(giSsgi.size) - 1));
+    let uv = (vec2f(clamped) + 0.5) / vec2f(giSsgi.size);
+    return giSsgiViewPosition(uv, textureLoad(giSsgiDepth, clamped, 0).x);
+}
+
+// The surface's own normal at a texel from the depth (the nearer neighbour each way), facing the eye:
+// a sample's plane is the surface's, not the shading normal's, which a normal map tilts (register D56).
+// Zero when the neighbours give no plane.
+fn giSsgiDepthNormal(texel: vec2i, centre: vec3f) -> vec3f {
+    let right = giSsgiPositionAtTexel(texel + vec2i(1, 0));
+    let left = giSsgiPositionAtTexel(texel - vec2i(1, 0));
+    let down = giSsgiPositionAtTexel(texel + vec2i(0, 1));
+    let up = giSsgiPositionAtTexel(texel - vec2i(0, 1));
+    let alongX = select(centre - left, right - centre, abs(right.z - centre.z) < abs(centre.z - left.z));
+    let alongY = select(centre - up, down - centre, abs(down.z - centre.z) < abs(centre.z - up.z));
+    let crossed = cross(alongX, alongY);
+    let crossedLength = length(crossed);
+    if (!(crossedLength > 0.0)) {
+        return vec3f(0.0);
+    }
+    let normal = crossed / crossedLength;
+    return select(-normal, normal, dot(normal, -centre) >= 0.0);
+}
+
+// Main (ssgi.comp:132-252), its tracing half: this frame's slices, added to the running means.
 @compute @workgroup_size(${WORKGROUP}, ${WORKGROUP})
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let did = id.xy;
@@ -230,8 +290,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let farDepth = select(1.0, 0.0, giSsgi.reversedDepth != 0u);
     // Capsaicin tells the sky by a zero normal; the host's screen also by the far plane (register D17).
     if (all(normal == vec3f(0.0)) || depth == farDepth) {
-        textureStore(giSsgiOcclusion, did, vec4f(0.0));
-        textureStore(giSsgiNearField, did, vec4f(0.0));
+        textureStore(giSsgiMeans, did, vec4f(0.0));
+        textureStore(giSsgiBent, did, vec4f(0.0));
+        textureStore(giSsgiLight, did, vec4f(0.0));
         return; // discard sky pixels
     }
 
@@ -241,7 +302,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     let noise = giSsgiNoise(did); // in [0, 1)
 
-    let sliceUvRadius = giSsgi.uvRadius / linearDepth;
+    // The radius on the image plane at this depth, in uv per unit of image-plane direction (D58).
+    let sliceUvScale = 0.5 * giSsgi.radius / linearDepth * giSsgi.projectionScale;
     var ambientOcclusion = 0.0;
     var bentNormal = vec3f(0.0);
     var globalLighting = vec3f(0.0);
@@ -255,12 +317,11 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let sliceAngle = ((f32(sliceIndex) + noise.x) / f32(sliceCount)) * GI_SSGI_PI;
         let sliceCos = cos(sliceAngle);
         let sliceSin = sin(sliceAngle);
-        let sliceUvDir = vec2f(sliceCos, -sliceSin) * sliceUvRadius;
-
-        // The view-space direction the uv step (cos, -sin) moves along on the image plane: the
-        // projection's scales turn it (register D58: Capsaicin takes (cos, sin, 0), which is that
-        // direction only for square pixels and equal scales, so its samples leave the slice).
-        let sliceViewDir = normalize(vec3f(sliceCos * giSsgi.inverseProjection[0][0], sliceSin * giSsgi.inverseProjection[1][1], 0.0));
+        // The slice angle is uniform on the image plane and the uv step follows it there, the same
+        // radius every way (register D58: Capsaicin steps (cos, -sin) in uv, which on a screen that
+        // isn't square is neither the direction (cos, sin, 0) its geometry uses nor uniform).
+        let sliceViewDir = vec3f(sliceCos, sliceSin, 0.0);
+        let sliceUvDir = vec2f(sliceCos, -sliceSin) * sliceUvScale;
         let orthoDir = sliceViewDir - dot(sliceViewDir, eyeDir) * eyeDir;
         let projAxisDir = normalize(cross(orthoDir, eyeDir));
         let projNormal = normal - dot(normal, projAxisDir) * projAxisDir;
@@ -282,15 +343,15 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                 let sampleUvOffset = sampleStep * sliceUvDir;
 
                 // The sample is where the view ray through its own uv meets the plane of the texel it
-                // reads (that texel's depth, at its centre, and its normal): on the surface and in the
-                // slice (register D56). Capsaicin puts the texel's depth at the unsnapped uv, off the
+                // reads (that texel's depth, at its centre, and the normal its neighbours' depths give):
+                // on the surface and in the slice (register D56). Capsaicin puts the texel's depth at the unsnapped uv, off the
                 // surface by up to half a texel's depth change, which on a floor seen at a grazing
                 // angle raises the horizon; the texel's centre alone would leave the slice sideways.
                 let rawUv = uv + sideSign * sampleUvOffset;
                 let sampleUv = (vec2f(giSsgiTexel(rawUv)) + 0.5) / vec2f(giSsgi.size);
                 let sampleDepth = giSsgiDepthAt(sampleUv);
                 let texelPos = giSsgiViewPosition(sampleUv, sampleDepth);
-                let texelNormal = giSsgiNormalAt(sampleUv);
+                let texelNormal = giSsgiDepthNormal(vec2i(giSsgiTexel(rawUv)), texelPos);
                 let rayDir = normalize(giSsgiViewPosition(rawUv, sampleDepth));
                 let rayCos = dot(rayDir, texelNormal);
                 let texelDistance = length(texelPos);
@@ -315,7 +376,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                     if (giSsgi.hasLighting != 0u) {
                         sampleLighting = textureLoad(giSsgiLighting, giSsgiTexel(sampleUv), 0).rgb;
                     }
-                    let sampleNormal = texelNormal;
+                    // Capsaicin's facing test takes the shading normal (ssgi.comp:212, 228).
+                    let sampleNormal = giSsgiNormalAt(sampleUv);
 
                     if (stepIndex > 0u) {
                         let closestPos = prevSamplePos * min(
@@ -355,27 +417,97 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         openBentNormal += projNormalLen * giSsgiIntegrateBentNormal(openAngle0, openAngle1, projNormalAngle, eyeDir, sliceViewDir);
     }
 
-    // Capsaicin averages the slices (ambient_occlusion / SLICE_COUNT, normalize(bent_normal)), which is
-    // right only on average over slice angles: one slice (the default) of an open surface reads
-    // len (cos n + n sin n), anywhere from 0 to above 1, and leans the bent normal towards the eye,
-    // and the SH cone lookup is not linear in either. Ours: the slices' visibility over what the
-    // same slices give open, and the bent normal as the pixel's normal moved by what the occluders
-    // took away, so an open surface reads 1 and its own normal in every frame (register D57).
-    var visibility = 1.0;
-    var bentView = normal;
-    if (openVisibility > 0.0) {
-        visibility = saturate(ambientOcclusion / openVisibility);
-        let moved = normal * length(openBentNormal) + (bentNormal - openBentNormal);
-        let movedLength = length(moved);
-        bentView = select(normal, moved / movedLength, movedLength > 0.0);
-    }
-    // The arcs are shares of the cosine-weighted hemisphere (pi), so the light they carry is E / pi:
-    // times pi it is irradiance, which the GI it is added to is (register D52). Taken over the same
-    // open total as the visibility (D57), so far field and near field share one hemisphere.
-    globalLighting *= GI_SSGI_PI / max(openVisibility, 1e-8);
+    // This frame's sums, world space for the bent normal so they can be carried to the next frame.
+    let worldNormal = giSsgiToWorld(normal);
+    let current = vec3f(ambientOcclusion, openVisibility, length(openBentNormal));
+    let currentBent = giSsgiToWorld(bentNormal - openBentNormal);
 
-    textureStore(giSsgiOcclusion, did, vec4f(giSsgiToWorld(bentView), visibility));
-    textureStore(giSsgiNearField, did, vec4f(globalLighting, 0.0));
+    // Last frame's means at this surface, if it was there (D60): this point in last frame's view and
+    // projection, its texel there, and the same plane (within 2% of the distance) and normal.
+    var frames = 0.0;
+    var means = vec3f(0.0);
+    var bent = vec3f(0.0);
+    var light = vec3f(0.0);
+    if (giSsgi.historyValid != 0u) {
+        let before = (giSsgi.previousView * vec4f(giSsgiToWorld(position) + giSsgi.eyeDelta, 0.0)).xyz;
+        let clip = giSsgi.previousProjection * vec4f(before, 1.0);
+        let previousUv = vec2f(0.5 * clip.x / clip.w + 0.5, 0.5 - 0.5 * clip.y / clip.w);
+        if (clip.w > 0.0 && all(previousUv >= vec2f(0.0)) && all(previousUv < vec2f(1.0))) {
+            let texel = giSsgiTexel(previousUv);
+            let texelUv = (vec2f(texel) + 0.5) / vec2f(giSsgi.size);
+            let previousNdc = vec4f(2.0 * texelUv.x - 1.0, 1.0 - 2.0 * texelUv.y, textureLoad(giSsgiPreviousDepth, texel, 0).x, 1.0);
+            let previousHomogeneous = giSsgi.previousInverseProjection * previousNdc;
+            let previousPosition = previousHomogeneous.xyz / previousHomogeneous.w;
+            let normalBefore = (giSsgi.previousView * vec4f(worldNormal, 0.0)).xyz;
+            let samePlane = abs(dot(previousPosition - before, normalBefore)) <= 0.02 * length(before);
+            let sameNormal = dot(textureLoad(giSsgiPreviousNormal, texel, 0).xyz, worldNormal) > 0.9;
+            if (samePlane && sameNormal) {
+                let previous = textureLoad(giSsgiPreviousMeans, texel, 0);
+                means = previous.xyz;
+                frames = previous.w;
+                bent = textureLoad(giSsgiPreviousBent, texel, 0).xyz;
+                light = textureLoad(giSsgiPreviousLight, texel, 0).xyz;
+            }
+        }
+    }
+    // A running mean over up to historyCap frames; with no history this frame alone.
+    let count = min(frames + 1.0, f32(giSsgi.historyCap));
+    let weight = 1.0 / count;
+    textureStore(giSsgiMeans, did, vec4f(mix(means, current, weight), count));
+    textureStore(giSsgiBent, did, vec4f(mix(bent, currentBent, weight), 0.0));
+    textureStore(giSsgiLight, did, vec4f(mix(light, globalLighting, weight), 0.0));
+}
+`;
+
+/**
+ * `Main`'s output half (ssgi.comp:246-251), on the running means (D60): the
+ * visibility as the occluded sum over the open sum (D57), the near-field
+ * light over the same open sum times π (D52, D57), and the bent normal as the
+ * pixel's normal moved by what the occluders took (D57), in world space.
+ */
+export const SSGI_RESOLVE_WGSL = /* wgsl */ `
+${SSGI_COMMON_WGSL}
+@group(0) @binding(3) var giSsgiMeans: texture_2d<f32>;
+@group(0) @binding(4) var giSsgiBent: texture_2d<f32>;
+@group(0) @binding(5) var giSsgiLight: texture_2d<f32>;
+// g_OcclusionAndBentNormalBuffer and g_NearFieldGlobalIlluminationBuffer.
+@group(0) @binding(6) var giSsgiOcclusion: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(7) var giSsgiNearField: texture_storage_2d<rgba16float, write>;
+
+const GI_SSGI_PI: f32 = 3.14159265358979;
+
+@compute @workgroup_size(${WORKGROUP}, ${WORKGROUP})
+fn resolve(@builtin(global_invocation_id) id: vec3u) {
+    let did = id.xy;
+    if (any(did >= giSsgi.size)) {
+        return; // out of bounds
+    }
+    let means = textureLoad(giSsgiMeans, did, 0);
+    if (means.w == 0.0) {
+        textureStore(giSsgiOcclusion, did, vec4f(0.0));
+        textureStore(giSsgiNearField, did, vec4f(0.0));
+        return; // a sky pixel
+    }
+    let stored = textureLoad(giSsgiNormal, did, 0).xyz;
+    let normal = normalize(select(stored, 2.0 * stored - 1.0, giSsgi.normalUnorm != 0u));
+    // Capsaicin averages the slices (ambient_occlusion / SLICE_COUNT, normalize(bent_normal)), right only
+    // on average over slice angles: one slice of an open surface reads len (cos n + n sin n), from 0 to
+    // above 1, and leans the bent normal towards the eye, and the SH cone lookup is not linear in
+    // either. Over the open sums an open surface reads 1 and its own normal (register D57).
+    var visibility = 1.0;
+    var bent = normal;
+    var light = vec3f(0.0);
+    if (means.y > 0.0) {
+        visibility = saturate(means.x / means.y);
+        let moved = normal * means.z + textureLoad(giSsgiBent, did, 0).xyz;
+        let movedLength = length(moved);
+        bent = select(normal, moved / movedLength, movedLength > 0.0);
+        // The arcs are shares of the cosine-weighted hemisphere (pi), so the light they carry is E / pi:
+        // times pi it is irradiance, which the GI it is added to is (register D52).
+        light = textureLoad(giSsgiLight, did, 0).rgb * GI_SSGI_PI / means.y;
+    }
+    textureStore(giSsgiOcclusion, did, vec4f(bent, visibility));
+    textureStore(giSsgiNearField, did, vec4f(light, 0.0));
 }
 `;
 
@@ -383,33 +515,64 @@ const SSGI_LAYOUT: GPUBindGroupLayoutDescriptor = {
     label: 'gi/ssgi',
     entries: [
         { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform', minBindingSize: UNIFORM_BYTES } },
-        { binding: 1, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 2, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 3, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float' } },
-        { binding: 4, visibility: SHADER_STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
-        { binding: 5, visibility: SHADER_STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+        ...[1, 2, 3, 4, 5, 6, 7, 8].map((binding) => ({ binding, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float' as const } })),
+        ...[9, 10, 11].map((binding) => ({ binding, visibility: SHADER_STAGE_COMPUTE, storageTexture: { access: 'write-only' as const, format: 'rgba16float' as const } })),
     ],
 };
 
-export interface ScreenSpaceGIKernel {
+const RESOLVE_LAYOUT: GPUBindGroupLayoutDescriptor = {
+    label: 'gi/ssgi resolve',
+    entries: [
+        { binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform', minBindingSize: UNIFORM_BYTES } },
+        ...[1, 2, 3, 4, 5].map((binding) => ({ binding, visibility: SHADER_STAGE_COMPUTE, texture: { sampleType: 'unfilterable-float' as const } })),
+        ...[6, 7].map((binding) => ({ binding, visibility: SHADER_STAGE_COMPUTE, storageTexture: { access: 'write-only' as const, format: 'rgba16float' as const } })),
+    ],
+};
+
+interface KernelPart {
     readonly layout: GPUBindGroupLayout;
     readonly pipeline: GPUComputePipeline;
 }
 
-/** Compiles the SSGI kernel (once per platform; every `ScreenSpaceGI` shares it). */
+export interface ScreenSpaceGIKernel {
+    readonly trace: KernelPart;
+    readonly resolve: KernelPart;
+}
+
+/** Compiles the two SSGI kernels (once per platform; every `ScreenSpaceGI` shares them). */
 export async function compileScreenSpaceGIKernel(device: GPUDevice, label: string): Promise<ScreenSpaceGIKernel> {
-    const layout = device.createBindGroupLayout({ ...SSGI_LAYOUT, label: `${label} gi/ssgi` });
-    const pipeline = await device.createComputePipelineAsync({
-        label: `${label} gi/ssgi`,
-        layout: device.createPipelineLayout({ label: `${label} gi/ssgi`, bindGroupLayouts: [layout] }),
-        compute: { module: device.createShaderModule({ label: `${label} gi/ssgi`, code: SSGI_WGSL }), entryPoint: 'main' },
-    });
-    return { layout, pipeline };
+    const part = async (name: string, descriptor: GPUBindGroupLayoutDescriptor, code: string, entryPoint: string): Promise<KernelPart> => {
+        const layout = device.createBindGroupLayout({ ...descriptor, label: `${label} ${name}` });
+        const pipeline = await device.createComputePipelineAsync({
+            label: `${label} ${name}`,
+            layout: device.createPipelineLayout({ label: `${label} ${name}`, bindGroupLayouts: [layout] }),
+            compute: { module: device.createShaderModule({ label: `${label} ${name}`, code }), entryPoint },
+        });
+        return { layout, pipeline };
+    };
+    const [trace, resolve] = await Promise.all([part('gi/ssgi', SSGI_LAYOUT, SSGI_WGSL, 'main'), part('gi/ssgi resolve', RESOLVE_LAYOUT, SSGI_RESOLVE_WGSL, 'resolve')]);
+    return { trace, resolve };
+}
+
+/** The running means (D60): (occluded sum, open sum, open bent length, frames), the moved bent normal, the near-field light. */
+interface Means {
+    readonly means: GPUTexture;
+    readonly bent: GPUTexture;
+    readonly light: GPUTexture;
 }
 
 interface Sized extends ScreenSpaceGITextures {
     readonly width: number;
     readonly height: number;
+    /** Two sets, swapped every frame: one read (last frame's), one written. */
+    readonly history: readonly [Means, Means];
+}
+
+/** The camera of the previous encode, for the reprojection. */
+interface PreviousCamera {
+    readonly view: readonly number[];
+    readonly projection: readonly number[];
+    readonly position: readonly [number, number, number];
 }
 
 /** A depth texture is read through its depth aspect; anything else whole. */
@@ -422,9 +585,13 @@ export class ScreenSpaceGI implements GpuScreenSpaceGI {
     private sized: Sized | null = null;
     private readonly uniforms: GPUBuffer;
     private readonly uniformWords = new ArrayBuffer(UNIFORM_BYTES);
-    /** Bound when there is no lighting image: the near-field light is then zero (`hasLighting` 0). */
-    private readonly noLighting: GPUTexture;
-    private group: { readonly key: readonly unknown[]; readonly bindGroup: GPUBindGroup } | null = null;
+    /** Bound when there is no lighting image or no screen history. */
+    private readonly placeholder: GPUTexture;
+    /** Which of the two sets of means this frame writes. */
+    private parity = 0;
+    private previousCamera: PreviousCamera | null = null;
+    private resetPending = true;
+    private groups: { readonly key: readonly unknown[]; readonly trace: readonly [GPUBindGroup, GPUBindGroup]; readonly resolve: readonly [GPUBindGroup, GPUBindGroup] } | null = null;
 
     constructor(
         private readonly device: GPUDevice,
@@ -432,11 +599,12 @@ export class ScreenSpaceGI implements GpuScreenSpaceGI {
         private readonly options: ScreenSpaceGIOptions,
     ) {
         this.uniforms = device.createBuffer({ label: `${options.label} ssgi`, size: UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        this.noLighting = device.createTexture({ label: `${options.label} ssgi no lighting`, size: [1, 1], format: 'rgba16float', usage: TEXTURE_USAGE.textureBinding });
+        this.placeholder = device.createTexture({ label: `${options.label} ssgi placeholder`, size: [1, 1], format: 'rgba16float', usage: TEXTURE_USAGE.textureBinding });
     }
 
     get memoryBytes(): number {
-        return UNIFORM_BYTES + (this.sized ? 2 * this.sized.width * this.sized.height * TEXEL_BYTES : 0);
+        // The two images and two sets of three running means.
+        return UNIFORM_BYTES + (this.sized ? 8 * this.sized.width * this.sized.height * TEXEL_BYTES : 0);
     }
 
     texturesFor(width: number, height: number): ScreenSpaceGITextures {
@@ -445,58 +613,98 @@ export class ScreenSpaceGI implements GpuScreenSpaceGI {
         this.releaseSized();
         const usage = TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.copySrc;
         const make = (name: string) => this.device.createTexture({ label: `${this.options.label} ssgi ${name}`, size: [width, height], format: 'rgba16float', usage });
-        const sized: Sized = { width, height, occlusion: make('occlusion and bent normal'), nearField: make('near-field light') };
+        const means = (set: number): Means => ({ means: make(`means ${set}`), bent: make(`bent normal ${set}`), light: make(`near-field light ${set}`) });
+        const sized: Sized = { width, height, occlusion: make('occlusion and bent normal'), nearField: make('near-field light'), history: [means(0), means(1)] };
         this.sized = sized;
+        this.resetPending = true;
         return sized;
+    }
+
+    reset(): void {
+        this.resetPending = true;
     }
 
     encode(encoder: GPUCommandEncoder, inputs: ScreenSpaceGIInputs): ScreenSpaceGITextures {
         const { screen } = inputs;
         const sized = this.texturesFor(screen.width, screen.height) as Sized;
-        this.writeUniforms(inputs);
-        const lighting = inputs.lighting ?? this.noLighting;
-        const key = [sized, screen.depth, screen.normal, lighting];
-        if (!this.group || this.group.key.some((value, index) => value !== key[index])) {
-            this.group = {
-                key,
-                bindGroup: this.device.createBindGroup({
+        const history = inputs.history;
+        const historyValid = !this.resetPending && this.previousCamera !== null && history !== null && history.valid;
+        this.writeUniforms(inputs, historyValid);
+        const lighting = inputs.lighting ?? this.placeholder;
+        const previousDepth = history?.depth ?? this.placeholder;
+        const previousNormal = history?.normal ?? this.placeholder;
+        const key = [sized, screen.depth, screen.normal, lighting, previousDepth, previousNormal];
+        if (!this.groups || this.groups.key.some((value, index) => value !== key[index])) {
+            const traceGroup = (write: Means, read: Means): GPUBindGroup =>
+                this.device.createBindGroup({
                     label: `${this.options.label} ssgi`,
-                    layout: this.kernel.layout,
+                    layout: this.kernel.trace.layout,
                     entries: [
                         { binding: 0, resource: { buffer: this.uniforms } },
                         { binding: 1, resource: screenView(screen.depth) },
                         { binding: 2, resource: screenView(screen.normal) },
                         { binding: 3, resource: screenView(lighting) },
-                        { binding: 4, resource: sized.occlusion.createView() },
-                        { binding: 5, resource: sized.nearField.createView() },
+                        { binding: 4, resource: screenView(previousDepth) },
+                        { binding: 5, resource: screenView(previousNormal) },
+                        { binding: 6, resource: read.means.createView() },
+                        { binding: 7, resource: read.bent.createView() },
+                        { binding: 8, resource: read.light.createView() },
+                        { binding: 9, resource: write.means.createView() },
+                        { binding: 10, resource: write.bent.createView() },
+                        { binding: 11, resource: write.light.createView() },
                     ],
-                }),
-            };
+                });
+            const resolveGroup = (read: Means): GPUBindGroup =>
+                this.device.createBindGroup({
+                    label: `${this.options.label} ssgi resolve`,
+                    layout: this.kernel.resolve.layout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.uniforms } },
+                        { binding: 1, resource: screenView(screen.depth) },
+                        { binding: 2, resource: screenView(screen.normal) },
+                        { binding: 3, resource: read.means.createView() },
+                        { binding: 4, resource: read.bent.createView() },
+                        { binding: 5, resource: read.light.createView() },
+                        { binding: 6, resource: sized.occlusion.createView() },
+                        { binding: 7, resource: sized.nearField.createView() },
+                    ],
+                });
+            const [a, b] = sized.history;
+            this.groups = { key, trace: [traceGroup(a, b), traceGroup(b, a)], resolve: [resolveGroup(a), resolveGroup(b)] };
         }
-        const pass = encoder.beginComputePass({ label: `${this.options.label} ssgi` });
-        pass.setPipeline(this.kernel.pipeline);
-        pass.setBindGroup(0, this.group.bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(screen.width / WORKGROUP), Math.ceil(screen.height / WORKGROUP));
+        const pass = encoder.beginComputePass({ label: `${this.options.label} ssgi`, timestampWrites: inputs.timestampWrites });
+        const groupsX = Math.ceil(screen.width / WORKGROUP);
+        const groupsY = Math.ceil(screen.height / WORKGROUP);
+        pass.setPipeline(this.kernel.trace.pipeline);
+        pass.setBindGroup(0, this.groups.trace[this.parity]);
+        pass.dispatchWorkgroups(groupsX, groupsY);
+        pass.setPipeline(this.kernel.resolve.pipeline);
+        pass.setBindGroup(0, this.groups.resolve[this.parity]);
+        pass.dispatchWorkgroups(groupsX, groupsY);
         pass.end();
+        this.parity = 1 - this.parity;
+        this.resetPending = false;
+        this.previousCamera = { view: Array.from(inputs.camera.view), projection: jitteredProjection(inputs.camera), position: [inputs.camera.position[0], inputs.camera.position[1], inputs.camera.position[2]] };
         return sized;
     }
 
     dispose(): void {
         this.releaseSized();
         this.uniforms.destroy();
-        this.noLighting.destroy();
+        this.placeholder.destroy();
     }
 
-    /** `SSGIConstants` (ssgi.cpp:118-138), for view space. */
-    private writeUniforms(inputs: ScreenSpaceGIInputs): void {
+    /** `SSGIConstants` (ssgi.cpp:118-138), for view space, and the previous camera for the reprojection. */
+    private writeUniforms(inputs: ScreenSpaceGIInputs, historyValid: boolean): void {
         const { screen, camera, settings } = inputs;
-        for (const [name, value] of [['sliceCount', settings.sliceCount], ['stepCount', settings.stepCount]] as const) {
+        for (const [name, value] of [['sliceCount', settings.sliceCount], ['stepCount', settings.stepCount], ['historyFrames', settings.historyFrames]] as const) {
             if (!Number.isInteger(value) || value < 1) throw new RangeError(`@pmndrs/gi: SSGI's ${name} must be a whole number of at least 1, got ${value}`);
         }
         if (!(settings.viewRadius > 0) || !(settings.falloffRange > 0 && settings.falloffRange <= 1)) {
             throw new RangeError(`@pmndrs/gi: SSGI needs a radius above 0 and a falloff range in (0, 1], got ${settings.viewRadius} and ${settings.falloffRange}`);
         }
-        const inverseProjection = invert4(jitteredProjection(camera));
+        const projection = jitteredProjection(camera);
+        const inverseProjection = invert4(projection);
         if (!inverseProjection) throw new Error('@pmndrs/gi: SSGI needs a camera projection that can be inverted');
         const words = this.uniformWords;
         const floats = new Float32Array(words);
@@ -505,13 +713,23 @@ export class ScreenSpaceGI implements GpuScreenSpaceGI {
         const offsets = SSGI_UNIFORM_OFFSETS;
         floats.set(inverseProjection, at(offsets.inverseProjection));
         floats.set(Array.from(camera.view), at(offsets.view));
+        const previous = this.previousCamera ?? { view: Array.from(camera.view), projection, position: camera.position };
+        const previousInverse = invert4(previous.projection) ?? inverseProjection;
+        // Rotation only: positions are carried relative to the eye, with the eye's move added (eyeDelta).
+        floats.set([...previous.view.slice(0, 12), 0, 0, 0, 1], at(offsets.previousView));
+        floats.set(previous.projection, at(offsets.previousProjection));
+        floats.set(previousInverse, at(offsets.previousInverseProjection));
+        floats.set([0, 1, 2].map((axis) => camera.position[axis] - previous.position[axis]), at(offsets.eyeDelta));
+        uints[at(offsets.frameIndex)] = inputs.frame >>> 0;
         uints[at(offsets.size)] = screen.width;
         uints[at(offsets.size) + 1] = screen.height;
-        uints[at(offsets.frameIndex)] = inputs.frame >>> 0;
+        // projection[0][0] and [1][1] (column-major elements 0 and 5): uv per unit of image plane is half of each (D58).
+        floats[at(offsets.projectionScale)] = projection[0];
+        floats[at(offsets.projectionScale) + 1] = projection[5];
         uints[at(offsets.sliceCount)] = settings.sliceCount;
         uints[at(offsets.stepCount)] = settings.stepCount;
-        // ssgi.cpp:132-137; projection[0][0] and [1][1] in glm are elements 0 and 5 column-major.
-        floats[at(offsets.uvRadius)] = settings.viewRadius * 0.5 * Math.max(camera.projection[0], camera.projection[5]);
+        floats[at(offsets.radius)] = settings.viewRadius;
+        // ssgi.cpp:134-137.
         const falloffRange = settings.viewRadius * settings.falloffRange;
         const falloffFrom = settings.viewRadius * (1 - settings.falloffRange);
         floats[at(offsets.falloffMul)] = -1 / falloffRange;
@@ -519,15 +737,19 @@ export class ScreenSpaceGI implements GpuScreenSpaceGI {
         uints[at(offsets.normalUnorm)] = screen.normalEncoding === 'unorm' ? 1 : 0;
         uints[at(offsets.reversedDepth)] = screen.reversedDepth ? 1 : 0;
         uints[at(offsets.hasLighting)] = inputs.lighting ? 1 : 0;
+        uints[at(offsets.historyValid)] = historyValid ? 1 : 0;
+        uints[at(offsets.historyCap)] = settings.historyFrames;
         this.device.queue.writeBuffer(this.uniforms, 0, words);
     }
 
     private releaseSized(): void {
-        if (!this.sized) return;
-        this.sized.occlusion.destroy();
-        this.sized.nearField.destroy();
+        const sized = this.sized;
+        if (!sized) return;
+        sized.occlusion.destroy();
+        sized.nearField.destroy();
+        for (const set of sized.history) for (const texture of Object.values(set)) texture.destroy();
         this.sized = null;
-        this.group = null;
+        this.groups = null;
     }
 }
 

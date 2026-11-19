@@ -58,12 +58,15 @@ const SKY = 1.5;
 const UNIFORM_TOLERANCE = 1e-3;
 /** Section 2: a cell's GPU value against the CPU port, relative to the larger of the two and 1% of the sky; outliers allowed (f32 vs f64 at a test's threshold). */
 const FILTER_TOLERANCE = 0.01;
-const FILTER_OUTLIER_FRACTION = 0.005;
+const FILTER_OUTLIER_FRACTION = 0.001;
 /** Section 3: the open plane's visibility (mean, 5th percentile), the bent normal's mean tilt and the near-field light against πL. */
 const PLANE_MEAN_AO = 0.99;
 const PLANE_P5_AO = 0.97;
 const PLANE_BENT_DEGREES = 2;
 const PLANE_NEAR_FIELD = 0.005;
+/** Section 3b: a normal map leaning the normal up to 28.6 degrees each way along x, and the visibility's tolerance per lean. */
+const NORMAL_MAP = { tilt: 0.5, wavelength: 0.6 } as const;
+const NORMAL_MAP_TOLERANCE = 0.03;
 /**
  * Section 4, at the wall's foot (d < R / 10): with many slices and steps (`DENSE_SSGI`) the visibility
  * against the analytic and the bent normal's tilt about the analytic 32.5 degrees; with Capsaicin's
@@ -115,6 +118,18 @@ const STEP: readonly Quad[] = [
     { corners: [[-2, 0, -9], [-2, 0, -6], [-2, 1, -6], [-2, 1, -9]], normal: [-1, 0, 0] },
     { corners: [[-200, 0, -25], [200, 0, -25], [200, 3, -25], [-200, 3, -25]], normal: [0, 0, 1] },
 ];
+/**
+ * A 0.3 m slab on x < 0, seen from 10 m straight above, and an emissive strip 0.25 m high 8 m away
+ * at x = 8: the floor's probes by the slab see the strip on their horizon, the slab's (0.3 m up)
+ * don't. Across the slab's edge only the plane test keeps them apart.
+ */
+const SLAB: readonly Quad[] = [
+    { corners: [[-20, 0.3, 20], [0, 0.3, 20], [0, 0.3, -20], [-20, 0.3, -20]], normal: [0, 1, 0] },
+    { corners: [[0, 0, 20], [0, 0, -20], [0, 0.3, -20], [0, 0.3, 20]], normal: [1, 0, 0] },
+];
+const EMISSIVE_EDGE: Quad = { corners: [[8, 0, 20], [8, 0.25, 20], [8, 0.25, -20], [8, 0, -20]], normal: [-1, 0, 0] };
+const EMISSIVE_EDGE_RADIANCE = 100;
+const SLAB_CAMERA: PageCamera = { position: [0, 10, 0], target: [0, 0, -0.001], fovYDeg: 60, near: 0.1, far: 1000 };
 /** The corner: the floor on x > 0 and a 6 m wall at x = 0 facing +x. */
 const CORNER: readonly Quad[] = [
     { corners: [[0, 0, 100], [100, 0, 100], [100, 0, -100], [0, 0, -100]], normal: [0, 1, 0] },
@@ -129,7 +144,13 @@ interface Run {
     dispose(): void;
 }
 
-async function makeRun(device: GPUDevice, name: string, quads: readonly Quad[], material: MaterialDescriptor, environment: EnvironmentDescriptor, camera: PageCamera): Promise<Run> {
+/** Extra surfaces with their own material, and a normal map on every surface (PageScreen.normalBump). */
+interface RunExtras {
+    readonly also?: ReadonlyArray<{ readonly quads: readonly Quad[]; readonly material: MaterialDescriptor }>;
+    readonly normalBump?: PageScreen['normalBump'];
+}
+
+async function makeRun(device: GPUDevice, name: string, quads: readonly Quad[], material: MaterialDescriptor, environment: EnvironmentDescriptor, camera: PageCamera, extras: RunExtras = {}): Promise<Run> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-near-field ${name}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique());
     platform.setOutput(technique);
@@ -137,9 +158,15 @@ async function makeRun(device: GPUDevice, name: string, quads: readonly Quad[], 
     const scene = platform.scene;
     const mesh = scene.createMesh({ ...quadsMesh(quads), label: name });
     const surface = scene.createMaterial({ ...material, label: name });
-    scene.createInstance({ mesh, materials: [surface], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: name });
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    scene.createInstance({ mesh, materials: [surface], transform: identity, label: name });
+    for (const [index, extra] of (extras.also ?? []).entries()) {
+        const extraMesh = scene.createMesh({ ...quadsMesh(extra.quads), label: `${name} ${index}` });
+        scene.createInstance({ mesh: extraMesh, materials: [scene.createMaterial({ ...extra.material, label: `${name} ${index}` })], transform: identity, label: `${name} ${index}` });
+    }
     scene.setEnvironment(environment);
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    if (extras.normalBump) screen.normalBump = extras.normalBump;
     const input = (): FrameInput => ({ deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) });
     const frame = (): void => {
         const encoder = device.createCommandEncoder({ label: `radiance-cache-near-field ${name}` });
@@ -256,7 +283,7 @@ try {
         const probes = open.technique.probes;
         if (!probes?.occlusion) throw new Error('no probes or no SSGI after encodeScreen');
         const [atlasWidth, atlasHeight] = probes.layout.atlasSize;
-        const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
+        const atlas = halves(await readTexture(device, probes.filteredAtlas, 8, atlasWidth, atlasHeight));
         const scratch = halves(await readTexture(device, probes.filterScratch, 8, atlasWidth, atlasHeight));
         const seeds = await readSeeds(device, open);
         let worst = 0;
@@ -317,75 +344,122 @@ try {
         await device.queue.onSubmittedWorkDone();
     }
 
-    // 2: the filter's second pass against the CPU port, on depth edges.
-    const step = await makeRun(device, 'step', [FLOOR, ...STEP], grey, constantSky(SKY), STEP_CAMERA);
+    // 3b: the open floor with a normal map: the samples must stay on the floor (D56 takes their plane
+    // from the depth), so a pixel whose normal leans θ off the floor's sees the floor cut its
+    // cosine lobe: visibility (1 + cos θ) / 2.
+    const bumped = await makeRun(device, 'normal map', [FLOOR], grey, constantSky(SKY), OPEN_CAMERA, { normalBump: NORMAL_MAP });
     try {
-        const probes = step.technique.probes;
-        if (!probes) throw new Error('no probes after encodeScreen');
-        const { layout } = probes;
-        const [atlasWidth, atlasHeight] = layout.atlasSize;
-        const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
-        const scratch = halves(await readTexture(device, probes.filterScratch, 8, atlasWidth, atlasHeight));
-        const levels: Array<{ width: number; texels: Uint32Array }> = [];
-        for (let level = 0; level < layout.probeMaskMipCount; level++) {
-            const size = [Math.max(1, layout.probeCount[0] >> level), Math.max(1, layout.probeCount[1] >> level)];
-            levels.push({ width: size[0], texels: new Uint32Array((await readTexture(device, probes.probeMask, 4, size[0], size[1], level)).buffer) });
-        }
-        const seeds = await readSeeds(device, step);
-        const screen = await readScreen(device, step);
-        const inputs: ProbeFilterInputs = {
-            width: WIDTH,
-            height: HEIGHT,
-            cellSize: screenProbeCellSize(screen.camera, WIDTH, HEIGHT),
-            eye: screen.eye,
-            viewForward: viewForward(screen.camera),
-            probeMaskMipCount: layout.probeMaskMipCount,
-            worldPosition: screen.worldPosition,
-            normal: screen.normal,
-            probeMask: (level, x, y) => levels[level].texels[y * levels[level].width + x],
-            atlas: (x, y) => {
-                const index = (y * atlasWidth + x) * 4;
-                return [scratch[index], scratch[index + 1], scratch[index + 2], scratch[index + 3]];
-            },
-        };
-        let cells = 0;
-        let outliers = 0;
-        let worst = 0;
-        let planeRefused = 0;
-        let angleRefused = 0;
-        let taps = 0;
-        let changed = 0;
-        for (const seed of seeds) {
-            const probeSeed = unpackSeed(seed);
-            const tile = [Math.floor(probeSeed[0] / PROBE_SIZE) * PROBE_SIZE, Math.floor(probeSeed[1] / PROBE_SIZE) * PROBE_SIZE];
-            for (let cell = 0; cell < 64; cell++) {
-                const result = filterScreenProbesCell(inputs, probeSeed, cell, [0, 1]);
-                const texel = ((tile[1] + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tile[0] + (cell % PROBE_SIZE)) * 4;
-                cells++;
-                taps += result.taps;
-                planeRefused += result.planeRefused;
-                angleRefused += result.angleRefused;
-                let error = 0;
-                for (let channel = 0; channel < 3; channel++) {
-                    const gpu = atlas[texel + channel];
-                    const cpu = result.value[channel];
-                    error = Math.max(error, Math.abs(gpu - cpu) / Math.max(Math.abs(cpu), Math.abs(gpu), 0.01 * SKY));
-                    if (Math.abs(scratch[texel + channel] - gpu) > 1e-3 * SKY) changed++;
+        const probes = bumped.technique.probes;
+        if (!probes?.occlusion) throw new Error('no SSGI after encodeScreen');
+        const screen = await readScreen(device, bumped);
+        const edges = [0, 5, 10, 15, 20, 25, 30];
+        const sums = edges.slice(1).map(() => ({ ao: 0, expected: 0, count: 0 }));
+        for (let frame = 0; frame < AVERAGE_FRAMES; frame++) {
+            bumped.frame();
+            const occlusion = halves(await readTexture(device, probes.occlusion.occlusion, 8, WIDTH, HEIGHT));
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    if (screen.isSky(x, y)) continue;
+                    // Within 20 m, where the map's 0.6 m wavelength spans several pixels.
+                    const position = screen.worldPosition(x, y);
+                    if (Math.hypot(...position.map((value, axis) => value - screen.eye[axis])) > 20) continue;
+                    const lean = Math.acos(Math.min(screen.normal(x, y)[1], 1));
+                    const degrees = (lean * 180) / Math.PI;
+                    const bin = edges.findIndex((edge, at) => at < edges.length - 1 && degrees >= edge && degrees < edges[at + 1]);
+                    if (bin < 0) continue;
+                    sums[bin].ao += occlusion[(y * WIDTH + x) * 4 + 3];
+                    sums[bin].expected += (1 + Math.cos(lean)) / 2;
+                    sums[bin].count++;
                 }
-                if (error > FILTER_TOLERANCE) outliers++;
-                worst = Math.max(worst, error);
             }
         }
-        const outlierFraction = outliers / Math.max(cells, 1);
-        data.filterAgainstCpu = { probes: seeds.length, cells, taps, planeRefused, angleRefused, cellChannelsChangedByThePass: changed, outliers, outlierFraction, worstError: worst };
-        if (!(outlierFraction <= FILTER_OUTLIER_FRACTION)) fail(`filter: ${outliers} of ${cells} cells (${(outlierFraction * 100).toFixed(2)}%) differ from the CPU port by more than ${FILTER_TOLERANCE * 100}%`);
-        if (planeRefused === 0) fail('filter: no neighbour was refused by the plane test, so the depth edges were not exercised');
-        if (changed === 0) fail('filter: the second pass changed nothing, so the comparison shows nothing');
-        const bad = badValues(atlas);
-        if (bad.nonFinite > 0 || bad.negative > 0) fail(`filter: the atlas has ${bad.nonFinite} non-finite and ${bad.negative} negative values`);
+        const table = sums.map((sum, bin) => ({ leanFrom: edges[bin], leanTo: edges[bin + 1], samples: sum.count, meanAO: sum.ao / Math.max(sum.count, 1), expectedAO: sum.expected / Math.max(sum.count, 1) }));
+        data.normalMappedPlane = { tiltDegrees: (NORMAL_MAP.tilt * 180) / Math.PI, wavelength: NORMAL_MAP.wavelength, bins: table };
+        for (const row of table.filter((entry) => entry.samples >= 1000)) {
+            if (!(Math.abs(row.meanAO - row.expectedAO) <= NORMAL_MAP_TOLERANCE)) fail(`normal-mapped plane: visibility ${row.meanAO.toFixed(3)} where the normal leans ${row.leanFrom}-${row.leanTo} degrees, expected ${row.expectedAO.toFixed(3)}`);
+        }
     } finally {
-        step.dispose();
+        bumped.dispose();
         await device.queue.onSubmittedWorkDone();
+    }
+
+    // 2: the filter's second pass against the CPU port, on depth edges: the step, and the slab whose
+    // edge only the plane test refuses (the depth weight is 0.78 there and the low emissive wall's
+    // parallax between slab and floor is under the 3.6 degree angle test).
+    const filterScenes = [
+        { name: 'step', quads: [FLOOR, ...STEP], camera: STEP_CAMERA, extras: {} },
+        { name: 'slab', quads: [FLOOR, ...SLAB], camera: SLAB_CAMERA, extras: { also: [{ quads: [EMISSIVE_EDGE], material: { albedo: [0, 0, 0], emissive: [1, 1, 1], emissiveIntensity: EMISSIVE_EDGE_RADIANCE } }] } },
+    ] as const;
+    for (const filterScene of filterScenes) {
+        const step = await makeRun(device, filterScene.name, filterScene.quads, grey, constantSky(SKY), filterScene.camera, filterScene.extras);
+        try {
+            const probes = step.technique.probes;
+            if (!probes) throw new Error('no probes after encodeScreen');
+            const { layout } = probes;
+            const [atlasWidth, atlasHeight] = layout.atlasSize;
+            const atlas = halves(await readTexture(device, probes.filteredAtlas, 8, atlasWidth, atlasHeight));
+            const scratch = halves(await readTexture(device, probes.filterScratch, 8, atlasWidth, atlasHeight));
+            const levels: Array<{ width: number; texels: Uint32Array }> = [];
+            for (let level = 0; level < layout.probeMaskMipCount; level++) {
+                const size = [Math.max(1, layout.probeCount[0] >> level), Math.max(1, layout.probeCount[1] >> level)];
+                levels.push({ width: size[0], texels: new Uint32Array((await readTexture(device, probes.probeMask, 4, size[0], size[1], level)).buffer) });
+            }
+            const seeds = await readSeeds(device, step);
+            const screen = await readScreen(device, step);
+            const inputs: ProbeFilterInputs = {
+                width: WIDTH,
+                height: HEIGHT,
+                cellSize: screenProbeCellSize(screen.camera, WIDTH, HEIGHT),
+                eye: screen.eye,
+                viewForward: viewForward(screen.camera),
+                probeMaskMipCount: layout.probeMaskMipCount,
+                worldPosition: screen.worldPosition,
+                normal: screen.normal,
+                probeMask: (level, x, y) => levels[level].texels[y * levels[level].width + x],
+                atlas: (x, y) => {
+                    const index = (y * atlasWidth + x) * 4;
+                    return [scratch[index], scratch[index + 1], scratch[index + 2], scratch[index + 3]];
+                },
+            };
+            let cells = 0;
+            let outliers = 0;
+            let worst = 0;
+            let planeRefused = 0;
+            let angleRefused = 0;
+            let taps = 0;
+            let changed = 0;
+            for (const seed of seeds) {
+                const probeSeed = unpackSeed(seed);
+                const tile = [Math.floor(probeSeed[0] / PROBE_SIZE) * PROBE_SIZE, Math.floor(probeSeed[1] / PROBE_SIZE) * PROBE_SIZE];
+                for (let cell = 0; cell < 64; cell++) {
+                    const result = filterScreenProbesCell(inputs, probeSeed, cell, [0, 1]);
+                    const texel = ((tile[1] + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tile[0] + (cell % PROBE_SIZE)) * 4;
+                    cells++;
+                    taps += result.taps;
+                    planeRefused += result.planeRefused;
+                    angleRefused += result.angleRefused;
+                    let error = 0;
+                    for (let channel = 0; channel < 3; channel++) {
+                        const gpu = atlas[texel + channel];
+                        const cpu = result.value[channel];
+                        error = Math.max(error, Math.abs(gpu - cpu) / Math.max(Math.abs(cpu), Math.abs(gpu), 0.01 * SKY));
+                        if (Math.abs(scratch[texel + channel] - gpu) > 1e-3 * SKY) changed++;
+                    }
+                    if (error > FILTER_TOLERANCE) outliers++;
+                    worst = Math.max(worst, error);
+                }
+            }
+            const outlierFraction = outliers / Math.max(cells, 1);
+            data[`filterAgainstCpu ${filterScene.name}`] = { probes: seeds.length, cells, taps, planeRefused, angleRefused, cellChannelsChangedByThePass: changed, outliers, outlierFraction, worstError: worst };
+            if (!(outlierFraction <= FILTER_OUTLIER_FRACTION)) fail(`filter (${filterScene.name}): ${outliers} of ${cells} cells (${(outlierFraction * 100).toFixed(2)}%) differ from the CPU port by more than ${FILTER_TOLERANCE * 100}%`);
+            if (planeRefused === 0) fail('filter: no neighbour was refused by the plane test, so the depth edges were not exercised');
+            if (changed === 0) fail('filter: the second pass changed nothing, so the comparison shows nothing');
+            const bad = badValues(atlas);
+            if (bad.nonFinite > 0 || bad.negative > 0) fail(`filter: the atlas has ${bad.nonFinite} non-finite and ${bad.negative} negative values`);
+        } finally {
+            step.dispose();
+            await device.queue.onSubmittedWorkDone();
+        }
     }
 
     // 4 and 5: the corner, lit by the sky (4), then as a furnace (5).

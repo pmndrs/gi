@@ -105,6 +105,11 @@ export interface RadianceCacheSettings {
     ssgiViewRadius: number;
     /** `ssgi_falloff_range_` (ssgi.h:50, default 0.05 of the radius). Read every frame. */
     ssgiFalloffRange: number;
+    /**
+     * Frames SSGI's slice sums are kept over, as running means reprojected with the screen
+     * history (register D60; 1 is Capsaicin's one frame). Default 16. Read every frame.
+     */
+    ssgiHistoryFrames: number;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71, and SSGI's, ssgi.h:47-50). */
@@ -130,6 +135,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     ssgiStepCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.stepCount,
     ssgiViewRadius: DEFAULT_SCREEN_SPACE_GI_SETTINGS.viewRadius,
     ssgiFalloffRange: DEFAULT_SCREEN_SPACE_GI_SETTINGS.falloffRange,
+    ssgiHistoryFrames: DEFAULT_SCREEN_SPACE_GI_SETTINGS.historyFrames,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

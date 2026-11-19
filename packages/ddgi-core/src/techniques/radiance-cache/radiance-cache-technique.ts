@@ -118,6 +118,8 @@ export interface RadianceCacheProbes {
     readonly irradiance: GPUTexture;
     /** The probe filter's first pass output (filtered across only; RC4.2), the atlas' size; after the second pass the atlas holds the filtered probes. */
     readonly filterScratch: GPUTexture;
+    /** Both filter passes' output, which the projection reads; `probeAtlas` stays the blended probes, next frame's history (register D59). */
+    readonly filteredAtlas: GPUTexture;
     /** The platform's SSGI images of the latest frame (RC4.2), or null with `settings.ssgi` off. */
     readonly occlusion: ScreenSpaceGITextures | null;
     /** The lit image the latest frame wrote for the next frame's SSGI (register D51); zeros without SSGI. */
@@ -208,7 +210,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     readonly requirements: TechniqueRequirements;
     readonly settings: RadianceCacheSettings;
     /** Reads the interpolated irradiance by screen position (shading.ts). */
-    readonly shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() });
+    readonly shading: RadianceCacheShadingModule;
     /**
      * Drawn per pixel through the shading module's `giDebugColor` by screen
      * position; {@link encodeDebugView} draws the same views engine-free.
@@ -254,6 +256,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.settings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS, ...settings };
         const ssgi = this.settings.ssgi;
         this.requirements = { queries: ['rays'], screen: { velocity: true, albedo: ssgi, lighting: ssgi } };
+        this.shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() }, ssgi);
     }
 
     attach(context: TechniqueContext): void {
@@ -446,7 +449,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 camera: frame.camera,
                 frame: frame.frame,
                 lighting: irradiance.combinedFor(resources.layout),
-                settings: { sliceCount: settings.ssgiSliceCount, stepCount: settings.ssgiStepCount, viewRadius: settings.ssgiViewRadius, falloffRange: settings.ssgiFalloffRange },
+                settings: { sliceCount: settings.ssgiSliceCount, stepCount: settings.ssgiStepCount, viewRadius: settings.ssgiViewRadius, falloffRange: settings.ssgiFalloffRange, historyFrames: settings.ssgiHistoryFrames },
+                // Last frame's depth and normals (the probes' history copy, made at the end of the frame).
+                history: prepared.history.screenTexturesFor(resources.layout),
+                timestampWrites: this.context?.timer.computePass(`${TECHNIQUE_ID}/ssgi`),
             }) ?? null;
         irradiance.encode(
             encoder,
@@ -528,7 +534,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const prepared = this.prepared;
         const resources = this.screenResources;
         const irradiance = this.irradiance;
-        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance || !irradiance.filterScratch) return null;
+        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance || !irradiance.filterScratch || !irradiance.filteredAtlas) return null;
         return {
             layout: resources.layout,
             frameIndex: this.latestFrameIndex,
@@ -542,6 +548,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             probeSH: irradiance.probeSH,
             irradiance: irradiance.irradiance,
             filterScratch: irradiance.filterScratch,
+            filteredAtlas: irradiance.filteredAtlas,
             occlusion: this.screenSpaceGI?.texturesFor(resources.layout.width, resources.layout.height) ?? null,
             combined: irradiance.combinedFor(resources.layout),
             counters: prepared.counters,
@@ -589,6 +596,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      */
     resetScreenHistory(): void {
         this.prepared?.history.reset();
+        this.screenSpaceGI?.reset();
         this.previousCamera = null;
     }
 

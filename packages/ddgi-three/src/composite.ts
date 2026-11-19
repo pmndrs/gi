@@ -287,6 +287,8 @@ export class DDGICompositeNode extends Node {
     private readonly occlusionSource: GIOcclusionSource | null = null;
     private moduleNodes: ShadingModuleNodes | null = null;
     private warnedStale = false;
+    /** Warned once that the technique's own occlusion and the composite's would both apply. */
+    private warnedDoubleOcclusion = false;
     /** The pass context the mark was last checked on. */
     private markedContext: PassNode['contextNode'] = null;
     private warnedLostMark = false;
@@ -367,6 +369,12 @@ export class DDGICompositeNode extends Node {
         const light = this.source.light;
         this.intensity.value = light.intensity;
         this.computeCoverage.value = light.computeCoverage ? 1 : 0;
+        if (this.occlusionSource && light.shading.occludesIrradiance && !this.warnedDoubleOcclusion) {
+            this.warnedDoubleOcclusion = true;
+            console.warn(
+                `@pmndrs/gi/three: the GI technique (${light.shading.techniqueId}) already occludes its irradiance (the radiance cache's SSGI), and ddgi() was given occlusion as well: GI gets occluded twice. Leave occlusion off, or turn the technique's SSGI off.`,
+            );
+        }
         const moduleNodes = new ShadingModuleNodes(light.shading);
         this.moduleNodes = moduleNodes;
         this.warnedStale = false;

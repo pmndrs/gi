@@ -7,7 +7,8 @@
  * 2. `FilterScreenProbes` twice, across then down (gi1.cpp:2587-2612; RC4.2): the
  *    blended atlas is copied to a scratch atlas first (Capsaicin copies it into
  *    its other probe buffer, gi1.cpp:2540-2541), the first pass writes the
- *    scratch, the second writes the atlas back, which is next frame's history;
+ *    scratch, the second a filtered atlas the projection reads; the blended
+ *    atlas stays next frame's history (register D59);
  * 3. `ProjectScreenProbes`, over every possible ray (gi1.cpp:2618-2625);
  * 4. `InterpolateScreenProbes`, a thread per pixel (gi1.cpp:2629-2636), with the
  *    platform's SSGI occlusion, bent normal and near-field light when the
@@ -105,6 +106,11 @@ interface SizedResources {
     readonly irradiance: GPUTexture;
     /** The first filter pass's output: Capsaicin's other probe buffer (gi1.cpp:2604-2610). */
     readonly filterScratch: GPUTexture;
+    /**
+     * The second pass's output, which the projection reads (register D59: Capsaicin writes it back
+     * into the atlas, which becomes next frame's history; ours keeps the blended atlas as history).
+     */
+    readonly filteredAtlas: GPUTexture;
     /** This frame's lit image (`FrameScreen.lighting` + albedo / pi x E), next frame's SSGI lighting (register D51). */
     readonly combined: GPUTexture;
     readonly bytes: number;
@@ -119,7 +125,9 @@ interface InputGroups {
     /** FilterScreenProbes across (atlas to scratch), then down (scratch to atlas). */
     readonly filterAcross: GPUBindGroup;
     readonly filterDown: GPUBindGroup;
+    /** The projection of the filtered atlas, and of the blended one when the filter is off. */
     readonly project: GPUBindGroup;
+    readonly projectUnfiltered: GPUBindGroup;
     readonly interpolate: GPUBindGroup;
 }
 
@@ -189,6 +197,11 @@ export class ScreenIrradiance {
         return this.sized?.filterScratch ?? null;
     }
 
+    /** The filtered probes the projection read (both passes), or null before the first {@link encode}. For tests. */
+    get filteredAtlas(): GPUTexture | null {
+        return this.sized?.filteredAtlas ?? null;
+    }
+
     /**
      * The lit image the latest {@link encode} wrote (with lighting and
      * albedo; zeros otherwise), which the next frame's SSGI reads as its
@@ -251,7 +264,7 @@ export class ScreenIrradiance {
         }
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
         kernels.project.bind(pass);
-        pass.setBindGroup(1, groups.project);
+        pass.setBindGroup(1, options.probeFilter ? groups.project : groups.projectUnfiltered);
         dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
         // InterpolateScreenProbes, a thread per pixel (gi1.cpp:2629-2636).
         kernels.interpolate.bind(pass);
@@ -309,6 +322,12 @@ export class ScreenIrradiance {
             format: 'rgba16float',
             usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst,
         });
+        const filteredAtlas = device.createTexture({
+            label: `${TECHNIQUE_ID} filtered probe atlas`,
+            size: [layout.atlasSize[0], layout.atlasSize[1]],
+            format: 'rgba16float',
+            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
+        });
         const combined = device.createTexture({
             label: `${TECHNIQUE_ID} lit image for SSGI`,
             size: [layout.width, layout.height],
@@ -320,11 +339,12 @@ export class ScreenIrradiance {
             probeSH,
             irradiance,
             filterScratch,
+            filteredAtlas,
             combined,
             bytes:
                 shSize[0] * shSize[1] * SH_TEXEL_BYTES +
                 2 * layout.width * layout.height * IRRADIANCE_TEXEL_BYTES +
-                layout.atlasSize[0] * layout.atlasSize[1] * IRRADIANCE_TEXEL_BYTES,
+                2 * layout.atlasSize[0] * layout.atlasSize[1] * IRRADIANCE_TEXEL_BYTES,
         };
         this.sized = sized;
         return sized;
@@ -376,8 +396,9 @@ export class ScreenIrradiance {
             inputs,
             filterLevels,
             filterAcross: filterPass('across', inputs.probeAtlas, sized.filterScratch, this.blurDirections[0]),
-            filterDown: filterPass('down', sized.filterScratch, inputs.probeAtlas, this.blurDirections[1]),
-            project: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, inputs.probeAtlas.createView(), sized.probeSH.createView()]),
+            filterDown: filterPass('down', sized.filterScratch, sized.filteredAtlas, this.blurDirections[1]),
+            project: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, sized.filteredAtlas.createView(), sized.probeSH.createView()]),
+            projectUnfiltered: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, inputs.probeAtlas.createView(), sized.probeSH.createView()]),
             interpolate: group(SCREEN_IRRADIANCE_ENTRY_POINT.interpolate, kernels.interpolate, [
                 uniforms,
                 { buffer: this.constants },
@@ -404,6 +425,7 @@ export class ScreenIrradiance {
         sized.probeSH.destroy();
         sized.irradiance.destroy();
         sized.filterScratch.destroy();
+        sized.filteredAtlas.destroy();
         sized.combined.destroy();
         this.sized = null;
         this.groups = null;

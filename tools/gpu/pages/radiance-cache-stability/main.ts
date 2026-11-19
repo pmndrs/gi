@@ -60,13 +60,18 @@ const CONFIGURATIONS = [
     ['moving', 'off'],
 ] as const;
 /**
- * RC4.2: the probe filter and SSGI on (the product), the filter alone, and both off (RC4.1's
- * image), each measured with history; history off only for the first.
+ * RC4.2: the probe filter and SSGI on (the product), SSGI at 2 and 4 slices, SSGI without its
+ * running means (D60) at 1 and 4 slices, the filter alone, and both off (RC4.1's image), each
+ * measured with history; history off only for the first.
  */
 const VARIANTS = [
-    { name: 'filter and SSGI', probeFilter: true, ssgi: true },
-    { name: 'filter only', probeFilter: true, ssgi: false },
-    { name: 'neither (RC4.1)', probeFilter: false, ssgi: false },
+    { name: 'filter and SSGI', probeFilter: true, ssgi: true, slices: 1, historyFrames: 16 },
+    { name: 'SSGI 2 slices', probeFilter: true, ssgi: true, slices: 2, historyFrames: 16 },
+    { name: 'SSGI 4 slices', probeFilter: true, ssgi: true, slices: 4, historyFrames: 16 },
+    { name: 'SSGI 1 slice, one frame (no D60)', probeFilter: true, ssgi: true, slices: 1, historyFrames: 1 },
+    { name: 'SSGI 4 slices, one frame (no D60)', probeFilter: true, ssgi: true, slices: 4, historyFrames: 1 },
+    { name: 'filter only', probeFilter: true, ssgi: false, slices: 1, historyFrames: 16 },
+    { name: 'neither (RC4.1)', probeFilter: false, ssgi: false, slices: 1, historyFrames: 16 },
 ] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
@@ -249,6 +254,8 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         for (const variant of VARIANTS) {
             technique.settings.probeFilter = variant.probeFilter;
             technique.settings.ssgi = variant.ssgi;
+            technique.settings.ssgiSliceCount = variant.slices;
+            technique.settings.ssgiHistoryFrames = variant.historyFrames;
             for (const jitter of [true, false]) {
                 for (const [motion, history] of CONFIGURATIONS) {
                     if (history === 'off' && variant !== VARIANTS[0]) continue;

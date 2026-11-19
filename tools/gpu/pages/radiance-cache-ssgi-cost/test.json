@@ -1,0 +1,4 @@
+{
+    "description": "RC4.2 review: GPU time of the radiance cache SSGI pass (gi/ssgi) at one, two and four slices on two-room at 1280x720 and 1920x1080, median and p90 from pass timestamps, beside the irradiance pass. A measurement: only missing timestamps or device errors fail.",
+    "timeoutMs": 600000
+}
