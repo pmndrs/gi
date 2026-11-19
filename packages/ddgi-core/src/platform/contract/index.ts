@@ -1,9 +1,10 @@
 /**
- * The platform contract (T0.11 draft): types only, plus two error classes.
+ * The platform contract (T0.11 draft): types, two error classes and two small helpers.
  * Explained in plain language in docs/api/platform.md.
  */
 
 export * from './errors';
+export * from './helpers';
 export type * from './compute';
 export type * from './frame';
 export type * from './handles';
