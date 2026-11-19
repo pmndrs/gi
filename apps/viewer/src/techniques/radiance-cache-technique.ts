@@ -22,6 +22,14 @@
  * position, as the pass's override material. The pass draws before this
  * frame's screen stage, so a debug view shows the previous frame's probes.
  *
+ * What ships (RC4.6): a DDGI volume (the scene's own) is stacked under the
+ * radiance cache on the same platform (`setFallback`, before `prepare`), so
+ * the cache's `secondBounce: 'auto'` reads its second bounce and every later
+ * one from DDGI (register E10); DDGI updates `STACKED_DDGI_PROBES_PER_FRAME`
+ * probes a frame (the frame budget's units; the radiance cache ignores them).
+ * The compare toggle "Run the cache alone" (`host.cacheAlone`) leaves DDGI
+ * out: GI-1.2's own second-bounce rays, as Capsaicin.
+ *
  * The compare toggles (RC4.5, `settings.compare`) go into the core
  * technique's settings, live: it reads them every frame and starts its
  * history over where a rule changed. `changeReadout` measures how much the
@@ -38,6 +46,7 @@ import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image';
 import { DdgiDebugMaterial } from '../ddgi/debug-material';
 import {
     createGI,
+    DDGITechnique,
     ddgi,
     giAlbedo,
     GI_ALBEDO_OUTPUT,
@@ -50,11 +59,14 @@ import {
 } from '../ddgi/library';
 // Not in the published package (internal until validated, docs/design/radiance-cache.md): by path.
 import { RADIANCE_CACHE_DEBUG_VIEW, RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/index.ts';
-import { applyCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { applyCompareValues, hostCompareValue, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 import { RcChangeMeter } from './rc-change-meter';
 import { applyViewLayers, LAYER_RADIANCE_CACHE, type GiMode } from '../scene/layers';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';
 import { copyViewerCamera, createViewCamera } from './view-camera';
+
+/** DDGI's probe updates a frame when it is stacked under the radiance cache (RC4.6, the P6.3 measurements' 256). */
+export const STACKED_DDGI_PROBES_PER_FRAME = 256;
 
 /** The radiance cache's debug views by the name the viewer (and its links) use. */
 export const RADIANCE_CACHE_SCREEN_VIEWS = {
@@ -100,6 +112,8 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
     private settings: RadianceCacheViewerSettings;
     private platform: GIPlatform | null = null;
     private technique: RadianceCacheTechnique | null = null;
+    /** The DDGI volume stacked under the cache (RC4.6), or null when the cache runs alone. */
+    private ddgiUnder: DDGITechnique | null = null;
     private threeGI: ThreeGI | null = null;
     private phase: Phase = 'preparing';
     private failure: string | null = null;
@@ -138,13 +152,22 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         platform.addTechnique(technique);
         this.technique = technique;
         platform.setOutput(technique);
+        // The shipped default: DDGI under the cache for its later bounces, stacked before prepare so
+        // the cache builds its pass for DDGI's shading module then (file comment).
+        const stacked = !hostCompareValue(this.settings.compare, 'host.cacheAlone');
+        if (stacked) {
+            const volume = loaded.manifest.volume;
+            const ddgiUnder = platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing } }));
+            platform.setFallback(technique, ddgiUnder);
+            this.ddgiUnder = ddgiUnder;
+        }
         const preparing = platform.prepare();
         // Chrome sends the compile requests when this JavaScript task ends (ThreeGI's file comment).
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (this.disposed) return;
         // The radiance cache has no world-space budget: all of its work, the world cache's
         // included, is the screen stage.
-        const threeGI = new ThreeGI(platform, loaded.scene, { preparing, budget: { units: 0 }, environment: environmentFor(loaded.manifest), warn: (message) => this.warn(message) });
+        const threeGI = new ThreeGI(platform, loaded.scene, { preparing, budget: { units: stacked ? STACKED_DDGI_PROBES_PER_FRAME : 0 }, environment: environmentFor(loaded.manifest), warn: (message) => this.warn(message) });
         this.threeGI = threeGI;
         // Only this technique's camera sees its GI light; the adapter keeps the layers when it replaces the light.
         threeGI.light.layers.set(LAYER_RADIANCE_CACHE);
@@ -208,6 +231,11 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         return graph ? { scenePass: graph.scenePass, output: graph.output } : null;
     }
 
+    /** The DDGI volume stacked under the cache (RC4.6), or null when it runs alone or before it starts. */
+    get stackedDdgi(): DDGITechnique | null {
+        return this.ddgiUnder;
+    }
+
     /** The core technique once started (its probes and irradiance, for checks and readbacks), or null. */
     get radianceCache(): RadianceCacheTechnique | null {
         return this.technique;
@@ -269,7 +297,11 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
                 return `Could not start: ${this.failure}`;
             case 'ready': {
                 const tiles = this.technique?.counters['spawn tiles'] ?? 0;
-                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each, kept from frame to frame, lit through the world cache (hash grid, with GI-1.2's second bounce)`;
+                const under = this.ddgiUnder;
+                const bounce = under
+                    ? `later bounces from a DDGI volume under it (${(under.field?.grid.probeCount ?? 0).toLocaleString('en')} probes, ${STACKED_DDGI_PROBES_PER_FRAME} updated a frame)`
+                    : "alone: GI-1.2's own second-bounce rays";
+                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each, kept from frame to frame, lit through the world cache; ${bounce}`;
             }
         }
     }
@@ -283,7 +315,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
     notePrepareFinished(): void {}
 
     describeSettings(): Record<string, number | string> {
-        return { probe_tile_px: 16, rays_per_probe: 64, bounces: 1 };
+        return { probe_tile_px: 16, rays_per_probe: 64, ddgi_under: this.ddgiUnder ? STACKED_DDGI_PROBES_PER_FRAME : 0 };
     }
 
     async warmUp(): Promise<void> {

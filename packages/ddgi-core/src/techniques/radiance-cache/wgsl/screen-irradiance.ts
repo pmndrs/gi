@@ -734,7 +734,7 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.filter}(
 
     var filtered = radiance / totalWeight;
     if (isFill) {
-        filtered.w = RC_FILL_HIT_DISTANCE;
+        filtered.w = rcFrame.fillHitDistance;
     }
     // Stored to the nearest half (D48), the hit distance within the half range (D19).
     textureStore(rcProbeBuffer, pos, rcNearestHalf4(vec4f(filtered.xyz, min(filtered.w, RC_LARGEST_HALF))));

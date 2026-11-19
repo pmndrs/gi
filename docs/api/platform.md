@@ -436,6 +436,7 @@ A technique gets the platform's services when attached, and never sees the host.
 | `fingerprintDifferences(saved, current)` | Which parts (geometry, materials, textures, lights, sky) of two `SceneFingerprint`s differ; every part when their versions differ. For saved bakes. |
 | `halfToFloat(bits)` | A binary16 value's 16 bits to a number; reads saved bakes' half-float fields. |
 | `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
+| `ChangeEventTracker`, `ChangeEvent`, `ChangeEventOptions` | For techniques: the change feed as events over time (`change-events.ts`): one event per source with a box grown to cover it, epochs at its start, every `rearmFrames` while it goes on and once when it stops, so a technique forgets history once per epoch rather than on every frame of a change that goes on (the radiance cache's E8, E9 and D46). |
 | `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
 | `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
 | `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |

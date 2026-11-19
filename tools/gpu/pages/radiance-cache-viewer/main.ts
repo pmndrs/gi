@@ -32,6 +32,9 @@
  *   The panel's readout (GI change per frame, frames since a toggle changed)
  *   is recorded too.
  *
+ * - RC4.6: the radiance cache starts with a DDGI volume stacked under it (what
+ *   ships); "Run the cache alone" makes it again without, and back.
+ *
  * The page ends on the last scene's radiance cache, GI on, for the runner's
  * screenshot, with the compare section beside it: at ours, or with
  * `VITE_RC_VIEWER_END=capsaicin` at every Capsaicin value (a before/after
@@ -57,7 +60,7 @@ import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { GiMode } from '../../../../apps/viewer/src/scene/layers.ts';
 import { RcCompareControls } from '../../../../apps/viewer/src/ui/rc-compare-controls.ts';
-import { compareSettingValue, RADIANCE_CACHE_COMPARE_TOGGLES, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { compareSettingValue, isHostToggle, RADIANCE_CACHE_COMPARE_TOGGLES, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -251,6 +254,8 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
     // The radiance cache on screen: a toggle read at prepare (the world-cache backend) makes a new one.
     const rc = (): RadianceCacheViewerTechnique => core.getTechnique('rc') as RadianceCacheViewerTechnique;
     const valueOf = (entry: CompareToggle): unknown => {
+        // The host's choice: whether a DDGI volume is stacked under the cache (RC4.6).
+        if (isHostToggle(entry)) return rc().stackedDdgi === null;
         const settings = rc().radianceCache?.settings;
         return settings ? compareSettingValue(settings, entry.setting) : undefined;
     };
@@ -341,6 +346,8 @@ try {
         const started = core.getTechnique('rc');
         if (!(started instanceof RadianceCacheViewerTechnique)) throw new Error('the rc technique is not the radiance cache');
         let technique: RadianceCacheViewerTechnique = started;
+        // RC4.6: what ships has a DDGI volume under the cache for its later bounces.
+        if (!technique.stackedDdgi) failures.push(`${sceneId}: no DDGI volume is stacked under the radiance cache`);
 
         // The scan: frames 1, 30 and 60 after the start, GI on.
         const scans: Record<string, unknown>[] = [];

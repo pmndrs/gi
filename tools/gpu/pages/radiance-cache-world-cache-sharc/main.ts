@@ -775,8 +775,11 @@ try {
     // 8. Lag and flicker.
     {
         const configurations: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
-            ['gi1 single bounce', GI1_SINGLE],
-            ['gi1 multibounce', GI1_MULTI],
+            // GI-1.2 as Capsaicin has it (experiment E9's change reset, on by default since P6.2b, off): the
+            // baseline SHaRC's change reset is gated against; with E9 on, recorded beside it.
+            ['gi1 single bounce', { ...GI1_SINGLE, cellChangeReset: false }],
+            ['gi1 multibounce', { ...GI1_MULTI, cellChangeReset: false }],
+            ['gi1 multibounce, E9 (default)', GI1_MULTI],
             ['sharc', SHARC_DEFAULT],
             ['sharc, no change reset', { worldCache: 'sharc', sharc: { changeReset: false } }],
             ['sharc, 64-sample threshold', { worldCache: 'sharc', sharc: { minSamples: 64 } }],
