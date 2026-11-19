@@ -6,7 +6,8 @@
  * with three's GTAO on the GI term at half the reduced pass's resolution
  * (1 m, 16 samples), read back at the reference's 1920 × 1080. That GTAO
  * was the composite's default until 2026-11-18; the default since has no
- * occlusion (DECISIONS 2026-11-18), which `run.ts --no-occlusion` measures.
+ * occlusion (DECISIONS 2026-11-18), so the page measures that by default and
+ * `run.ts --occlusion` turns the GTAO on.
  *
  * What differs from M1's run (`three-composite-ao`, match mode): the scene
  * keeps its own materials. M1 replaced them with Lambert materials holding
@@ -39,7 +40,7 @@
  * Not a shading path: everything here is measurement.
  */
 
-import { FloatType, PerspectiveCamera, RenderPipeline, RenderTarget, type Mesh, type Node, type Object3D } from 'three/webgpu';
+import { Box3, BoxGeometry, Euler, FloatType, Matrix4, Mesh as ThreeMesh, MeshStandardMaterial, PerspectiveCamera, RenderPipeline, RenderTarget, Vector3, type Mesh, type Node, type Object3D } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
@@ -50,6 +51,7 @@ import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts'
 import { runSteps, runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { advanceThreeFrame, findManifest, SHOT_FAR, SHOT_NEAR } from '../three-composite-shared/composite-check.ts';
 import { upscaledComposite, type UpscalePreset } from '../three-composite-shared/variants.ts';
+import endStates from '../../../reference/cycles/end-states.json';
 import { UPLOAD_PATH } from './upload-path.ts';
 
 /** A reference's stored camera (its json's `shot.camera`). */
@@ -62,6 +64,15 @@ export interface AccuracyView {
 
 export interface TexturedAccuracyJob {
     readonly scene: string;
+    /** An entry of tools/reference/cycles/end-states.json (TU.4): objects turned about a pivot and boxes added, as the Cycles end-state render has them. */
+    readonly endState: string | null;
+    /**
+     * A diagnostic for foliage (TU.4, sponza-full): 'default' leaves the loaded materials alone; 'cutout' makes every
+     * blended (`transparent`, no alphaTest) material an alpha-tested one (alphaTest 0.5, opaque pass), 'opaque' drops
+     * its alpha altogether. Neither is what the reference has (it keeps the glTF's BLEND); they tell where a difference
+     * comes from.
+     */
+    readonly materialVariant: 'default' | 'cutout' | 'opaque';
     readonly views: readonly AccuracyView[];
     /** The references' size; every view is read back at it. */
     readonly width: number;
@@ -74,9 +85,9 @@ export interface TexturedAccuracyJob {
     /** The upscaler preset; M1's default path is Performance. */
     readonly preset: UpscalePreset;
     /**
-     * GTAO on the GI term, as M1's default path had it (true), or none (false: the composite's
-     * default since 2026-11-18, and the way to tell the occlusion's share of a difference from the
-     * field's). Its resolution against the reduced pass, and its samples (M1's default path: 0.5, 16).
+     * GTAO on the GI term, as M1's default path had it (true, `run.ts --occlusion`), or none (false: the
+     * shipping composite's default since 2026-11-18; run both to tell the occlusion's share of a
+     * difference from the field's). Its resolution against the reduced pass, and its samples (M1's default path: 0.5, 16).
      */
     readonly occlusion: boolean;
     readonly occlusionScale: number;
@@ -87,6 +98,8 @@ export interface TexturedAccuracyJob {
 
 const DEFAULT_JOB: TexturedAccuracyJob = {
     scene: 'textured-furnace',
+    endState: null,
+    materialVariant: 'default',
     views: [],
     width: 1920,
     height: 1080,
@@ -94,7 +107,7 @@ const DEFAULT_JOB: TexturedAccuracyJob = {
     warmupPasses: 16,
     passes: 64,
     preset: 'performance',
-    occlusion: true,
+    occlusion: false,
     occlusionScale: 0.5,
     occlusionSamples: 16,
     upscaleFrames: 32,
@@ -111,6 +124,46 @@ const job: TexturedAccuracyJob = { ...DEFAULT_JOB, ...window.m4TexturedAccuracyJ
 /** The DDGI technique's default `maxProbesPerFrame`: whole passes are split into frames of at most this many probes. */
 const MAX_PROBES_PER_FRAME = 4096;
 
+interface EndState {
+    readonly scene: string;
+    readonly moves?: readonly { readonly object: string; readonly pivot: [number, number, number]; readonly rotationDeg: [number, number, number] }[];
+    readonly boxes?: readonly { readonly name: string; readonly size: [number, number, number]; readonly color: string; readonly x: number; readonly floorGap: number; readonly wallGap: number }[];
+}
+
+/**
+ * Sets the scene to an end state before GI first sees it: each move as the viewer's motion drivers place an
+ * object (pivot x turn x pivot^-1 x rest), each box as ddgi-move-cabinet stands its cabinet. The same
+ * end-states.json drives Cycles (render.py --end-state). Returns what it did, with the content's bounds the boxes stood on.
+ */
+function applyEndState(state: EndState, content: Object3D): Record<string, unknown> {
+    const applied: Record<string, unknown> = {};
+    content.updateMatrixWorld(true);
+    for (const move of state.moves ?? []) {
+        const target = content.getObjectByName(move.object);
+        assert(target, `end state: no object ${move.object}`);
+        const pivot = new Vector3(...move.pivot);
+        const turn = new Matrix4().makeRotationFromEuler(new Euler(...(move.rotationDeg.map((degrees) => (degrees * Math.PI) / 180) as [number, number, number]), 'XYZ'));
+        const world = new Matrix4().makeTranslation(pivot.x, pivot.y, pivot.z).multiply(turn).multiply(new Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z)).multiply(target.matrixWorld);
+        // The parent is the identity here (procedural parts add their meshes to the content group), checked below.
+        assert(target.parent !== null && target.parent.matrixWorld.equals(new Matrix4()), `end state: ${move.object}'s parent is not the identity`);
+        target.matrix.copy(world);
+        target.matrix.decompose(target.position, target.quaternion, target.scale);
+        target.updateMatrixWorld(true);
+        applied[move.object] = { position: target.position.toArray(), rotationDeg: move.rotationDeg };
+    }
+    const bounds = new Box3().setFromObject(content);
+    applied.bounds = { min: bounds.min.toArray(), max: bounds.max.toArray() };
+    for (const box of state.boxes ?? []) {
+        const mesh = new ThreeMesh(new BoxGeometry(...box.size), new MeshStandardMaterial({ color: Number.parseInt(box.color, 16), roughness: 1, metalness: 0 }));
+        mesh.name = box.name;
+        mesh.position.set(box.x, bounds.min.y + box.size[1] / 2 + box.floorGap, bounds.min.z + box.size[2] / 2 + box.wallGap);
+        content.add(mesh);
+        applied[box.name] = { position: mesh.position.toArray() };
+    }
+    content.updateMatrixWorld(true);
+    return applied;
+}
+
 /** rgb of an rgba read-back. */
 function rgbOf(rgba: Float32Array): Float32Array<ArrayBuffer> {
     const rgb = new Float32Array((rgba.length / 4) * 3);
@@ -124,6 +177,31 @@ async function measure(context: ThreePageContext): Promise<void> {
     const manifest = findManifest(job.scene);
     const loaded = await loadScene(manifest, () => {}, job.maxTextureSize === null ? {} : { maxTextureSize: job.maxTextureSize });
     const scene = loaded.scene;
+    if (job.endState) {
+        const state = (endStates as unknown as Record<string, EndState>)[job.endState];
+        assert(state && state.scene === job.scene, `no end state ${job.endState} of ${job.scene}`);
+        const applied = applyEndState(state, loaded.content);
+        log(`end state ${job.endState}: ${JSON.stringify(applied)}`);
+        data.endState = applied;
+    }
+    if (job.materialVariant !== 'default') {
+        const changed = new Set<string>();
+        scene.traverse((object) => {
+            const mesh = object as Mesh;
+            if (!mesh.isMesh) return;
+            for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+                if (!material.transparent || material.alphaTest > 0) continue;
+                material.transparent = false;
+                material.depthWrite = true;
+                material.alphaHash = false;
+                material.alphaTest = job.materialVariant === 'cutout' ? 0.5 : 0;
+                material.needsUpdate = true;
+                changed.add(material.name);
+            }
+        });
+        log(`material variant ${job.materialVariant}: ${changed.size} blended materials changed: ${[...changed].join(', ')}`);
+        data.variantMaterials = [...changed];
+    }
     // Cycles lights point and spot lights with no range window (M1's `ignoreLightRange`).
     scene.traverse((object) => {
         const light = object as Object3D & { isPointLight?: boolean; isSpotLight?: boolean; distance?: number };

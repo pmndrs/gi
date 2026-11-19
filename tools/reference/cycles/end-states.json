@@ -1,0 +1,24 @@
+{
+    "$comment": "TU.4 / T3.9: end states of the moving scenes, rendered by Cycles (render.py --end-state <id>, written to bench/references/<id>/<camera>/) and set up the same way by the m4-textured-accuracy page (job.endState). `moves` turn an object about a pivot (manifest space, as the viewer's motion drivers: pivot x turn x pivot^-1 x rest); `boxes` stand a Lambert box against the scene's floor and the wall at its lowest z, as the ddgi-move-cabinet page does (x is the centre; floorGap and wallGap in metres; color is the sRGB hex three reads). Cameras are bookmarks of the end state that the manifest doesn't have.",
+    "door-shut": {
+        "scene": "closed-door",
+        "title": "closed-door as authored: the door panel shut in the doorway (door-swing's end state)"
+    },
+    "door-open": {
+        "scene": "closed-door",
+        "title": "the door swung 90 degrees open into room A (door-swing's keyframe t=0)",
+        "moves": [{ "object": "door-panel", "pivot": [4.08, 0, 1.546], "rotationDeg": [0, -90, 0] }]
+    },
+    "cabinet-before": {
+        "scene": "furnished-room",
+        "title": "ddgi-move-cabinet before the move: a 0.9 x 0.85 x 0.45 m brown box against the north wall",
+        "cameras": [{ "name": "towards-the-cabinet", "position": [0.2, 1.3, 1.6], "target": [-0.3, 0.6, -2.3], "fovYDeg": 65 }],
+        "boxes": [{ "name": "cabinet", "size": [0.9, 0.85, 0.45], "color": "73502e", "x": -1.0, "floorGap": 0.002, "wallGap": 0.03 }]
+    },
+    "cabinet-moved": {
+        "scene": "furnished-room",
+        "title": "ddgi-move-cabinet after the move: the cabinet slid 1 m along the wall (+x)",
+        "cameras": [{ "name": "towards-the-cabinet", "position": [0.2, 1.3, 1.6], "target": [-0.3, 0.6, -2.3], "fovYDeg": 65 }],
+        "boxes": [{ "name": "cabinet", "size": [0.9, 0.85, 0.45], "color": "73502e", "x": 0.0, "floorGap": 0.002, "wallGap": 0.03 }]
+    }
+}
