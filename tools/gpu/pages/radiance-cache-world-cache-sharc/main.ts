@@ -514,7 +514,11 @@ async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings
             });
             return sum / Math.max(count, 1);
         };
-        const changes: number[] = [];
+        // Relative changes pooled over pixels and frames as a histogram (steps of 0.0005 up to 5), as
+        // radiance-cache-stability tallies them: millions of values, so no array to sort.
+        const bins = new Uint32Array(10001);
+        let changeSum = 0;
+        let changeCount = 0;
         let previous: Float32Array | null = null;
         let beforeE = 0;
         let beforeRay = 0;
@@ -534,7 +538,11 @@ async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings
                 const floor = 0.05 * mean;
                 for (let pixel = 0; pixel < e.length; pixel++) {
                     if (depth[pixel] === 1) continue;
-                    changes.push(Math.abs(e[pixel] - previous[pixel]) / Math.max(previous[pixel], floor));
+                    const change = Math.abs(e[pixel] - previous[pixel]) / Math.max(previous[pixel], floor);
+                    if (!Number.isFinite(change)) continue;
+                    changeSum += change;
+                    changeCount++;
+                    bins[Math.min(Math.floor(change / 0.0005), bins.length - 1)]++;
                 }
             }
             previous = e;
@@ -548,7 +556,14 @@ async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings
             eAfter.push(surfaceMean(await readE()));
             rayAfter.push(await rayMean());
         }
-        changes.sort((a, b) => a - b);
+        let p95 = NaN;
+        for (let bin = 0, running = 0; bin < bins.length; bin++) {
+            running += bins[bin];
+            if (running >= 0.95 * changeCount) {
+                p95 = (bin + 1) * 0.0005;
+                break;
+            }
+        }
         const counters: Record<string, number> = {};
         const backend = technique.worldCacheBackend;
         if (backend?.id === 'sharc') {
@@ -556,8 +571,8 @@ async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings
             for (const [counter, word] of Object.entries(SHARC_COUNTER)) counters[counter] = words[word];
         }
         return {
-            flickerMean: Number((changes.reduce((sum, value) => sum + value, 0) / Math.max(changes.length, 1)).toFixed(5)),
-            flickerP95: Number((changes[Math.floor(0.95 * (changes.length - 1))] ?? NaN).toFixed(4)),
+            flickerMean: Number((changeSum / Math.max(changeCount, 1)).toFixed(5)),
+            flickerP95: Number(p95.toFixed(4)),
             irradianceFramesTo5: settledAfter(eAfter, 2 * beforeE, 0.05),
             irradianceFramesTo1: settledAfter(eAfter, 2 * beforeE, 0.01),
             rayFramesTo5: settledAfter(rayAfter, 2 * beforeRay, 0.05),
