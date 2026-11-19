@@ -265,6 +265,8 @@ E8's change marking on its own, on the per-hit path, behind `cellChangeReset` (d
 
 Measured (RTX 3060, 720p, `radiance-cache-cell-shading`): lag to within 5% after a doubling, per hit / per hit + E9 / E8 at 20k: sun 37 / 2 / 8 frames, point light 32 / 7 / 5. Lit plane from frame 1 and the furnace within 1% from frame 5 (mean 1.0016 × ρ²E/π), as per hit. Still-camera stability unchanged (no changes happen there): Sponza 5.5% / 19% mean / p95 with the jitter off, as per hit. So the lag win of E8 is mostly the marking; E8's own gain is the shadow rays.
 
+The cost (`radiance-cache-change-noise`, the cost page): the per-pixel noise of E (second difference) over the 16 frames after a light doubles rises from 5.2% to 5.6% on Sponza (sun) and from 1.6% to 2.3% on two-room (lamp) with E9; keeping 3 samples of history on a marked frame (`cellChangeResetHistory: 3`) gives 5.4% and 2.0% for a little lag. The box test adds no measurable time to `PopulateCells` with 16 boxes in the window (6.38 against 6.57 ms, timing INVALID).
+
 ## Extensions after the baseline (ranked)
 
 1. DDGI as the third cache level (screen cache, world cache, then the DDGI volume), through the `BounceSource` slot.
