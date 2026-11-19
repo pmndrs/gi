@@ -693,6 +693,14 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
   - **Phase 4's by-eye check is Dennis's** (the plan's done-when: steady by eye on Cornell and Sponza, no popping on a fly-through). The viewer is made ready for it and the check is listed in PROGRESS "Next"; it doesn't block the track.
   - Moving the module into `pmndrs/denoiser` (a PR there) needs Dennis's go-ahead: listed in PROGRESS "Next".
 
+### radiance-cache phase 6: levers and experiments
+
+Our experiments are first-class (DECISIONS 2026-11-19): each behind a setting beside GI-1.2, judged by accuracy against analytic references and the path tracer, stability, memory and GPU time (timing recorded, not gated). Register rows in the E series.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| P6.3 | Experiment E10, DDGI supplies the second bounce (id Tech 8's last-frame irradiance volumes; extension 1): `secondBounce: 'gi1-rays' \| 'ddgi-volume'` (default gi1-rays); with a DDGI stacked under the cache (`setFallback`), each first-bounce entry reads DDGI's irradiance at its hit instead of tracing a second-bounce ray (`SampleBounceSourceCells`); GPU checks (furnace, strips, bypass, lag), stability, GPU ms on Sponza and Bistro exterior, DDGI's own cost separately | implementer | M | RC3.5 | review (2026-11-19; branch `p6-ddgi-bounce`; RTX 3060; `radiance-cache-ddgi-bounce` passes, four mutations caught; furnace every-bounce 0.990 × 0.4244, second bounce with DDGI's bounce off 0.985 × 0.3183; world cache Sponza 12.2 → 6.5 ms, Bistro exterior 15.1 → 8.0 ms plus DDGI's update (9.7 / 16-21 ms at 2,048 probes, about 2-3 ms at 256-512), timing INVALID (thermal, shared GPU); see PROGRESS) |
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
