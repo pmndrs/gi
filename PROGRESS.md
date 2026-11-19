@@ -21,6 +21,23 @@ Rules:
 
 ---
 
+## 2026-11-19 · P6.3 E10 against Cycles (radiance-cache-accuracy) · implementer (opus)
+Did: merged `radiance-cache` 91441ca (RC4.4) into `p6-ddgi-bounce`. `radiance-cache-accuracy` gains E10's settings, run only when named: `ddgi 256|512`, `ddgi cap4 256|512` (DDGI stacked under the cache with one light group, the second bounce from it), `ddgi cap4 512 no env` (DDGI's environment layer, sky and emitters, at 0: the light the cache's own lights lack, D21/D33), `ddgi cap4 512 history off`. Rows in `bench/results/radiance-cache-accuracy.csv` (`p6.3/...`).
+Verified (RTX 3060 Laptop, headless Chrome, bench lock, references by junction): `radiance-cache-accuracy` PASS (two-room, both Cornells, Sponza; 543 s) and Sponza history off PASS. lint, typecheck pass.
+Numbers, GI bias / 8 × 8 mean / p95 (E over 60 frames after 90):
+| view | default (gi1-rays) | ddgi 256 | ddgi 512 | ddgi cap4 256 | ddgi cap4 512 | cap4 512 no env |
+| --- | --- | --- | --- | --- | --- | --- |
+| two-room lit-room | −43.5/43.5/48 | −1.1/1.6/5 | −0.6/1.4/4 | −0.4/1.3/4 | −0.2/1.3/4 | −0.2/1.3/4 |
+| two-room doorway | −43.4/43.4/48 | 0.0/1.2/3 | +0.1/1.2/3 | +0.1/1.2/3 | +0.1/1.2/3 | +0.2/1.2/3 |
+| two-room dark room | −56.2/56.2/69 | +5.1/6.1/17 | +5.1/6.1/17 | +5.1/6.1/17 | +5.2/6.2/17 | +5.2/6.2/17 |
+| point Cornell (3 views) | −22.3, −22.0, −21.9 | +2.4, +4.3, +0.8 | +2.4, +4.4, +0.8 | +2.5, +4.3, +0.8 | +2.6, +4.3, +0.8 (m8 4.0-6.9) | same |
+| emissive Cornell (3 views) | −48.2, −39.4, −37.2 | −0.7, +4.5, −1.3 | +0.1, +4.5, −1.3 | +0.4, +4.4, −1.3 | +0.3, +4.3, −1.3 (m8 5.9-10.3) | −48.3, −39.5, −37.3 |
+| Sponza colonnade / gallery | +8.2/12.7/56, +11.3/19.1/88 | +15.1, +20.8 | +15.1, +20.9 | +15.1, +21.0 | +15.2/17.3/74, +20.8/23.9/101 | +10.2, +11.3 |
+| Sponza, history off | −2.8/11.2/37, −0.7/14.9/63 | | | | +3.9/11.8/52, +8.9/15.4/71 | |
+Where the brightening comes from: two-room and point Cornell, all extra bounces (no env changes nothing); emissive Cornell, all from the emitter DDGI sees (D21: with the environment layer off it reads exactly the default); Sponza, about +2/0 points from extra bounces and +5/+10 from the sky DDGI's rays see (D33). DDGI's probes a frame (256 vs 512) and the cap (16 vs 4) move nothing by more than 0.8 points.
+Not verified: Bistro interior and exterior; Intel UHD.
+Next: (1) Lead: ddgi-volume with cap 4 at 256 probes is within ±5% of Cycles in every closed-room view (from −22 to −56%); RC3.6's decision. (2) Sponza's excess is the screen probes' history (+11 points, RC4.4) and the world cache's own direct (+11/+25%, RC4.4's finding 4), now with the sky added on top; fix those before judging Sponza. (3) Once RC3.4 adds the sky to the cache's light choice, DDGI's environment layer must be dropped in this mode (no-env setting) or the sky counts twice.
+
 ## 2026-11-19 · P6.3 DDGI supplies the second bounce (register E10) · implementer (opus)
 Did: branch `p6-ddgi-bounce` from `radiance-cache` 5775fcc. `secondBounce: 'gi1-rays' | 'ddgi-volume'` (default gi1-rays; single bounce stays `useMultibounce: false`). With 'ddgi-volume' and a technique stacked under the cache (`gi.setFallback(radianceCache, ddgi)`, the platform's existing `BounceSource` slot, no platform change), GI-1.2's three multibounce passes are replaced by `SampleBounceSourceCells` before `UpdateTiles`: each first-bounce entry reads `giIrradianceAt` of the fallback's shading module (bound in compute through its own `globalsCode`, group 3; no DDGI import) at its hit and adds albedo/π × E to its cell's indirect scratch; bypassing rays get it on their probe ray (D38). No fallback: warns, traces rays. Switching empties the cache. Files: `world-cache/bounce-source.ts` (+ test), `hash-grid-cache.ts`, `capacity.ts`, `settings.ts`, `world-cache.ts`. Pages: `radiance-cache-ddgi-bounce` (furnace, strips, bypass, what runs, lag), `radiance-cache-ddgi-bounce-cost` (manual), `radiance-cache-stability` takes `VITE_RC_SECOND_BOUNCE`, `VITE_RC_INDIRECT_CAP`. Register E10, design section "Experiment E10", NOTES.
 Verified (RTX 3060 Laptop nvidia/ampere, headless Chrome, bench lock, one at a time): `radiance-cache-ddgi-bounce` PASS (twice); `radiance-cache-stability` PASS ×3; `radiance-cache-ddgi-bounce-cost` PASS. Mutations, each failing then restored: albedo/π dropped (×3.10), normal flipped (0.009), rays traced as well (no-second-bounce check, every-bounce 0.939), bypass routing dropped (needed new case 6b: 0.407). `pnpm lint`, `pnpm typecheck`, `pnpm test` pass.
