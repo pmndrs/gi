@@ -24,6 +24,10 @@
  * frame's E is read at the pixel the velocity points back to; a pixel whose
  * previous pixel shows another surface (a disocclusion) is left out.
  *
+ * P6.2: the world cache lights its cells per hit unless the run sets
+ * `VITE_RC_CELL_SHADING=budgeted` (and `VITE_RC_CELL_BUDGET`, default 20000),
+ * for lever L1's stability against per hit.
+ *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
  */
@@ -34,6 +38,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
@@ -61,6 +66,10 @@ const CONFIGURATIONS = [
 ] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
+/** P6.2: how the world cache lights its cells in this run (lever L1), from the environment. */
+const env = import.meta.env as Record<string, unknown>;
+const CELL_SHADING: Partial<RadianceCacheSettings> =
+    env.VITE_RC_CELL_SHADING === 'budgeted' ? { cellShading: 'budgeted', cellShadingBudget: Number(env.VITE_RC_CELL_BUDGET ?? 20000) } : { cellShading: 'per-hit' };
 
 type Vector = [number, number, number];
 
@@ -200,7 +209,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique(CELL_SHADING));
     platform.setOutput(technique);
     await platform.prepare();
     let beforeFrame = (): void => {};
@@ -315,7 +324,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, scenes },
+        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, cellShading: CELL_SHADING, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
