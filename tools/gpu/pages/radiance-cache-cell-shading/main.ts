@@ -59,7 +59,7 @@ import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techn
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { CELL_SHADING_SALT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-common.ts';
-import { CELL_CANDIDATE_BIN_SHIFT, CELL_CANDIDATE_CHANGED_BIT, CELL_PRIORITY_CLASS, CELL_SHADING_MAX_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-wgsl.ts';
+import { CELL_CANDIDATE_BIN_SHIFT, CELL_CANDIDATE_CHANGED_BIT, CELL_PRIORITY_CLASS, CELL_SHADING_CHANGE_FRAMES, CELL_SHADING_MAX_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-wgsl.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, pcgHash, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import { MULTIBOUNCE_MISS_CELL } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
@@ -205,7 +205,9 @@ async function startScenario(device: GPUDevice, name: string, kind: SceneKind, l
     };
     frame();
     await platform.rays.whenBuilt();
-    frame();
+    // Past the window lever L1 remembers scene changes for (the scene's creation is one), so the
+    // checks start from an empty cache with no change pending.
+    for (let index = 0; index <= CELL_SHADING_CHANGE_FRAMES; index++) frame();
     await device.queue.onSubmittedWorkDone();
     technique.resetHistory();
     const cache = technique.worldCache;
