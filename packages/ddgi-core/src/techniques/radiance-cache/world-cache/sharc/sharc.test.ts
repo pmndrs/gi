@@ -131,13 +131,14 @@ describe('SHaRC hash cache: the furnace answers', () => {
 describe('SHaRC hash cache: settings', () => {
     it('defaults to the pathtracer tuned cell and table, and the two-bounce cache-tail path', () => {
         expect(resolveSharcSettings()).toEqual({ ...DEFAULT_SHARC_SETTINGS });
-        expect(DEFAULT_SHARC_SETTINGS).toMatchObject({ log2Entries: 20, cellPixels: 16, minSamples: 64, historyFrames: 32, staleFrames: 64, fallbackLevels: 3, pyramid: true, bounceRays: 2, cacheTail: true });
+        expect(DEFAULT_SHARC_SETTINGS).toMatchObject({ log2Entries: 20, cellPixels: 16, minSamples: 64, historyFrames: 32, staleFrames: 64, fallbackLevels: 3, pyramid: true, bounceRays: 2, cacheTail: true, updateFraction: 0.25 });
     });
 
     it('names the setting out of range', () => {
         expect(() => resolveSharcSettings({ bounceRays: 3 })).toThrow(/sharc.bounceRays/);
         expect(() => resolveSharcSettings({ log2Entries: 30 })).toThrow(/sharc.log2Entries/);
         expect(() => resolveSharcSettings({ minCell: 0 })).toThrow(/sharc.minCell/);
+        expect(() => resolveSharcSettings({ updateFraction: 0 })).toThrow(/sharc.updateFraction/);
     });
 
     it('keeps the GI-1.2 hash grid the technique default, and copies the SHaRC overrides', () => {

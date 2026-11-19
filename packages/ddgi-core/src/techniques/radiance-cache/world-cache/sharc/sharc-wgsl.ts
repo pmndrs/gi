@@ -181,6 +181,7 @@ export const SHARC_PARAMS_WORD = {
     cacheTail: 12,
     useDirectLighting: 13,
     skyOnMiss: 14,
+    updateFraction: 15,
 } as const;
 
 /**
@@ -210,7 +211,7 @@ struct SharcParams {
     cacheTail: u32,           // 1: the path ends in a cache lookup; 0: in the tail hit's own light sample
     useDirectLighting: u32,   // RadianceCacheSettings.useDirectLighting: emissive hits add their emission
     skyOnMiss: u32,           // 1: a bounce ray that misses brings the sky's radiance
-    reserved: u32,
+    updateFraction: f32,      // the share of probes (workgroups of 64 rays) that run the update path this frame
 }
 
 const SHARC_BUCKET: u32 = ${SHARC_BUCKET}u;
@@ -502,6 +503,17 @@ fn ${SHARC_ENTRY_POINT.update}(
     // emissive hits). Unlike Capsaicin's, the light the surface reflects is added too.
     if (g_Sharc.useDirectLighting != 0u && surface.frontFace && dot(surface.emission, surface.emission) > 0.0) {
         sharcAddToProbeRay(did, surface.emission);
+    }
+
+    // Whole probes (a workgroup holds one probe's 64 rays) update or don't, so the skipped ones trace
+    // nothing and the others keep their rays together.
+    let probe = did / ${SHARC_WORKGROUP_SIZE}u;
+    let updates = f32(rcPcgHash(probe ^ rcPcgHash(g_Sharc.frame ^ SHARC_SEED_SALT)) >> 8u) * (1.0 / 16777216.0) < g_Sharc.updateFraction;
+    if (!updates) {
+        // Read the cache only (a ray shorter than its cell too; a cell with no samples reads black).
+        g_SharcRaySamples[2u * did] = bitcast<vec4u>(vec4f(0.0, 0.0, 0.0, SHARC_RAY_LOOKUP));
+        g_SharcRaySamples[2u * did + 1u] = vec4u(bitcast<vec3u>(surface.position), pack4x8snorm(vec4f(surface.normal, 0.0)));
+        return;
     }
 
     var random = rcMakeRandom(did ^ SHARC_SEED_SALT, g_Sharc.frame);

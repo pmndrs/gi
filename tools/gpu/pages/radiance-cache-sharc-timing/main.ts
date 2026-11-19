@@ -52,6 +52,7 @@ const CONFIGURATIONS: readonly (readonly [string, Partial<RadianceCacheSettings>
     ['gi1-hash-grid', { worldCache: 'gi1-hash-grid' }],
     ['sharc', { worldCache: 'sharc' }],
     ['sharc, one bounce ray', { worldCache: 'sharc', sharc: { bounceRays: 1 } }],
+    ['sharc, every probe updating', { worldCache: 'sharc', sharc: { updateFraction: 1 } }],
 ];
 
 /** The world cache's timed passes, by backend (`radiance-cache/<section>`). */

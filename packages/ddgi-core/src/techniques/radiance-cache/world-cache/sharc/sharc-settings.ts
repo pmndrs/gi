@@ -49,6 +49,15 @@ export interface SharcSettings {
      * light in `giDirectChooseLight` (RC3.4), or both would count it.
      */
     skyOnMiss: boolean;
+    /**
+     * The share of probes whose rays run the update path this frame (SHaRC
+     * updates from a few per cent of its paths). Chosen per probe (a
+     * workgroup), at random each frame, so a probe's 64 rays update together
+     * and the skipped ones cost no tracing. The other probes' rays only read
+     * the cache: a ray shorter than its cell reads its cell too, and a cell
+     * with no samples yet reads black (register D55).
+     */
+    updateFraction: number;
 }
 
 export const DEFAULT_SHARC_SETTINGS: Readonly<SharcSettings> = Object.freeze({
@@ -67,6 +76,9 @@ export const DEFAULT_SHARC_SETTINGS: Readonly<SharcSettings> = Object.freeze({
     bounceRays: 2,
     cacheTail: true,
     skyOnMiss: true,
+    // P6.1 timing (RTX 3060, Sponza 1280 x 720): every probe updating costs 92 ms with two bounce
+    // rays, eight times GI-1.2's cache; a quarter keeps the accuracy checks and costs about a quarter.
+    updateFraction: 0.25,
 });
 
 /** `settings` over the defaults, with the ranges checked (a RangeError names the setting). */
@@ -82,6 +94,7 @@ export function resolveSharcSettings(settings: Partial<SharcSettings> = {}): Sha
     check('staleFrames', Number.isInteger(resolved.staleFrames) && resolved.staleFrames >= 1, 'a whole number of at least 1');
     check('fallbackLevels', Number.isInteger(resolved.fallbackLevels) && resolved.fallbackLevels >= 0 && resolved.fallbackLevels <= 8, 'a whole number from 0 to 8');
     check('minSamples', resolved.minSamples >= 0, 'at least 0');
+    check('updateFraction', resolved.updateFraction > 0 && resolved.updateFraction <= 1, 'above 0 and at most 1');
     check('bounceRays', Number.isInteger(resolved.bounceRays) && resolved.bounceRays >= 0 && resolved.bounceRays <= 2, '0, 1 or 2');
     return resolved;
 }

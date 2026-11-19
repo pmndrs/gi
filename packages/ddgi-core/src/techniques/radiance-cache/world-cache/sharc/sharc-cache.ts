@@ -342,6 +342,7 @@ export class SharcCache implements WorldCache {
         words[word.cacheTail] = live.cacheTail ? 1 : 0;
         words[word.useDirectLighting] = this.options.useDirectLighting ? 1 : 0;
         words[word.skyOnMiss] = live.skyOnMiss ? 1 : 0;
+        floats[word.updateFraction] = live.updateFraction;
         prepared.device.queue.writeBuffer(prepared.buffers.params, 0, this.paramWords);
     }
 
