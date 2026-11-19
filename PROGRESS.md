@@ -23,9 +23,32 @@ Rules:
 
 ## 2026-11-19 · RC4.5 compare toggles · implementer (opus)
 Did: branch `rc4-5` (from radiance-cache a3eab8b). Settings that bring back Capsaicin's temporal rules, read every frame as `RcFrame` fields (no compile-time constants left): `probeBlend` (`capsaicin-hysteresis`, gi1.comp:1258-1269), `historySampleCap`, `emptyCellFill` (`capsaicin`: summed backup / empty count in every unreached cell, blend and reprojection), `backupFillsAsHistory` (fills at 65,504), `rayGuidingUniformShare` (0 = Capsaicin's guiding incl. its max(total,1e-5) CDF and all-black-to-last-cell), `probeChangeReset`, `probeHistory`; a change of blend/fill/fills-as-history resets the screen history (`SCREEN_HISTORY_SETTINGS`). Typed registry `compare-toggles.ts` (group, label, urlName, default, Capsaicin value, help, register row); viewer section "Radiance cache · compare" (`ui/rc-compare-controls.ts`, All Capsaicin / All ours, links, readout of GI change per frame via `techniques/rc-change-meter.ts`); GPU pages take `VITE_RC_COMPARE`; `radiance-cache-viewer` clicks every toggle in the real section. Design doc "Compare toggles"; register D41/D42/D46/D47 name their settings.
-Verified: `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,788 passed, 1 skipped). RTX 3060 (nvidia/ampere, headless Chrome, bench lock): `radiance-cache-viewer` on two-room PASS with every toggle clicked; picture change vs ours (noise 4.5%): emptyCellFill=capsaicin 20.5% (mean E 0.80 of ours), hysteresis 5.4% (0.986), cap 1 5.5% (0.992), probeHistory off 9.2%, All Capsaicin 22.9% (0.773); readout 4.2% per frame with jitter, 1.6% without, 11.6% with history off. Screenshot: bench/screenshots/rc4.5/before/nvidia-radiance-cache-viewer.png (git-ignored).
-Not verified: temporal/stability runs with each Capsaicin value and the "after" screenshot were queued behind another job's GPU lock at handback (script in the session scratchpad, `gpu-runs.sh`); clicking the full viewer app (the GPU page uses the panel section with ViewerCore, not ViewerApp).
-Next: record the queued runs' numbers; RC4.2/RC4.3/P6.x add their entries to the registry.
+Verified: `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,788 passed, 1 skipped). RTX 3060 (nvidia/ampere, headless Chrome, bench lock): `radiance-cache-viewer` on two-room PASS with every toggle clicked; picture change vs ours (noise 4.5%): emptyCellFill=capsaicin 20.5% (mean E 0.80 of ours), hysteresis 5.4% (0.986), cap 1 5.5% (0.992), probeHistory off 9.2%, All Capsaicin 22.9% (0.773); readout 4.2% per frame with jitter, 1.6% without, 11.6% with history off. Screenshots (git-ignored): bench/screenshots/rc4.5/before, after (every Capsaicin value) and layout (the panel fix: checkboxes on their own lines, the section inside the window with its own vertical scroll).
+Not verified: clicking the full viewer app (the GPU page uses the panel section with ViewerCore, not ViewerApp).
+Numbers (RTX 3060, bench lock, one run each via `VITE_RC_COMPARE`; a Capsaicin value failing a gate is the page catching the behaviour it was written for):
+
+| Value | `radiance-cache-temporal` | Constant sky, worst mean |E/πL − 1| | Noisy sky E / irradiance, exponential / sparse | Guiding χ² (dof, limit) | What failed |
+| --- | --- | --- | --- | --- | --- |
+| ours (defaults) | pass | 0.05% | 0.9954 / 0.986 | 77.3 (63, 97.7) | |
+| `probeBlend=capsaicin-hysteresis` | fail | 0.05% | 0.959 / 0.685 | 82.5 (63) | noisy sky worst frame 4.3% |
+| `historySampleCap=1` | fail | 0.05% | 0.979 / 0.912 | 82.6 (63) | noisy sky 2.3%; 4 kept cells changed on the still camera |
+| `emptyCellFill=capsaicin` | fail | 29% (0.79 at frame 2, 0.71 from frame 8) | 0.714 / 0.727 | 50.8 (63) | constant sky every frame from 2 |
+| `backupFillsAsHistory=true` | fail | 0.05% | 0.995 / 0.986 | 78.4 (63) | 81 stale cells outside the bright cap (up to 61); reprojection disagrees with the CPU port (77 tiles), which skips fills |
+| `rayGuidingUniformShare=0` | fail | 0.05% | 0.994 / 0.981 | 18.9 (15, 31.9), against Capsaicin's rule | noisy sky worst frame 1.16% |
+| `probeChangeReset=false` | pass | 0.05% | 0.995 / 0.986 | 78.4 (63) | (no scene change on this page) |
+
+| Value | `radiance-cache-stability` | Cornell still: change mean / p95, mean E | two-room still | Sponza still | two-room moving: mean, E | Sponza moving |
+| --- | --- | --- | --- | --- | --- | --- |
+| ours | pass | 29.6% / 80%, 0.180 | 4.6% / 13%, 1.970 | 13.4% / 46%, 0.0379 | 6.7%, 1.806 | 14.2%, 0.0389 |
+| hysteresis | pass | 29.6% / 81%, 0.167 | 5.9% / 16%, 1.948 | 20.6% / 64%, 0.0346 | 8.2%, 1.793 | 21.3%, 0.0355 |
+| cap 1 | pass | 31.5% / 85%, 0.175 | 6.1% / 17%, 1.961 | 21.3% / 66%, 0.0362 | 7.9%, 1.804 | 21.9%, 0.0371 |
+| Capsaicin's empty cells | pass | 31.7% / 90%, 0.437 | 6.4% / 17%, 1.574 | 15.1% / 51%, 0.0370 | 7.9%, 1.453 | 15.8%, 0.0379 |
+| fills as history | pass | 29.6% / 80%, 0.180 | 4.6% / 13%, 1.969 | 13.4% / 46%, 0.0379 | 6.8%, 1.812 | 14.0%, 0.0388 |
+| guiding share 0 | pass | 28.8% / 79%, 0.180 | 4.7% / 13%, 1.969 | 13.5% / 46%, 0.0381 | 7.2%, 1.810 | 14.3%, 0.0391 |
+| change reset off | pass | 29.6% / 80%, 0.180 | 4.6% / 13%, 1.967 | 13.4% / 46%, 0.0379 | 6.7%, 1.807 | 14.2%, 0.0390 |
+
+Stability: per-pixel |ΔE| / max(E, 5% of the mean), history on, jitter on. Capsaicin's empty-cell rule brightens Cornell 2.4× (lit by its ceiling alone: its backup sums each cell's rays, so cells that guiding sent many rays to the bright ceiling dominate) and darkens two-room to 0.80. The "after" viewer run (every Capsaicin value) passed too.
+Next: RC4.2/RC4.3/P6.x add their entries to the registry.
 
 ## 2026-11-19 · RC4.1 merged into radiance-cache · lead (opus)
 Did: independent Opus review of `rc4-1` (pass with notes; port matches Capsaicin line by line; the darkening diagnosis D41 confirmed by rerunning the CPU model). Lead decision on the review's main finding: Capsaicin's biased hysteresis (darker samples taken at once, brighter ones damped; 0.94 of the mean under per-ray noise, 0.46 under sparse rays in the reviewer's model) replaced by a per-cell running mean, n capped at 8, reset by `SceneChanges.regions` (D46). Trade: a new shadow settles over several frames instead of at once; responsiveness comes from the reset and later RC4.3. The implementer also stopped backup fills becoming history (D47), rounds atlas stores to nearest (D48), sized the scan buffers to the screen via `GpuPrefixScan.rebind`, tested the probe cache's contents with a passing occluder, and merged `radiance-cache` in. Fast-forwarded `radiance-cache`. RC4.1 done.
