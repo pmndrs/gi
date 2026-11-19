@@ -50,7 +50,7 @@ export function temporalBlendFactor(a: number, b: number): number {
  */
 export type EmptyCellRule = 'capsaicin' | 'fixed' | 'running';
 
-/** The most samples a cell's running mean counts (D46); the WGSL's `RC_HISTORY_SAMPLE_CAP`. */
+/** The most samples a cell's running mean counts (D46): the default of `RadianceCacheSettings.historySampleCap`. */
 export const HISTORY_SAMPLE_CAP = 8;
 
 /**
@@ -160,18 +160,21 @@ export function findCellIndex(cdf: readonly number[], s: number): number {
     return Math.max(index, 1) - 1;
 }
 
-/** The share of rays that sample their own cell under guiding (register D42); the WGSL's `RC_RAY_GUIDING_UNIFORM_SHARE`. */
+/** The share of rays that sample their own cell under guiding (register D42): the default of `RadianceCacheSettings.rayGuidingUniformShare`. */
 export const RAY_GUIDING_UNIFORM_SHARE = 0.125;
 
 /**
  * The cell a ray samples (`SampleScreenProbes`, gi1.comp:969-972, with D42):
  * its own cell when its cell has no history, when the CDF is empty, or for a
  * `guide` draw below the uniform share; otherwise the CDF's cell for the draw
- * rescaled past the share. Capsaicin's rule is `uniformShare` 0 and no test of
- * the total (its empty CDF gives the last cell).
+ * rescaled past the share. A `uniformShare` of 0 is Capsaicin's rule, as the
+ * WGSL takes it: no test of the total, so an all-black CDF (all zeros) gives
+ * the last cell.
  */
 export function guidedCell(ownCell: number, ownHasHistory: boolean, cdf: { cdf: readonly number[]; total: number }, guide: number, uniformShare = RAY_GUIDING_UNIFORM_SHARE): number {
-    if (!ownHasHistory || !(cdf.total > 0) || guide < uniformShare) return ownCell;
+    if (!ownHasHistory) return ownCell;
+    if (uniformShare <= 0) return findCellIndex(cdf.cdf, guide);
+    if (!(cdf.total > 0) || guide < uniformShare || uniformShare >= 1) return ownCell;
     return findCellIndex(cdf.cdf, (guide - uniformShare) / (1 - uniformShare));
 }
 

@@ -121,7 +121,7 @@ describe("lever E8's kernels and lists", () => {
 
     it('pack the budget and the change events: each box with its epoch plus one, a change with no bounds as the whole world', () => {
         const box = { min: [0, 1, 2] as const, max: [3, 4, 5] as const };
-        const words = cellShadingWords(5000, { events: [{ box, epoch: 41 }, { box: null, epoch: 7 }] });
+        const words = cellShadingWords(5000, { events: [{ box, epoch: 41 }, { box: null, epoch: 7 }], everything: true, boxes: [] });
         expect(words.byteLength).toBe(CELL_SHADING_UNIFORM_BYTES);
         expect([...new Uint32Array(words, 0, 2)]).toEqual([5000, 2]);
         expect([...new Float32Array(words, 16, 3)]).toEqual([0, 1, 2]);
@@ -130,6 +130,6 @@ describe("lever E8's kernels and lists", () => {
         expect(new Float32Array(words, 48, 1)[0]).toBeLessThan(-1e38);
         expect(new Uint32Array(words, 60, 1)[0]).toBe(8);
         expect([...new Uint32Array(cellShadingWords(1, undefined), 0, 2)]).toEqual([1, 0]);
-        expect(() => cellShadingWords(1, { events: new Array(17).fill({ box, epoch: 1 }) })).toThrow(RangeError);
+        expect(() => cellShadingWords(1, { events: new Array(17).fill({ box, epoch: 1 }), everything: false, boxes: [] })).toThrow(RangeError);
     });
 });

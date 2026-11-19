@@ -1,0 +1,4 @@
+{
+    "description": "P6.1: the SHaRC-style hash cache (from pmndrs/pathtracer) in the radiance cache's world-cache slot against analytic answers, with the GI-1.2 hash grid through the same checks (recorded, not gated here): lit plane albedo/pi x E, the slab's shadow, the furnace's second bounce rho^2 E/pi and every bounce rho(rhoE/pi)/(1-rho^2), the strips with half the bounce rays missing, warm-up frames per check, and a NaN scan of rays and cells on cornell-box, two-room and sponza. Correctness only.",
+    "timeoutMs": 1200000
+}

@@ -41,6 +41,10 @@
  *    each moved from the override list into an empty tile at the CPU's seed.
  *    The scene must evict, list and patch something.
  *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts):
+ * with Capsaicin's rules back, sections 1 and 5 are expected to fail (that is the drift they
+ * catch); the guiding check follows the run's share (0: Capsaicin's rule).
+ *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 temporal" -- pnpm test:gpu --filter radiance-cache-temporal --gpu nvidia` (or intel).
  */
@@ -64,13 +68,14 @@ import {
     unpackSeed,
     type Direction,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { screenProbeCellSize } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
-import { CACHED_TILE_NEW, luminance, RAY_GUIDING_UNIFORM_SHARE, reprojectProbeTile, type ReprojectionInputs } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-history-cpu.ts';
+import { CACHED_TILE_NEW, luminance, reprojectProbeTile, type ReprojectionInputs } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-history-cpu.ts';
 import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { COUNTER, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_PROBE_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -166,7 +171,7 @@ interface Run {
 /** A floor (and with `withStep`, the step and wall) under `environment`; frames until the trees are built. */
 async function startRun(device: GPUDevice, name: string, environment: Parameters<GIPlatformImpl['scene']['setEnvironment']>[0], camera: PageCamera, withStep: boolean): Promise<Run> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-temporal ${name}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(pageRadianceCache());
     platform.setOutput(technique);
     await platform.prepare();
     const scene = platform.scene;
@@ -358,6 +363,7 @@ async function checkGuiding(device: GPUDevice, run: Run, cells: { seeds: number[
     if (!probes) throw new Error('no probes after encodeScreen');
     const [atlasWidth, atlasHeight] = probes.layout.atlasSize;
     const previous = halvesFast(await readTexture(device, probes.history.previousProbeAtlas, 8, atlasWidth, atlasHeight));
+    const share = run.technique.settings.rayGuidingUniformShare;
     const cosine = Array.from({ length: PROBE_CELLS }, (_, cell) => mapToHemiOctahedron(((cell % PROBE_SIZE) + 0.5) / PROBE_SIZE, (Math.floor(cell / PROBE_SIZE) + 0.5) / PROBE_SIZE)[2]);
     const expected = new Float64Array(PROBE_CELLS);
     const observed = new Float64Array(PROBE_CELLS);
@@ -374,12 +380,17 @@ async function checkGuiding(device: GPUDevice, run: Run, cells: { seeds: number[
         }
         const total = weights.reduce((sum, weight) => sum + weight, 0);
         for (let thread = 0; thread < PROBE_CELLS; thread++) {
-            if (!history[thread] || !(total > 0)) {
+            if (!history[thread]) {
                 expected[thread] += 1;
                 continue;
             }
-            expected[thread] += RAY_GUIDING_UNIFORM_SHARE;
-            for (let cell = 0; cell < PROBE_CELLS; cell++) expected[cell] += ((1 - RAY_GUIDING_UNIFORM_SHARE) * weights[cell]) / total;
+            // Capsaicin's rule (a share of 0): every ray follows the CDF, an all-black one to the last cell.
+            if (!(total > 0)) {
+                expected[share > 0 ? thread : PROBE_CELLS - 1] += 1;
+                continue;
+            }
+            expected[thread] += share;
+            for (let cell = 0; cell < PROBE_CELLS; cell++) expected[cell] += ((1 - share) * weights[cell]) / total;
         }
         cells.countsPerProbe[probe].forEach((count, cell) => (observed[cell] += count));
     });
@@ -1090,7 +1101,7 @@ try {
     const fail = (message: string): void => {
         if (failures.length < 30) failures.push(message);
     };
-    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT };
+    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT, compare: PAGE_COMPARE_VALUES };
     const only = new URLSearchParams(location.search).get('only') ?? (import.meta.env.VITE_RC_TEMPORAL_ONLY as string | undefined);
     const sections: Array<[string, (device: GPUDevice, fail: (message: string) => void) => Promise<Record<string, unknown>>]> = [
         ['constantSky', checkConstantSky],

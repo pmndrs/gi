@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cameraRelativeViewProjection } from './camera.ts';
 import { historyChangesFromEvents, historyChangesWords, NO_HISTORY_CHANGES } from './screen-probe-history.ts';
-import { PROBE_CELLS } from './settings.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_CELLS } from './settings.ts';
 import {
     blendProbeCells,
     blendRunningMean,
@@ -18,7 +18,7 @@ import {
     temporalBlendFactor,
     unpackNormal,
 } from './screen-probe-history-cpu.ts';
-import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, HISTORY_SAMPLE_CAP as WGSL_HISTORY_SAMPLE_CAP, RAY_GUIDING_UNIFORM_SHARE as WGSL_RAY_GUIDING_UNIFORM_SHARE, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
+import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
 
 describe("BlendScreenProbes' biased hysteresis (gi1.comp:1262-1268)", () => {
     it('keeps nothing of the past when the new value is darker or under twice as bright', () => {
@@ -84,8 +84,18 @@ describe('ray guiding (SampleScreenProbes, gi1.comp:916-978, register D42)', () 
         expect(guidedCell(3, true, cdf, RAY_GUIDING_UNIFORM_SHARE * 0.99)).toBe(3);
         expect(guidedCell(3, true, cdf, RAY_GUIDING_UNIFORM_SHARE)).toBe(40);
         expect(guidedCell(3, false, cdf, 0.9)).toBe(3);
-        expect(RAY_GUIDING_UNIFORM_SHARE).toBe(WGSL_RAY_GUIDING_UNIFORM_SHARE);
-        expect(SAMPLE_WGSL).toContain(`RC_RAY_GUIDING_UNIFORM_SHARE: f32 = ${RAY_GUIDING_UNIFORM_SHARE};`);
+        // The CPU twin's share is the technique's default, which the GPU reads from RcFrame.
+        expect(RAY_GUIDING_UNIFORM_SHARE).toBe(DEFAULT_RADIANCE_CACHE_SETTINGS.rayGuidingUniformShare);
+        expect(SAMPLE_WGSL).toContain('rcFrame.rayGuidingUniformShare');
+    });
+
+    it("with a share of 0 follows Capsaicin's rule: every ray guided, an all-black CDF sends all to the last cell", () => {
+        const weights = new Array<number>(PROBE_CELLS).fill(0);
+        weights[40] = 1;
+        expect(guidedCell(3, true, cellCdf(weights), 0.01, 0)).toBe(40);
+        const empty = cellCdf(new Array<number>(PROBE_CELLS).fill(0));
+        expect(guidedCell(5, true, empty, 0.9, 0)).toBe(PROBE_CELLS - 1);
+        expect(guidedCell(5, false, empty, 0.9, 0)).toBe(5);
     });
 });
 
@@ -203,7 +213,7 @@ describe('noisy rays with history (register D46): the running mean against the h
         // Neither rays nor history: the reached cells' mean, as a fill that counts nothing.
         expect(values[3]).toBeCloseTo((2 + 3) / 2, 12);
         expect(next[3]).toBe(0);
-        expect(HISTORY_SAMPLE_CAP).toBe(WGSL_HISTORY_SAMPLE_CAP);
+        expect(HISTORY_SAMPLE_CAP).toBe(DEFAULT_RADIANCE_CACHE_SETTINGS.historySampleCap);
     });
 });
 

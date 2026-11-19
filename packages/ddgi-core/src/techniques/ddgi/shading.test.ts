@@ -46,6 +46,8 @@ describe('the DDGI shading module', () => {
         expect(shading.code).toMatch(/fn giDebugColor\(/);
         expect(shading.code).not.toMatch(/fn giRadiance\(/);
         expect(shading.provides.radiance).toBe(false);
+        // A probe field: another technique can read it at its own hits (the radiance cache's second bounce, P6.3).
+        expect(shading.provides.worldSpaceIrradiance).toBe(true);
     });
 
     it('uses the parameter names as the WGSL parameter names, in order', () => {
