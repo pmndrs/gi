@@ -399,7 +399,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | --- | --- |
 | `ShadingModule` | `gi.shading`: the WGSL, its `parameters`, `globalsCode(group)`, `writeUniforms`, `version` ([the adapter guide, step 9](../guides/adapter.md#step-9-sampling-gi-in-your-shaders)). |
 | `ShadingParameter` | One resource the module's functions take: a texture, a sampler or a `vec4f`. |
-| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture. |
+| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture, optionally with the shading-module function that gives each point's own light (`irradianceFunction`). |
 
 ### Stats and GPU timing
 
@@ -465,6 +465,7 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 | `DDGI_SHADING_PARAMETER_NAMES` | The names of DDGI's shading parameters. |
 | `DDGI_SAMPLE_WGSL` | The one WGSL function that samples DDGI's field, for engine-free test views. |
 | `DDGI_DEBUG_VIEW` | DDGI's debug view ids: `points`, `giOnly`, `coverage`, `probeStates`. |
+| `DDGI_PROBE_IRRADIANCE_FUNCTION` | `'giProbeIrradiance'`, the shading-module function the `points` view names for each probe's own light. |
 | `DDGI_DEBUG_COLORS` | The colours its debug views use, for checks. |
 
 ### Quality presets
@@ -538,6 +539,7 @@ The functions are:
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
 - `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It is on SPEC's after-v1 list.
 - `giDebugColor(position, normal, view, ...)` drives the debug views.
+- A technique may add its own functions. DDGI's `giProbeIrradiance(point, direction, ...)` returns the irradiance one probe holds for a surface facing `direction`, from that probe's tile alone (`point` is its index in the `points` debug view). The `points` view names it in `irradianceFunction`, so an adapter can shade each probe's sphere by its own light, RTXGI's standard probe view (TU.5, DV-03).
 
 `screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it.
 

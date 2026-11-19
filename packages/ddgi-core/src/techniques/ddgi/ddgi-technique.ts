@@ -201,7 +201,7 @@ import { DDGI_LIGHT_GROUP_MASK, DDGI_TRACE_WGSL, deferredTraceKernelWgsl, DIRECT
 import { MARK_ENTRY_POINTS, MARK_WORKGROUP_SIZE, markKernelWgsl } from './wgsl/mark.ts';
 import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelWgsl } from './wgsl/propagate.ts';
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
-import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
+import { DDGI_DEBUG_VIEW, DDGI_PROBE_IRRADIANCE_FUNCTION } from './wgsl/shading.ts';
 import { WRITE_ENTRY_POINTS, writeKernelWgsl } from './wgsl/write.ts';
 import { fingerprintDifferences } from '../../platform/scene/scene-fingerprint.ts';
 import {
@@ -827,7 +827,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 kind: 'points',
                 id: DDGI_DEBUG_VIEW.points,
                 label: 'Probes',
-                description: 'Each probe as a dot where it really sits (after relocation), coloured by its state.',
+                description: 'Each probe as a dot where it really sits (after relocation), coloured by its state, or shaded by its own light.',
                 texture: () => {
                     const first = this.firstVolume;
                     if (!first) throw new Error('@pmndrs/gi: the probes debug view exists after prepare');
@@ -836,6 +836,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
                 // Every volume's probes, one volume after another (volumes.ts, probeBase).
                 count: () => this.firstVolume?.volumePlan.probeCount ?? 0,
                 states: PROBE_STATE_LABELS,
+                // Each probe's own light, from its tile alone (wgsl/shading.ts; DV-03, RTXGI's probe view).
+                irradianceFunction: DDGI_PROBE_IRRADIANCE_FUNCTION,
             },
             // Drawn through the shading module's giDebugColor (wgsl/shading.ts).
             {
@@ -2019,9 +2021,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'feedback requests': census[CENSUS_FEEDBACK_FIRED],
             'feedback requests (total)': census[CENSUS_FEEDBACK_FIRED_TOTAL],
             'probes blended (total)': census[CENSUS_PROBES_BLENDED_TOTAL],
+            'updates skipped for back faces (total)': census[CENSUS_BACK_FACE_SKIPS_TOTAL],
             'key probes passing a change': census[CENSUS_KEY_CHANGES_PASSED],
             'key changes passed (total)': census[CENSUS_KEY_CHANGES_PASSED_TOTAL],
-            'updates skipped for back faces (total)': census[CENSUS_BACK_FACE_SKIPS_TOTAL],
             'probes propagated': census[CENSUS_PROBES_PROPAGATED],
             'probes propagated (total)': census[CENSUS_PROBES_PROPAGATED_TOTAL],
             // Each volume has a clock of its own: their sum (one volume's own with one), and each beside it with several.
@@ -2735,9 +2737,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         data[UNIFORM_WORD.fineOwedUpdates] = FINE_PROBE_UPDATES;
         words[UNIFORM_WORD.propagation] = blend.keyProbes ? 1 : 0;
         words[UNIFORM_WORD.holdFineProbes] = blend.holdFineProbes ? 1 : 0;
+        data[UNIFORM_WORD.backFaceRayThreshold] = blend.backFaceRayThreshold;
         // The sun layer's unit (T2.6b): the blend weighs that layer by it in the probe's mean. Read only with a sun layer.
         data.set([...(sun ? sunLightOf(sun) : [0, 0, 0]), 0], UNIFORM_WORD.sunLight);
-        data[UNIFORM_WORD.backFaceRayThreshold] = blend.backFaceRayThreshold;
         data[UNIFORM_WORD.cameraFalloffDistance] = cameraFalloffDistance(grid);
         data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
         frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));
