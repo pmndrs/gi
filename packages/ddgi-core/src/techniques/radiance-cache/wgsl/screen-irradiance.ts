@@ -85,6 +85,7 @@ export const SCREEN_PROBES_CONSTANTS_OFFSETS = {
     viewForward: 0,
     cellSize: 12,
     probeMaskMipCount: 16,
+    interpolationJitter: 20,
 } as const;
 
 /**
@@ -102,6 +103,7 @@ struct RcScreenProbesConstants {
     viewForward: vec3f,         // the camera's forward axis, world space: linear depth is dot(p - eye, viewForward)
     cellSize: f32,              // cell_size: tan(fovY * probe_size * max(1 / h, h / w^2)) (gi1.cpp:1839-1843), per unit distance
     probeMaskMipCount: u32,     // probe_mask_mip_count (gi1.cpp:1846)
+    interpolationJitter: u32,   // 1: the lookup position is jittered (Capsaicin's); 0: not (RadianceCacheSettings.interpolationJitter)
 }
 @group(1) @binding(1) var<uniform> rcScreenProbes: RcScreenProbesConstants;
 `;
@@ -440,7 +442,7 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
     // g_FrameIndex, 1), gi1.comp:1540-1543); ours from the PCG (register D27).
     var random = rcMakeRandom(did.x + did.y * rcFrame.bufferDimensions.x, rcFrame.frameIndex);
     let s = rcRand2(&random);
-    let jitter = vec2i((2.0 * s - 1.0) * f32(RC_PROBE_SPAWN_TILE_SIZE));
+    let jitter = vec2i((2.0 * s - 1.0) * f32(RC_PROBE_SPAWN_TILE_SIZE)) * i32(rcScreenProbes.interpolationJitter);
     let newPos = vec2u(clamp(vec2i(did) + jitter, vec2i(0), vec2i(rcFrame.bufferDimensions) - 1));
     let newWorldPos = rcWorldPositionAt(newPos);
 

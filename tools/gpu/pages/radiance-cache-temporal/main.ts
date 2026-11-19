@@ -52,6 +52,7 @@ import { equirectUvToDirection } from '../../../../packages/ddgi-core/src/platfo
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import {
     calculateHaltonSequence,
+    CpuRandom,
     floatToHalfBits,
     halfBitsToFloat,
     INVALID_ID,
@@ -464,6 +465,7 @@ async function checkOverflow(device: GPUDevice, fail: (message: string) => void)
         });
         let tiles = 0;
         let nearHitDistance = 0;
+        let fills = 0;
         let worstInside = 0;
         let worstOutside = 0;
         let insideCells = 0;
@@ -480,7 +482,9 @@ async function checkOverflow(device: GPUDevice, fail: (message: string) => void)
             for (let cell = 0; cell < PROBE_CELLS; cell++) {
                 const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
                 const radiance = (atlas[texel] + atlas[texel + 1] + atlas[texel + 2]) / 3;
-                if (!(atlas[texel + 3] >= 60000)) nearHitDistance++;
+                // A fill (negative hit distance, D47) has no ray behind it; any other cell missed the floor.
+                if (atlas[texel + 3] < 0) fills++;
+                else if (!(atlas[texel + 3] >= 60000)) nearHitDistance++;
                 if (placeOf[cell] === 'inside') {
                     insideCells++;
                     worstInside = Math.max(worstInside, Math.abs(radiance - CAP_RADIANCE) / CAP_RADIANCE);
@@ -515,6 +519,7 @@ async function checkOverflow(device: GPUDevice, fail: (message: string) => void)
             brightestRayOutside,
             brightestRayOutsideElevation,
             cellsWithANearHitDistance: nearHitDistance,
+            fills,
         };
     } finally {
         run.dispose();
@@ -834,6 +839,222 @@ async function checkCacheAndPatch(device: GPUDevice, fail: (message: string) => 
     }
 }
 
+// ---- 5. A noisy constant sky (register D46) -------------------------------------------------------
+
+/** Section 5: the sky's blocks (texels of the 512 × 256 image a side), and the frames checked. */
+const NOISE_BLOCK = 4;
+const NOISY_FRAMES = 330;
+const NOISY_SETTLE = 30;
+
+/**
+ * A sky of mean `CONSTANT_SKY` made of blocks of random radiance (blocks of
+ * NOISE_BLOCK texels, 2.8 degrees, about 60 to a probe cell): each ray reads
+ * one block, so the cells' rays are noisy with a known mean. `exponential`:
+ * coefficient of variation 1; `sparse`: 5 L in a fifth of the blocks, 0 in the
+ * rest. Returns the texture and the irradiance it gives an upward plane,
+ * summed from the image itself.
+ */
+function noisySky(device: GPUDevice, kind: 'exponential' | 'sparse'): { texture: GPUTexture; irradiance: number } {
+    const { width, height } = SKY_IMAGE;
+    const random = new CpuRandom(kind === 'exponential' ? 7 : 11, 0);
+    const blocks = new Float32Array((width / NOISE_BLOCK) * (height / NOISE_BLOCK));
+    for (let index = 0; index < blocks.length; index++) {
+        const u = random.rand();
+        blocks[index] = CONSTANT_SKY * (kind === 'exponential' ? -Math.log(1 - u) : u < 0.2 ? 5 : 0);
+    }
+    const value = (column: number, row: number): number => blocks[Math.floor(row / NOISE_BLOCK) * (width / NOISE_BLOCK) + Math.floor(column / NOISE_BLOCK)];
+    const texture = device.createTexture({ label: `noisy sky ${kind}`, size: [width, height], format: 'rgba32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const texels = new Float32Array(width * height * 4);
+    let irradiance = 0;
+    for (let row = 0; row < height; row++) {
+        // Memory row 0 is the nadir (the platform's GPU order); the image row is the mirror.
+        const imageRow = height - 1 - row;
+        for (let column = 0; column < width; column++) {
+            const radiance = value(column, row);
+            texels.set([radiance, radiance, radiance, 1], (row * width + column) * 4);
+            const direction = equirectUvToDirection({ u: (column + 0.5) / width, v: (imageRow + 0.5) / height });
+            if (direction[1] <= 0) continue;
+            // An equirect texel's solid angle: (2 pi / width) x (pi / height) x cos(latitude).
+            const solidAngle = ((2 * Math.PI) / width) * (Math.PI / height) * Math.sqrt(1 - direction[1] * direction[1]);
+            irradiance += radiance * direction[1] * solidAngle;
+        }
+    }
+    device.queue.writeTexture({ texture }, texels, { bytesPerRow: width * 16 }, [width, height]);
+    return { texture, irradiance };
+}
+
+async function checkNoisySky(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, unknown>> {
+    const camera: PageCamera = { position: [0, 3, 0], target: [0, 1, -10], fovYDeg: 60, near: 0.1, far: 1000 };
+    const results: Record<string, unknown> = {};
+    for (const kind of ['exponential', 'sparse'] as const) {
+        const sky = noisySky(device, kind);
+        const run = await startRun(device, `noisy sky ${kind}`, { type: 'texture', texture: sky.texture, layout: 'equirect' }, camera, false);
+        try {
+            const settled: number[] = [];
+            let worst = 0;
+            let bad = 0;
+            for (let frame = 1; frame <= NOISY_FRAMES; frame++) {
+                run.frame();
+                if (frame <= NOISY_SETTLE && frame % 8 !== 0) continue;
+                const depth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
+                const ratios = await floorRatios(device, run, (pixel) => depth[pixel] === 1, sky.irradiance);
+                bad += ratios.bad;
+                if (frame > NOISY_SETTLE) {
+                    settled.push(ratios.mean);
+                    worst = Math.max(worst, Math.abs(ratios.mean - 1));
+                }
+            }
+            const mean = settled.reduce((sum, value) => sum + value, 0) / Math.max(settled.length, 1);
+            // The gate (exponential): every frame's mean over the floor within 1% of the sky's irradiance.
+            // Sparse rays are reported: what is left there is ray guiding by the cells' own estimates (NOTES).
+            if (kind === 'exponential' && !(worst <= LAMBERT_TOLERANCE)) fail(`noisy sky (${kind}): a frame's mean E is ${(worst * 100).toFixed(2)}% off the sky's irradiance (mean over frames ${mean.toFixed(4)})`);
+            if (bad > 0) fail(`noisy sky (${kind}): ${bad} pixels not finite or negative`);
+            results[kind] = { expectedE: Number(sky.irradiance.toFixed(4)), meanRatio: Number(mean.toFixed(4)), worstFrameError: Number(worst.toFixed(4)), frames: settled.length };
+        } finally {
+            run.dispose();
+            sky.texture.destroy();
+            await device.queue.onSubmittedWorkDone();
+        }
+    }
+    return results;
+}
+
+// ---- 6. A probe displaced by an occluder is cached and reused -----------------------------------------
+
+/** Section 6: frames of the pole's crossing, and its speed (metres a frame). */
+const OCCLUDER_FRAMES = 60;
+const OCCLUDER_SPEED = 0.06;
+
+/**
+ * A still camera looks at the wall across the floor while a thin pole (0.2 m
+ * wide, 3 m tall) slides sideways in front of the wall. Where its edge sweeps
+ * a probe tile, the wall's probe there is displaced by one on the pole and
+ * goes into the off-screen cache (gi1.comp:762-765, 863-872); where the pole
+ * has passed, the wall shows again and its new probes find the cached tile.
+ * Checks, every frame: each probe evicted this frame was copied into its
+ * cache slot cell for cell (`BlendScreenProbes`' copy, D43's staging), with
+ * last frame's radiance at its tile (a still camera moves no wall probe) and
+ * its count (D46); and over the crossing, probes on uncovered wall tiles
+ * claim a cached tile (the cache's cells reach a new probe).
+ */
+async function checkOccluder(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, unknown>> {
+    const sky = skyTexture(device, varyingSky);
+    const camera: PageCamera = { position: [0, 2, -12], target: [0, 2, -25], fovYDeg: 60, near: 0.1, far: 1000 };
+    const run = await startRun(device, 'occluder', { type: 'texture', texture: sky, layout: 'equirect' }, camera, true);
+    try {
+        const scene = run.platform.scene;
+        const pole = scene.createMesh({
+            ...quadsMesh([
+                { corners: [[-0.1, 0, 0.1], [0.1, 0, 0.1], [0.1, 3, 0.1], [-0.1, 3, 0.1]], normal: [0, 0, 1] },
+                { corners: [[0.1, 0, -0.1], [-0.1, 0, -0.1], [-0.1, 3, -0.1], [0.1, 3, -0.1]], normal: [0, 0, -1] },
+                { corners: [[0.1, 0, 0.1], [0.1, 0, -0.1], [0.1, 3, -0.1], [0.1, 3, 0.1]], normal: [1, 0, 0] },
+                { corners: [[-0.1, 0, -0.1], [-0.1, 0, 0.1], [-0.1, 3, 0.1], [-0.1, 3, -0.1]], normal: [-1, 0, 0] },
+            ]),
+            label: 'pole',
+        });
+        const material = scene.createMaterial({ albedo: [0.8, 0.2, 0.2], label: 'pole' });
+        const at = (x: number): number[] => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, 0, -20, 1];
+        const instance = scene.createInstance({ mesh: pole, materials: [material], transform: at(-1.8), label: 'pole' });
+        run.frame();
+        await run.platform.rays.whenBuilt();
+        for (let frame = 0; frame < 8; frame++) run.frame();
+        await device.queue.onSubmittedWorkDone();
+
+        let evictedChecked = 0;
+        let evictedWrong = 0;
+        let countsWrong = 0;
+        let uncoveredClaims = 0;
+        let uncoveredProbes = 0;
+        const examples: string[] = [];
+        for (let step = 1; step <= OCCLUDER_FRAMES; step++) {
+            const probes = run.technique.probes;
+            if (!probes) throw new Error('no probes after encodeScreen');
+            const { layout, history } = probes;
+            const [atlasWidth, atlasHeight] = layout.atlasSize;
+            const [maskWidth] = layout.probeCount;
+            const beforeAtlas = halvesFast(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
+            const beforeCounts = new Uint32Array(await readBuffer(device, history.cellCounts, atlasWidth * atlasHeight * 4));
+            const beforeDepth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
+
+            scene.setTransform(instance, at(-1.8 + step * OCCLUDER_SPEED));
+            run.frame();
+            await device.queue.onSubmittedWorkDone();
+
+            const depth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
+            const spawnWords = new Uint32Array(await readBuffer(device, probes.probeSpawn, PROBE_SPAWN_SEEDS_OFFSET + layout.maxProbeSpawnCount * 4));
+            const probeCount = spawnWords[0];
+            const spawnProbe = new Uint32Array(await readBuffer(device, history.spawnProbe, Math.max(probeCount, 1) * PROBE_SPAWN_PROBE_BYTES));
+            const staged = halvesFast(new Uint8Array(await readBuffer(device, history.evictedRadiance, Math.max(probeCount, 1) * PROBE_CELLS * 8)));
+            const cachedAtlas = halvesFast(await readTexture(device, history.cachedTileAtlas, 8, atlasWidth, atlasHeight));
+            const cachedCounts = new Uint32Array(await readBuffer(device, history.cachedCellCounts, atlasWidth * atlasHeight * 4));
+            const cachedIndex = new Uint32Array(await readBuffer(device, history.cachedTileIndex, history.probeTileCount * 16));
+            const counters = new Uint32Array(await readBuffer(device, probes.counters, 64));
+            const lruCount = counters[COUNTER.cachedTileLRUCount];
+            const geometry = screenGeometry({ depth, normal: new Float32Array(0), velocity: new Float32Array(0) }, run.camera);
+
+            for (let probe = 0; probe < probeCount; probe++) {
+                const [sx, sy] = unpackSeed(spawnWords[1 + probe]);
+                const tileX = Math.floor(sx / PROBE_SIZE);
+                const tileY = Math.floor(sy / PROBE_SIZE);
+                // A tile the pole covered last frame (its depth was nearer) and the wall shows now.
+                const wasCovered = beforeDepth[sy * WIDTH + sx] < depth[sy * WIDTH + sx] - 1e-4;
+                if (wasCovered) {
+                    uncoveredProbes++;
+                    if (spawnProbe[probe * 4 + 1] !== INVALID_ID) uncoveredClaims++;
+                }
+                const evicted = spawnProbe[probe * 4];
+                if (evicted === INVALID_ID || ((evicted & CACHED_TILE_NEW) === 0 && evicted < lruCount)) continue;
+                // Its slot: the one whose stored position is the evicted probe's (the blend wrote it this frame).
+                const [px, py] = unpackSeed(spawnProbe[probe * 4 + 2]);
+                const position = new Float32Array(geometry.world(px, py));
+                const bits = new Uint32Array(position.buffer);
+                let slot = -1;
+                for (let index = 0; index < history.probeTileCount; index++) {
+                    if (cachedIndex[index * 4] === bits[0] && cachedIndex[index * 4 + 1] === bits[1] && cachedIndex[index * 4 + 2] === bits[2]) {
+                        slot = index;
+                        break;
+                    }
+                }
+                evictedChecked++;
+                if (slot < 0) {
+                    evictedWrong++;
+                    if (examples.length < 3) examples.push(`frame ${step}: probe ${probe}'s evicted slot not found by position`);
+                    continue;
+                }
+                const slotX = (slot % maskWidth) * PROBE_SIZE;
+                const slotY = Math.floor(slot / maskWidth) * PROBE_SIZE;
+                let wrong = false;
+                for (let cell = 0; cell < PROBE_CELLS; cell++) {
+                    const cachedTexel = (slotY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + slotX + (cell % PROBE_SIZE);
+                    const tileTexel = (tileY * PROBE_SIZE + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX * PROBE_SIZE + (cell % PROBE_SIZE);
+                    for (let channel = 0; channel < 4; channel++) {
+                        const cached = cachedAtlas[cachedTexel * 4 + channel];
+                        if (cached !== staged[(probe * PROBE_CELLS + cell) * 4 + channel]) wrong = true;
+                        // A fill (negative hit distance) is made again each frame, not moved (D47).
+                        if (beforeAtlas[tileTexel * 4 + 3] < 0) continue;
+                        const before = beforeAtlas[tileTexel * 4 + channel];
+                        if (Math.abs(cached - before) > 1e-3 * Math.abs(before) + 1e-3) wrong = true;
+                    }
+                    if (cachedCounts[cachedTexel] !== beforeCounts[tileTexel]) countsWrong++;
+                }
+                if (wrong) {
+                    evictedWrong++;
+                    if (examples.length < 3) examples.push(`frame ${step}: probe ${probe} at ${sx},${sy}: cached cells differ from the displaced probe's`);
+                }
+            }
+        }
+        if (evictedChecked === 0) fail('occluder: the pole displaced no probe into the cache');
+        if (evictedWrong > 0) fail(`occluder: ${evictedWrong} of ${evictedChecked} displaced probes cached wrongly (${examples.join('; ')})`);
+        if (countsWrong > 0) fail(`occluder: ${countsWrong} cached cells' counts differ from the displaced probe's`);
+        if (uncoveredClaims === 0) fail(`occluder: none of ${uncoveredProbes} probes on uncovered wall tiles found a cached tile`);
+        return { frames: OCCLUDER_FRAMES, evictedChecked, evictedWrong, countsWrong, uncoveredProbes, uncoveredClaims };
+    } finally {
+        run.dispose();
+        sky.destroy();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
 const startTime = performance.now();
 let deviceErrors: string[] = [];
 try {
@@ -853,6 +1074,8 @@ try {
         ['overflow', checkOverflow],
         ['reprojection', checkReprojection],
         ['cacheAndPatch', checkCacheAndPatch],
+        ['noisySky', checkNoisySky],
+        ['occluder', checkOccluder],
     ];
     for (const [name, section] of sections) {
         if (only && only !== name) continue;

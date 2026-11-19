@@ -13,7 +13,8 @@
  * - **moving:** the camera sliding sideways at 0.5 m/s (60 frames a second)
  *   and turning 3 degrees a second.
  *
- * Each with the screen probes' history on (RC4.1) and off (the history
+ * Each with the interpolation's jitter on (the product) and off (RC4.1 review: the jitter is
+ * meant for the GI denoiser, RC4.3), and with the screen probes' history on (RC4.1) and off (the history
  * dropped before every frame, so each frame runs as the first does; the world
  * cache keeps its cells in both). After `CONVERGE_FRAMES` frames, over
  * `MEASURE_FRAMES` frames, per surface pixel: the relative change of the
@@ -51,6 +52,13 @@ const MEASURE_FRAMES = 40;
 /** The moving camera: metres and degrees per frame (0.5 m/s and 3 degrees/s at 60 frames a second). */
 const SLIDE_PER_FRAME = 0.5 / 60;
 const TURN_PER_FRAME = 3 / 60;
+/** Camera motion and screen-probe history, each measured with the interpolation jitter on and off. */
+const CONFIGURATIONS = [
+    ['still', 'on'],
+    ['still', 'off'],
+    ['moving', 'on'],
+    ['moving', 'off'],
+] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
 
@@ -229,8 +237,9 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
             if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
         }
         const results: Record<string, Measurement> = {};
-        for (const motion of ['still', 'moving'] as const) {
-            for (const history of ['on', 'off'] as const) {
+        for (const jitter of [true, false]) {
+            for (const [motion, history] of CONFIGURATIONS) {
+                technique.settings.interpolationJitter = jitter;
                 technique.resetScreenHistory();
                 let step = 0;
                 const advance = (): void => {
@@ -266,7 +275,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                     leftOut += changes(previous, current, tally).leftOut;
                     previous = current;
                 }
-                results[`${motion}, history ${history}`] = {
+                results[`${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
                     meanChange: Number((tally.sum / Math.max(tally.count, 1)).toFixed(5)),
                     p95Change: Number(tally.percentile(0.95).toFixed(4)),
                     meanE: Number((eSum / Math.max(eCount, 1)).toPrecision(5)),
@@ -276,6 +285,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 };
             }
         }
+        technique.settings.interpolationJitter = true;
         return results;
     } finally {
         screen.dispose();

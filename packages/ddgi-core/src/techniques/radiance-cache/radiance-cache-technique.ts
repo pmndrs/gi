@@ -428,6 +428,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 normal: frame.screen.normal,
             },
             frame.camera,
+            this.settings.interpolationJitter,
         );
     }
 
