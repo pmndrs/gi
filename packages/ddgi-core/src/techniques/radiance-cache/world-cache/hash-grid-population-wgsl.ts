@@ -319,6 +319,14 @@ fn HashGridCache_SetRayListWord(offset: u32, index: u32, value: u32) {
     atomicStore(&g_HashGridCache_RayListWords[offset + index], value);
 }
 
+// A hit with no light to draw (every candidate weighs 0: it faces away from every light, and the
+// sky is black or not a candidate) is a sample of no light for its cell, as PopulateCells counts
+// an occluded shadow ray (register D50). Capsaicin traces no shadow ray for it (gi1.comp:2569-2572,
+// 2661-2664), so nothing counted it, and a cell holding lit and unlit hits averaged the lit ones.
+fn HashGridCache_AddSampleOfNoLight(cell_index: u32) {
+    atomicAdd(&g_HashGridCache_UpdateScratch[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);
+}
+
 // GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:74-81): maps the colour to [0, 1), clamps it and maps
 // it back, so a NaN becomes 0 and anything past about 1e4 is held there. HLSL's saturate turns a
 // NaN into 0; WGSL's clamp leaves that to the implementation, so the NaN test is on the bits.
@@ -564,6 +572,7 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     // Without USE_MULTI_BOUNCE Capsaicin resolves the shadow-ray list (gi1.comp:2363-2368, 2514-2521),
     // so a hit with no light isn't resolved; the resolve list then holds the same entries (register D35).
     if (g_HashGridCacheConstants.use_multibounce == 0u && reservoir.light == GI_DIRECT_NO_LIGHT) {
+        HashGridCache_AddSampleOfNoLight(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did));
         return;
     }
 
@@ -590,6 +599,7 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     }
 
     if (reservoir.light == GI_DIRECT_NO_LIGHT) {
+        HashGridCache_AddSampleOfNoLight(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did));
         return;
     }
 
@@ -1230,6 +1240,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_direct_buffer + ${MULTIBOUNCE_DIRECT_WORDS}u * entry, 1u, 0u);
 
     if (reservoir.light == GI_DIRECT_NO_LIGHT) {
+        HashGridCache_AddSampleOfNoLight(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did));
         return;
     }
 
