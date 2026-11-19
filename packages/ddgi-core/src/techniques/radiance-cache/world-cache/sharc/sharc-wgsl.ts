@@ -625,7 +625,13 @@ fn sharcInsert(key: vec2u) -> i32 {
     }
     for (var i = 0u; i < SHARC_BUCKET; i++) {
         let slot = key.x + i;
-        if (atomicLoad(&g_SharcKeys[slot]) == 0u) {
+        let current = atomicLoad(&g_SharcKeys[slot]);
+        // Another thread may have claimed a slot for this cell since the first scan: use it, or the
+        // cell would get a second slot (the pathtracer's loop skips any taken slot; register E1).
+        if (current == key.y) {
+            return i32(slot);
+        }
+        if (current == 0u) {
             var result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
             if (!result.exchanged && result.old_value == 0u) {
                 result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);

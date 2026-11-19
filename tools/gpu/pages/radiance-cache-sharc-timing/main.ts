@@ -48,12 +48,15 @@ const env = import.meta.env as Record<string, unknown>;
 /** T2.17: scale model textures down to this side at load; undefined keeps them. */
 const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(env.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
 
-const CONFIGURATIONS: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
+const ALL_CONFIGURATIONS: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
     ['gi1-hash-grid', { worldCache: 'gi1-hash-grid' }],
     ['sharc', { worldCache: 'sharc' }],
     ['sharc, one bounce ray', { worldCache: 'sharc', sharc: { bounceRays: 1 } }],
     ['sharc, every probe updating', { worldCache: 'sharc', sharc: { updateFraction: 1 } }],
 ];
+/** `VITE_SHARC_TIMING_CONFIGS`: a semicolon-separated subset of the names above (all by default), to keep a timed session short. */
+const CONFIG_FILTER = typeof env.VITE_SHARC_TIMING_CONFIGS === 'string' ? env.VITE_SHARC_TIMING_CONFIGS.split(';').map((name) => name.trim()) : null;
+const CONFIGURATIONS = CONFIG_FILTER ? ALL_CONFIGURATIONS.filter(([name]) => CONFIG_FILTER.includes(name)) : ALL_CONFIGURATIONS;
 
 /** The world cache's timed passes, by backend (`radiance-cache/<section>`). */
 const CACHE_SECTIONS = new Set([
@@ -225,7 +228,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, warmFrames: WARM_FRAMES, timedFrames: TIMED_FRAMES, maxTextureSize: MAX_TEXTURE_SIZE ?? null, scenes },
+        data: { configurations: CONFIGURATIONS.map(([name]) => name), width: WIDTH, height: HEIGHT, warmFrames: WARM_FRAMES, timedFrames: TIMED_FRAMES, maxTextureSize: MAX_TEXTURE_SIZE ?? null, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
