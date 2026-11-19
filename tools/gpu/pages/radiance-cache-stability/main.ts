@@ -24,11 +24,11 @@
  * frame's E is read at the pixel the velocity points back to; a pixel whose
  * previous pixel shows another surface (a disocclusion) is left out.
  *
- * P6.3: with `VITE_RC_SECOND_BOUNCE=ddgi-volume` a DDGI volume (the manifest's)
+ * P6.3: with `VITE_RC_SECOND_BOUNCE=fallback` a DDGI volume (the manifest's)
  * is stacked under the radiance cache and supplies its second bounce
  * (experiment E10), DDGI updating 2,048 probes a frame; otherwise GI-1.2's
  * second-bounce rays, with no DDGI. `VITE_RC_INDIRECT_CAP` sets
- * `hashGridCacheMaxMultibounceSampleCount` (default 16).
+ * the fallback's `fallbackIndirectSampleCount` (default 4).
  *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
@@ -75,9 +75,9 @@ const WORLD_CACHE: WorldCacheKind = document.documentElement.dataset.worldCache 
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
 /** P6.3: the world cache's second bounce in this run (experiment E10), from the environment. */
-const SECOND_BOUNCE = (import.meta.env as Record<string, unknown>).VITE_RC_SECOND_BOUNCE === 'ddgi-volume' ? 'ddgi-volume' : 'gi1-rays';
+const SECOND_BOUNCE = (import.meta.env as Record<string, unknown>).VITE_RC_SECOND_BOUNCE === 'fallback' ? 'fallback' : 'gi1-rays';
 /** The cells' indirect sample cap in this run (Capsaicin's 16 unless the environment says). */
-const INDIRECT_CAP = Number((import.meta.env as Record<string, unknown>).VITE_RC_INDIRECT_CAP ?? 16);
+const INDIRECT_CAP = Number((import.meta.env as Record<string, unknown>).VITE_RC_INDIRECT_CAP ?? 4);
 /** DDGI's probes a frame when it supplies the second bounce. */
 const DDGI_UNITS = 2048;
 
@@ -219,9 +219,9 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, hashGridCacheMaxMultibounceSampleCount: INDIRECT_CAP }));
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, fallbackIndirectSampleCount: INDIRECT_CAP }));
     platform.setOutput(technique);
-    if (SECOND_BOUNCE === 'ddgi-volume') {
+    if (SECOND_BOUNCE === 'fallback') {
         const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
         platform.setFallback(technique, ddgi);
     }
@@ -234,7 +234,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const frame = (): void => {
         beforeFrame();
         const encoder = device.createCommandEncoder({ label: `radiance-cache-stability ${id}` });
-        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: SECOND_BOUNCE === 'ddgi-volume' ? DDGI_UNITS : 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: SECOND_BOUNCE === 'fallback' ? DDGI_UNITS : 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
         platform.encode(encoder, input);
         screen.encode(encoder, camera);
         platform.encodeScreen(encoder, screen.screen);

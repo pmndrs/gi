@@ -2,10 +2,10 @@
  * P6.3, experiment E10: the GPU time of the radiance cache's world cache per
  * frame with GI-1.2's second-bounce rays (`secondBounce: 'gi1-rays'`) against
  * the second bounce read from a DDGI volume stacked under it
- * (`'ddgi-volume'`), on Sponza (with curtains) and Bistro exterior at
+ * (`'fallback'`), on Sponza (with curtains) and Bistro exterior at
  * 1280 × 720 from each scene's first bookmark, the camera still. DDGI is
  * stacked under the cache on the manifest's volume in every setting; with
- * 'gi1-rays' it updates no probe (nothing reads it), with 'ddgi-volume' it
+ * 'gi1-rays' it updates no probe (nothing reads it), with 'fallback' it
  * updates 2,048, 512 or 256 probes a frame, its own cost listed separately
  * (the second bounce's cost moves from the world cache to DDGI). A
  * measurement (DECISIONS 2026-11-06/09: no timing gates); the page fails only
@@ -49,9 +49,9 @@ const TIMED_FRAMES = 60;
 /** Each setting: the estimator, and DDGI's probes updated a frame (its `maxProbesPerFrame` default is 4,096). */
 const SETTINGS: readonly { readonly secondBounce: RadianceCacheSettings['secondBounce']; readonly ddgiUnits: number }[] = [
     { secondBounce: 'gi1-rays', ddgiUnits: 0 },
-    { secondBounce: 'ddgi-volume', ddgiUnits: 2048 },
-    { secondBounce: 'ddgi-volume', ddgiUnits: 512 },
-    { secondBounce: 'ddgi-volume', ddgiUnits: 256 },
+    { secondBounce: 'fallback', ddgiUnits: 2048 },
+    { secondBounce: 'fallback', ddgiUnits: 512 },
+    { secondBounce: 'fallback', ddgiUnits: 256 },
 ];
 /** DDGI's probes a frame while warming up: its field filled before anything is timed. */
 const WARM_UNITS = 2048;
@@ -179,7 +179,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
             const worldCacheMs = WORLD_CACHE_SECTIONS.reduce((sum, section) => sum + mean(`radiance-cache/${section}`), 0);
             const radianceCacheMs = prefixed('radiance-cache/').reduce((sum, name) => sum + mean(name), 0);
             const ddgiPasses = prefixed('ddgi/');
-            results[setting.secondBounce === 'gi1-rays' ? 'gi1-rays' : `ddgi-volume, ${setting.ddgiUnits} probes`] = {
+            results[setting.secondBounce === 'gi1-rays' ? 'gi1-rays' : `fallback, ${setting.ddgiUnits} probes`] = {
                 worldCacheMs: round(worldCacheMs),
                 probeTraceMs: round(mean('radiance-cache/sample-populate')),
                 radianceCacheMs: round(radianceCacheMs),

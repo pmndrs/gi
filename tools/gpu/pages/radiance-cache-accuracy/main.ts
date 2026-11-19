@@ -46,17 +46,20 @@
  * them say what each part contributes.
  *
  * **Experiment E10 settings** (P6.3, picked by name only: not in the default
- * list): `ddgi <units>` and `ddgi cap4 <units>` stack a DDGI volume (the
- * manifest's) under the radiance cache and read the second bounce from it
- * (`secondBounce: 'ddgi-volume'`, the cells' indirect cap 16 or 4, DDGI
- * updating 256 or 512 probes a frame); `ddgi cap4 512 no env` sets DDGI's
- * environment layer (the sky and emissive surfaces, and their bounces) to 0,
- * so its difference from `ddgi cap4 512` is the light the cache's own lights
- * lack (registers D21, D33). DDGI is attached only when one of these is
- * picked; it runs at 0 probes a frame in the other settings (its field stays
- * as it was) and keeps its field across settings and views (it is warm, as
- * in an application, rather than restarted per setting). `ddgi cap4 512 history
- * off` drops the screen probes' history as `history off` does.
+ * list): `fallback <units>` stacks a DDGI volume (the manifest's) under the
+ * radiance cache and reads the second bounce from it (`secondBounce:
+ * 'fallback'`, the cells' indirect cap 4), DDGI updating 256 or 512 probes a
+ * frame; `fallback cap16 <units>` the same at Capsaicin's cap of 16;
+ * `fallback 512 no env` sets DDGI's environment layer (the sky and emissive
+ * surfaces, and their bounces) to 0, so its difference from `fallback 512` is
+ * the light the cache's own lights lack (registers D21, D33); `fallback 512
+ * history off` drops the screen probes' history as `history off` does. DDGI
+ * is attached when one of these is picked, stacked under the cache only for
+ * them (the other settings run with nothing stacked, so `default`, whose
+ * `secondBounce` is `'auto'`, traces rays as it does for a host without
+ * DDGI), and its field is reset before each of them (its warm-up then runs
+ * again), so no setting starts from another's field. `gi1-rays` names
+ * GI-1.2's rays explicitly (the faithful baseline), whatever is stacked.
  *
  * **Picking scenes, settings and frame counts** (vite env, as other pages):
  * `VITE_RC_ACCURACY_SCENES=two-room,sponza`, `VITE_RC_ACCURACY_CONFIGS=default,history off`,
@@ -121,28 +124,24 @@ interface Configuration {
 
 const ALL_CONFIGURATIONS: readonly Configuration[] = [
     { name: 'default', settings: {}, history: true },
+    // GI-1.2's second-bounce rays by name: the faithful baseline, whatever 'auto' picks.
+    { name: 'gi1-rays', settings: { secondBounce: 'gi1-rays' }, history: true },
     { name: 'history off', settings: {}, history: false },
     { name: 'multibounce off', settings: { useMultibounce: false }, history: true },
     { name: 'cells 16 px', settings: { hashGridCacheCellSize: 16 }, history: true },
 ];
 /** Experiment E10 (P6.3): the second bounce from a DDGI volume; run only when named. */
 const E10_CONFIGURATIONS: readonly Configuration[] = [
-    ...[256, 512].map((units) => ({ name: `ddgi ${units}`, settings: { secondBounce: 'ddgi-volume' as const }, history: true, ddgiUnits: units })),
+    ...[256, 512].map((units) => ({ name: `fallback ${units}`, settings: { secondBounce: 'fallback' as const }, history: true, ddgiUnits: units })),
     ...[256, 512].map((units) => ({
-        name: `ddgi cap4 ${units}`,
-        settings: { secondBounce: 'ddgi-volume' as const, hashGridCacheMaxMultibounceSampleCount: 4 },
+        name: `fallback cap16 ${units}`,
+        settings: { secondBounce: 'fallback' as const, fallbackIndirectSampleCount: 16 },
         history: true,
         ddgiUnits: units,
     })),
-    {
-        name: 'ddgi cap4 512 no env',
-        settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 },
-        history: true,
-        ddgiUnits: 512,
-        ddgiEnvironment: false,
-    },
+    { name: 'fallback 512 no env', settings: { secondBounce: 'fallback' }, history: true, ddgiUnits: 512, ddgiEnvironment: false },
     // With the screen probes' history off, which RC4.4 found too bright on Sponza.
-    { name: 'ddgi cap4 512 history off', settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 }, history: false, ddgiUnits: 512 },
+    { name: 'fallback 512 history off', settings: { secondBounce: 'fallback' }, history: false, ddgiUnits: 512 },
 ];
 const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
 /**
@@ -326,6 +325,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
               }),
           )
         : null;
+    // Stacked for prepare, so the cache builds its pass for DDGI's module then; each setting stacks or unstacks it.
     if (ddgiTechnique) platform.setFallback(technique, ddgiTechnique);
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
@@ -388,6 +388,12 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
             for (const configuration of CONFIGURATIONS) {
                 Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, { worldCache: WORLD_CACHE }, configuration.settings);
                 threeGI.budget = { units: configuration.ddgiUnits ?? 0 };
+                if (ddgiTechnique) {
+                    // DDGI under the cache only for E10's settings, from a fresh field each time.
+                    const stacked = configuration.ddgiUnits !== undefined;
+                    platform.setFallback(technique, stacked ? ddgiTechnique : undefined);
+                    if (stacked) ddgiTechnique.resetHistory();
+                }
                 const environmentWeight = configuration.ddgiEnvironment === false ? 0 : 1;
                 ddgiTechnique?.setEnvironmentWeight([environmentWeight, environmentWeight, environmentWeight]);
                 // An emptied world cache and probe history: each setting starts as a camera cut does.
@@ -401,7 +407,8 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
                     if (frame % 4 === 3) await device.queue.onSubmittedWorkDone();
                 }
                 const asked = configuration.settings.useMultibounce === false ? null : (configuration.settings.secondBounce ?? 'gi1-rays');
-                assert(technique.worldCache?.secondBounceInUse === asked, `${sceneId}/${view.camera}, ${configuration.name}: the cache ran ${technique.worldCache?.secondBounceInUse}, not ${asked}`);
+                // The estimator is the hash grid's (SHaRC's cache has its own bounces).
+                if (WORLD_CACHE === 'gi1-hash-grid') assert(technique.worldCache?.secondBounceInUse === asked, `${sceneId}/${view.camera}, ${configuration.name}: the cache ran ${technique.worldCache?.secondBounceInUse}, not ${asked}`);
                 accumulator.clear();
                 for (let frame = 0; frame < MEASURE_FRAMES; frame++) {
                     step();

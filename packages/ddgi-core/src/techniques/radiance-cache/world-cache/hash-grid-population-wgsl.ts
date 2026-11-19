@@ -208,9 +208,13 @@ export interface HashGridCacheRayListLayout {
  * entry (at most one per first-bounce entry, so `max_ray_count`) its BRDF and
  * pdf (`MultibounceInfoBuffer`) and its ray (ours, register D36).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number): HashGridCacheRayListLayout {
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true): HashGridCacheRayListLayout {
     // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
-    const maxCombinedRayCount = 2 * maxRayCount;
+    // Without second-bounce rays (multibounce off, or the second bounce from a fallback, register
+    // E10) the lists hold the first bounce only and the second-bounce lists are empty: 9 words a
+    // probe ray instead of 32. The offsets are uniforms, so the lists are made again on a switch.
+    const secondBounceCount = secondBounceRays ? maxRayCount : 0;
+    const maxCombinedRayCount = maxRayCount + secondBounceCount;
     const updateTileBuffer = 0;
     const visibilityCellBuffer = updateTileBuffer + Math.min(maxCombinedRayCount, numCells);
     const visibilityQueryBuffer = visibilityCellBuffer + maxCombinedRayCount;
@@ -218,10 +222,10 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const resolveBuffer = visibilityRayBuffer + maxCombinedRayCount;
     const reservoirBuffer = resolveBuffer + maxRayCount;
     const multibounceInfoBuffer = reservoirBuffer + RESERVOIR_WORDS * maxCombinedRayCount;
-    const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount;
-    const firstBounceBypassBuffer = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount;
+    const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * secondBounceCount;
+    const firstBounceBypassBuffer = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * secondBounceCount;
     const multibounceDirectBuffer = firstBounceBypassBuffer + maxRayCount;
-    const words = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
+    const words = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * secondBounceCount;
     return {
         maxRayCount,
         maxCombinedRayCount,

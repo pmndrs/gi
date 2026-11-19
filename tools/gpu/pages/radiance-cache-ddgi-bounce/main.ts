@@ -1,8 +1,9 @@
 /**
  * P6.3, experiment E10: the world cache's second bounce read from a DDGI
- * volume stacked under the radiance cache (`secondBounce: 'ddgi-volume'`,
+ * volume stacked under the radiance cache (`secondBounce: 'fallback'`, what
+ * the default `'auto'` picks when a world-space fallback is stacked;
  * `gi.setFallback(radianceCache, ddgi)`), against GI-1.2's second-bounce rays
- * (`'gi1-rays'`, the default). Correctness checks with expected values
+ * (`'gi1-rays'`, the faithful baseline). Correctness checks with expected values
  * written before the run, and the lag after a light change as a measurement.
  *
  * **The furnace** (radiance-cache-world-cache's sections 8-13): a floor
@@ -20,11 +21,11 @@
  * Expected, before the run (L_f1 = ρ E / π = 0.6366, the floor's direct light):
  *
  * 1. **gi1-rays:** the second bounce ρ L_f1 = ρ² E / π = 0.3183 (RC3.5).
- * 2. **ddgi-volume, DDGI with no bounce of its own** (`bounceEnergy` 0): DDGI's
+ * 2. **fallback, DDGI with no bounce of its own** (`bounceEnergy` 0): DDGI's
  *    field is then the floor's direct light only, E = π L_f1 under the ceiling,
  *    so albedo / π × E is the same second bounce, 0.3183: the lookup itself is
  *    right (position, normal side, albedo / π).
- * 3. **ddgi-volume, DDGI as it ships** (`bounceEnergy` 1): DDGI's field holds
+ * 3. **fallback, DDGI as it ships** (`bounceEnergy` 1): DDGI's field holds
  *    every bounce, so the floor's light is L_f = L_f1 / (1 − ρ²) = 0.8488 and
  *    a ceiling cell's indirect value is every later bounce, ρ L_f = 0.4244 (the
  *    analytic every-bounce value). GI-1.2's estimate stops at the second.
@@ -36,7 +37,7 @@
  *
  * 4-6. **Strips** (the furnace's floor as strips 5 cm wide every 10 cm, so
  *    half the rays from the ceiling miss into the black below): gi1-rays and
- *    ddgi-volume without DDGI's bounce read the second bounce ρ L_f1 × 1/2 =
+ *    fallback without DDGI's bounce read the second bounce ρ L_f1 × 1/2 =
  *    0.1592; with DDGI's bounce, every bounce: the strips' light is
  *    L_f1 / (1 − ρ² / 2) = 0.7276 and the ceiling's ρ / 2 × that = 0.1819.
  *    Same tolerances.
@@ -46,9 +47,17 @@
  *    cell reads no cell, so with DDGI's bounce off it reads 0.3183 only through
  *    the bypass routing (the value added to its own probe ray). Within 3%.
  *
- * 7. **What runs:** with 'ddgi-volume' the frame has no second-bounce entry
- *    and no second-bounce shadow ray, and the cache reports 'ddgi-volume' in
- *    use; asked for 'ddgi-volume' with nothing stacked under it, the cache
+ * 6c. **Hits outside the field** (DDGI bounce off, its volume covering only
+ *    x < 0): rays whose hit is at x < −2 m read the second bounce (within
+ *    3%), rays whose hit is at x > +2 m, past the volume's fade, read under 2%
+ *    of it: the fallback's coverage weighs its value, which outside every
+ *    volume is the nearest volume's edge value, not 0.
+ *
+ * 7. **What runs:** with 'fallback' the frame has no second-bounce entry
+ *    and no second-bounce shadow ray, and the cache reports 'fallback' in
+ *    use, and 'auto' picks it; with nothing stacked, 'auto' traces rays
+ *    without a warning, 'fallback' with multibounce off says nothing, and
+ *    asked for 'fallback' with nothing stacked under it, the cache
  *    warns and traces GI-1.2's rays.
  *
  * 8. **Lag after a light change** (a measurement; DDGI at its defaults: the
@@ -59,14 +68,21 @@
  *    value of the live finest cells. Everything is linear in the one light, so
  *    the settled value after the change is twice the one before (the mean of
  *    the last 10 frames before it); the count is the first frame within 5% of
- *    that. Each scene with gi1-rays and with ddgi-volume, and ddgi-volume with
- *    the cells' indirect cap at 4 samples instead of 16
- *    (`hashGridCacheMaxMultibounceSampleCount`): DDGI's value carries no ray
- *    noise, so a shorter running mean may do; and that with DDGI updating
+ *    that. Each scene with gi1-rays, with the fallback at an indirect cap of
+ *    16 (Capsaicin's) and of 4 (`fallbackIndirectSampleCount`, the mode's
+ *    default: DDGI's value carries no ray noise), and that with DDGI updating
  *    256 probes a frame instead of every probe.
  *
  * `VITE_E10_SECTIONS=accuracy` runs sections 1-7 only and `lag` section 8
  * only (for mutation runs); unset, all of them.
+ *
+ * 9. **Sponza's sun doubled** (a measurement; through the viewer's loader,
+ *    the bookmark camera, DDGI on the manifest's volume, 19k probes, updating
+ *    256 a frame): the mean of every probe ray that hits, each frame after
+ *    the change, against its settled value (the mean of frames 280-300 after
+ *    it; the sky and the point light don't double, so twice the old value is
+ *    not the target): frames until within 5% of the settled value, and until
+ *    95% of the step; GI-1.2's rays against the fallback (cap 4).
  *
  * Correctness only, no timing (radiance-cache-ddgi-bounce-cost times it).
  * Through the lock:
@@ -86,6 +102,9 @@ import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/t
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
+import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
@@ -133,7 +152,10 @@ const SECTIONS = String((import.meta.env as Record<string, unknown>).VITE_E10_SE
 
 const FURNACE_SUN: LightDescriptor = { type: 'directional', direction: [0, -1, 0], color: [1, 1, 1], intensity: FURNACE.sunIntensity, castsShadows: false, label: 'furnace sun' };
 
-type Mode = 'gi1-rays' | 'ddgi-volume';
+type Mode = 'gi1-rays' | 'fallback';
+
+/** Section 6c's volume: the furnace's, cut at x = 0. */
+const HALF_VOLUME = { center: [-6, 1.5, -4] as Vec3, size: [12, 2, 24] as Vec3, spacing: 1 };
 
 interface Scenario {
     readonly platform: GIPlatformImpl;
@@ -153,6 +175,8 @@ interface ScenarioOptions {
     readonly ddgi: Partial<Omit<DDGISettings, 'volume' | 'volumes'>> | null;
     /** DDGI's probes a frame (default `DDGI_UNITS`). */
     readonly ddgiUnits?: number;
+    /** The furnace's DDGI volume, when not `FURNACE_VOLUME`. */
+    readonly volume?: { readonly center: Vec3; readonly size: Vec3; readonly spacing: number };
 }
 
 // ---- The scenes ---------------------------------------------------------------------------------
@@ -205,7 +229,7 @@ async function startScenario(device: GPUDevice, name: string, options: ScenarioO
     const technique = platform.addTechnique(new RadianceCacheTechnique(options.settings));
     platform.setOutput(technique);
     let camera: PageCamera = FURNACE.camera;
-    let volume = { center: FURNACE_VOLUME.center, size: FURNACE_VOLUME.size, spacing: FURNACE_VOLUME.spacing };
+    let volume = options.volume ?? { center: FURNACE_VOLUME.center, size: FURNACE_VOLUME.size, spacing: FURNACE_VOLUME.spacing };
     const manifest = options.scene.kind === 'manifest' ? loadManifest(options.scene.id) : null;
     if (manifest) {
         const bookmark = manifest.cameras[0];
@@ -286,7 +310,7 @@ interface RayReading {
     readonly bad: number;
 }
 
-async function readRays(device: GPUDevice, scenario: Scenario, furnace: boolean): Promise<RayReading> {
+async function readRays(device: GPUDevice, scenario: Scenario, furnace: boolean, keepHit: (hit: Vec3) => boolean = () => true): Promise<RayReading> {
     const probes = scenario.technique.probes;
     if (!probes) throw new Error('no probes after encodeScreen');
     const rayCount = new Uint32Array(await readRange(device, probes.probeRays, 0, 4))[0];
@@ -319,6 +343,7 @@ async function readRays(device: GPUDevice, scenario: Scenario, furnace: boolean)
         const onCeiling = Math.abs(hit[1] - FURNACE.ceilingY) < 1e-3;
         if (furnace && !onCeiling) continue;
         if (Math.hypot(hit[0] - eye[0], hit[2] - eye[2]) > NEAR_HIT_METRES) continue;
+        if (!keepHit(hit)) continue;
         nearSum += value;
         nearRays++;
     }
@@ -368,7 +393,7 @@ interface AccuracyCase {
     readonly name: string;
     readonly strips: boolean;
     readonly mode: Mode;
-    /** DDGI's bounceEnergy (ddgi-volume only). */
+    /** DDGI's bounceEnergy (fallback only). */
     readonly ddgiBounce: number;
     readonly expected: number;
     readonly tolerance: number;
@@ -378,24 +403,50 @@ interface AccuracyCase {
 
 const ACCURACY_CASES: readonly AccuracyCase[] = [
     { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02 },
-    { name: '2 furnace, ddgi-volume, DDGI bounce off (second bounce)', strips: false, mode: 'ddgi-volume', ddgiBounce: 0, expected: EXPECTED.secondBounce, tolerance: 0.03 },
-    { name: '3 furnace, ddgi-volume, DDGI bounce on (every bounce)', strips: false, mode: 'ddgi-volume', ddgiBounce: 1, expected: EXPECTED.everyBounce, tolerance: 0.03 },
+    { name: '2 furnace, fallback, DDGI bounce off (second bounce)', strips: false, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.secondBounce, tolerance: 0.03 },
+    { name: '3 furnace, fallback, DDGI bounce on (every bounce)', strips: false, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.everyBounce, tolerance: 0.03 },
     { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: 0.02 },
-    { name: '5 strips, ddgi-volume, DDGI bounce off (second bounce)', strips: true, mode: 'ddgi-volume', ddgiBounce: 0, expected: EXPECTED.stripsSecondBounce, tolerance: 0.03 },
-    { name: '6 strips, ddgi-volume, DDGI bounce on (every bounce)', strips: true, mode: 'ddgi-volume', ddgiBounce: 1, expected: EXPECTED.stripsEveryBounce, tolerance: 0.03 },
+    { name: '5 strips, fallback, DDGI bounce off (second bounce)', strips: true, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.stripsSecondBounce, tolerance: 0.03 },
+    { name: '6 strips, fallback, DDGI bounce on (every bounce)', strips: true, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.stripsEveryBounce, tolerance: 0.03 },
     // Cells of 900 pixels (3.7 m a metre away, wider than the 3 m gap): nearly every probe ray is
     // shorter than its cell, reads no cell, and gets its indirect light only through the bypass
     // routing (register D38), so a ray reading 0 there would pull the mean down.
     {
-        name: '6b furnace, every ray bypasses, ddgi-volume, DDGI bounce off (second bounce)',
+        name: '6b furnace, every ray bypasses, fallback, DDGI bounce off (second bounce)',
         strips: false,
-        mode: 'ddgi-volume',
+        mode: 'fallback',
         ddgiBounce: 0,
         expected: EXPECTED.secondBounce,
         tolerance: 0.03,
         extra: { hashGridCacheCellSize: 900 },
     },
 ];
+
+/** Section 6c: the second bounce inside the half volume (x < −2 m), nothing past its fade (x > +2 m). */
+async function runCoverage(device: GPUDevice, failures: string[]): Promise<Record<string, unknown>> {
+    const name = '6c furnace, half the field, fallback, DDGI bounce off';
+    const scenario = await startScenario(device, name, {
+        scene: { kind: 'furnace', strips: false },
+        settings: { secondBounce: 'fallback' },
+        ddgi: { ...DDGI_ACCURACY, bounceEnergy: 0 },
+        volume: HALF_VOLUME,
+    });
+    try {
+        await runFrames(device, scenario, ACCURACY_FRAMES);
+        const inside = await readRays(device, scenario, true, (hit) => hit[0] < -2);
+        const outside = await readRays(device, scenario, true, (hit) => hit[0] > 2);
+        const insideRatio = inside.nearMean / EXPECTED.secondBounce;
+        const outsideRatio = outside.nearMean / EXPECTED.secondBounce;
+        if (inside.nearRays < 1000 || outside.nearRays < 1000) failures.push(`${name}: too few rays (${inside.nearRays} inside, ${outside.nearRays} outside)`);
+        if (Math.abs(insideRatio - 1) > 0.03) failures.push(`${name}: inside the field the rays read ${insideRatio.toFixed(4)} of the second bounce`);
+        if (outsideRatio > 0.02) failures.push(`${name}: outside the field the rays read ${outsideRatio.toFixed(4)} of the second bounce, not about 0 (coverage not applied)`);
+        if (scenario.cache.secondBounceInUse !== 'fallback') failures.push(`${name}: the cache ran ${scenario.cache.secondBounceInUse}`);
+        return { insideRatio: round(insideRatio), insideRays: inside.nearRays, outsideRatio: round(outsideRatio), outsideRays: outside.nearRays };
+    } finally {
+        scenario.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
 
 async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: string[]): Promise<Record<string, unknown>> {
     const scenario = await startScenario(device, testCase.name, {
@@ -417,7 +468,7 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
         if (rays.bad > 0) failures.push(`${testCase.name}: ${rays.bad} rays NaN, infinite or negative`);
         if (scenario.cache.secondBounceInUse !== testCase.mode) failures.push(`${testCase.name}: the cache ran ${scenario.cache.secondBounceInUse}, not ${testCase.mode}`);
         const secondBounceEntries = counters[HASH_GRID_COUNTER.visibilityCount1];
-        if (testCase.mode === 'ddgi-volume' && secondBounceEntries !== 0) failures.push(`${testCase.name}: ${secondBounceEntries} second-bounce entries; 'ddgi-volume' traces none`);
+        if (testCase.mode === 'fallback' && secondBounceEntries !== 0) failures.push(`${testCase.name}: ${secondBounceEntries} second-bounce entries; 'fallback' traces none`);
         if (testCase.mode === 'gi1-rays' && secondBounceEntries === 0) failures.push(`${testCase.name}: no second-bounce entries with 'gi1-rays'`);
         return {
             expected: round(testCase.expected),
@@ -445,20 +496,37 @@ async function runNoFallback(device: GPUDevice, failures: string[]): Promise<Rec
         warnings.push(args.map(String).join(' '));
         consoleWarn(...args);
     };
-    const scenario = await startScenario(device, '7 no fallback', { scene: { kind: 'furnace', strips: false }, settings: { secondBounce: 'ddgi-volume' }, ddgi: null });
+    const results: Record<string, unknown> = {};
+    // Each case: what it asks, what is stacked, what must run, and whether a warning is due.
+    const cases = [
+        { name: "'fallback', nothing stacked", settings: { secondBounce: 'fallback' }, ddgi: null, runs: 'gi1-rays', warns: true },
+        { name: "'auto', nothing stacked", settings: { secondBounce: 'auto' }, ddgi: null, runs: 'gi1-rays', warns: false },
+        { name: "'auto', DDGI stacked", settings: { secondBounce: 'auto' }, ddgi: {}, runs: 'fallback', warns: false },
+        { name: "'fallback', multibounce off", settings: { secondBounce: 'fallback', useMultibounce: false }, ddgi: null, runs: null, warns: false },
+    ] as const;
     try {
-        await runFrames(device, scenario, 4);
-        const counters = await readCounters(device, scenario.cache);
-        const warned = warnings.some((message) => message.includes("'ddgi-volume' needs a technique stacked under it"));
-        if (scenario.cache.secondBounceInUse !== 'gi1-rays') failures.push(`7: with nothing stacked the cache ran ${scenario.cache.secondBounceInUse}, not gi1-rays`);
-        if (counters[HASH_GRID_COUNTER.visibilityCount1] === 0) failures.push('7: with nothing stacked no second-bounce ray was traced');
-        if (!warned) failures.push('7: no warning that ddgi-volume needs a stacked technique');
-        return { inUse: scenario.cache.secondBounceInUse, secondBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount1], warned };
+        for (const testCase of cases) {
+            warnings.length = 0;
+            const scenario = await startScenario(device, `7 ${testCase.name}`, { scene: { kind: 'furnace', strips: false }, settings: testCase.settings, ddgi: testCase.ddgi });
+            try {
+                await runFrames(device, scenario, 4);
+                const counters = await readCounters(device, scenario.cache);
+                const warned = warnings.some((message) => message.includes('secondBounce'));
+                const inUse = scenario.cache.secondBounceInUse;
+                if (inUse !== testCase.runs) failures.push(`7 ${testCase.name}: the cache ran ${inUse}, not ${testCase.runs}`);
+                if (warned !== testCase.warns) failures.push(`7 ${testCase.name}: ${warned ? 'a warning, none due' : 'no warning that the fallback is missing'}`);
+                if (testCase.runs === 'gi1-rays' && counters[HASH_GRID_COUNTER.visibilityCount1] === 0) failures.push(`7 ${testCase.name}: no second-bounce ray was traced`);
+                if (testCase.runs !== 'gi1-rays' && counters[HASH_GRID_COUNTER.visibilityCount1] !== 0) failures.push(`7 ${testCase.name}: second-bounce rays traced`);
+                results[testCase.name] = { inUse, secondBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount1], warned, listBytes: scenario.cache.rayLists?.buffer.size ?? 0 };
+            } finally {
+                scenario.dispose();
+                await device.queue.onSubmittedWorkDone();
+            }
+        }
     } finally {
         console.warn = consoleWarn;
-        scenario.dispose();
-        await device.queue.onSubmittedWorkDone();
     }
+    return results;
 }
 
 // ---- Section 8: lag after a light change ---------------------------------------------------------
@@ -476,9 +544,9 @@ const LAG_SCENES: readonly { readonly label: string; readonly scene: ScenarioOpt
 ];
 const LAG_SETTINGS: readonly { readonly label: string; readonly settings: Partial<RadianceCacheSettings>; readonly ddgiUnits?: number }[] = [
     { label: 'gi1-rays', settings: { secondBounce: 'gi1-rays' } },
-    { label: 'ddgi-volume', settings: { secondBounce: 'ddgi-volume' } },
-    { label: 'ddgi-volume, indirect cap 4', settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 } },
-    { label: 'ddgi-volume, indirect cap 4, DDGI 256 probes a frame', settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 }, ddgiUnits: 256 },
+    { label: 'fallback, indirect cap 16', settings: { secondBounce: 'fallback', fallbackIndirectSampleCount: 16 } },
+    { label: 'fallback (indirect cap 4)', settings: { secondBounce: 'fallback' } },
+    { label: 'fallback (indirect cap 4), DDGI 256 probes a frame', settings: { secondBounce: 'fallback' }, ddgiUnits: 256 },
 ];
 
 function framesToSettle(series: readonly number[], target: number): number | null {
@@ -531,6 +599,91 @@ async function runLag(device: GPUDevice, lagCase: LagCase, failures: string[]): 
     }
 }
 
+// ---- Section 9: Sponza's sun doubled ---------------------------------------------------------------
+
+const SPONZA_SETTLED_FRAMES = 300;
+const SPONZA_DDGI_UNITS = 256;
+
+async function runSponzaLag(device: GPUDevice, label: string, settings: Partial<RadianceCacheSettings>, failures: string[]): Promise<Record<string, unknown>> {
+    const manifest = loadManifest('sponza');
+    const bookmark = manifest.cameras[0];
+    const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
+    const platform = new GIPlatformImpl(device, { label: `radiance-cache-ddgi-bounce sponza ${label}` });
+    const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
+    platform.setOutput(technique);
+    const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
+    platform.setFallback(technique, ddgi);
+    await platform.prepare();
+    const loaded = await loadScene(manifest, () => {});
+    const content = new Set<object>();
+    loaded.content.traverse((object) => content.add(object));
+    loaded.scene.traverse((object) => {
+        if ((object as { isMesh?: boolean }).isMesh && !content.has(object)) object.userData.giContributes = false;
+    });
+    loaded.scene.updateMatrixWorld();
+    const sync = new SceneSync(platform.scene, { device, warn: () => {} });
+    sync.environment = platformSkyEnvironment(manifest);
+    const suns: { intensity: number }[] = [];
+    loaded.scene.traverse((object) => {
+        if ((object as { isDirectionalLight?: boolean }).isDirectionalLight) suns.push(object as unknown as { intensity: number });
+    });
+    const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    const frame = (): void => {
+        sync.update(loaded.scene);
+        const encoder = device.createCommandEncoder({ label: `radiance-cache-ddgi-bounce sponza ${label}` });
+        platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: SPONZA_DDGI_UNITS }, camera: frameCamera(camera, WIDTH, HEIGHT) });
+        screen.encode(encoder, camera);
+        platform.encodeScreen(encoder, screen.screen);
+        device.queue.submit([encoder.finish()]);
+    };
+    const scenario = { technique, camera } as unknown as Scenario;
+    try {
+        if (suns.length !== 1) throw new Error(`sponza: expected one sun, found ${suns.length}`);
+        frame();
+        await platform.rays.whenBuilt();
+        technique.resetHistory();
+        for (let index = 0; index < LAG_SETTLE_FRAMES; index++) {
+            frame();
+            if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+        }
+        const before: number[] = [];
+        for (let index = 0; index < 10; index++) {
+            frame();
+            await device.queue.onSubmittedWorkDone();
+            before.push((await readRays(device, scenario, false)).hitMean);
+        }
+        const base = before.reduce((sum, value) => sum + value, 0) / before.length;
+        suns[0].intensity *= 2;
+        const series: number[] = [];
+        let bad = 0;
+        for (let index = 0; index < SPONZA_SETTLED_FRAMES; index++) {
+            frame();
+            await device.queue.onSubmittedWorkDone();
+            const rays = await readRays(device, scenario, false);
+            bad += rays.bad;
+            series.push(rays.hitMean);
+        }
+        if (bad > 0) failures.push(`9 sponza ${label}: ${bad} rays NaN, infinite or negative`);
+        const settled = series.slice(-20).reduce((sum, value) => sum + value, 0) / 20;
+        const step = settled - base;
+        const within = series.findIndex((value) => Math.abs(value / settled - 1) <= LAG_TOLERANCE);
+        const stepDone = series.findIndex((value) => (value - base) / step >= 0.95);
+        if (scenario.technique.worldCache?.secondBounceInUse !== (settings.secondBounce === 'gi1-rays' ? 'gi1-rays' : 'fallback')) failures.push(`9 sponza ${label}: the cache ran ${technique.worldCache?.secondBounceInUse}`);
+        return {
+            base: round(base),
+            settled: round(settled),
+            settledOverBase: round(settled / base, 3),
+            framesToWithin5OfSettled: within < 0 ? null : within + 1,
+            framesTo95OfStep: stepDone < 0 ? null : stepDone + 1,
+            overSettled: [1, 2, 5, 10, 20, 40, 80, 160].map((frameNumber) => `${frameNumber}: ${round(series[frameNumber - 1] / settled, 3)}`).join(', '),
+        };
+    } finally {
+        screen.dispose();
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
 // ---- The run ------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -546,6 +699,7 @@ try {
     let noFallback: Record<string, unknown> = {};
     if (SECTIONS !== 'lag') {
         for (const testCase of ACCURACY_CASES) accuracy[testCase.name] = await runAccuracy(device, testCase, failures);
+        accuracy['6c coverage'] = await runCoverage(device, failures);
         noFallback = await runNoFallback(device, failures);
     }
     const lag: Record<string, unknown> = {};
@@ -554,6 +708,10 @@ try {
             const name = `8 ${label}, ${settingsLabel}`;
             lag[name] = await runLag(device, { name, scene, settings, ddgiUnits }, failures);
         }
+    }
+    if (SECTIONS !== 'accuracy') {
+        lag['9 sponza, sun doubled, gi1-rays'] = await runSponzaLag(device, 'gi1-rays', { secondBounce: 'gi1-rays' }, failures);
+        lag['9 sponza, sun doubled, fallback (cap 4), DDGI 256 probes a frame'] = await runSponzaLag(device, 'fallback', { secondBounce: 'fallback' }, failures);
     }
     await drainDevice(device);
     reportGpuTest({

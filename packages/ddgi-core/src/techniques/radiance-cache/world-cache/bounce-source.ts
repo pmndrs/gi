@@ -1,6 +1,7 @@
 /**
  * Experiment E10 (P6.3, phase 6): the world cache's second bounce read from
- * another technique's field instead of traced (`secondBounce: 'ddgi-volume'`).
+ * another technique's field instead of traced (`secondBounce: 'fallback'`, or
+ * `'auto'` with a world-space fallback stacked).
  *
  * id Tech 8 shades its cache entries with last frame's irradiance volumes
  * (research/gi-1.0/idtech8-performance.md); the design doc's extension 1 is
@@ -18,8 +19,15 @@
  * `UpdateMultibounceCells`): each first-bounce entry rebuilds its hit, reads
  * the fallback's irradiance E there (`giIrradianceAt` with the hit's normal on
  * the side the probe ray arrived from, and the ray's direction as the view
- * direction, so DDGI biases the point as it does for a camera), and adds
- * albedo / π × E to its cell's indirect scratch with a count of one. No entry
+ * direction, so DDGI biases the point as it does for a camera) and its
+ * coverage c (`giCoverageAt`), and adds albedo / π × c × E to its cell's
+ * indirect scratch with a count of one. The coverage matters: outside every
+ * volume DDGI's E is the nearest volume's edge value, not 0
+ * (`ddgiSampleVolumes`), and c is 0 there, so a hit outside the field gets no
+ * later bounce (as with multibounce off) rather than a wrong one; inside, c is
+ * 1, and it fades over the volume's edge. Tracing GI-1.2's ray for the entries
+ * with c < 1 instead would keep their second bounce; not built (register E10's
+ * way back). A host covers the view with its volumes (a camera-following one). No entry
  * is discarded (GI-1.2 discards 70% to bound its rays; here there is no ray),
  * and E holds every bounce after the first that the fallback holds: DDGI's
  * field carries its own previous field as bounce light, so in a closed scene
@@ -29,18 +37,19 @@
  * It runs before `UpdateTiles`, so the samples are blended in the same frame
  * (GI-1.2's run after it and land a frame later): the field was updated
  * earlier in the frame, so its value is this frame's, and the indirect value
- * has no lag of its own beyond the cell's running mean
- * (`hashGridCacheMaxMultibounceSampleCount`). A first-bounce entry whose probe
+ * has no lag of its own beyond the cell's running mean, capped at
+ * `fallbackIndirectSampleCount` (4) in this mode. A first-bounce entry whose probe
  * ray bypasses the cache (shorter than its cell, register D38) also adds the
  * value to its own probe ray, as GI-1.2's bypass routing does, without the
  * 1 / (1 − p) since nothing was discarded.
  *
- * The sky: the fallback's E includes what its own rays see of the sky. Under
- * register D33 (no sky in the cache's light choice) that is the only sky a
- * cache hit gets, so it adds light GI-1.2's second bounce leaves out (its
- * misses are 0). Once RC3.4 puts the sky in the cache's light choice, the
- * sky arriving at a hit straight from above would be counted twice; see
- * register E10's way back.
+ * The sky and emitters: the fallback's E includes what its own rays see of the
+ * sky and of emissive surfaces. The cache's light choice has neither today
+ * (registers D33, D21), so a cache hit gets them only here. RC3.4 puts the
+ * sky in the cache's light choice (`GI_DIRECT_SKY_LIGHT_BIT`); in this mode
+ * the cache leaves it out (`hashGridCacheSamplesSky`), or the sky arriving
+ * straight at a hit would be counted twice. Emissive surfaces as cache lights
+ * (D21's way back) would need the same rule.
  */
 
 import type { ShadingModule, ShadingParameter } from '../../../platform/contract/shading-module.ts';
@@ -218,8 +227,10 @@ fn ${SAMPLE_BOUNCE_SOURCE_ENTRY_POINT}(
     // The light arriving at the hit from every later bounce, as the bounce source holds it, and
     // the share the hit reflects toward the probe ray (Lambert, register D8): albedo / π × E.
     // GI-1.2's estimate of the same term is a cosine-weighted ray's radiance × BRDF / pdf.
+    // Weighted by the source's coverage: outside its volumes E is an edge value, not 0.
     let irradiance = giIrradianceAt(surface.position, surface.normal, worldCacheProbeRayDirection(probe_ray), vec2f(0.0));
-    let radiance = GIDenoiser_RemoveNaNs(surface.albedo * HASHGRIDCACHE_BOUNCE_SOURCE_INV_PI * max(irradiance, vec3f(0.0)));
+    let coverage = saturate(giCoverageAt(surface.position, surface.normal));
+    let radiance = GIDenoiser_RemoveNaNs(surface.albedo * HASHGRIDCACHE_BOUNCE_SOURCE_INV_PI * coverage * max(irradiance, vec3f(0.0)));
 
     // One sample per entry into the cell's indirect scratch, which UpdateTiles blends this frame.
     let quantized_radiance = HashGridCache_QuantizeRadiance(radiance);

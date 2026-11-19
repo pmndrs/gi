@@ -88,14 +88,18 @@ export interface RadianceCacheSettings {
     interpolationJitter: boolean;
     /**
      * Experiment E10 (P6.3; not Capsaicin's): where the world cache's second
-     * bounce comes from with `useMultibounce` on. `'gi1-rays'` (default) is
-     * GI-1.2's second-bounce rays; `'ddgi-volume'` reads the irradiance of the
-     * technique stacked under this one (`gi.setFallback(radianceCache, ddgi)`)
-     * at each first-bounce hit instead, and traces no second-bounce ray
-     * (docs/design/radiance-cache.md, register E10). Changing it empties the
-     * world cache. Read every frame.
+     * bounce comes from with `useMultibounce` on. `'auto'` (default; lead
+     * decision 2026-11-19): from the technique stacked under this one
+     * (`gi.setFallback(radianceCache, ddgi)`) when its shading module answers
+     * in world space, else GI-1.2's rays. `'fallback'` asks for the stacked
+     * technique (and warns when it can't have it); `'gi1-rays'` is GI-1.2's
+     * rays, the faithful baseline. Details on `HashGridCacheOptions.secondBounce`
+     * and register E10. Changing what runs empties the world cache. Read every
+     * frame.
      */
     secondBounce: SecondBounceSource;
+    /** The cells' indirect sample cap with the second bounce from a fallback (E10; default 4). Read every frame. */
+    fallbackIndirectSampleCount: number;
     /**
      * The world-cache backend (P6.1): `gi1-hash-grid` (Capsaicin's, the
      * default; the `hashGridCache*` and multibounce options above are its) or
@@ -123,7 +127,8 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
-    secondBounce: 'gi1-rays',
+    secondBounce: 'auto',
+    fallbackIndirectSampleCount: 4,
     worldCache: 'gi1-hash-grid',
     sharc: Object.freeze({}),
 });
