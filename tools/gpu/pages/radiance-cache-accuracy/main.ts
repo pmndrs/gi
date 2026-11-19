@@ -63,7 +63,7 @@ import { FloatType, NodeMaterial, PerspectiveCamera, QuadMesh, RenderTarget, typ
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings, type WorldCacheKind } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
@@ -108,6 +108,12 @@ const ALL_CONFIGURATIONS: readonly Configuration[] = [
     { name: 'cells 16 px', settings: { hashGridCacheCellSize: 16 }, history: true },
 ];
 const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
+/**
+ * `VITE_RC_ACCURACY_WORLD_CACHE=sharc`: the world-cache backend for the whole run (P6.1); the backend
+ * is made at prepare, so it is a run's choice, not a configuration's. The settings tied to
+ * Capsaicin's hash grid (multibounce, cell size) don't apply to the SHaRC cache.
+ */
+const WORLD_CACHE: WorldCacheKind = env.VITE_RC_ACCURACY_WORLD_CACHE === 'sharc' ? 'sharc' : 'gi1-hash-grid';
 const CONFIGURATIONS = configurationNames ? ALL_CONFIGURATIONS.filter((configuration) => configurationNames.includes(configuration.name)) : ALL_CONFIGURATIONS;
 
 /** Contact-sheet thumbnails, pixels across: four fit the runner's window (about 1,258 CSS pixels, NOTES). */
@@ -269,7 +275,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
     placeCamera(views[0]);
 
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-accuracy ${sceneId}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ worldCache: WORLD_CACHE }));
     platform.setOutput(technique);
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
@@ -290,7 +296,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
     const frameTarget = new RenderTarget(width, height, { type: FloatType, depthBuffer: false });
     const reader = new HdrReader(renderer, width, height);
     const accumulator = new IrradianceAccumulator(device, width, height);
-    const worldCache = technique.worldCache;
+    const worldCache = technique.worldCacheBackend;
     assert(worldCache?.lookup, `${sceneId}: the radiance cache has no world-cache lookup`);
     const worldCacheProbe = await WorldCacheProbe.create(device, worldCache.lookup);
 
@@ -330,7 +336,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
             const configurations: Record<string, ConfigurationResult> = {};
             const pictures: Record<string, RgbImage> = {};
             for (const configuration of CONFIGURATIONS) {
-                Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, configuration.settings);
+                Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, { worldCache: WORLD_CACHE }, configuration.settings);
                 // An emptied world cache and probe history: each setting starts as a camera cut does.
                 technique.resetHistory();
                 const step = (): void => {
@@ -409,7 +415,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
                         `composite ${formatNumbers(result.composite)}; world cache (${(worldCacheNumbers.coverage * 100).toFixed(0)}% covered, vs ${worldCacheNumbers.against}) ${formatNumbers(worldCacheNumbers)}`,
                 );
             }
-            Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS);
+            Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, { worldCache: WORLD_CACHE });
 
             const defaultPicture = pictures['default'] ?? Object.values(pictures)[0];
             let threeDirect: AccuracyNumbers | null = null;
@@ -480,7 +486,7 @@ await runThreePage(
         sheet.style.flexDirection = 'column';
         sheet.style.gap = '4px';
         document.body.append(sheet);
-        data.settings = { warmFrames: WARM_FRAMES, measureFrames: MEASURE_FRAMES, configurations: CONFIGURATIONS.map((configuration) => configuration.name) };
+        data.settings = { worldCache: WORLD_CACHE, warmFrames: WARM_FRAMES, measureFrames: MEASURE_FRAMES, configurations: CONFIGURATIONS.map((configuration) => configuration.name) };
         const scenes: Record<string, Record<string, ViewResult>> = {};
         const skipped: string[] = [];
         data.scenes = scenes;

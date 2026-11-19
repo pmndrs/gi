@@ -144,6 +144,39 @@ struct LookupView {
 @group(${LOOKUP_GROUP}) @binding(1) var<storage, read> lookup_depth: array<f32>;
 @group(${LOOKUP_GROUP}) @binding(2) var<storage, read_write> lookup_radiance: array<vec4f>;
 
+// The world position of pixel (x, y) at depth 'depth' (row 0 is the top of the picture; NDC y is up).
+fn lookupPosition(x: i32, y: i32, depth: f32) -> vec3f {
+    let ndc = vec4f((f32(x) + 0.5) / f32(lookup_view.size.x) * 2.0 - 1.0, 1.0 - (f32(y) + 0.5) / f32(lookup_view.size.y) * 2.0, depth, 1.0);
+    let world = lookup_view.inverse_view_projection * ndc;
+    return world.xyz / world.w;
+}
+
+// The step to the neighbour along one axis whose depth is closer (the same surface, most likely), or
+// zero at the picture's edge with no neighbour there.
+fn lookupNeighbourStep(x: i32, y: i32, dx: i32, dy: i32, position: vec3f) -> vec3f {
+    let width = i32(lookup_view.size.x);
+    let height = i32(lookup_view.size.y);
+    var best = vec3f(0.0);
+    var bestLength = 3.0e38;
+    for (var sign = -1; sign <= 1; sign += 2) {
+        let nx = x + sign * dx;
+        let ny = y + sign * dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) {
+            continue;
+        }
+        let depth = lookup_depth[u32(ny * width + nx)];
+        if (!(depth < 1.0)) {
+            continue;
+        }
+        let step = (lookupPosition(nx, ny, depth) - position) * f32(sign);
+        if (length(step) < bestLength) {
+            best = step;
+            bestLength = length(step);
+        }
+    }
+    return best;
+}
+
 @compute @workgroup_size(64)
 fn lookupVisibleSurfaces(@builtin(global_invocation_id) id: vec3u) {
     let width = lookup_view.size.x;
@@ -164,7 +197,18 @@ fn lookupVisibleSurfaces(@builtin(global_invocation_id) id: vec3u) {
     let world = lookup_view.inverse_view_projection * ndc;
     let position = world.xyz / world.w;
     let direction = normalize(position - lookup_view.eye.xyz);
-    lookup_radiance[index] = worldCacheLookup(position, -direction, direction);
+    // The surface normal from the depth's neighbours, facing the viewer (P6.1: the SHaRC cache bins
+    // cells by the normal; Capsaicin's hash grid ignores it and keys by the direction). Where no
+    // neighbour gives one, the reversed view ray stands in, as before.
+    let across = cross(lookupNeighbourStep(i32(x), i32(y), 1, 0, position), lookupNeighbourStep(i32(x), i32(y), 0, 1, position));
+    var normal = -direction;
+    if (dot(across, across) > 0.0) {
+        normal = normalize(across);
+        if (dot(normal, direction) > 0.0) {
+            normal = -normal;
+        }
+    }
+    lookup_radiance[index] = worldCacheLookup(position, normal, direction);
 }
 `;
 }
