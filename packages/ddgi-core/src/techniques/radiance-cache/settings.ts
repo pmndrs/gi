@@ -15,6 +15,16 @@
  * configuration").
  */
 
+import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
+
+/**
+ * Which backend fills the world-cache slot (docs/design/radiance-cache.md,
+ * "World cache as a slot"): Capsaicin's GI-1.2 hash grid (the default), or
+ * the SHaRC-style hash cache ported from pmndrs/pathtracer (phase 6
+ * experiment P6.1, register D49-D54).
+ */
+export type WorldCacheKind = 'gi1-hash-grid' | 'sharc';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -75,6 +85,14 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * The world-cache backend (P6.1): `gi1-hash-grid` (Capsaicin's, the
+     * default; the `hashGridCache*` and multibounce options above are its) or
+     * `sharc`. Read at `prepare`: changing it makes the other cache there.
+     */
+    worldCache: WorldCacheKind;
+    /** The SHaRC backend's settings over its defaults (`DEFAULT_SHARC_SETTINGS`), with `worldCache: 'sharc'`. Read every frame, but the table size, fallback levels and pyramid at `prepare`. */
+    sharc: Partial<SharcSettings>;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -94,6 +112,8 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    worldCache: 'gi1-hash-grid',
+    sharc: Object.freeze({}),
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

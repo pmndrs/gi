@@ -144,7 +144,7 @@ export interface WorldCacheLookup {
 
 /** A world cache the technique owns. */
 export interface WorldCache {
-    /** Short stable id: `hash-grid`. */
+    /** Short stable id: `hash-grid` (Capsaicin's) or `sharc` (P6.1). */
     readonly id: string;
     /** Allocates and compiles. May throw `GILimitError` naming the device limit it needs. Call again after capacity settings change. */
     prepare(context: WorldCacheContext): Promise<void>;
