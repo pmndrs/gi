@@ -694,12 +694,13 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
   - **Phase 4's by-eye check is Dennis's** (the plan's done-when: steady by eye on Cornell and Sponza, no popping on a fly-through). The viewer is made ready for it and the check is listed in PROGRESS "Next"; it doesn't block the track.
   - Moving the module into `pmndrs/denoiser` (a PR there) needs Dennis's go-ahead: listed in PROGRESS "Next".
 
-### radiance-cache phase 6: levers and experiments
+### radiance-cache phase 6: levers, experiments and dynamic scenes
 
-Our experiments are first-class (DECISIONS 2026-11-19): each behind a setting beside GI-1.2, judged by accuracy against analytic references and the path tracer, stability, memory and GPU time (timing recorded, not gated). Register rows in the E series.
+Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experiments are first-class alternatives behind a setting, judged by accuracy against analytic answers and the path tracer, temporal stability, memory and GPU time (timing recorded under the bench lock, not gated); the GI-1.2 baseline stays the default. Register rows in the experiments' own series (E1 on, kind E; the lead, 2026-11-19): P6.1 holds E1-E7, P6.2 starts at E8.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
+| P6.1 | Experiment A: the pmndrs/pathtracer SHaRC-style hash cache as a second backend of the world-cache slot (`worldCache: 'gi1-hash-grid' \| 'sharc'`), with the GI-1.2 grid's analytic checks, an A/B table (accuracy, warm-up, stability, memory, GPU time on Sponza and Bistro exterior) and mutation checks | implementer | M | RC3.5, RC4.1 | done (2026-11-19; opt-in backend `worldCache: 'sharc'`, default stays GI-1.2; Opus review: merge as opt-in after the memory fix, all 7 fixes applied; the Cycles accuracy run waits on the references junction) |
 | P6.3 | Experiment E10, DDGI supplies the second bounce (id Tech 8's last-frame irradiance volumes; extension 1): `secondBounce: 'gi1-rays' \| 'ddgi-volume'` (default gi1-rays); with a DDGI stacked under the cache (`setFallback`), each first-bounce entry reads DDGI's irradiance at its hit instead of tracing a second-bounce ray (`SampleBounceSourceCells`); GPU checks (furnace, strips, bypass, lag), stability, GPU ms on Sponza and Bistro exterior, DDGI's own cost separately | implementer | M | RC3.5 | review (2026-11-19; branch `p6-ddgi-bounce`; RTX 3060; `radiance-cache-ddgi-bounce` passes, four mutations caught; furnace every-bounce 0.990 × 0.4244, second bounce with DDGI's bounce off 0.985 × 0.3183; world cache Sponza 12.2 → 6.5 ms, Bistro exterior 15.1 → 8.0 ms plus DDGI's update (9.7 / 16-21 ms at 2,048 probes, about 2-3 ms at 256-512), timing INVALID (thermal, shared GPU); against Cycles (`radiance-cache-accuracy`) GI bias two-room −43/−43/−56% → −0.2/+0.1/+5.2%, point Cornell −22% → +1 to +4%, emissive Cornell −37 to −48% → −1 to +4%, Sponza +8/+11% → +15/+21% (history off −3/−1% → +4/+9%); see PROGRESS) |
 
 ## Carried to M2 (collected during M1)
