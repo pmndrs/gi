@@ -161,6 +161,8 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
             if (timedFrames === 0) throw new Error(`${id}, ${setting.secondBounce}: no timed frame`);
             if (cache.secondBounceInUse !== setting.secondBounce) throw new Error(`${id}: asked for ${setting.secondBounce}, the cache ran ${cache.secondBounceInUse}`);
             const counters = await readCounters(device, cache.buffers.tileWords);
+            const packed = cache.packedTiles;
+            const liveTiles = (await readCounters(device, packed.count.buffer))[packed.count.offset / 4];
             const mean = (name: string): number => (sums.get(name) ?? 0) / timedFrames;
             const prefixed = (prefix: string): string[] => [...sums.keys()].filter((name) => name.startsWith(prefix));
             const sections = Object.fromEntries(WORLD_CACHE_SECTIONS.map((section) => [section, round(mean(`radiance-cache/${section}`))]));
@@ -179,6 +181,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
                     firstBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount0],
                     secondBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount1],
                     shadowRays: counters[HASH_GRID_COUNTER.visibilityRayCount],
+                    liveTiles,
                 },
             };
         }

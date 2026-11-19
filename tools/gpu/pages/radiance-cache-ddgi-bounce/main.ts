@@ -59,6 +59,9 @@
  *    (`hashGridCacheMaxMultibounceSampleCount`): DDGI's value carries no ray
  *    noise, so a shorter running mean may do.
  *
+ * `VITE_E10_SECTIONS=accuracy` runs sections 1-7 only and `lag` section 8
+ * only (for mutation runs); unset, all of them.
+ *
  * Correctness only, no timing (radiance-cache-ddgi-bounce-cost times it).
  * Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-ddgi-bounce --gpu nvidia`.
@@ -119,6 +122,8 @@ const DDGI_UNITS = 2048;
 const LAG_SETTLE_FRAMES = 300;
 const LAG_MAX_FRAMES = 240;
 const LAG_TOLERANCE = 0.05;
+/** Which sections run: `accuracy` (1-7), `lag` (8) or all. */
+const SECTIONS = String((import.meta.env as Record<string, unknown>).VITE_E10_SECTIONS ?? 'all');
 
 const FURNACE_SUN: LightDescriptor = { type: 'directional', direction: [0, -1, 0], color: [1, 1, 1], intensity: FURNACE.sunIntensity, castsShadows: false, label: 'furnace sun' };
 
@@ -514,10 +519,13 @@ try {
     deviceErrors = watchDevice(device);
     const failures: string[] = [];
     const accuracy: Record<string, unknown> = {};
-    for (const testCase of ACCURACY_CASES) accuracy[testCase.name] = await runAccuracy(device, testCase, failures);
-    const noFallback = await runNoFallback(device, failures);
+    let noFallback: Record<string, unknown> = {};
+    if (SECTIONS !== 'lag') {
+        for (const testCase of ACCURACY_CASES) accuracy[testCase.name] = await runAccuracy(device, testCase, failures);
+        noFallback = await runNoFallback(device, failures);
+    }
     const lag: Record<string, unknown> = {};
-    for (const { label, scene } of LAG_SCENES) {
+    for (const { label, scene } of SECTIONS === 'accuracy' ? [] : LAG_SCENES) {
         for (const { label: settingsLabel, settings } of LAG_SETTINGS) {
             const name = `8 ${label}, ${settingsLabel}`;
             lag[name] = await runLag(device, { name, scene, settings }, failures);
