@@ -12,8 +12,8 @@ import { findBrowser, removeProfile, startChrome } from '../../chrome.ts';
 import { installShutdownHandlers, registerCleanup } from '../../cleanup.ts';
 import type { RunSummary } from '../../contract.ts';
 import { withBenchLock } from '../../../reference/bench-lock.ts';
-import { appleMetalDevices, budgetPage, checkQuality, correctnessPages, distribution, idleWindow, pagesPassed, qualityPage,
-    readPair, utilizationCounters } from './metal-evidence.ts';
+import { appleMetalDevices, budgetPage, checkQuality, compareWindows, correctnessPages, idleWindow, pagesPassed, qualityPage,
+    readPair, utilizationCounters, type Cadence } from './metal-evidence.ts';
 
 const root = resolve(import.meta.dirname, '../../../..');
 const execute = promisify(execFile);
@@ -120,14 +120,14 @@ async function suite(out: string) {
     await runNode(['node_modules/vite/bin/vite.js', 'build', '--config', 'examples/vite.config.ts'], { ...process.env, PAGES_BASE: '/gi/' });
     assert((await readFile(join(root, 'examples/dist/11-radiance-cascades/index.html'), 'utf8')).includes('src="/gi/assets/'),
         'gallery build is missing the /gi/ base');
-    async function fixture(name: string, filters: string[], pair?: number) {
+    async function fixture(name: string, filters: string[], pair?: number, cadence: Cadence = 'normal') {
         const reportDir = join(out, name);
         await mkdir(reportDir);
         const file = join(reportDir, 'run.json');
         let harnessError: unknown;
         try {
             await runNode(['tools/gpu/run.ts', '--chrome', executable, '--filter', filters.join(','), '--out', reportDir, '--json', file],
-                pair === undefined ? process.env : { ...process.env, VITE_RC_REFLECTION_PAIR: String(pair) });
+                { ...process.env, VITE_RC_REFLECTION_PAIR: pair === undefined ? '' : String(pair), VITE_RC_REFLECTION_CADENCE: cadence });
         } catch (error) { harnessError = error; }
         const raw = await readFile(file, 'utf8').catch(error => { throw harnessError ?? error; });
         const report = JSON.parse(raw) as RunSummary;
@@ -145,50 +145,58 @@ async function suite(out: string) {
     }
     const correctness = pagesPassed(await fixture('correctness', correctnessPages), correctnessPages).map(p => p.name);
     const quality = checkQuality(await fixture('quality', [qualityPage]));
-    const pairs = [];
-    const conditions: Array<{ preflight: ReturnType<typeof idleWindow> & { elapsedMs: number; waitExhausted: boolean };
-        before: Reading; after: Reading; sampleCount: number;
-        thermalPressureObserved: string[]; samplesWithUtilization: number }> = [];
-    for (const pair of [1, 2, 3]) {
-        const name = 'pair-' + pair;
-        const { attempts, ...preflight } = await waitForIdle();
-        const before = attempts.at(-1)!.readings.at(-1)!;
-        await save(join(out, name + '-preflight.json'), { ...preflight, attempts });
-        const during: Reading[] = [];
-        let sampling: Promise<void> | undefined;
-        const interval = setInterval(() => {
-            if (!sampling) sampling = telemetry().then(reading => { during.push(reading); }).finally(() => { sampling = undefined; });
-        }, 3000);
-        let pairData;
-        try {
-            pairData = readPair(await fixture(name, [budgetPage], pair), pair);
-        } finally {
-            clearInterval(interval);
-            await sampling;
-            const after = await telemetry();
-            await save(join(out, name + '-telemetry.json'), { before, during, after });
-            const readings = [before, ...during, after];
-            conditions.push({ preflight, before, after, sampleCount: readings.length,
-                thermalPressureObserved: [...new Set(readings.map(sample => sample.thermalPressure).filter(value => value !== null))],
-                samplesWithUtilization: readings.filter(sample => sample.utilizationPercent !== null).length });
+    async function measureCadence(cadence: Cadence) {
+        const prefix = cadence === 'normal' ? 'pair-' : 'uncapped-pair-';
+        const pairs = [];
+        const conditions: Array<{ preflight: ReturnType<typeof idleWindow> & { elapsedMs: number; waitExhausted: boolean };
+            before: Reading; after: Reading; sampleCount: number;
+            thermalPressureObserved: string[]; samplesWithUtilization: number }> = [];
+        for (const pair of [1, 2, 3]) {
+            const name = prefix + pair;
+            const { attempts, ...preflight } = await waitForIdle();
+            const before = attempts.at(-1)!.readings.at(-1)!;
+            await save(join(out, name + '-preflight.json'), { ...preflight, attempts });
+            const during: Reading[] = [];
+            let sampling: Promise<void> | undefined;
+            const interval = setInterval(() => {
+                if (!sampling) sampling = telemetry().then(reading => { during.push(reading); }).finally(() => { sampling = undefined; });
+            }, 3000);
+            let pairData;
+            try {
+                pairData = readPair(await fixture(name, [budgetPage], pair, cadence), pair, cadence);
+            } finally {
+                clearInterval(interval);
+                await sampling;
+                const after = await telemetry();
+                await save(join(out, name + '-telemetry.json'), { before, during, after });
+                const readings = [before, ...during, after];
+                conditions.push({ preflight, before, after, sampleCount: readings.length,
+                    thermalPressureObserved: [...new Set(readings.map(sample => sample.thermalPressure).filter(value => value !== null))],
+                    samplesWithUtilization: readings.filter(sample => sample.utilizationPercent !== null).length });
+            }
+            pairs.push(pairData);
         }
-        pairs.push(pairData);
+        const matched = compareWindows(pairs.flatMap(pair => pair.on.samplesMs), pairs.flatMap(pair => pair.off.samplesMs));
+        const sustained = cadence === 'uncapped' ? compareWindows(pairs.flatMap(pair => pair.on.sustained!.samplesMs),
+            pairs.flatMap(pair => pair.off.sustained!.samplesMs)) : undefined;
+        return { cadence, endedAt: new Date().toISOString(),
+            allPreflightsObservedIdleAndNominal: conditions.every(c => c.preflight.verdict === 'observed-idle-and-nominal'),
+            thermalQualification: 'unassessed', on: matched.on, off: matched.off, pooledMedianDeltaMs: matched.medianDeltaMs,
+            pooledP95DeltaMs: matched.p95DeltaMs, sustained, pairs: pairs.map((pair, index) => {
+                const name = prefix + pair.pair;
+                return { pair: pair.pair, order: pair.order, ...compareWindows(pair.on.samplesMs, pair.off.samplesMs),
+                    sustained: cadence === 'uncapped' ? compareWindows(pair.on.sustained!.samplesMs, pair.off.sustained!.samplesMs) : undefined,
+                    floor: pair.floor, report: name + '/run.json', conditions: conditions[index],
+                    preflight: name + '-preflight.json', telemetry: name + '-telemetry.json' };
+            }) };
     }
-    const on = distribution(pairs.flatMap(pair => pair.on.samplesMs));
-    const off = distribution(pairs.flatMap(pair => pair.off.samplesMs));
-    const summary = { ok: true, endedAt: new Date().toISOString(), host, correctness, quality,
-        allPreflightsObservedIdleAndNominal: conditions.every(c => c.preflight.verdict === 'observed-idle-and-nominal'),
-        thermalQualification: 'unassessed', on, off, pooledMedianDeltaMs: on.medianMs - off.medianMs,
-        pooledP95DeltaMs: on.p95Ms - off.p95Ms, pairs: pairs.map((pair, index) => {
-            const on = distribution(pair.on.samplesMs), off = distribution(pair.off.samplesMs);
-            return { pair: pair.pair, order: pair.order, on, off, medianDeltaMs: on.medianMs - off.medianMs,
-                p95DeltaMs: on.p95Ms - off.p95Ms, floor: pair.floor, report: 'pair-' + pair.pair + '/run.json',
-                conditions: conditions[index], preflight: 'pair-' + pair.pair + '-preflight.json',
-                telemetry: 'pair-' + pair.pair + '-telemetry.json' };
-        }) };
-    await save(join(out, 'summary.json'), summary);
-    console.log('Completed all checks. Evidence:', out);
-    console.log('Pooled reflection GPU milliseconds:', { on, off });
+    const normal = await measureCadence('normal');
+    await save(join(out, 'summary.json'), { ok: true, host, correctness, quality, ...normal });
+    console.log('Normal-cadence GPU milliseconds:', { on: normal.on, off: normal.off });
+    const uncapped = await measureCadence('uncapped');
+    await save(join(out, 'uncapped-summary.json'), { ok: true, host, ...uncapped });
+    console.log('Uncapped sustained GPU milliseconds:', uncapped.sustained);
+    console.log('Completed both cadences. Evidence:', out);
 }
 
 if (values.help) console.log(usage);
@@ -199,7 +207,9 @@ else {
     await mkdir(dirname(out), { recursive: true });
     await mkdir(out); // Fail on an existing return bundle rather than mixing two machines or revisions.
     try {
-        await withBenchLock(() => suite(out), { what: 'Apple Metal RC correctness, polished quality and three timing pairs', command: usage });
+        const reservation = { what: 'Apple Metal RC correctness, polished quality and six timing pairs', command: usage };
+        // Both platforms reserve GPU first, then CPU, to keep queue submission clear of other benchmarks.
+        await withBenchLock(() => withBenchLock(() => suite(out), { ...reservation, lock: 'cpu' }), reservation);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await save(join(out, 'failure.json'), { ok: false, at: new Date().toISOString(), message });

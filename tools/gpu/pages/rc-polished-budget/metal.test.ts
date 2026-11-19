@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { RunSummary } from '../../contract.ts';
-import { appleAdapter, appleMetalDevices, budgetPage, checkQuality, distribution, idleWindow, pagesPassed, qualityPage, readPair,
+import { appleAdapter, appleMetalDevices, budgetPage, checkQuality, compareWindows, distribution, idleWindow, pagesPassed, qualityPage, readPair,
     utilizationCounters } from './metal-evidence.ts';
 
 const adapter = { vendor: 'apple', architecture: 'apple-7', device: '', description: '', isFallbackAdapter: false, features: ['timestamp-query'] };
@@ -37,6 +39,44 @@ describe('Mac polished evidence', () => {
             expect(() => readPair(report(budgetPage, { ...pair, ...change }), 2)).toThrow();
         }
         expect(distribution([5, 4, 2, 3])).toEqual({ count: 4, medianMs: 3.5, p95Ms: 5 });
+    });
+    it('requires 480 contiguous updates and preserves the first measured window in each uncapped arm', () => {
+        const sustained = { ...timing(480), animationIntervals: timing(472), cascadeUpdates: 480 };
+        const extendedArm = { ...arm, sustained };
+        const data = { ...pair, on: extendedArm, off: extendedArm, sustainedTicks: [128, 607] };
+        expect(readPair(report(budgetPage, data), 2, 'uncapped').off.sustained?.count).toBe(480);
+        expect(() => readPair(report(budgetPage, data), 2, 'normal')).toThrow();
+        expect(() => readPair(report(budgetPage, pair), 2, 'uncapped')).toThrow();
+        for (const change of [{ cascadeUpdates: 479 }, { count: 479 }, { samplesMs: sustained.samplesMs.slice(1) },
+            { samplesMs: sustained.samplesMs.slice().reverse() }, { animationIntervals: timing(479) }]) {
+            const test = { ...data, off: { ...extendedArm, sustained: { ...sustained, ...change } } };
+            expect(() => readPair(report(budgetPage, test), 2, 'uncapped')).toThrow();
+        }
+        expect(() => readPair(report(budgetPage, { ...data, sustainedTicks: [128, 606] }), 2, 'uncapped')).toThrow();
+    });
+    // Optional replay of real pre-existing runner reports; the mock replaces only the adapter evidence in memory.
+    const archive = process.env.RC_METAL_CAPTURE_REPLAY;
+    it.runIf(archive)('replays captured Windows normal and uncapped arms without starting a GPU', async () => {
+        for (const [folder, cadence] of [['run-02', 'normal'], ['uncapped-01', 'uncapped']] as const) {
+            const pairs = [];
+            for (const n of [1, 2, 3]) {
+                const run: RunSummary = JSON.parse(await readFile(join(archive!, folder, 'pair-' + n + '.json'), 'utf8'));
+                expect(run.adapter?.vendor).toBe('nvidia');
+                run.adapter = adapter;
+                for (const page of run.pages) page.adapter = adapter;
+                pairs.push(readPair(run, n, cadence));
+            }
+            const expected = JSON.parse(await readFile(join(archive!, folder, 'summary.json'), 'utf8'));
+            const matched = compareWindows(pairs.flatMap(pair => pair.on.samplesMs), pairs.flatMap(pair => pair.off.samplesMs));
+            expect(matched.on).toEqual(expected.on);
+            expect(matched.off).toEqual(expected.off);
+            if (cadence === 'uncapped') {
+                const extended = compareWindows(pairs.flatMap(pair => pair.on.sustained!.samplesMs), pairs.flatMap(pair => pair.off.sustained!.samplesMs));
+                expect(extended.on).toEqual(expected.sustained.on);
+                expect(extended.off).toEqual(expected.sustained.off);
+                expect(extended.on.count).toBe(1440);
+            }
+        }
     });
     it('requires all 24 quality ticks, all ratios and 20 within-phase differences', () => {
         expect(checkQuality(report(qualityPage, quality))).toEqual(quality);

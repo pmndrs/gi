@@ -29,9 +29,11 @@ Rules:
 
 **Sustained load** · A separate uncapped run retained one actual cascade update per animation frame. On the same rail ticks (128–187), pooled median and p95 on/off were 2.186 / 2.785 and 1.893 / 2.385 ms. Over ticks 128–607 (1,440 frames per setting), on/off were 2.113 / 2.627 and 1.758 / 2.218 ms. All three pairs passed the sustained clock check. They started at 58, 66 and 68°C with 11, 10 and 10 loaded samples, and zero thermal throttling. These timings measure the whole queue from G-buffer through final canvas blit.
 
-**Mac** · The [portable test](docs/radiance-cascades/metal.md) runs the same gallery with Apple-device checks, image comparisons, idle sampling and three reflection pairs. A fresh checkout installed the 79-file tracer pin from the included pnpm seed with HTTPS Git disabled. Public npm supplied the other 185 packages. Phase five awaits the returned Apple hardware evidence.
+**Mac** · The [portable test](docs/radiance-cascades/metal.md) runs the same gallery with Apple-device checks, image comparisons, idle sampling and three reflection pairs at each cadence. A fresh checkout installed the 79-file tracer pin from the included pnpm seed with HTTPS Git disabled. Public npm supplied the other 185 packages. Phase five awaits the returned Apple hardware evidence.
 
-**Integration** · Merged upstream main at `93176bb` into the RC branch. The clean source checkout built the gallery and npm package, and both packed-consumer tests passed. The public CI workflow still needs a way to install the private pathtracer pin on a cold checkout. The internal Mac dependency seed is for this handoff.
+**Integration** · Merged upstream main at `93176bb` into the RC branch. The clean source checkout built the gallery and npm package, and both packed-consumer tests passed. Lint, typecheck and 1,628 unit tests passed with 13 skipped, including replay of all six Windows pair reports through the Metal result checks. The public CI workflow still needs a way to install the private pathtracer pin on a cold checkout. The internal Mac dependency seed is for this handoff.
+
+**Skill feedback** · Reserve CPU and GPU together for whole-queue timing. In this test the 60 Hz gallery stayed below the sustained clock threshold, while a longer genuine animation-frame run without the cap produced 10–11 loaded clock samples per pair.
 
 ## 2026-11-19 · SRC.1 · Web performance and image quality
 

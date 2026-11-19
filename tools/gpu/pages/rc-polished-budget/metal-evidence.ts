@@ -42,13 +42,23 @@ export function distribution(samples: number[]) {
         p95Ms: sorted[Math.ceil(0.95 * sorted.length) - 1] };
 }
 
-type Timing = { count: number; samplesMs: number[]; animationIntervals: { count: number; samplesMs: number[] };
-    cascadeUpdates: number; threeTimestampPools: number };
+export type Cadence = 'normal' | 'uncapped';
+type TimingWindow = { count: number; samplesMs: number[]; animationIntervals: { count: number; samplesMs: number[] };
+    cascadeUpdates: number };
+type Timing = TimingWindow & { threeTimestampPools: number; sustained?: TimingWindow };
 type Pair = { pair: number; order: string[]; resolution: number[]; internal: number[]; ratio: number;
-    warmFrames: number; measuredFrames: number; measuredTicks: number[]; on: Timing; off: Timing;
+    warmFrames: number; measuredFrames: number; measuredTicks: number[]; sustainedTicks?: number[] | null; on: Timing; off: Timing;
     floor: { pixels: number; rgbMae255: number; signedDisplayLuma255: number } };
 
-export function readPair(report: RunSummary, pair: number) {
+function checkWindow(timing: TimingWindow, frames: number, intervals: number) {
+    assert.equal(timing.count, frames);
+    assert.equal(distribution(timing.samplesMs).count, frames);
+    assert.equal(timing.cascadeUpdates, frames);
+    assert.equal(timing.animationIntervals.count, intervals);
+    assert.equal(distribution(timing.animationIntervals.samplesMs).count, intervals);
+}
+
+export function readPair(report: RunSummary, pair: number, cadence: Cadence = 'normal') {
     const [page] = pagesPassed(report, [budgetPage]);
     const data = page.data as unknown as Pair;
     assert.equal(data.pair, pair);
@@ -59,17 +69,27 @@ export function readPair(report: RunSummary, pair: number) {
     assert.equal(data.warmFrames, 48);
     assert.equal(data.measuredFrames, 60);
     assert.deepEqual(data.measuredTicks, [128, 187]);
+    assert.deepEqual(data.sustainedTicks ?? null, cadence === 'uncapped' ? [128, 607] : null);
     for (const arm of [data.on, data.off]) {
-        assert.equal(arm.count, 60);
-        assert.equal(distribution(arm.samplesMs).count, 60);
-        assert.equal(arm.animationIntervals.count, 59);
-        assert.equal(distribution(arm.animationIntervals.samplesMs).count, 59);
-        assert.equal(arm.cascadeUpdates, 60);
+        checkWindow(arm, 60, 59);
         assert.equal(arm.threeTimestampPools, 0);
+        if (cadence === 'uncapped') {
+            assert(arm.sustained, 'missing the extended timing window');
+            checkWindow(arm.sustained, 480, 8 * 59);
+            assert.deepEqual(arm.sustained.samplesMs.slice(0, 60), arm.samplesMs);
+            assert.deepEqual(arm.sustained.animationIntervals.samplesMs.slice(0, 59), arm.animationIntervals.samplesMs);
+        } else {
+            assert.equal(arm.sustained, undefined, 'normal cadence unexpectedly included extended timings');
+        }
     }
     assert(data.floor.pixels > 0 && data.floor.rgbMae255 > 1 && data.floor.signedDisplayLuma255 > 0,
         'reflection gather produced no measured floor gain');
     return data;
+}
+
+export function compareWindows(onSamples: number[], offSamples: number[]) {
+    const on = distribution(onSamples), off = distribution(offSamples);
+    return { on, off, medianDeltaMs: on.medianMs - off.medianMs, p95DeltaMs: on.p95Ms - off.p95Ms };
 }
 
 export function checkQuality(report: RunSummary) {
