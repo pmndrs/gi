@@ -1,4 +1,5 @@
 import { nativeRcShader } from './shaders.ts';
+import { nativeRcSpecularShader } from './specular.ts';
 
 type Triple = readonly [number, number, number];
 export interface NativeRcOptions {
@@ -13,12 +14,22 @@ export interface NativeRcOptions {
     history?: number;
     /** World-space origin offset along the surface normal, in metres. */
     normalBias?: number;
+    /** Compile the optional reflected-direction query over the existing interval cache. */
+    roughSpecular?: boolean;
+}
+export interface NativeRcSpecularInput {
+    /** 16-byte uniform vec4f. Perspective: camera world position, w=1. Orthographic: surface-to-camera direction, w=0. */
+    view: GPUBuffer;
+    /** Optional caller-owned rgba16float storage view, one mip at the screen size. */
+    outputView?: GPUTextureView;
 }
 export interface NativeRcScreen {
     /** Unfiltered float textures, at the exact output size. xyz are world units, w>0 marks a surface. */
     worldPosition: GPUTextureView;
-    /** Signed world-space unit normal in xyz. */
+    /** Signed world-space unit normal in xyz; perceptual roughness [0,1] in w when querying specular. */
     worldNormal: GPUTextureView;
+    /** Omit to skip reflection work on this frame, even on a specular-capable solver. */
+    specular?: NativeRcSpecularInput;
 }
 export interface NativeRcTransport {
     beginFrame(): void;
@@ -68,6 +79,9 @@ export class NativeRadianceCascades {
     private readonly cube: GPUBuffer;
     private frameData: { width: number; height: number; count: number; rays: GPUBuffer; results: GPUBuffer; output: GPUTexture | null; view: GPUTextureView | null } | null = null;
     private bindings: { worldPosition: GPUTextureView; worldNormal: GPUTextureView; output: GPUTextureView; group: GPUBindGroup } | null = null;
+    private specularOutput: GPUTexture | null = null;
+    private specularView: GPUTextureView | null = null;
+    private specularBindings: { view: GPUBuffer; output: GPUTextureView; group: GPUBindGroup } | null = null;
     private clearHistory = true;
     private disposed = false;
 
@@ -96,16 +110,30 @@ export class NativeRadianceCascades {
         ];
         const groupLayout = device.createBindGroupLayout({ label: 'RC solver resources', entries: resources });
         const pipelineLayout = device.createPipelineLayout({ label: 'RC solver layout', bindGroupLayouts: [groupLayout] });
-        const module = device.createShaderModule({ label: 'Bounded-volume Split RC', code: nativeRcShader });
+        const module = device.createShaderModule({ label: 'Bounded-volume Split RC',
+            code: options.roughSpecular ? nativeRcShader + nativeRcSpecularShader : nativeRcShader });
         const programs = await Promise.all(entries.map(entryPoint => device.createComputePipelineAsync({
             label: `RC ${entryPoint}`, layout: pipelineLayout, compute: { module, entryPoint },
         })));
         const pipelines = Object.fromEntries(entries.map((entry, i) => [entry, programs[i]])) as Pipelines;
-        return new NativeRadianceCascades(device, options, layout, groupLayout, pipelines);
+        let specularPipeline: GPUComputePipeline | null = null;
+        if (options.roughSpecular) {
+            const specularLayout = device.createBindGroupLayout({ label: 'RC reflection view and output', entries: [
+                { binding: 0, visibility, buffer: { type: 'uniform', minBindingSize: 16 } },
+                { binding: 1, visibility, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+            ] });
+            specularPipeline = await device.createComputePipelineAsync({
+                label: 'RC rough reflection',
+                layout: device.createPipelineLayout({ bindGroupLayouts: [groupLayout, specularLayout] }),
+                compute: { module, entryPoint: 'roughReflection' },
+            });
+        }
+        return new NativeRadianceCascades(device, options, layout, groupLayout, pipelines, specularPipeline);
     }
 
     private constructor(private readonly device: GPUDevice, private readonly options: NativeRcOptions,
-        layout: ReturnType<typeof nativeRcLayout>, private readonly groupLayout: GPUBindGroupLayout, private readonly pipelines: Pipelines) {
+        layout: ReturnType<typeof nativeRcLayout>, private readonly groupLayout: GPUBindGroupLayout, private readonly pipelines: Pipelines,
+        private readonly specularPipeline: GPUComputePipeline | null) {
         this.layout = layout;
         this.rayStride = options.rayStride ?? 2;
         const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
@@ -142,6 +170,23 @@ export class NativeRadianceCascades {
     }
     /** Zero for a host that always supplies its own storage view. */
     get ownedOutputBytes(): number { return this.frameData?.output ? this.frameData.width * this.frameData.height * 8 : 0; }
+    /**
+     * Separate prefiltered incident radiance (RGB) and observed cache support (A).
+     * The host applies its material BRDF. A broad lobe samples the merged near
+     * bins; polished surfaces can also use finer distant angular samples through
+     * transparent near intervals. Both paths use the existing transport rays.
+     */
+    get specularTexture(): GPUTexture {
+        if (!this.specularPipeline) throw new Error('Enable roughSpecular before accessing native RC reflections');
+        const data = this.frameData;
+        if (!data) throw new Error('Call resize() before accessing native RC reflections');
+        this.specularOutput ??= this.device.createTexture({
+            label: 'RC prefiltered specular radiance', size: [data.width, data.height], format: 'rgba16float',
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+        });
+        return this.specularOutput;
+    }
+    get ownedSpecularBytes(): number { return this.frameData && this.specularOutput ? this.frameData.width * this.frameData.height * 8 : 0; }
     get rayScratchBytes(): number { return this.frameData ? this.frameData.rays.size + this.frameData.results.size : 0; }
 
     resize(width: number, height: number) {
@@ -183,13 +228,14 @@ export class NativeRadianceCascades {
     encode(encoder: GPUCommandEncoder, screen: NativeRcScreen, transport: NativeRcTransport, outputView?: GPUTextureView, timing?: GPUComputePassTimestampWrites) {
         const data = this.frameData;
         if (!data) throw new Error('Native RC encode requires a live, resized solver');
+        if (screen.specular && !this.specularPipeline) throw new Error('Enable roughSpecular to query the native RC reflection cache');
         const output = outputView ?? (data.view ??= this.outputTexture.createView());
         if (!this.bindings || this.bindings.worldPosition !== screen.worldPosition || this.bindings.worldNormal !== screen.worldNormal || this.bindings.output !== output) {
             const buffers = [this.uniforms, this.frame, data.rays, data.results, this.observations, this.history, this.seen, this.merged, this.cube];
             const entries: GPUBindGroupEntry[] = buffers.map((buffer, binding) => ({ binding, resource: { buffer } }));
             entries.push({ binding: 9, resource: screen.worldPosition }, { binding: 10, resource: screen.worldNormal }, { binding: 11, resource: output });
             const group = this.device.createBindGroup({ label: 'RC frame bindings', layout: this.groupLayout, entries });
-            this.bindings = { ...screen, output, group };
+            this.bindings = { worldPosition: screen.worldPosition, worldNormal: screen.worldNormal, output, group };
         }
         if (this.clearHistory) {
             encoder.clearBuffer(this.frame);
@@ -220,6 +266,20 @@ export class NativeRadianceCascades {
         dispatch(post, 'mergeFar', groups(levels[2].bins));
         dispatch(post, 'mergeMiddle', groups(levels[1].bins));
         dispatch(post, 'mergeNear', groups(levels[0].bins));
+        if (screen.specular && this.specularPipeline) {
+            const { view, outputView } = screen.specular;
+            const output = outputView ?? (this.specularView ??= this.specularTexture.createView());
+            if (this.specularBindings?.view !== view || this.specularBindings.output !== output) {
+                const group = this.device.createBindGroup({
+                    label: 'RC rough reflection inputs', layout: this.specularPipeline.getBindGroupLayout(1),
+                    entries: [{ binding: 0, resource: { buffer: view, size: 16 } }, { binding: 1, resource: output }],
+                });
+                this.specularBindings = { view, output, group };
+            }
+            post.setPipeline(this.specularPipeline);
+            post.setBindGroup(1, this.specularBindings.group);
+            post.dispatchWorkgroups(Math.ceil(data.width / 8), Math.ceil(data.height / 8));
+        }
         dispatch(post, 'project', groups(levels[0].cells));
         dispatch(post, 'gather', Math.ceil(data.width / 8), Math.ceil(data.height / 8));
         post.end();
@@ -229,6 +289,10 @@ export class NativeRadianceCascades {
         this.frameData?.rays.destroy();
         this.frameData?.results.destroy();
         this.frameData?.output?.destroy();
+        this.specularOutput?.destroy();
+        this.specularOutput = null;
+        this.specularView = null;
+        this.specularBindings = null;
         this.frameData = null;
         this.bindings = null;
     }

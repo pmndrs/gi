@@ -4,6 +4,9 @@ import * as THREE from 'three/webgpu';
 export const REPLAY_FRAMES = 720;
 export type LampCue = 'sequence' | 'amber' | 'blue' | 'off';
 export type CameraPose = 'rail' | 'receiver';
+export type PassagePreset = 'gallery' | 'polished' | 'roughness' | 'reflection-motion';
+export type EmitterMotion = 'sequence' | 'left' | 'still' | 'right';
+export const FLOOR_ROUGHNESSES = [0.12, 0.25, 0.4, 0.55, 0.8] as const;
 
 const limestone = 0xd8c9b2;
 const granite = 0x514f52;
@@ -19,16 +22,19 @@ function vault(radius: number, thickness: number, length: number): THREE.Extrude
     return new THREE.ExtrudeGeometry(shape, { depth: length, bevelEnabled: false, curveSegments: 24 });
 }
 
-export function makePassage() {
+export function makePassage(preset: PassagePreset = 'gallery') {
+    const polished = preset !== 'gallery';
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x08090c);
     const stone = new THREE.MeshStandardMaterial({ color: limestone, roughness: 0.91 });
     const trim = new THREE.MeshStandardMaterial({ color: granite, roughness: 0.78 });
     const ceiling = new THREE.MeshStandardMaterial({ color: 0xa3a09c, roughness: 0.9 });
-    const floor = new THREE.MeshStandardMaterial({ color: 0xc3b6a7, roughness: 0.86 });
+    const floor = new THREE.MeshStandardMaterial(polished
+        ? { color: 0x9fa7ac, metalness: 0.8, roughness: 0.24 }
+        : { color: 0xc3b6a7, roughness: 0.86 });
     const tile = new THREE.MeshStandardMaterial({ color: 0x807d77, roughness: 0.8 });
     const unit = new THREE.BoxGeometry();
-    function block(x: number, y: number, z: number, w: number, h: number, d: number, material: THREE.Material) {
+    function block(x: number, y: number, z: number, w: number, h: number, d: number, material: THREE.MeshStandardMaterial) {
         const mesh = new THREE.Mesh(unit, material);
         mesh.scale.set(w, h, d);
         mesh.position.set(x, y, z);
@@ -36,7 +42,16 @@ export function makePassage() {
         return mesh;
     }
 
-    block(0, -0.14, 0, 10, 0.28, 22, floor);
+    if (preset === 'roughness') {
+        const edges = [-5, -1.8, -0.6, 0.6, 1.8, 5];
+        FLOOR_ROUGHNESSES.forEach((roughness, i) => {
+            const material = floor.clone();
+            material.roughness = roughness;
+            block((edges[i] + edges[i + 1]) / 2, -0.14, 0, edges[i + 1] - edges[i], 0.28, 22, material);
+        });
+    } else {
+        block(0, -0.14, 0, 10, 0.28, 22, floor);
+    }
     for (const x of [-1.95, 1.95]) block(x, 0.002, 0, 0.07, 0.005, 22, tile);
     for (let z = -10; z <= 10; z += 2) block(0, 0.002, z, 3.84, 0.004, 0.018, tile);
     const shell = new THREE.Mesh(vault(2.9, 0.24, 22), ceiling);
@@ -87,8 +102,42 @@ export function makePassage() {
     guide.position.set(0, 3.6, -7.8);
     scene.add(guide);
 
+    // At the fixed floor camera this broad source is above the frustum. Its
+    // virtual image across y=0 remains inside the bottom half of the viewport.
+    const panel = polished ? block(0, 3.75, -0.4, 1.9, 0.2, 2.2,
+        new THREE.MeshStandardMaterial({ color: 0x22272c, emissive: 0x8dd9ff, emissiveIntensity: 12 })) : null;
+    if (panel) panel.name = 'Moving overhead emitter';
+    const projection = new THREE.Matrix4();
+    const frustum = new THREE.Frustum();
+    const panelBounds = new THREE.Box3();
+    const projected = new THREE.Vector3();
+    function updateReflection(frame: number, motion: EmitterMotion, roughness: number) {
+        if (!panel) return;
+        floor.roughness = roughness;
+        const offset = motion === 'sequence' ? Math.sin(2 * Math.PI * frame / REPLAY_FRAMES)
+            : motion === 'left' ? -1 : motion === 'right' ? 1 : 0;
+        panel.position.x = 1.32 * offset;
+        panel.updateMatrixWorld(true);
+    }
+    function reflectionState(camera: THREE.PerspectiveCamera) {
+        if (!panel) return null;
+        camera.updateMatrixWorld();
+        projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        frustum.setFromProjectionMatrix(projection, THREE.WebGPUCoordinateSystem);
+        projected.copy(panel.position);
+        projected.y = -projected.y;
+        projected.project(camera);
+        return {
+            emitterPosition: panel.position.toArray(), cameraPosition: camera.position.toArray(),
+            emitterOnScreen: frustum.intersectsBox(panelBounds.setFromObject(panel)), mirrorUv: [(projected.x + 1) / 2, (1 - projected.y) / 2],
+        };
+    }
+
     function pose(camera: THREE.PerspectiveCamera, frame: number, view: CameraPose) {
-        if (view === 'receiver') {
+        if (view === 'receiver' && polished) {
+            camera.position.set(0, 1.35, 5.55);
+            camera.lookAt(0, 0, 2.05);
+        } else if (view === 'receiver') {
             camera.position.set(-0.6, 1.38, 3.3);
             camera.lookAt(1.65, 1.12, 0.75);
         } else {
@@ -101,9 +150,14 @@ export function makePassage() {
     function light(frame: number, requested: LampCue): string {
         const phase = frame % REPLAY_FRAMES;
         const cue = requested === 'sequence' ? (phase < 240 ? 'amber' : phase < 480 ? 'blue' : 'off') : requested;
-        warm.emissiveIntensity = cue === 'amber' ? 16 : 0;
-        blue.emissiveIntensity = cue === 'blue' ? 16 : 0;
+        // The fixed-camera motion fixture isolates a single transported source.
+        warm.emissiveIntensity = preset !== 'reflection-motion' && cue === 'amber' ? 16 : 0;
+        blue.emissiveIntensity = preset !== 'reflection-motion' && cue === 'blue' ? 16 : 0;
+        if (panel) {
+            panel.material.emissive.setHex(cue === 'blue' ? 0x8dd9ff : 0xffbc74);
+            panel.material.emissiveIntensity = cue === 'off' ? 0 : 14;
+        }
         return cue;
     }
-    return { scene, pose, light };
+    return { scene, pose, light, panel, updateReflection, reflectionState };
 }

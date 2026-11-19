@@ -36,6 +36,14 @@ device.queue.submit([encoder.finish()]);
 
 The gallery uses Three.js to rasterize direct light, surface attributes and depth, and optionally to reconstruct a reduced-resolution image. The native transport calls the pathtracer's closest-hit and visibility queues for opaque emissive or Lambertian surfaces with point lights. A custom transport only needs to implement `beginFrame` and `encode`. [Transport](../../packages/ddgi-core/src/techniques/radiance-cascades/transport.ts) · [Gallery adapter](../../examples/11-radiance-cascades/native-adapter.ts)
 
+## Rough reflections
+
+Set `roughSpecular: true` when creating the native solver. Supply perceptual roughness in the world-normal texture's alpha channel. The optional `specular` input to `encode` accepts a 16-byte uniform buffer containing a world-space camera position (w = 1) or an orthographic surface-to-camera direction (w = 0), plus an optional same-size `rgba16float` storage view. If the caller omits the output view, sample `rc.specularTexture` after encoding. Omitting the specular input skips the gather for that frame.
+
+The query returns prefiltered incident radiance in RGB. The output adapter applies the material's specular reflectance. The broad lobe uses the merged directional field. At lower roughness a nine-direction cone reads the nearer and farther intervals and composes them using observed transmittance. The finite cone and the near cascade's 24 directions limit the detail available on polished surfaces. The gather reuses the rays already traced for diffuse lighting. [WGSL implementation](../../packages/ddgi-core/src/techniques/radiance-cascades/specular.ts) · [Analytical GPU fixture](../../tools/gpu/pages/rc-native-reflections/)
+
+The polished gallery uses the original rail and lighting cues. The floor-strip example varies roughness under shared lighting. The reflection-motion example keeps the receiver camera fixed while a colored emitter moves above the viewport. [Experiment list and references](../../research/radiance-cascades/reflections.md)
+
 ## Reference and dynamic geometry
 
 The Three.js reference descends from Chandra via zalo's Three.js PR and the S5 upscaler example. Both solvers share camera, geometry, cues and exposure. The reference includes a secondary bounce. The native transport shades the closest hit with emission and shadowed direct illumination. The A/B compares end-to-end techniques at a matched primary stride. [Research and original implementations](../../research/radiance-cascades/README.md)

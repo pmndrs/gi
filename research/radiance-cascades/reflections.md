@@ -8,6 +8,16 @@
 | Upstream diffuse comparison | Use Chandra's Sponza geometry and camera, hold emission constant and compare linear indirect radiance. | A shared scene exposes brightness and spatial interpolation differences. Sun, sky, frame count and capture units must match. |
 | Sharp reflection rays | Future experiment. Trace a specular BVH ray for smooth surfaces and sample RC lighting at the hit. Sweep the transition to the rough gather. | Check narrow features and motion stability, and measure the extra rays and GPU time. |
 
+## Gallery
+
+The recording follows the original gallery rail. The lit and reflection-only views each accumulate their own temporal history at 1.5× reconstruction.
+
+![Polished gallery rail in motion, lit and specular views](../../docs/radiance-cascades/images/polished-rail.webp)
+
+The fixed-camera example below holds exposure constant. The first two captures move the lamp with the same floor finish. The third increases floor roughness with the lamp fixed.
+
+![Offscreen emitter position and floor roughness](../../docs/radiance-cascades/images/offscreen-roughness.png)
+
 ## Sources
 
 Sannikov describes querying radiance in a cone centered on the reflected view vector. The cone angle depends on material roughness. Probes keep their directional information until the diffuse projection. [Original manuscript](https://github.com/Raikiri/RadianceCascadesPaper/blob/main/RadianceCascades.tex)
