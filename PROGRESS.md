@@ -23,10 +23,17 @@ Rules:
 
 ## 2026-11-19 · SRC.2 and SRC.3 · Chandra and rough reflections
 
-- **Status** · Three of five original phases have passed. The [phase table](docs/radiance-cascades/PLAN.md) links the evidence and lists the remaining comparisons.
-- **Did** · Located Chandra's optional directional specular query and its interactive render loop. Added a matched Sponza fixture, a roughness-dependent gather in the vanilla WebGPU core, and three gallery presets. [Experiments and sources](research/radiance-cascades/reflections.md)
-- **Verified so far** · The gallery and core pass static type checking. The local upstream build and hardware image comparisons are in progress.
-- **Next** · Record the matched Sponza radiance and primary-hit checks, the polished-floor motion test, and the distinction between diffuse parity and rough specular quality.
+**Original phases** · Three of five passed. The shared tracer still has a diffuse parity investigation. Reconstruction runs on Windows and awaits Metal validation and sustained comparative timings. [Phase table](docs/radiance-cascades/PLAN.md)
+
+**Reflections** · The new vanilla WebGPU gather reuses the directional data that diffuse transport already collected. At low roughness it composes nine reflected directions through three intervals. Bilinear directional interpolation in the farther intervals reduced visible faceting. The gallery handles material Fresnel and presents the result through Three.js. [Experiment list, stills and recording](research/radiance-cascades/reflections.md)
+
+**Gallery checks** · On the RTX 3060 Laptop at 480 × 270, moving the offscreen blue lamp with the camera fixed shifted the floor response centroid from 0.4372 to 0.5620 of the image width (59.9 pixels). At the right-hand pose increasing roughness from 0.15 to 0.85 increased the horizontal standard deviation from 0.1323 to 0.2182 of image width and reduced peak display response from 0.8880 to 0.4831. Disabling specular produced a black reflection-only image. With the lamp fixed, moving the camera from rail tick 115 to 155 changed floor RGB by 16.0/255 on average. [GPU test](tools/gpu/pages/rc-rough-motion/)
+
+**Core checks** · The NVIDIA analytical fixture found a 0.00073 change in red radiance across a far-cascade angular-bin boundary. Two directions inside the same coarse near bin remained distinguishable at 0.0230 and 0.9063 red. An opaque near blocker suppressed the distant signal. The solver issued 169 transport batches in 169 frames with specular enabled. The integrated demo's 1.5× temporal rail stayed ready through 751 updates at 320 × 180 internal and 480 × 270 display. The recording's final specular-only frame reached 238/255. Some rectangular probe-cell boundaries remain visible at roughness 0.15. [Analytical fixture](tools/gpu/pages/rc-native-reflections/)
+
+**Matched Sponza** · The two browser arms agree on the directly visible emitters. Both use the upstream OBJ, a fixed camera, a black environment, zero sun and two constant emitters. The original Rust/CUDA build and capture are in progress. [Upstream recipe and scene setup](docs/radiance-cascades/chandra.md)
+
+**Verification** · Package build, TypeScript checks and all 1,620 active unit tests passed. The suite skipped 13 tests. The unit suite ran with two workers after the default parallel run hit timer and I/O timeouts on the compiling host.
 
 ## 2026-11-19 · Native Split RC, gallery A/B and shutter response
 
