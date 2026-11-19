@@ -1,0 +1,5 @@
+{
+    "description": "RC4.4: the radiance cache's GI term against the Cycles references (cycles-textured-gi.exr, else cycles-gi.exr) at their stored cameras and 1920x1080, on every scene with references (Cornell point and emissive, two-room, Sponza, Bistro interior and exterior): bias, 8x8 mean and p95 error of E averaged over 60 frames and of one frame, for the defaults, screen-probe history off, multibounce off and 16 px world-cache cells; the composite against cycles-full (information) and the world cache looked up at the visible surfaces against lights-direct (+ indirect). A measurement: fails only on errors, non-finite values or an upside-down reference. Needs bench/references and the downloads. VITE_RC_ACCURACY_SCENES / _CONFIGS / _WARM_FRAMES / _MEASURE_FRAMES pick a subset.",
+    "timeoutMs": 3600000,
+    "manual": true
+}

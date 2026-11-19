@@ -199,6 +199,24 @@ All in `tools/reference/cycles/units.py`, each with its reason. Pinned by measur
 - A second line with every value limited to 1 first (`--also-clamp x` changes it), so a bright lamp (17 in Cornell) does not dominate the sums. `--clamp x` applies a limit to the main numbers instead. Clamping happens before block averaging.
 - `--downsample 8` averages 8 x 8 blocks of both images first. A path-traced image is noisy; this takes most of the noise out so lighting differences show. FLIP gets the block-averaged images with its pixels per degree divided by 8 (67 becomes 8.4): each pixel now spans 8 times the viewing angle, so FLIP judges the same view. `--ppd` always describes the full-size image, so a value you give is divided too (`--ppd 40 --downsample 8` gives FLIP 5). A FLIP number is only comparable with another taken at the same downsample.
 
+## Radiance cache accuracy (RC4.4)
+
+```
+node tools/reference/bench-lock.ts run --no-cool-wait --what "rc accuracy" -- pnpm test:gpu --filter radiance-cache-accuracy --gpu nvidia --out <dir> --json <file>
+```
+
+The `radiance-cache-accuracy` GPU page (`tools/gpu/pages/radiance-cache-accuracy/`) renders the radiance cache through the three adapter at every Cycles reference's stored camera and size, and compares it with the references in the page itself (no Node side, no files written; the numbers are in the report's data and log, the screenshot is a contact sheet per view). It is the radiance-cache counterpart of `m4-textured-accuracy`, built to be reused (phase 5 and later techniques): `references.ts` finds and reads the references in the browser, `accuracy.ts` holds the numbers (unit-tested), `gpu.ts` the frame accumulator and the world-cache lookup.
+
+- **Views:** every bookmark of a scene whose folder holds a GI composite with a stored shot; the textured render (`cycles-textured-*`) where there is one, else the plain one (the viewer's `findReference`). Scenes: `cornell-box-point`, `cornell-box`, `two-room`, `sponza`, `bistro-interior`, `bistro-exterior`; a scene without references is listed as skipped.
+- **Images compared**, all with the numbers of "Compare" above (bias over every pixel, then 8 x 8 blocks: mean relative error and p95 block error):
+  - the **GI term** (`giAlbedo x E / pi`, what the composite adds) against `<prefix>-gi.exr`, with E averaged over 60 frames after 90 (the bias, the per-frame noise mostly averaged out) and from the last frame alone (what one frame shows);
+  - the **composite** (three's picture without GI plus the GI term) against `<prefix>-full.exr`, as information: it also carries three's shadow maps and sky dome;
+  - the **world cache alone**: the cache looked up at each pixel's visible surface (with the view ray as the arriving direction) against what the cache holds in Cycles' terms, `<prefix>-lights-direct.exr` (its hits get no sky and no emitter light, registers D33 and D21) plus `<prefix>-indirect.exr` when multibounce is on, over the pixels where it has a cell (the coverage is reported).
+- **Settings:** `default`, `history off` (screen-probe history dropped before every frame), `multibounce off`, `cells 16 px` (world-cache cells half as wide). Each starts from an emptied cache. Their differences say what each part contributes; the reference decides which is right.
+- **Subsets:** `VITE_RC_ACCURACY_SCENES=two-room,sponza`, `VITE_RC_ACCURACY_CONFIGS=default,history off`, `VITE_RC_ACCURACY_WARM_FRAMES`, `VITE_RC_ACCURACY_MEASURE_FRAMES`.
+- **Fails only** on a device error, a NaN or infinite value, a reference that agrees better upside down (a row-order mistake), or no view at all.
+- **References** come from `bench/references/<scene>/<bookmark>/` (gitignored). In a worktree, a junction to the checkout that holds them works (`mklink /J bench\references <that checkout>\bench\references`).
+
 ## Agreement tolerance: Cycles vs path tracer
 
 Proposed tolerance for "the two references agree" (both near converged: Cycles at least 2048 samples, path tracer at least 8192):

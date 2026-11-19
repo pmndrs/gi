@@ -41,15 +41,6 @@ const TECHNIQUE_IMPORT_MESSAGE = 'A technique may import only platform/contract 
 const PLATFORM_IMPORT_MESSAGE = 'The platform may not import a technique (or the core entry point that assembles them): techniques depend on the platform, never the other way round. Put shared code in the platform and export it through platform/contract.';
 // Package names that lead into the repo's own packages from a bare specifier.
 const OWN_PACKAGE_PREFIXES = ['@pmndrs/bvh', '@pmndrs/ddgi-core'];
-// Technique imports of platform internals that `main` made before this rule
-// reached it (the radiance-cache merge, 2026-11-19), allowed one by one so DDGI's
-// code stays as `main` has it. Each is a helper the contract doesn't offer yet;
-// the way out is to export it through platform/contract (the lead's call), then
-// drop the line here. Paths are below ddgi-core's src/: importer -> imported file.
-const KNOWN_TECHNIQUE_IMPORTS = new Set([
-    'techniques/ddgi/ddgi-technique.ts -> platform/scene/scene-fingerprint.ts', // fingerprintDifferences (T5.2 saved bakes)
-    'techniques/ddgi/saved-field.ts -> platform/sky/half-float.ts', // halfToFloat (T5.2 saved bakes)
-]);
 
 /** Path segments of `file` below ddgi-core's `src/`, or null when it is outside. */
 function coreSegments(file) {
@@ -84,7 +75,6 @@ function layerViolation(importer, specifier) {
         const insidePackages = !fromPackages.startsWith('..') && !path.isAbsolute(fromPackages);
         return insidePackages ? TECHNIQUE_IMPORT_MESSAGE : null;
     }
-    if (KNOWN_TECHNIQUE_IMPORTS.has(`${from.join('/')} -> ${to.join('/')}`)) return null;
     const ownTechnique = from.length > 2 ? from[1] : null;
     const isContract = to[0] === 'platform' && to[1] !== undefined && to[1].replace(/\.ts$/, '') === 'contract';
     const isOwnFolder = ownTechnique !== null && to[0] === 'techniques' && to[1] === ownTechnique;
