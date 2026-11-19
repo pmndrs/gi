@@ -1,0 +1,29 @@
+diff --git a/src/scene_viewer/main_shared.cpp b/src/scene_viewer/main_shared.cpp
+index e29c07e..14432fe 100644
+--- a/src/scene_viewer/main_shared.cpp
++++ b/src/scene_viewer/main_shared.cpp
+@@ -437,6 +437,11 @@ bool CapsaicinMain::initialise() noexcept
+         app.add_option("--dump-folder", dumpFolderOverride,
+             "Name of the folder (or path) where the results will be saved.");
+ 
++        // ddgi research patch: select a debug view / AOV from the command line so benchmark dumps can
++        // save e.g. "GlobalIllumination" directly (tools/reference/capsaicin/debug-view.patch).
++        string startDebugView;
++        app.add_option("--debug-view", startDebugView, "Start with this debug view or AOV selected");
++
+         vector<string> renderOptions;
+         app.add_option("--render-options", renderOptions, "Additional render options");
+ 
+@@ -713,6 +718,12 @@ bool CapsaicinMain::initialise() noexcept
+             }
+         }
+ 
++        if (!startDebugView.empty() && !Capsaicin::SetDebugView(startDebugView))
++        {
++            printString("Invalid command line value passed for '--debug-view'", MessageLevel::Error);
++            return false;
++        }
++
+         if (benchmarkMode)
+         {
+             uint32_t const lastFrame = benchmarkModeFrameCount - 1U;

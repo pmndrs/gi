@@ -2,3 +2,6 @@
 	path = native/rtxgi-ddgi
 	url = https://github.com/DennisSmolek/ddgi-rtxgi.git
 	branch = ddgi-reference
+[submodule "native/capsaicin"]
+	path = native/capsaicin
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin.git
