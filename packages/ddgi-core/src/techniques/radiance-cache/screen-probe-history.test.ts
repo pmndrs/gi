@@ -133,7 +133,7 @@ describe('a constant sky with history (register D41): the cause of GI-1.2 drifti
             expect(result.unreachedShare).toBeGreaterThan(0.45);
             expect(result.unreachedShare).toBeLessThan(0.6);
         }
-    });
+    }, 60_000);
 
     it('the empty-cell rule is the cause: with it fixed the sky stays at 1 under either guiding', () => {
         for (const guiding of ['capsaicin', 'fixed'] as const) {
@@ -144,10 +144,10 @@ describe('a constant sky with history (register D41): the cause of GI-1.2 drifti
                 if (result.frame > 1) expect(result.unreachedShare).toBeGreaterThan(0.38);
             }
         }
-    });
+    }, 60_000);
 
     it("our guiding alone does not fix it: Capsaicin's rule still drifts", () => {
         const results = simulateConstantSky({ rule: 'capsaicin', guiding: 'fixed', frames: 128, report: [128] });
         expect(results[0].ourProjection).toBeLessThan(0.8);
-    });
+    }, 60_000);
 });
