@@ -39,6 +39,10 @@ jobs:
             # The same npm as publish.yml: the packed check runs `npm pack` and
             # `npm install`, whose output and behaviour vary by npm major.
             - run: npm install -g npm@^11.5.1
+            # Development link to a sibling library (root package.json `linkedSiblings`,
+            # radiance-cache branch only): clone it at its pinned commit and build it, or the
+            # install's preinstall check stops. Remove with the link.
+            - run: corepack enable && node tools/linked-siblings.ts --fetch
             - run: pnpm install --frozen-lockfile
             - run: pnpm lint
             - run: pnpm typecheck
