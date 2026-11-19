@@ -24,6 +24,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
@@ -52,6 +53,30 @@ interface SceneCounts {
     readonly mostLiveTiles: number;
     readonly tileSlots: number;
     readonly meanHitsInserted: number;
+    /**
+     * The last frame's probe rays that hit a back face within 2 cm (RC3.5 review): the sign of a
+     * ray whose origin, rebuilt from the screen's depth, sits under thin geometry at a grazing
+     * view (register D17). Some can be real (a thin double-sided leaf); information only.
+     */
+    readonly probeRays: number;
+    readonly backFaceHitsWithin2cm: number;
+    readonly backFaceHitsWithin2cmShare: number;
+}
+
+/** The last frame's probe rays, and those that hit a back face within 2 cm (`WorldCacheProbeRay`: hitT word 6, front face word 9). */
+async function countBackFaceHits(device: GPUDevice, technique: RadianceCacheTechnique): Promise<{ probeRays: number; backFaceHitsWithin2cm: number; backFaceHitsWithin2cmShare: number }> {
+    const probes = technique.probes;
+    if (!probes) return { probeRays: 0, backFaceHitsWithin2cm: 0, backFaceHitsWithin2cmShare: 0 };
+    const count = new Uint32Array(await readBuffer(device, probes.probeRays, 4))[0];
+    const words = new Uint32Array(await readBuffer(device, probes.probeRays, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + count * WORLD_CACHE_PROBE_RAY_BYTES));
+    const floats = new Float32Array(words.buffer);
+    let backFace = 0;
+    for (let ray = 0; ray < count; ray++) {
+        const base = (WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + ray * WORLD_CACHE_PROBE_RAY_BYTES) / 4;
+        const hitT = floats[base + 6];
+        if (hitT >= 0 && hitT < 0.02 && words[base + 9] === 0) backFace++;
+    }
+    return { probeRays: count, backFaceHitsWithin2cm: backFace, backFaceHitsWithin2cmShare: backFace / Math.max(count, 1) };
 }
 
 async function countScene(device: GPUDevice, manifest: SceneManifest): Promise<SceneCounts> {
@@ -104,6 +129,7 @@ async function countScene(device: GPUDevice, manifest: SceneManifest): Promise<S
         }
         await device.queue.onSubmittedWorkDone();
         const words = new Uint32Array(await readBuffer(device, counts, FRAMES * WORDS_PER_FRAME * 4));
+        const grazing = await countBackFaceHits(device, technique);
         let refusedInserts = 0;
         let framesWithOverflow = 0;
         let mostRefusedInAFrame = 0;
@@ -131,6 +157,7 @@ async function countScene(device: GPUDevice, manifest: SceneManifest): Promise<S
             mostLiveTiles,
             tileSlots: technique.worldCache?.capacity.numTiles ?? 0,
             meanHitsInserted: hits / FRAMES,
+            ...grazing,
         };
     } finally {
         counts.destroy();

@@ -1351,8 +1351,9 @@ async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: Fr
     // The ceiling has no light: a self-bypassed ceiling ray's own sample is 0.
     const prediction = await predictProbeRays(device, scenario, state, () => 0);
     const rays = judgePredictedRays(state, prediction, fail);
-    const tally = { near: 0, nearWithIndirect: 0, nearWithoutIndirect: 0, nearWithDirect: 0, nearOff: 0, worstNear: 0, nearIndirectMean: 0, farWithDirect: 0 };
+    const tally = { near: 0, nearWithIndirect: 0, nearWithoutIndirect: 0, nearWithDirect: 0, nearOff: 0, worstNear: 0, nearIndirectMean: 0, nearMeanWithZeros: 0, farWithDirect: 0 };
     let nearIndirectSum = 0;
+    let nearSum = 0;
     for (const index of prediction.resolvedCellOf.keys()) {
         if (state.rays[index].surface !== 'ceiling') continue;
         const [directCount, indirectCount] = prediction.counts.get(index) ?? [0, 0];
@@ -1365,6 +1366,7 @@ async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: Fr
         if (directCount > 0) tally.nearWithDirect++;
         const extra = prediction.additions.get(index) ?? [0, 0, 0];
         const own = [0, 1, 2].map((channel) => state.radiance[index * 4 + channel] - extra[channel]);
+        nearSum += own[0];
         if (indirectCount > 0) {
             tally.nearWithIndirect++;
             nearIndirectSum += own[0];
@@ -1374,6 +1376,7 @@ async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: Fr
         if (error > (indirectCount > 0 ? TOLERANCE : 1e-3)) tally.nearOff++;
     }
     tally.nearIndirectMean = nearIndirectSum / Math.max(tally.nearWithIndirect, 1);
+    tally.nearMeanWithZeros = nearSum / Math.max(tally.near, 1);
     if (tally.near === 0) fail(`no ceiling ray in a tile under ${NEAR_TILE_SIZE} m: move the camera`);
     if (tally.nearWithDirect > 0) fail(`${tally.nearWithDirect} ceiling rays in tiles under ${NEAR_TILE_SIZE} m read direct light: the ceiling has none`);
     if (perRay && tally.nearOff > Math.ceil(0.01 * tally.near)) fail(`${tally.nearOff} of ${tally.near} ceiling rays in tiles under ${NEAR_TILE_SIZE} m are off ${expectedIndirect.toFixed(4)}`);
@@ -1692,6 +1695,19 @@ async function checkCornerBypass(device: GPUDevice, scenario: Scenario): Promise
         if (Math.abs(value) > 1e-3 && relativeError(value, LIT_RADIANCE) > 2 * HALF_TOLERANCE) ownLightsOff++;
     }
     if (ownLightsOff > 0) fail(`${ownLightsOff} of ${ownLights} second hits' own light is neither 0 nor albedo / pi x E`);
+    // A bypassing second hit on a back face (the wall's or the slab's underside, which the sun
+    // never reaches) has no light drawn and no shadow ray: its own light must be the 0 that
+    // GenerateMultibounceReservoirs wrote, not an older frame's word.
+    let unlitOwnLights = 0;
+    let unlitOwnLightsOff = 0;
+    for (let entry = 0; entry < state.multibounceCell.length; entry++) {
+        const base = entry * MULTIBOUNCE_RAY_WORDS;
+        if ((state.multibounceRays[base + 3] & WORLD_CACHE_PROBE_RAY_BYPASS) === 0 || state.multibounceRays[base + 9] !== 0) continue;
+        unlitOwnLights++;
+        if (Math.max(...state.multibounceDirect.slice(entry * 4, entry * 4 + 3)) !== 0) unlitOwnLightsOff++;
+    }
+    if (unlitOwnLights === 0) fail('no bypassing second hit on a back face: the unlit own light is unchecked');
+    if (unlitOwnLightsOff > 0) fail(`${unlitOwnLightsOff} of ${unlitOwnLights} bypassing second hits on a back face hold an own light`);
     // Where Capsaicin's two misdirected additions would have landed this frame: those rays now read their prediction.
     const capsaicinTargets = new Set<number>();
     for (const entry of state.visibilityRay) {
@@ -1700,7 +1716,7 @@ async function checkCornerBypass(device: GPUDevice, scenario: Scenario): Promise
     }
     if (rays.skipped > tally.selfBypassedRays) fail(`${rays.skipped} rays had no prediction`);
     if (rays.skipped > 0.5 * tally.selfBypassedRays) fail(`${rays.skipped} of ${tally.selfBypassedRays} self-bypassed rays had no prediction: move the slab`);
-    return { failures, data: { firstBounceEntries: firstCount, secondBounceEntries: state.multibounceCell.length, ...tally, segmentsWithOwnLight: ownLights, capsaicinMisdirectedTargets: capsaicinTargets.size, rays } };
+    return { failures, data: { firstBounceEntries: firstCount, secondBounceEntries: state.multibounceCell.length, ...tally, segmentsWithOwnLight: ownLights, unlitSegmentsWithOwnLight: unlitOwnLights, capsaicinMisdirectedTargets: capsaicinTargets.size, rays } };
 }
 
 // ---- Section 13: an open scene, half the second-bounce rays missing --------------------------------
@@ -1732,11 +1748,17 @@ async function checkStrips(device: GPUDevice, scenario: Scenario): Promise<Check
     const indirectCells = await finestValues(device, cache, tiles, true);
     let sum = 0;
     let cells = 0;
+    // Every near cell counts, one with no sample yet as 0, so a cell left at 0 between its sparse
+    // samples (Capsaicin's step-down, register D37) would pull the average down.
+    let cellsWithoutSamples = 0;
     for (const cell of nearCells) {
         const value = indirectCells.get(cell);
-        if (!value || !(value[3] > 0)) continue;
-        sum += value[0] / value[3];
         cells++;
+        if (!value || !(value[3] > 0)) {
+            cellsWithoutSamples++;
+            continue;
+        }
+        sum += value[0] / value[3];
     }
     const nearCellMean = sum / Math.max(cells, 1);
     const firstHitsOnTheFloor = state.rays.filter((ray) => ray.hitT >= 0 && ray.surface === 'floor').length;
@@ -1787,8 +1809,45 @@ async function checkStrips(device: GPUDevice, scenario: Scenario): Promise<Check
     const nearHitShare = nearHits / Math.max(nearEntries, 1);
     if (Math.abs(nearHitShare - STRIPS.fill) > 0.02) fail(`${(nearHitShare * 100).toFixed(2)}% of the near ceiling cells' kept second-bounce rays hit, expected ${STRIPS.fill * 100}%`);
     if (disagreements > Math.ceil(0.005 * cpuJudged)) fail(`the GPU and the CPU disagree on ${disagreements} of ${cpuJudged} landings`);
+    if (relativeError(rays.nearMeanWithZeros, STRIPS_INDIRECT) > TOLERANCE) fail(`the near ceiling rays, those reading no indirect value as 0, average ${rays.nearMeanWithZeros.toFixed(4)}, expected ${STRIPS_INDIRECT.toFixed(4)}`);
     if (relativeError(nearCellMean, STRIPS_INDIRECT) > TOLERANCE) fail(`the near ceiling cells' indirect means average ${nearCellMean.toFixed(4)}, expected ${STRIPS_INDIRECT.toFixed(4)} (a hit-only mean would read ${(STRIPS_INDIRECT / STRIPS.fill).toFixed(4)})`);
-    return { failures, data: { expectedIndirect: STRIPS_INDIRECT, hitOnlyMeanWouldRead: STRIPS_INDIRECT / STRIPS.fill, entries, hitShare, nearCells: cells, nearCellMean, nearCellMeanOverExpected: nearCellMean / STRIPS_INDIRECT, byCountMean, nearEntries, nearHitShare, cpuHitShare: cpuHits / Math.max(cpuJudged, 1), cpuJudged, disagreements, firstHitsOnTheFloor, rays } };
+    return { failures, data: { expectedIndirect: STRIPS_INDIRECT, hitOnlyMeanWouldRead: STRIPS_INDIRECT / STRIPS.fill, entries, hitShare, nearCells: cells, nearCellsWithoutSamples: cellsWithoutSamples, nearCellMean, nearCellMeanOverExpected: nearCellMean / STRIPS_INDIRECT, byCountMean, nearEntries, nearHitShare, cpuHitShare: cpuHits / Math.max(cpuJudged, 1), cpuJudged, disagreements, firstHitsOnTheFloor, rays } };
+}
+
+// ---- Section 14: every first bounce bypasses; its probe rays average the second bounce -------------
+
+/** Cells 62 times Capsaicin's default (2,000 pixels): wider than the furnace's 3 m gap, so every short ray bypasses. */
+const BYPASS_ALL: Partial<RadianceCacheSettings> = { useMultibounce: true, hashGridCacheCellSize: 2000 };
+
+async function checkBypassAverage(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`bypass average: ${message}`);
+    };
+    // Over four frames: a self-bypassed ceiling ray reads its own sample (0, the ceiling has no
+    // light) plus its one draw over 1 - p (register D38), so a single ray reads 0 or about
+    // rho L_f / 0.3, and their average is the true second bounce. Independent of the
+    // per-ray prediction, which uses the same formula as the kernel.
+    let sum = 0;
+    let rays = 0;
+    let predictedOff = 0;
+    for (let frame = 0; frame < 4; frame++) {
+        await runFrames(device, scenario, 1);
+        const state = await readFrameState(device, scenario);
+        const prediction = await predictProbeRays(device, scenario, state, () => 0);
+        predictedOff += judgePredictedRays(state, prediction, fail).off;
+        for (const entry of state.resolve) {
+            if ((entry & BYPASS_CACHE_BIT) === 0) continue;
+            const index = state.visibilityQuery[entry & ~BYPASS_CACHE_BIT];
+            if (state.rays[index].surface !== 'ceiling') continue;
+            sum += state.radiance[index * 4];
+            rays++;
+        }
+    }
+    const mean = sum / Math.max(rays, 1);
+    if (rays === 0) fail('no ceiling ray bypassed the cache');
+    if (relativeError(mean, TRUE_SECOND_BOUNCE) > TOLERANCE) fail(`the self-bypassed ceiling rays average ${mean.toFixed(4)}, the second bounce is ${TRUE_SECOND_BOUNCE.toFixed(4)}`);
+    return { failures, data: { selfBypassedCeilingRays: rays, mean, meanOverTrueSecondBounce: mean / TRUE_SECOND_BOUNCE, predictedOff } };
 }
 
 // ---- Section 12: emptied when a cell size changes ---------------------------------------------------
@@ -1877,6 +1936,7 @@ try {
     await run('cornerBypass', [sun(SUN_TRAVEL)], { slab: true }, CONVERGENCE_FRAMES, checkCornerBypass, MULTIBOUNCE);
     await run('clearOnChange', [sun(SUN_TRAVEL)], {}, 10, checkClearOnChange);
     await run('strips', [FURNACE_SUN], { furnace: true, strips: true }, CONVERGENCE_FRAMES, checkStrips, MULTIBOUNCE);
+    await run('bypassAverage', [FURNACE_SUN], { furnace: true }, CONVERGENCE_FRAMES, checkBypassAverage, BYPASS_ALL);
 
     await drainDevice(device);
     reportGpuTest({

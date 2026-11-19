@@ -3,7 +3,7 @@ import type { Vec3 } from '../../../platform/contract/math.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS } from './capacity.ts';
 import { HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
-import { pcgHash } from './hash-grid-cpu.ts';
+import { pcgHash, updateTilesAccumulate, updateTilesAccumulateIndirect, type CellValue } from './hash-grid-cpu.ts';
 import {
     makeRandom,
     mapToCosineHemisphere,
@@ -210,6 +210,34 @@ describe('the multibounce sample and its settled value', () => {
             expect(Math.abs(bypassSum / draws / expected - 1)).toBeLessThan(0.05);
         }
         expect(multibounceSettledIndirect(albedo, secondDirect)).toBeCloseTo(albedo * secondDirect, 10);
+    });
+});
+
+describe("a sparse cell's indirect value over frames (UpdateTiles, register D37)", () => {
+    /**
+     * One cell with `entries` first-bounce entries a frame, each kept with probability 0.3 and
+     * adding a sample of `mu` (one entry a frame is a cell its probes rarely reach). The reading
+     * each frame is the cell's mean, 0 at a count of 0, as ResolveCells divides it; averaged
+     * over frames 100 to 4,100.
+     */
+    function meanReading(entries: number, blend: (stored: CellValue, samples: CellValue, cap: number) => CellValue): number {
+        const mu = 0.5;
+        let value: CellValue = [0, 0, 0, 0];
+        let sum = 0;
+        for (let frame = 0; frame < 4100; frame++) {
+            let kept = 0;
+            for (let entry = 0; entry < entries; entry++) if (!multibounceDraw(frame * 16 + entry, 3, 0.7).discarded) kept++;
+            value = blend(value, [mu * kept, mu * kept, mu * kept, kept], 16);
+            if (frame >= 100) sum += value[3] > 0 ? value[0] / value[3] : 0;
+        }
+        return sum / 4000 / mu;
+    }
+
+    it("reads the samples' mean at one, two and three entries a frame, where Capsaicin's step-down reads low at one", () => {
+        for (const entries of [1, 2, 3]) expect(meanReading(entries, updateTilesAccumulateIndirect)).toBeCloseTo(1, 3);
+        // Capsaicin's blend: a frame with no sample drops the count by one, and a count of 0 reads 0.
+        expect(meanReading(1, updateTilesAccumulate)).toBeLessThan(0.6);
+        expect(meanReading(3, updateTilesAccumulate)).toBeGreaterThan(0.97);
     });
 });
 

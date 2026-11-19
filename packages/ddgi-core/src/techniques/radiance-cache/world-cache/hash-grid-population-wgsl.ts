@@ -832,11 +832,18 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_direct_radiance;
 
         // USE_MULTI_BOUNCE: the scratch UpdateMultibounceCells filled last frame (its one-frame lag).
+        // A frame with no indirect sample leaves the value and its count as they are (register
+        // D37): Capsaicin's blend takes such a frame as a step down (the mean kept, the count one
+        // less, and at 0 the value reads 0), and with only a cell's kept rays counting (about 0.3
+        // of its hits a frame) a sparse cell would spend many frames at 0. The direct values keep
+        // Capsaicin's blend.
         if (g_HashGridCacheConstants.use_multibounce != 0u) {
-            let indirect_radiance = UpdateTiles_Accumulate(
-                HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]),
-                UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index),
-                g_HashGridCacheConstants.max_multibounce_sample_count);
+            let previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
+            let new_indirect_samples = UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index);
+            var indirect_radiance = previous_indirect_radiance;
+            if (new_indirect_samples.w > 0.0) {
+                indirect_radiance = UpdateTiles_Accumulate(previous_indirect_radiance, new_indirect_samples, g_HashGridCacheConstants.max_multibounce_sample_count);
+            }
             let packed_indirect_radiance = HashGridCache_PackRadiance(indirect_radiance);
             lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_indirect_radiance;
             g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_indirect_radiance;
