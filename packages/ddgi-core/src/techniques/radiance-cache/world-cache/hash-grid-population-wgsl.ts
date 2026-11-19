@@ -639,8 +639,8 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     if (bypass_cache) {
         // BE CAREFUL: for a second-bounce entry the query is the first-bounce entry's visibility
         // index, not a probe ray's, and Capsaicin adds to that probe ray all the same
-        // (gi1.comp:2102-2105 with gi1.comp:1793): kept as Capsaicin has it for now, to be fixed
-        // by default behind a switch (DECISIONS 2026-11-19; NOTES, RC3.3).
+        // (gi1.comp:2102-2105 with gi1.comp:1793): Capsaicin behaviour, to be fixed under
+        // DECISIONS 2026-11-19 (NOTES, RC3.3).
         let query_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, visibility_index);
         ScreenProbes_AccumulateRadiance(query_index, GIDenoiser_RemoveNaNs(lighting));
     }
@@ -1155,8 +1155,8 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
  * cell). `UpdateTiles` blends that scratch into the indirect values next
  * frame: the one-frame lag.
  *
- * Two of Capsaicin's index uses are kept as they are for now (NOTES, RC3.3;
- * DECISIONS 2026-11-19 fixes them by default behind a switch): the
+ * Two of Capsaicin's index uses are kept as they are for now (Capsaicin behaviour,
+ * to be fixed under DECISIONS 2026-11-19; NOTES, RC3.3): the
  * bypass test reads the shadow-ray list at the visibility index, and a
  * bypassed sample is added to the probe ray numbered as the first-bounce
  * entry's visibility index.
@@ -1201,7 +1201,7 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
     }
     atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
 
-    // BE CAREFUL (kept as Capsaicin has it for now, gi1.comp:1977-1982; DECISIONS 2026-11-19 fixes it by default): the shadow-ray list is read at
+    // BE CAREFUL (Capsaicin behaviour, gi1.comp:1977-1982, to be fixed under DECISIONS 2026-11-19): the shadow-ray list is read at
     // the visibility index, and the query is the first-bounce entry's visibility index, which is
     // added to as a probe ray's.
     let bypass_cache = (HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_ray_buffer, did2) >> 31u) != 0u;

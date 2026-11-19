@@ -81,7 +81,7 @@
  *   indirect value, and every probe ray reading it, is ρ² E / (π × 0.3) =
  *   1.0610: up from 0 by that much, and 1 / 0.3 = 3.33 times the second
  *   bounce's expected value ρ² E / π = 0.3183, because only kept rays add a
- *   sample (Capsaicin's arithmetic, kept for now: DECISIONS 2026-11-19 fixes it by default behind a switch; NOTES, RC3.3).
+ *   sample (Capsaicin behaviour, to be fixed under DECISIONS 2026-11-19; NOTES, RC3.3).
  *
  * Far from the camera a tile is taller than the 3 m gap, and nearly level
  * rays up and down share a direction bin, so a far tile holds floor and
@@ -223,7 +223,7 @@ const FLOOR_RADIANCE = (FURNACE.albedo * FURNACE.sunIntensity) / Math.PI;
 const TRUE_SECOND_BOUNCE = FURNACE.albedo * FLOOR_RADIANCE;
 /**
  * Capsaicin's factor on it: 1 / (1 - p), since only kept rays add a sample (NOTES, RC3.3). A
- * switch that removes the bias would test against TRUE_SECOND_BOUNCE alone.
+ * fix of the bias (DECISIONS 2026-11-19) tests against TRUE_SECOND_BOUNCE alone.
  */
 const CAPSAICIN_FACTOR = 1 / (1 - DISCARD_PROBABILITY);
 /** A ceiling cell's settled indirect value, as Capsaicin computes it (`multibounceSettledIndirect`). */

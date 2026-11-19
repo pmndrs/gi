@@ -177,9 +177,8 @@ export function multibounceSample(directMean: Vec3, brdf: Vec3, pdf: number, dis
  * (BRDF / pdf is the albedo), and `UpdateTiles` averages the samples it gets.
  * Only the kept rays add a sample, so the 1 / (1 - p) isn't undone by a count
  * that includes the discarded ones: the value is 1 / (1 - p) times the
- * second bounce's expected value (3.33 × at p = 0.7). Capsaicin's arithmetic,
- * kept for now; to be fixed by default with a switch reproducing it
- * (DECISIONS 2026-11-19; NOTES, RC3.3).
+ * second bounce's expected value (3.33 × at p = 0.7). Capsaicin behaviour,
+ * to be fixed under DECISIONS 2026-11-19 (NOTES, RC3.3).
  */
 export function multibounceSettledIndirect(albedo: number, secondDirect: number, discardProbability: number): number {
     return (albedo * secondDirect) / (1 - discardProbability);
