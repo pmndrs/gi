@@ -368,10 +368,16 @@ export class DdgiTechnique extends ScenePassTechnique {
             const history = new ProbeHistoryTexture(this.context.device);
             this.probeHistory = history;
             // The history texture has the points texture's shape: probe i at texel (i mod width, i div width).
-            this.spheres = new ProbeSpheres(points, loaded.manifest.volume.probeSpacing, {
-                texture: () => history.texture(points.texture().width, points.texture().height),
-                maxSamples: () => started.technique.settings.hysteresisMaxSamples,
-            });
+            this.spheres = new ProbeSpheres(
+                points,
+                loaded.manifest.volume.probeSpacing,
+                {
+                    texture: () => history.texture(points.texture().width, points.texture().height),
+                    maxSamples: () => started.technique.settings.hysteresisMaxSamples,
+                },
+                // The probes' own light (DV-03) comes from the shading module the picture is lit by.
+                started.platform.shading,
+            );
             loaded.scene.add(this.spheres.mesh);
         }
         this.debugMaterial = new DdgiDebugMaterial(started.platform.shading);

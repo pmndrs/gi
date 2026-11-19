@@ -1,5 +1,5 @@
 {
-    "description": "M4 T4.5: GI's indirect light on textured scenes against the textured Cycles references (cycles-textured-gi.exr), on M1's default path (composite through the upscaler, Performance, GTAO at half resolution; the composite's default since 2026-11-18 has no GTAO, which --no-occlusion measures). Run through node tools/gpu/pages/m4-textured-accuracy/run.ts, which gives the page its scene and cameras and compares (mean error, FLIP 8x8). Needs the references and the downloads.",
+    "description": "M4 T4.5: GI's indirect light on textured scenes against the textured Cycles references (cycles-textured-gi.exr), on the shipping default (composite through the upscaler, Performance, no GTAO since 2026-11-18; run.ts --occlusion adds M1's GTAO at half resolution). Run through node tools/gpu/pages/m4-textured-accuracy/run.ts, which gives the page its scene and cameras and compares (mean error, FLIP 8x8). Needs the references and the downloads.",
     "timeoutMs": 1800000,
     "manual": true
 }

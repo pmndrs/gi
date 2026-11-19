@@ -21,7 +21,8 @@
  *                watching a saved bake load: the panel's "Load probes from a file")
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
- * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
+ * - `probecolor` `history` colours DDGI's probe spheres by how settled they are, `irradiance` by each
+ *                probe's own light (RTXGI's probe view) (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
  * - `atlasev`    extra exposure for the irradiance atlas, in stops
@@ -69,7 +70,7 @@ export type GiChoice = 'off' | 'on' | 'only';
 export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'gi-albedo';
 export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'gi-albedo'];
 
-export type ProbeColorName = 'state' | 'history';
+export type ProbeColorName = 'state' | 'history' | 'irradiance';
 export type AtlasName = 'irradiance' | 'distance';
 const ATLAS_NAMES: readonly AtlasName[] = ['irradiance', 'distance'];
 
@@ -270,7 +271,8 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.warmUp = params.get('warmup') !== '0';
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
-    if (params.get('probecolor') === 'history') state.probeColor = 'history';
+    const probeColor = params.get('probecolor');
+    if (probeColor === 'history' || probeColor === 'irradiance') state.probeColor = probeColor;
     state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
     state.atlasFill = params.get('atlasfill') === '1';
     const atlasEv = finiteNumber(params.get('atlasev'));

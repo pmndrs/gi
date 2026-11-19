@@ -4,7 +4,7 @@
  * with them.
  *
  *   node tools/gpu/pages/m4-textured-accuracy/run.ts [--scenes a,b,...] [--gpu nvidia|intel]
- *        [--references <dir>] [--out <dir>] [--compare-only] [--no-occlusion] [--timeout-minutes 30]
+ *        [--references <dir>] [--out <dir>] [--compare-only] [--occlusion] [--material-variant cutout|opaque] [--timeout-minutes 30]
  *
  * For each scene, every camera folder under `<references>/<scene>/` with a
  * `cycles-textured-gi.exr` is a view: its json's stored shot gives the
@@ -17,10 +17,19 @@
  * Writes `<out>/<scene>/<camera>/ddgi-textured-gi.exr` (the GI term in the
  * reference's row order), comparison PNGs beside it, and
  * `<out>/m4-textured-accuracy-<gpu>.json` with every row. `--compare-only`
- * compares the EXRs already written (no GPU). `--no-occlusion` runs the
- * same without GTAO on the GI term (files and summary named `-no-ao`): the
- * composite's default since 2026-11-18, and the way to tell the occlusion's
- * share of a difference from the field's.
+ * compares the EXRs already written (no GPU). The default is the shipping
+ * composite's (no occlusion since 2026-11-18; files and summary named `-no-ao`).
+ * `--occlusion` adds GTAO on the GI term, as M1's default path had it (files
+ * and summary unsuffixed): the way to tell the occlusion's share of a
+ * difference from the field's.
+ *
+ * `--material-variant cutout|opaque` (a foliage diagnostic, TU.4: blended materials
+ * made alpha-tested or opaque on our side only; files and summary get the variant's suffix).
+ *
+ * A scene id can also be an end state of tools/reference/cycles/end-states.json
+ * (TU.4: door-shut, door-open, cabinet-moved; Cycles renders them with
+ * `--end-state`, to `<references>/<id>/<camera>/`): the page puts the scene in
+ * that state before GI first sees it.
  *
  * What is compared, as M1's HD accuracy (DECISIONS 2026-11-06; T1.14's
  * `three-composite-ao/run.ts --upscale performance --resolution-scale 0.5`,
@@ -33,7 +42,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +65,9 @@ const DEFAULT_SCENES = ['textured-furnace', 'uv-board', 'alpha-checker', 'glass-
 
 /** T2.17's opt-in cap on three's own textures, for the scenes that need it on the 6 GB RTX. */
 const TEXTURE_CAPS: Record<string, number> = { 'bistro-exterior': 1024, 'bistro-interior': 1024 };
+
+/** End states by id (end-states.json), whose references live under their own id. */
+const END_STATES = JSON.parse(readFileSync(join(repoRoot, 'tools', 'reference', 'cycles', 'end-states.json'), 'utf8')) as Record<string, { scene: string } | string>;
 
 const REFERENCE_PREFIX = 'cycles-textured';
 const REFERENCE_IMAGE = `${REFERENCE_PREFIX}-gi.exr`;
@@ -230,7 +242,8 @@ async function main(): Promise<void> {
             references: { type: 'string', default: join(repoRoot, 'bench', 'references') },
             out: { type: 'string', default: join(repoRoot, 'bench', 'references') },
             'compare-only': { type: 'boolean', default: false },
-            'no-occlusion': { type: 'boolean', default: false },
+            occlusion: { type: 'boolean', default: false },
+            'material-variant': { type: 'string', default: 'default' },
             'timeout-minutes': { type: 'string', default: '30' },
         },
     });
@@ -240,7 +253,9 @@ async function main(): Promise<void> {
     const outRoot = resolve(values.out);
     const scenes = values.scenes ? values.scenes.split(',').map((scene) => scene.trim()).filter(Boolean) : DEFAULT_SCENES;
     const timeoutMs = Number(values['timeout-minutes']) * 60_000;
-    const variant = values['no-occlusion'] ? '-no-ao' : '';
+    const materialVariant = values['material-variant'] as 'default' | 'cutout' | 'opaque';
+    if (!['default', 'cutout', 'opaque'].includes(materialVariant)) throw new Error('--material-variant must be default, cutout or opaque');
+    const variant = `${values.occlusion ? '' : '-no-ao'}${materialVariant === 'default' ? '' : `-${materialVariant}`}`;
     const testImage = `ddgi-textured-gi${variant}.exr`;
     const summaryPath = join(outRoot, `m4-textured-accuracy-${gpu}${variant}.json`);
     const earlier = existsSync(summaryPath) ? (JSON.parse(await readFile(summaryPath, 'utf8')) as { rows: Row[]; scenes: Record<string, unknown> }) : { rows: [], scenes: {} };
@@ -265,7 +280,8 @@ async function main(): Promise<void> {
                 return { name: view.camera, position: camera.position, target: camera.target, fovYDeg: camera.fovYDeg };
             });
             const maxTextureSize = TEXTURE_CAPS[scene] ?? null;
-            const job: Partial<TexturedAccuracyJob> = { scene, views: accuracyViews, width, height, maxTextureSize, occlusion: !values['no-occlusion'] };
+            const endState = !scene.startsWith('$') && typeof END_STATES[scene] === 'object' ? (END_STATES[scene] as { scene: string }) : null;
+            const job: Partial<TexturedAccuracyJob> = { scene: endState ? endState.scene : scene, endState: endState ? scene : null, views: accuracyViews, width, height, maxTextureSize, occlusion: values.occlusion === true, materialVariant };
             console.log(`${scene}: ${views.map((view) => view.camera).join(', ')} on ${gpu}${maxTextureSize ? `, three's textures capped at ${maxTextureSize}` : ''}`);
             const { data, images } = await withBenchLock(() => runPage(job, gpu, timeoutMs, join(outRoot, 'logs')), { what: `m4-textured-accuracy ${scene} on ${gpu}` });
             for (const view of views) {
@@ -286,6 +302,7 @@ async function main(): Promise<void> {
                 maxTextureSize,
             };
             sceneRecords[scene] = { ...record, finishedAt: new Date().toISOString() };
+            if (data.endState) console.log(`  end state as the page set it: ${JSON.stringify(data.endState)}`);
             console.log(`  ${record.probeCount} probes, texture store ${(record.textureStoreBytes / 2 ** 20).toFixed(1)} MB, recompiles ${record.recompiles} after the warm-up, ${record.recompilesAfter} after the views`);
         } else {
             record = (sceneRecords[scene] as typeof record) ?? null;
@@ -326,7 +343,7 @@ async function main(): Promise<void> {
     }
 
     const percent = (value: number, digits = 2) => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(digits)}%`;
-    console.log(`\nGI term${variant ? ' without occlusion' : ''} against ${REFERENCE_IMAGE} on ${gpu} (mean error bar ±${MEAN_TOLERANCE * 100}%, FLIP 8x8 bar ${FLIP_LIMIT})`);
+    console.log(`\nGI term${values.occlusion ? ' with GTAO' : ' without occlusion'}${materialVariant === 'default' ? '' : `, material variant ${materialVariant}`} against ${REFERENCE_IMAGE} on ${gpu} (mean error bar ±${MEAN_TOLERANCE * 100}%, FLIP 8x8 bar ${FLIP_LIMIT})`);
     console.log('scene              camera                         mean error  FLIP 8x8  block err  p95 block  ref noise (px / 8x8)  store MB  probes');
     for (const row of rows) {
         const noise = row.referenceNoise ? `${(row.referenceNoise.pixel * 100).toFixed(1)}% / ${(row.referenceNoise.block8 * 100).toFixed(2)}%` : 'not measured';
