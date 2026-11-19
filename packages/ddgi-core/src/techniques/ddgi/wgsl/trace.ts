@@ -133,10 +133,10 @@ fn ddgiShadeRay(ray: GiRay, hit: GiHit, random: vec2f) -> vec3f {
         surface.position, surface.normal, ray.direction,
         ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
     ).irradiance;
-    let albedoOverPi = surface.albedo * (1.0 / DDGI_PI);
-    let emittedAndBounced = surface.emission + albedoOverPi * (ddgi.bounceEnergy * bounce);
+    // Only the bounce term's albedo is capped (giBounceAlbedo, bounceAlbedoCap), as native RTXGI.
+    let emittedAndBounced = surface.emission + giBounceAlbedo(surface) * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
     let direct = giDirectIrradiance(surface, DDGI_ALL_LIGHT_GROUPS, random);
-    return emittedAndBounced + albedoOverPi * direct;
+    return emittedAndBounced + surface.albedo * (1.0 / DDGI_PI) * direct;
 }
 
 // Workgroup (x, y, z): x walks a probe's rays 64 at a time; y and z give the
@@ -225,7 +225,8 @@ fn ddgiEmittedAndBounced(ray: GiRay, surface: GiSurface) -> vec3f {
         surface.position, surface.normal, ray.direction,
         ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
     ).irradiance;
-    return surface.emission + surface.albedo * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
+    // The bounce term's albedo is capped (giBounceAlbedo, bounceAlbedoCap); gi/direct's isn't, as native RTXGI.
+    return surface.emission + giBounceAlbedo(surface) * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
 }
 `;
 
@@ -355,7 +356,8 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
 // albedo / pi × each group's direct light, is added to its layer by gi/direct.
 fn ddgiEmittedAndBouncedLayers(ray: GiRay, surface: GiSurface) -> DdgiLayerRadiance {
     let bounce = ddgiLayeredIrradiance(surface.position, surface.normal, ray.direction);
-    let reflected = surface.albedo * (1.0 / DDGI_PI) * ddgi.bounceEnergy;
+    // The bounce term's albedo is capped (giBounceAlbedo, bounceAlbedoCap); gi/direct's isn't, as native RTXGI.
+    let reflected = giBounceAlbedo(surface) * (1.0 / DDGI_PI) * ddgi.bounceEnergy;
     var result = DdgiLayerRadiance(${perLayer(plan, (layer) => `reflected * bounce.layer${layer}`, ', ')});
     result.layer${plan.environmentLayer} += surface.emission;
     return result;

@@ -529,7 +529,7 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **The Intel UHD's calibration right after the warm-up measured about half its sustained cost** (turbo isn't sustained), so its batch cost 1.5–2.2× the budget. Source: budget v2.
 - **Leak fixes by measured effect:** double-sided distance (84×), then probe density (22×). Probe texture resolution made no difference. Reducing bias made leaks *worse*, by up to 34×. Source: the HomeFig DDGI branch.
 - **View bias:** 6 → 0 cut image error against a path tracer from 18.2% to 12.4% RMS on two-rooms. Bias pulled into furniture caused black patches. Source: the audit, the HomeFig branch.
-- **Recursion cap:** NVIDIA's native recursion albedo cap (0.9 vs 1.0) changes indirect light by about 23%. Match it when comparing against native. Source: the audit.
+- **Recursion cap:** NVIDIA's native recursion albedo cap (0.9 vs 1.0) changes indirect light by about 23%. Match it when comparing against native. Source: the audit. It caps the bounce term only, not direct light at the hit (`ProbeTraceRGS.hlsl:236-243`); ours does the same since DV-08 (`giBounceAlbedo`, 2026-11-19).
 - **Reference cameras:** build rays from an explicit camera basis, not inverse-MVP, which loses precision at near 0.01 / far 2000. Source: the audit.
 - **Light groups:** while a group updates, its bounce reads only its own layer. The sky is a fixed layer. Bake groups in real colors. Source: the HomeFig branch.
 - **Per-pixel BVH visibility:** about 12 ms per frame at 720p on a 90-triangle scene. Don't put it in the default shading path. Source: the audit.

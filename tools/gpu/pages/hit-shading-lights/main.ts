@@ -14,7 +14,8 @@
  * 3. **Light groups:** each group alone, all four together (the sum), mask 0
  *    and bits above 3 (nothing).
  * 4. **`giSurfaceAt`:** position, interpolated normal, frontFace, uv, material
- *    and `bounceAlbedoCap` (a live setting).
+ *    and `bounceAlbedoCap` (a live setting), which caps `giBounceAlbedo`
+ *    only: the surface's own albedo, which direct light uses, stays (DV-08).
  * 6. **The binding budget:** the scene copy and hit shading bind 2 storage
  *    buffers together; the test kernel (tracer, scene copy, hit shading, 2 of
  *    its own) uses 7 of a default device's 8.
@@ -50,8 +51,9 @@ const ALL_GROUPS = 0b1111;
 /**
  * Traces one ray per query and shades the hit. Inputs, 3 vec4 per query:
  * (origin, unused), (direction, unused), (random.xy, groupMask as bits, unused).
- * Outputs, 4 vec4 per query: (direct irradiance, t), (position, frontFace),
- * (shading normal, material), (albedo, instance); t < 0 for a miss.
+ * Outputs, 5 vec4 per query: (direct irradiance, t), (position, frontFace),
+ * (shading normal, material), (albedo, instance), (giBounceAlbedo, unused);
+ * t < 0 for a miss.
  */
 const SHADE_KERNEL = /* wgsl */ `
 @group(1) @binding(0) var<storage, read> inputs: array<vec4f>;
@@ -67,15 +69,16 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let extra = inputs[3u * query + 2u];
     let hit = giTraceClosest(ray);
     if (hit.t < 0.0) {
-        outputs[4u * query] = vec4f(0.0, 0.0, 0.0, -1.0);
+        outputs[5u * query] = vec4f(0.0, 0.0, 0.0, -1.0);
         return;
     }
     let surface = giSurfaceAt(ray, hit);
     let direct = giDirectIrradiance(surface, bitcast<u32>(extra.z), extra.xy);
-    outputs[4u * query] = vec4f(direct, hit.t);
-    outputs[4u * query + 1u] = vec4f(surface.position, select(0.0, 1.0, surface.frontFace));
-    outputs[4u * query + 2u] = vec4f(surface.normal, f32(surface.material));
-    outputs[4u * query + 3u] = vec4f(surface.albedo, f32(surface.instance));
+    outputs[5u * query] = vec4f(direct, hit.t);
+    outputs[5u * query + 1u] = vec4f(surface.position, select(0.0, 1.0, surface.frontFace));
+    outputs[5u * query + 2u] = vec4f(surface.normal, f32(surface.material));
+    outputs[5u * query + 3u] = vec4f(surface.albedo, f32(surface.instance));
+    outputs[5u * query + 4u] = vec4f(giBounceAlbedo(surface), 0.0);
 }
 `;
 
@@ -95,6 +98,7 @@ interface Shaded {
     material: number;
     albedo: Vec3;
     instance: number;
+    bounceAlbedo: Vec3;
 }
 
 async function shade(kernel: ShadeKernel, queries: readonly Query[]): Promise<Shaded[]> {
@@ -106,9 +110,9 @@ async function shade(kernel: ShadeKernel, queries: readonly Query[]): Promise<Sh
         inputs.set(query.random ?? [0.5, 0.5], index * 12 + 8);
         words[index * 12 + 10] = query.groupMask ?? ALL_GROUPS;
     });
-    const out = new Float32Array(await kernel.run(inputs, queries.length * 64, queries.length));
+    const out = new Float32Array(await kernel.run(inputs, queries.length * 80, queries.length));
     return queries.map((_, index) => {
-        const base = index * 16;
+        const base = index * 20;
         const vec = (offset: number): Vec3 => [out[base + offset], out[base + offset + 1], out[base + offset + 2]];
         return {
             direct: vec(0),
@@ -119,6 +123,7 @@ async function shade(kernel: ShadeKernel, queries: readonly Query[]): Promise<Sh
             material: out[base + 11],
             albedo: vec(12),
             instance: out[base + 15],
+            bounceAlbedo: vec(16),
         };
     });
 }
@@ -208,7 +213,9 @@ await runGpuTest(async ({ device, log }) => {
         platform.shade.settings.bounceAlbedoCap = 0.7;
         frame(device, platform);
         const capped = (await shade(kernel, [down(1, 1)]))[0];
-        assert(capped.albedo.every((value, channel) => Math.abs(value - Math.min(0.7, groundAlbedo[channel])) < 1e-6), `bounceAlbedoCap 0.7 gave albedo ${capped.albedo}`);
+        // The cap is on the bounce term's albedo only (DV-08): the surface's own, which direct light uses, stays.
+        assert(capped.bounceAlbedo.every((value, channel) => Math.abs(value - Math.min(0.7, groundAlbedo[channel])) < 1e-6), `bounceAlbedoCap 0.7 gave bounce albedo ${capped.bounceAlbedo}`);
+        assert(capped.albedo.every((value, channel) => Math.abs(value - groundAlbedo[channel]) < 1e-6), `bounceAlbedoCap 0.7 changed the surface's albedo to ${capped.albedo}`);
         platform.shade.settings.bounceAlbedoCap = 1;
         results.surface = 'ok';
 

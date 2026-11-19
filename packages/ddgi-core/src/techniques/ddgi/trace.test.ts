@@ -50,6 +50,15 @@ describe('ddgi/trace with direct light deferred', () => {
         expect(layered).toContain('result.layer2 += surface.emission;');
     });
 
+    it('multiplies the bounce by the capped albedo and the direct light by the full one, in every version (DV-08)', () => {
+        for (const code of [DDGI_TRACE_WGSL, deferred, layered]) {
+            expect(code).toContain('giBounceAlbedo(surface) * (1.0 / DDGI_PI)');
+            expect(code).not.toMatch(/surface\.albedo \* \(1\.0 \/ DDGI_PI\) \* \(?ddgi\.bounceEnergy/);
+        }
+        // The inline kernel adds the direct light itself, with the surface's own albedo.
+        expect(DDGI_TRACE_WGSL).toContain('surface.albedo * (1.0 / DDGI_PI) * direct');
+    });
+
     it("sizes one round's work list at about 7.3 MB with the default rays per probe", () => {
         const bytes = DIRECT_ROUND_PROBES * (DEFAULT_DDGI_SETTINGS.raysPerProbe - FIXED_RAYS) * WORK_ITEM_BYTES;
         expect(bytes / 1e6).toBeCloseTo(7.34, 2);

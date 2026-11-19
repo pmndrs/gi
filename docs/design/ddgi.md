@@ -104,8 +104,8 @@ One workgroup per probe in this frame's update list. Workgroup size 256 (the def
   - **Miss:** radiance = `giSkyRadiance(direction)`, distance = the clamp value.
   - **Back-face hit:** radiance 0. Distance = `−0.2 × t`. The negative sign marks a back face for classification; the distance atlas uses `0.2 × t`, which pulls the probe's mean distance short in that direction so the Chebyshev test sees it as blocked. This is the "double-sided distance" leak fix, measured as the largest single fix (84×, NOTES).
   - **Front-face hit:** `s = giSurfaceAt(ray, hit)`, then
-    `radiance = s.emission + s.albedo / π × (giDirectIrradiance(s, groupMask, random) + bounceEnergy × ddgiSampleIrradiance(s.position, s.normal, ray.direction, ...))`,
-    where `ddgiSampleIrradiance` reads the **current** atlases (the field from earlier updates) for unlimited bounces. Hit-shading's `bounceAlbedoCap` applies to `s.albedo`.
+    `radiance = s.emission + s.albedo / π × giDirectIrradiance(s, groupMask, random) + giBounceAlbedo(s) / π × bounceEnergy × ddgiSampleIrradiance(s.position, s.normal, ray.direction, ...)`,
+    where `ddgiSampleIrradiance` reads the **current** atlases (the field from earlier updates) for unlimited bounces. Hit-shading's `bounceAlbedoCap` applies to the bounce term only (`giBounceAlbedo`), as native RTXGI's sample does (DV-08; it applied to both terms before 2026-11-19).
 - Results go to workgroup memory: rgb radiance and signed distance per ray (16 bytes × 256 = 4 KB). **Rays never touch device memory.**
 
 **Phase B: classification and relocation**, over the 32 fixed rays. Workgroup reductions:
