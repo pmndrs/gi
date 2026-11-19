@@ -5,7 +5,7 @@ import { capsaicinCompareValues, RADIANCE_CACHE_COMPARE_TOGGLES } from '../../..
 describe('url state', () => {
     it("keeps each radiance-cache compare toggle (RC4.5) through a link, and doesn't take it for a scene setting", () => {
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
-            if (entry.capsaicin === entry.defaultValue) continue;
+            if (entry.capsaicin === undefined || entry.capsaicin === entry.defaultValue) continue;
             const state = { ...DEFAULT_URL_STATE, technique: 'rc' as const, rcCompare: { [entry.setting]: entry.capsaicin } };
             const link = serializeUrlState(state);
             expect(link).toContain(`${entry.urlName}=`);

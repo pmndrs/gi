@@ -27,6 +27,7 @@ import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type Load
 import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, layerKey, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
+import { RADIANCE_CACHE_COMPARE_TOGGLES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 import { DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS, RadianceCacheViewerTechnique, type RadianceCacheChangeReadout, type RadianceCacheViewerSettings } from '../techniques/radiance-cache-technique';
 import { ReferenceImageTechnique } from '../techniques/reference-technique';
 import { TECHNIQUE_LABELS, type GiTechnique, type TechniqueContext, type TechniqueId, type UpscaleSettings } from '../techniques/types';
@@ -285,10 +286,27 @@ export class ViewerCore {
         ddgi?.configure(settings);
     }
 
-    /** Applies to the radiance cache now if it exists, and to the one created later (its debug view: a uniform and an override material). */
+    /**
+     * Applies to the radiance cache now if it exists, and to the one created later (its debug
+     * view: a uniform and an override material; its compare toggles, live). A compare toggle read
+     * only at `prepare` (the world-cache backend) starts a new radiance cache instead.
+     */
     configureRadianceCache(settings: RadianceCacheViewerSettings): void {
+        const restart = restartKey(settings) !== restartKey(this.radianceCacheSettings);
         this.radianceCacheSettings = { ...settings };
-        (this.techniques.get('rc') as RadianceCacheViewerTechnique | undefined)?.configure(settings);
+        const rc = this.techniques.get('rc') as RadianceCacheViewerTechnique | undefined;
+        if (rc && restart) {
+            rc.dispose();
+            this.techniques.delete('rc');
+            this.prepareStarts.delete(rc);
+            const shown = this.layout.left === 'rc' || this.layout.right === 'rc';
+            if (this.loaded && shown) {
+                this.getTechnique('rc');
+                this.rebuildOutput();
+            }
+            return;
+        }
+        rc?.configure(settings);
     }
 
     /** The radiance cache's change-per-frame readout (RC4.5) if it has been made and is ready, else null. */
@@ -486,4 +504,10 @@ export class ViewerCore {
         this.renderer.dispose();
         this.device.destroy();
     }
+}
+
+/** The radiance cache's compare values that are read at `prepare` only (compare-toggles.ts `restartsTechnique`). */
+function restartKey(settings: RadianceCacheViewerSettings): string {
+    const values = settings.compare as Record<string, unknown>;
+    return JSON.stringify(RADIANCE_CACHE_COMPARE_TOGGLES.filter((entry) => entry.restartsTechnique).map((entry) => values[entry.setting] ?? entry.defaultValue));
 }

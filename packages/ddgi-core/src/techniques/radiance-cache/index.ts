@@ -11,6 +11,7 @@ export {
     screenProbeLayout,
     type RadianceCacheSettings,
     type ScreenProbeLayout,
+    type WorldCacheKind,
 } from './settings.ts';
 export { RadianceCacheShadingModule } from './shading.ts';
 export { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';

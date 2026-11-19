@@ -57,7 +57,7 @@ import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { GiMode } from '../../../../apps/viewer/src/scene/layers.ts';
 import { RcCompareControls } from '../../../../apps/viewer/src/ui/rc-compare-controls.ts';
-import { RADIANCE_CACHE_COMPARE_TOGGLES, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { compareSettingValue, RADIANCE_CACHE_COMPARE_TOGGLES, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -196,7 +196,7 @@ function showCompareControls(core: ViewerCore): RcCompareControls {
 
 /** The value a toggle is clicked to: Capsaicin's, or where that is ours, the other one. */
 function compareValueOf(entry: CompareToggle): boolean | number | string {
-    if (entry.capsaicin !== entry.defaultValue) return entry.capsaicin;
+    if (entry.capsaicin !== undefined && entry.capsaicin !== entry.defaultValue) return entry.capsaicin;
     if (entry.kind === 'boolean') return !entry.defaultValue;
     if (entry.kind === 'number') return entry.defaultValue === entry.min ? entry.max : entry.min;
     return entry.choices.find((choice) => choice.value !== entry.defaultValue)!.value;
@@ -246,17 +246,27 @@ function imageChange(a: Float32Array, b: Float32Array): { change: number; ratio:
 }
 
 /** RC4.5: every compare toggle clicked in the panel section, its picture against ours (the page comment). */
-async function checkCompareToggles(core: ViewerCore, technique: RadianceCacheViewerTechnique, controls: RcCompareControls, sceneId: string): Promise<Record<string, unknown>> {
+async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls, sceneId: string): Promise<Record<string, unknown>> {
     const section = controls.section;
-    const settings = (): Record<string, unknown> => (technique.radianceCache?.settings ?? {}) as unknown as Record<string, unknown>;
+    // The radiance cache on screen: a toggle read at prepare (the world-cache backend) makes a new one.
+    const rc = (): RadianceCacheViewerTechnique => core.getTechnique('rc') as RadianceCacheViewerTechnique;
+    const valueOf = (entry: CompareToggle): unknown => {
+        const settings = rc().radianceCache?.settings;
+        return settings ? compareSettingValue(settings, entry.setting) : undefined;
+    };
+    // After a click: a restarted radiance cache prepares again before frames are drawn.
+    const settle = async (): Promise<void> => {
+        await showReady(core, { left: 'rc', right: null, giMode: 'on' });
+        if (rc().failed) failures.push(`${sceneId}: the radiance cache failed: ${rc().failed}`);
+    };
     clickButton(section, 'all-ours');
     await drawFrames(core, COMPARE_FRAMES);
-    const ours = await irradianceImage(core, technique);
+    const ours = await irradianceImage(core, rc());
     await drawFrames(core, COMPARE_FRAMES);
-    const noise = imageChange(ours, await irradianceImage(core, technique));
+    const noise = imageChange(ours, await irradianceImage(core, rc()));
     const results: Record<string, unknown> = { noise };
     const scan = async (name: string): Promise<void> => {
-        const probes = technique.radianceCache?.probes;
+        const probes = rc().radianceCache?.probes;
         if (!probes) throw new Error('no probes');
         for (const [label, texture] of [['irradiance', probes.irradiance], ['probe atlas', probes.probeAtlas]] as const) {
             const values = await scanHalves(core.device, texture);
@@ -266,25 +276,29 @@ async function checkCompareToggles(core: ViewerCore, technique: RadianceCacheVie
     for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
         const value = compareValueOf(entry);
         clickToggle(section, entry, value);
-        if (settings()[entry.setting] !== value) failures.push(`${sceneId}: clicking ${entry.setting} to ${String(value)} left the technique at ${String(settings()[entry.setting])}`);
+        await settle();
+        if (valueOf(entry) !== value) failures.push(`${sceneId}: clicking ${entry.setting} to ${String(value)} left the technique at ${String(valueOf(entry))}`);
         await drawFrames(core, COMPARE_FRAMES);
-        const image = await irradianceImage(core, technique);
+        const image = await irradianceImage(core, rc());
         await scan(`${entry.setting} = ${String(value)}`);
-        results[`${entry.setting}=${String(value)}`] = { ...imageChange(ours, image), readout: technique.changeReadout };
+        results[`${entry.setting}=${String(value)}`] = { ...imageChange(ours, image), readout: rc().changeReadout };
         clickToggle(section, entry, entry.defaultValue);
-        if (settings()[entry.setting] !== entry.defaultValue) failures.push(`${sceneId}: clicking ${entry.setting} back left the technique at ${String(settings()[entry.setting])}`);
+        await settle();
+        if (valueOf(entry) !== entry.defaultValue) failures.push(`${sceneId}: clicking ${entry.setting} back left the technique at ${String(valueOf(entry))}`);
         await drawFrames(core, COMPARE_FRAMES);
     }
     clickButton(section, 'all-capsaicin');
+    await settle();
     for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
-        if (settings()[entry.setting] !== entry.capsaicin) failures.push(`${sceneId}: "All Capsaicin" left ${entry.setting} at ${String(settings()[entry.setting])}`);
+        if (entry.capsaicin !== undefined && valueOf(entry) !== entry.capsaicin) failures.push(`${sceneId}: "All Capsaicin" left ${entry.setting} at ${String(valueOf(entry))}`);
     }
     await drawFrames(core, COMPARE_FRAMES);
-    const capsaicin = imageChange(ours, await irradianceImage(core, technique));
+    const capsaicin = imageChange(ours, await irradianceImage(core, rc()));
     await scan('all Capsaicin');
-    results.allCapsaicin = { ...capsaicin, readout: technique.changeReadout };
+    results.allCapsaicin = { ...capsaicin, readout: rc().changeReadout };
     if (!(capsaicin.change > 2 * noise.change)) failures.push(`${sceneId}: "All Capsaicin" changed the picture by ${capsaicin.change} of ours, not over twice the noise ${noise.change}`);
     clickButton(section, 'all-ours');
+    await settle();
     await drawFrames(core, COMPARE_FRAMES);
     return results;
 }
@@ -324,8 +338,9 @@ try {
         const errorsBefore = core.gpuErrors.length;
 
         await showReady(core, { left: 'rc', right: null, giMode: 'on' });
-        const technique = core.getTechnique('rc');
-        if (!(technique instanceof RadianceCacheViewerTechnique)) throw new Error('the rc technique is not the radiance cache');
+        const started = core.getTechnique('rc');
+        if (!(started instanceof RadianceCacheViewerTechnique)) throw new Error('the rc technique is not the radiance cache');
+        let technique: RadianceCacheViewerTechnique = started;
 
         // The scan: frames 1, 30 and 60 after the start, GI on.
         const scans: Record<string, unknown>[] = [];
@@ -365,7 +380,9 @@ try {
             views.push(view);
         }
         core.configureRadianceCache({ screenView: null, compare: {} });
-        const compare = COMPARE ? await checkCompareToggles(core, technique, compareControls, sceneId) : null;
+        const compare = COMPARE ? await checkCompareToggles(core, compareControls, sceneId) : null;
+        // A restart toggle made a new radiance cache: check that one from here on.
+        technique = core.getTechnique('rc') as RadianceCacheViewerTechnique;
         await showReady(core, { left: 'rc', right: 'ddgi', giMode: 'on', split: 0.5 });
         await drawFrames(core, FRAMES_PER_VIEW);
         views.push('wipe rc | ddgi');

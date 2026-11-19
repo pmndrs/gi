@@ -15,6 +15,17 @@
  * configuration").
  */
 
+import type { SecondBounceSource } from './world-cache/capacity.ts';
+import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
+
+/**
+ * Which backend fills the world-cache slot (docs/design/radiance-cache.md,
+ * "World cache as a slot"): Capsaicin's GI-1.2 hash grid (the default), or
+ * the SHaRC-style hash cache ported from pmndrs/pathtracer (phase 6
+ * experiment P6.1, register E1-E7).
+ */
+export type WorldCacheKind = 'gi1-hash-grid' | 'sharc';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -75,6 +86,28 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * Experiment E10 (P6.3; not Capsaicin's): where the world cache's second
+     * bounce comes from with `useMultibounce` on. `'auto'` (default; lead
+     * decision 2026-11-19): from the technique stacked under this one
+     * (`gi.setFallback(radianceCache, ddgi)`) when its shading module answers
+     * in world space, else GI-1.2's rays. `'fallback'` asks for the stacked
+     * technique (and warns when it can't have it); `'gi1-rays'` is GI-1.2's
+     * rays, the faithful baseline. Details on `HashGridCacheOptions.secondBounce`
+     * and register E10. Changing what runs empties the world cache. Read every
+     * frame.
+     */
+    secondBounce: SecondBounceSource;
+    /** The cells' indirect sample cap with the second bounce from a fallback (E10; default 4). Read every frame. */
+    fallbackIndirectSampleCount: number;
+    /**
+     * The world-cache backend (P6.1): `gi1-hash-grid` (Capsaicin's, the
+     * default; the `hashGridCache*` and multibounce options above are its) or
+     * `sharc`. Read at `prepare`: changing it makes the other cache there.
+     */
+    worldCache: WorldCacheKind;
+    /** The SHaRC backend's settings over its defaults (`DEFAULT_SHARC_SETTINGS`), with `worldCache: 'sharc'`. Read every frame, but the table size, fallback levels and pyramid at `prepare`. */
+    sharc: Partial<SharcSettings>;
 
     // ---- The screen probes' temporal rules (RC4.1's changes to Capsaicin, register D41-D47) ----
     // Each has a value that brings Capsaicin's behaviour back (RC4.5, compare-toggles.ts), read
@@ -134,6 +167,9 @@ export interface RadianceCacheSettings {
  */
 export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
 
+/** Settings read at `prepare` only: changing one makes the technique again (the viewer restarts it; compare-toggles.ts). */
+export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache'];
+
 /** Capsaicin's defaults (gi1.h:48-71). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
@@ -151,6 +187,10 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    secondBounce: 'auto',
+    fallbackIndirectSampleCount: 4,
+    worldCache: 'gi1-hash-grid',
+    sharc: Object.freeze({}),
     // Ours (RC4.1, decided: DECISIONS 2026-11-19); compare-toggles.ts lists Capsaicin's values.
     probeBlend: 'running-mean',
     historySampleCap: 8,

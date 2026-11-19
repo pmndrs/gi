@@ -10,17 +10,18 @@
  * doesn't know throws, so a typo can't run the defaults unnoticed.
  */
 
-import { applyCompareValues, compareValuesFromText, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { compareValuesFromText, setCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 
 /** The values this run sets (empty: the defaults). */
 export const PAGE_COMPARE_VALUES: CompareValues = compareValuesFromText(typeof env.VITE_RC_COMPARE === 'string' ? env.VITE_RC_COMPARE : undefined);
 
-/** A radiance cache at the run's compare values. */
-export function pageRadianceCache(): RadianceCacheTechnique {
-    const technique = new RadianceCacheTechnique();
-    applyCompareValues(technique.settings, PAGE_COMPARE_VALUES);
+/** A radiance cache at `base` (the page's own settings), with the run's compare values over them. */
+export function pageRadianceCache(base: Partial<RadianceCacheSettings> = {}): RadianceCacheTechnique {
+    const technique = new RadianceCacheTechnique(base);
+    setCompareValues(technique.settings, PAGE_COMPARE_VALUES);
     return technique;
 }

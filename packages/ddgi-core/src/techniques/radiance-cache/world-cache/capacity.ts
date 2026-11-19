@@ -71,7 +71,42 @@ export interface HashGridCacheOptions {
      * face gives the probe ray its emission and bypasses the cache.
      */
     useDirectLighting: boolean;
+    /**
+     * Experiment E10 (P6.3, phase 6): where the indirect values come from with
+     * `useMultibounce` on.
+     * - `'fallback'`: no second-bounce ray. Every first-bounce entry reads the
+     *   irradiance of the technique the host stacked under the radiance cache
+     *   (`GIPlatform.setFallback`; DDGI in practice) at its hit, weighted by
+     *   that technique's coverage there, and adds albedo / π times it: the
+     *   light of every later bounce the fallback holds (`bounce-source.ts`).
+     *   The fallback's shading module must say
+     *   `provides.worldSpaceIrradiance`. The cells' indirect cap is then
+     *   `fallbackIndirectSampleCount`, and the cache's own light choice leaves
+     *   out the sky (the fallback's field has it; register E10). Unavailable
+     *   (nothing stacked, a screen-space module, a failed compile), it traces
+     *   rays and warns.
+     * - `'gi1-rays'`: GI-1.2's second-bounce ray per kept first-bounce hit.
+     * - `'auto'` (the default, lead decision 2026-11-19): `'fallback'` when a
+     *   world-space fallback is stacked, `'gi1-rays'` otherwise, with no warning.
+     *
+     * Changing what runs empties the cache, as changing `useMultibounce` does.
+     * Single bounce stays `useMultibounce: false`.
+     */
+    secondBounce: SecondBounceSource;
+    /**
+     * The cells' indirect sample cap (as `hashGridCacheMaxMultibounceSampleCount`)
+     * while the second bounce comes from a fallback. Default 4: the fallback's
+     * value carries no ray noise, and 16 reacts more slowly than the rays do
+     * (two-room's lamp: 30 frames against 24; the furnace's sun 43 against 11 at 4).
+     */
+    fallbackIndirectSampleCount: number;
 }
+
+/** Experiment E10's setting for the second-bounce estimator (`HashGridCacheOptions.secondBounce`). */
+export type SecondBounceSource = 'auto' | 'gi1-rays' | 'fallback';
+
+/** The estimator that runs: `'auto'` resolved. */
+export type SecondBounceInUse = 'gi1-rays' | 'fallback';
 
 /** Capsaicin's defaults (gi1.h:58-65). */
 export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = Object.freeze({
@@ -85,6 +120,8 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     useDirectLighting: true,
+    secondBounce: 'auto',
+    fallbackIndirectSampleCount: 4,
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */

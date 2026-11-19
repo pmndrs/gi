@@ -1,0 +1,4 @@
+{
+    "description": "P6.3 experiment E10: the world cache's second bounce from a DDGI volume stacked under the radiance cache (secondBounce 'fallback', what 'auto' picks) against GI-1.2's second-bounce rays. Furnace and strips: gi1-rays and the fallback with DDGI's bounce off read the second bounce rho^2 E / pi (0.3183; strips 0.1592), with DDGI's bounce every bounce (0.4244; strips 0.1819); every ray bypassing; hits outside the field read nothing (coverage); what runs for auto/fallback with and without a stack, and warnings. Lag after the furnace's sun and two-room's lamp double, and after Sponza's sun doubles, as a measurement.",
+    "timeoutMs": 1200000
+}

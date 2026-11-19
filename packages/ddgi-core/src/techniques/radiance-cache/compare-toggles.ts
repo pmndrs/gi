@@ -21,7 +21,8 @@
  * and DOM-free, so the viewer's link code (url-state.ts) can import it.
  */
 
-import { DEFAULT_RADIANCE_CACHE_SETTINGS, SCREEN_HISTORY_SETTINGS, type RadianceCacheSettings } from './settings.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, PREPARE_SETTINGS, SCREEN_HISTORY_SETTINGS, type RadianceCacheSettings } from './settings.ts';
+import { DEFAULT_SHARC_SETTINGS, type SharcSettings } from './world-cache/sharc/sharc-settings.ts';
 
 /** The panel's groups, in the order it shows them. */
 export const COMPARE_GROUPS = ['screen-probes', 'world-cache', 'denoiser', 'experiments'] as const;
@@ -35,44 +36,49 @@ export const COMPARE_GROUP_LABELS: Readonly<Record<CompareGroup, string>> = {
 };
 
 /** Settings whose values are booleans, strings of a few choices, or numbers: the kinds a toggle can show. */
-type KeysOfType<T> = { [K in keyof RadianceCacheSettings]: RadianceCacheSettings[K] extends T ? K : never }[keyof RadianceCacheSettings];
-export type CompareBooleanSetting = KeysOfType<boolean>;
-export type CompareNumberSetting = KeysOfType<number>;
-export type CompareChoiceSetting = KeysOfType<string>;
+type KeysOfType<S, T> = { [K in keyof S]: S[K] extends T ? K : never }[keyof S];
+/** A SHaRC setting, inside `RadianceCacheSettings.sharc` (P6.1), named `sharc.<key>`. */
+type SharcSetting<T> = `sharc.${KeysOfType<SharcSettings, T> & string}`;
+export type CompareBooleanSetting = KeysOfType<RadianceCacheSettings, boolean> | SharcSetting<boolean>;
+export type CompareNumberSetting = KeysOfType<RadianceCacheSettings, number> | SharcSetting<number>;
+export type CompareChoiceSetting = KeysOfType<RadianceCacheSettings, string>;
 export type CompareSetting = CompareBooleanSetting | CompareNumberSetting | CompareChoiceSetting;
+type CompareValue = boolean | number | string;
 
 /** What every toggle says about itself. */
-interface ToggleCommon<K extends CompareSetting> {
-    /** The technique's setting it drives. */
+interface ToggleCommon<K extends CompareSetting, V extends CompareValue> {
+    /** The technique's setting it drives (`sharc.<key>` for one of the SHaRC backend's). */
     readonly setting: K;
     readonly group: CompareGroup;
     /** A few words for the panel. */
     readonly label: string;
     /** Its name in the viewer's links (lowercase letters and digits, unique). */
     readonly urlName: string;
-    /** One plain line: what it does, and which value is Capsaicin's. */
+    /** One plain line: what it does, and which value is Capsaicin's (or that Capsaicin has none). */
     readonly help: string;
     /** The divergence-register row it undoes (docs/design/radiance-cache.md), if any. */
     readonly register?: string;
-    /** The decided value (`DEFAULT_RADIANCE_CACHE_SETTINGS`). */
-    readonly defaultValue: RadianceCacheSettings[K];
-    /** The value that behaves as Capsaicin v1.3 does. */
-    readonly capsaicin: RadianceCacheSettings[K];
+    /** The decided value (`DEFAULT_RADIANCE_CACHE_SETTINGS`, or `DEFAULT_SHARC_SETTINGS`). */
+    readonly defaultValue: V;
+    /** The value that behaves as Capsaicin v1.3 does; absent where Capsaicin has nothing like it. */
+    readonly capsaicin?: V;
     /** Changing it starts the screen probes' history over (`SCREEN_HISTORY_SETTINGS`). */
     readonly resetsHistory: boolean;
+    /** Read at `prepare`: changing it makes the technique again (`PREPARE_SETTINGS`; the viewer restarts it). */
+    readonly restartsTechnique: boolean;
 }
 
-export interface CompareBooleanToggle extends ToggleCommon<CompareBooleanSetting> {
+export interface CompareBooleanToggle extends ToggleCommon<CompareBooleanSetting, boolean> {
     readonly kind: 'boolean';
 }
 
-export interface CompareChoiceToggle extends ToggleCommon<CompareChoiceSetting> {
+export interface CompareChoiceToggle extends ToggleCommon<CompareChoiceSetting, string> {
     readonly kind: 'choice';
     /** Every value it can take, with the panel's words for it. */
     readonly choices: readonly { readonly value: string; readonly label: string }[];
 }
 
-export interface CompareNumberToggle extends ToggleCommon<CompareNumberSetting> {
+export interface CompareNumberToggle extends ToggleCommon<CompareNumberSetting, number> {
     readonly kind: 'number';
     readonly min: number;
     readonly max: number;
@@ -82,16 +88,38 @@ export interface CompareNumberToggle extends ToggleCommon<CompareNumberSetting> 
 export type CompareToggle = CompareBooleanToggle | CompareChoiceToggle | CompareNumberToggle;
 
 /** The compare settings that differ from the defaults, by setting name (what a link stores). */
-export type CompareValues = { -readonly [K in CompareSetting]?: RadianceCacheSettings[K] };
+export type CompareValues = { [K in CompareSetting]?: CompareValue };
 
-type ToggleInput<T extends CompareToggle> = Omit<T, 'defaultValue' | 'resetsHistory'>;
+type ToggleInput<T extends CompareToggle> = Omit<T, 'defaultValue' | 'resetsHistory' | 'restartsTechnique'>;
 
-/** An entry, with its default and history reset taken from settings.ts so they can't drift. */
+const SHARC_PREFIX = 'sharc.';
+
+/** A toggle's current value in `settings` (a `sharc.<key>` read through `settings.sharc` over SHaRC's defaults). */
+export function compareSettingValue(settings: Readonly<RadianceCacheSettings>, setting: CompareSetting): CompareValue {
+    if (setting.startsWith(SHARC_PREFIX)) {
+        const key = setting.slice(SHARC_PREFIX.length) as keyof SharcSettings;
+        return (settings.sharc[key] ?? DEFAULT_SHARC_SETTINGS[key]) as CompareValue;
+    }
+    return settings[setting as keyof RadianceCacheSettings] as CompareValue;
+}
+
+/** Sets a toggle's value in `settings` (a SHaRC one in a new `settings.sharc`, which the cache reads every frame). */
+function setCompareSetting(settings: RadianceCacheSettings, setting: CompareSetting, value: CompareValue): void {
+    if (setting.startsWith(SHARC_PREFIX)) {
+        settings.sharc = { ...settings.sharc, [setting.slice(SHARC_PREFIX.length)]: value };
+        return;
+    }
+    (settings as unknown as Record<string, CompareValue>)[setting] = value;
+}
+
+/** An entry, with its default, history reset and restart taken from settings.ts so they can't drift. */
 function toggle<T extends CompareToggle>(input: ToggleInput<T>): T {
+    const top = input.setting.startsWith(SHARC_PREFIX) ? null : (input.setting as keyof RadianceCacheSettings);
     return {
         ...input,
-        defaultValue: DEFAULT_RADIANCE_CACHE_SETTINGS[input.setting],
-        resetsHistory: SCREEN_HISTORY_SETTINGS.includes(input.setting),
+        defaultValue: compareSettingValue(DEFAULT_RADIANCE_CACHE_SETTINGS, input.setting),
+        resetsHistory: top !== null && SCREEN_HISTORY_SETTINGS.includes(top),
+        restartsTechnique: top !== null && PREPARE_SETTINGS.includes(top),
     } as T;
 }
 
@@ -213,6 +241,79 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         help: "The same for the cells' second bounce (GI-1.2's multibounce). Capsaicin's 16 is the default.",
     }),
 
+    toggle<CompareChoiceToggle>({
+        kind: 'choice',
+        setting: 'worldCache',
+        group: 'world-cache',
+        label: 'World cache',
+        urlName: 'rcworld',
+        register: 'E1',
+        choices: [
+            { value: 'gi1-hash-grid', label: "GI-1.2 hash grid (Capsaicin's)" },
+            { value: 'sharc', label: 'SHaRC-style cache (experiment)' },
+        ],
+        capsaicin: 'gi1-hash-grid',
+        help: "Which cache lights the probe rays' hits. Capsaicin's GI-1.2 hash grid (the default), or a SHaRC-style hash cache from pmndrs/pathtracer (smaller, more bounces). Changing it starts the radiance cache over.",
+    }),
+    toggle<CompareChoiceToggle>({
+        kind: 'choice',
+        setting: 'secondBounce',
+        group: 'world-cache',
+        label: 'Second bounce from',
+        urlName: 'rcsecond',
+        register: 'E10',
+        choices: [
+            { value: 'auto', label: 'Auto (ours)' },
+            { value: 'gi1-rays', label: "GI-1.2's own rays (Capsaicin's)" },
+            { value: 'fallback', label: 'The technique stacked under it' },
+        ],
+        capsaicin: 'gi1-rays',
+        help: "Where the hash grid's second bounce comes from. Capsaicin traces its own second-bounce rays; ours (auto) reads it from a technique stacked under the radiance cache, such as DDGI, when there is one, else the same rays. The viewer stacks nothing yet, so here auto is Capsaicin's way and 'stacked' warns. Changing what runs empties the world cache.",
+    }),
+    toggle<CompareNumberToggle>({
+        kind: 'number',
+        setting: 'fallbackIndirectSampleCount',
+        group: 'world-cache',
+        label: 'Stacked second bounce history (samples)',
+        urlName: 'rcfallbackcap',
+        register: 'E10',
+        min: 1,
+        max: 32,
+        step: 1,
+        help: "With the second bounce from a stacked technique: the most samples a cell averages it over (ours 4). Capsaicin has no stacked technique, so no value of its own.",
+    }),
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'sharc.changeReset',
+        group: 'world-cache',
+        label: 'SHaRC: forget history where the scene changed',
+        urlName: 'rcsharcreset',
+        register: 'E7a',
+        help: "With the SHaRC cache: where a light or object changed, a cell keeps only a few samples, so the new light shows at once (ours, on). Off: its 32-frame average alone, about 80 frames to follow the sun doubling. Not in Capsaicin.",
+    }),
+    toggle<CompareNumberToggle>({
+        kind: 'number',
+        setting: 'sharc.minSamples',
+        group: 'world-cache',
+        label: 'SHaRC: samples before a cell is read',
+        urlName: 'rcsharcmin',
+        min: 1,
+        max: 128,
+        step: 1,
+        help: "With the SHaRC cache: a cell with fewer samples than this is passed over for a coarser one (ours 16). Lower reads finer cells sooner but blotchier. Not in Capsaicin.",
+    }),
+    toggle<CompareNumberToggle>({
+        kind: 'number',
+        setting: 'sharc.historyFrames',
+        group: 'world-cache',
+        label: 'SHaRC: cell history (frames)',
+        urlName: 'rcsharchist',
+        min: 1,
+        max: 128,
+        step: 1,
+        help: "With the SHaRC cache: how many frames a cell's average reaches back (ours 32): more is steadier but slower to follow a change. Not in Capsaicin.",
+    }),
+
     // ---- Experiments (not Capsaicin's changes; for seeing what history does) ----
     toggle<CompareBooleanToggle>({
         kind: 'boolean',
@@ -240,10 +341,10 @@ export function isCapsaicinValue(entry: CompareToggle, value: unknown): boolean 
     return value === entry.capsaicin;
 }
 
-/** Every toggle at its Capsaicin value (the panel's "All Capsaicin"), as values that differ from the defaults. */
+/** Every toggle Capsaicin has at its Capsaicin value (the panel's "All Capsaicin"; the others at ours), as values that differ from the defaults. */
 export function capsaicinCompareValues(): CompareValues {
     const values: Record<string, unknown> = {};
-    for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) if (entry.capsaicin !== entry.defaultValue) values[entry.setting] = entry.capsaicin;
+    for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) if (entry.capsaicin !== undefined && entry.capsaicin !== entry.defaultValue) values[entry.setting] = entry.capsaicin;
     return values as CompareValues;
 }
 
@@ -304,10 +405,17 @@ export const COMPARE_URL_NAMES: readonly string[] = RADIANCE_CACHE_COMPARE_TOGGL
  * them every frame and resets its history where a rule changed).
  */
 export function applyCompareValues(settings: RadianceCacheSettings, values: CompareValues): void {
-    const target = settings as unknown as Record<string, unknown>;
     for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
-        const value = (values as Record<string, unknown>)[entry.setting];
-        target[entry.setting] = value === undefined ? entry.defaultValue : value;
+        const value = (values as Record<string, CompareValue | undefined>)[entry.setting];
+        setCompareSetting(settings, entry.setting, value === undefined ? entry.defaultValue : value);
+    }
+}
+
+/** Sets only the toggles `values` names (a GPU page's configuration over its own settings). */
+export function setCompareValues(settings: RadianceCacheSettings, values: CompareValues): void {
+    for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
+        const value = (values as Record<string, CompareValue | undefined>)[entry.setting];
+        if (value !== undefined) setCompareSetting(settings, entry.setting, value);
     }
 }
 

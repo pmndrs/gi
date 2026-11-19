@@ -3,33 +3,47 @@ import {
     applyCompareValues,
     capsaicinCompareValues,
     COMPARE_GROUPS,
+    compareSettingValue,
     compareValuesFromText,
     parseCompareValue,
     RADIANCE_CACHE_COMPARE_TOGGLES,
     readCompareValues,
     writeCompareValues,
+    type CompareToggle,
     type CompareValues,
 } from './compare-toggles.ts';
 import { RadianceCacheTechnique, temporalRuleUniforms } from './radiance-cache-technique.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS, SCREEN_HISTORY_SETTINGS, type RadianceCacheSettings } from './settings.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, PREPARE_SETTINGS, SCREEN_HISTORY_SETTINGS, type RadianceCacheSettings } from './settings.ts';
 import { BLEND_WGSL, FRAME_UNIFORM_OFFSETS, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
 import { REPROJECT_WGSL } from './wgsl/temporal-probes.ts';
+
+/** A value other than the default: Capsaicin's where it differs, else the other end or choice. */
+function otherValue(entry: CompareToggle): boolean | number | string {
+    if (entry.capsaicin !== undefined && entry.capsaicin !== entry.defaultValue) return entry.capsaicin;
+    if (entry.kind === 'boolean') return !entry.defaultValue;
+    if (entry.kind === 'number') return entry.defaultValue === entry.min ? entry.max : entry.min;
+    return entry.choices.find((choice) => choice.value !== entry.defaultValue)!.value;
+}
 
 describe('the compare toggles (RC4.5)', () => {
     it('each names a setting, its default and a valid Capsaicin value, with a unique link name and help', () => {
         const urlNames = new Set<string>();
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
-            expect(entry.setting in DEFAULT_RADIANCE_CACHE_SETTINGS).toBe(true);
-            expect(entry.defaultValue).toBe(DEFAULT_RADIANCE_CACHE_SETTINGS[entry.setting]);
+            const top = entry.setting.startsWith('sharc.') ? null : (entry.setting as keyof RadianceCacheSettings);
+            if (top) expect(top in DEFAULT_RADIANCE_CACHE_SETTINGS).toBe(true);
+            expect(entry.defaultValue).toBe(compareSettingValue(DEFAULT_RADIANCE_CACHE_SETTINGS, entry.setting));
+            expect(entry.defaultValue).toBeDefined();
             expect(COMPARE_GROUPS).toContain(entry.group);
             expect(entry.urlName).toMatch(/^[a-z0-9]+$/);
             expect(urlNames.has(entry.urlName)).toBe(false);
             urlNames.add(entry.urlName);
             expect(entry.help.length).toBeGreaterThan(20);
             expect(entry.help).toMatch(/Capsaicin/);
-            expect(entry.resetsHistory).toBe(SCREEN_HISTORY_SETTINGS.includes(entry.setting));
-            // Capsaicin's value and the default are values the toggle can take.
+            expect(entry.resetsHistory).toBe(top !== null && SCREEN_HISTORY_SETTINGS.includes(top));
+            expect(entry.restartsTechnique).toBe(top !== null && PREPARE_SETTINGS.includes(top));
+            // Capsaicin's value (where it has one) and the default are values the toggle can take.
             for (const value of [entry.capsaicin, entry.defaultValue]) {
+                if (value === undefined) continue;
                 if (entry.kind === 'boolean') expect(typeof value).toBe('boolean');
                 if (entry.kind === 'choice') expect(entry.choices.map((choice) => choice.value)).toContain(value);
                 if (entry.kind === 'number') {
@@ -48,15 +62,17 @@ describe('the compare toggles (RC4.5)', () => {
 
     it('round-trips every value through link parameters, writing only what differs from the defaults', () => {
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
-            const values = { [entry.setting]: entry.capsaicin } as CompareValues;
-            const params = new URLSearchParams();
-            writeCompareValues(values, params);
-            if (entry.capsaicin === entry.defaultValue) {
-                expect(params.toString()).toBe('');
-                continue;
+            for (const value of [entry.capsaicin ?? entry.defaultValue, otherValue(entry)]) {
+                const values = { [entry.setting]: value } as CompareValues;
+                const params = new URLSearchParams();
+                writeCompareValues(values, params);
+                if (value === entry.defaultValue) {
+                    expect(params.toString()).toBe('');
+                    continue;
+                }
+                expect([...params.keys()]).toEqual([entry.urlName]);
+                expect(readCompareValues(new URLSearchParams(params.toString()))).toEqual(values);
             }
-            expect([...params.keys()]).toEqual([entry.urlName]);
-            expect(readCompareValues(new URLSearchParams(params.toString()))).toEqual(values);
         }
         const all = capsaicinCompareValues();
         const params = new URLSearchParams();
@@ -80,12 +96,12 @@ describe('the compare toggles (RC4.5)', () => {
     it('reach the technique: its settings, and the RcFrame words the kernels read', () => {
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
             const technique = new RadianceCacheTechnique();
-            applyCompareValues(technique.settings, { [entry.setting]: entry.capsaicin } as CompareValues);
-            expect(technique.settings[entry.setting]).toBe(entry.capsaicin);
+            applyCompareValues(technique.settings, { [entry.setting]: entry.capsaicin ?? otherValue(entry) } as CompareValues);
+            expect(compareSettingValue(technique.settings, entry.setting)).toBe(entry.capsaicin ?? otherValue(entry));
             // Every other toggle at its default.
-            for (const other of RADIANCE_CACHE_COMPARE_TOGGLES) if (other !== entry) expect(technique.settings[other.setting]).toBe(other.defaultValue);
+            for (const other of RADIANCE_CACHE_COMPARE_TOGGLES) if (other !== entry) expect(compareSettingValue(technique.settings, other.setting)).toBe(other.defaultValue);
             applyCompareValues(technique.settings, {});
-            expect(technique.settings[entry.setting]).toBe(entry.defaultValue);
+            expect(compareSettingValue(technique.settings, entry.setting)).toBe(entry.defaultValue);
         }
         const settings: RadianceCacheSettings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS };
         expect(temporalRuleUniforms(settings)).toEqual({ historySampleCap: 8, rayGuidingUniformShare: 0.125, capsaicinHysteresis: 0, capsaicinEmptyCells: 0, fillHitDistance: -1, probeChangeReset: 1 });

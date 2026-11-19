@@ -122,9 +122,9 @@ export class RcCompareControls {
     }
 
     private buildControl(entry: CompareToggle): ToggleControl {
-        const capsaicinText = describeValue(entry, entry.capsaicin);
-        const title = `${entry.label}${entry.resetsHistory ? ' ↺' : ''}`;
-        const help = `${entry.help}${entry.register ? ` (Register ${entry.register}.)` : ''}${entry.resetsHistory ? ' Changing it starts the probes over (↺).' : ''}`;
+        const capsaicinText = entry.capsaicin === undefined ? null : describeValue(entry, entry.capsaicin);
+        const title = `${entry.label}${entry.resetsHistory || entry.restartsTechnique ? ' ↺' : ''}`;
+        const help = `${entry.help}${entry.register ? ` (Register ${entry.register}.)` : ''}${entry.resetsHistory ? ' Changing it starts the probes over (↺).' : ''}${entry.restartsTechnique ? ' Changing it starts the radiance cache over (↺).' : ''}`;
         const withEntryHelp = <T extends HTMLElement>(element: T): T => {
             element.dataset.help = help;
             element.title = help;
@@ -136,7 +136,7 @@ export class RcCompareControls {
                 const input = h('input', { type: 'checkbox' });
                 input.addEventListener('change', () => this.changed(entry, input.checked));
                 // Its own line: inline labels would otherwise flow side by side.
-                const row = withEntryHelp(h('div', {}, h('label', { className: 'inline' }, input, ` ${title}`, h('span', { className: 'muted small', text: ` (Capsaicin: ${capsaicinText})` }))));
+                const row = withEntryHelp(h('div', {}, h('label', { className: 'inline' }, input, ` ${title}`, h('span', { className: 'muted small', text: capsaicinText === null ? ' (not in Capsaicin)' : ` (Capsaicin: ${capsaicinText})` }))));
                 return { entry, row, show: (value) => (input.checked = value === true) };
             }
             case 'choice': {
@@ -157,7 +157,7 @@ export class RcCompareControls {
                     h(
                         'div',
                         {},
-                        h('div', { className: 'label small' }, `${title} `, shown, h('span', { className: 'muted small', text: ` (ours ${describeValue(entry, entry.defaultValue)}, Capsaicin ${capsaicinText})` })),
+                        h('div', { className: 'label small' }, `${title} `, shown, h('span', { className: 'muted small', text: ` (ours ${describeValue(entry, entry.defaultValue)}${capsaicinText === null ? '' : `, Capsaicin ${capsaicinText}`})` })),
                         input,
                     ),
                 );
