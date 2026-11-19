@@ -458,6 +458,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         }
         denoiser.encode(encoder, irradiance, frame.screen, prepared.history.screenTexturesFor(resources.layout), frame.camera, changes, {
             historyClamp: this.settings.denoiserHistoryClamp,
+            historyClip: this.settings.denoiserHistoryClip,
             changeReset: this.settings.denoiserChangeReset,
         });
     }

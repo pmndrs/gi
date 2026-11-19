@@ -68,9 +68,10 @@ export class RadianceCacheDenoiser {
         history: ScreenHistoryTextures,
         camera: FrameCamera,
         changes: HistoryChanges,
-        options: { readonly historyClamp: 'neighbourhood' | 'none'; readonly changeReset: boolean },
+        options: { readonly historyClamp: 'neighbourhood' | 'none'; readonly historyClip: number; readonly changeReset: boolean },
     ): GPUTexture {
         this.denoiser.historyClamp = options.historyClamp;
+        this.denoiser.historyClip = options.historyClip;
         this.denoiser.changeReset = options.changeReset;
         if (!screen.velocity) throw new Error('@pmndrs/gi: the GI denoiser reads FrameScreen.velocity');
         if (screen.width !== this.width || screen.height !== this.height) {

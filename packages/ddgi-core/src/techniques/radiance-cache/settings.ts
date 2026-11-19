@@ -89,6 +89,12 @@ export interface RadianceCacheSettings {
      */
     denoiserHistoryClamp: 'neighbourhood' | 'none';
     /**
+     * The clamp's box half width, in standard errors of the short history's mean
+     * (`Gi1Denoiser.historyClip`). Smaller follows changes sooner and flickers more. Default 2
+     * (lead decision 2026-11-19). Read every frame.
+     */
+    denoiserHistoryClip: number;
+    /**
      * The denoiser's soft reset where the frame's scene changes are (`SceneChanges`, the boxes
      * D46 uses, or everywhere for a global change; register D50): a short history there for
      * 8 frames. Default true. Read every frame.
@@ -115,6 +121,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     interpolationJitter: true,
     denoiser: true,
     denoiserHistoryClamp: 'neighbourhood',
+    denoiserHistoryClip: 2,
     denoiserChangeReset: true,
 });
 
