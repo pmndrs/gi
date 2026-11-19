@@ -55,6 +55,13 @@ export interface PageManifest {
      * when a --filter names it exactly, never in a full run or a partial match.
      */
     manual?: boolean;
+    /**
+     * Optional sibling libraries the page needs (root package.json
+     * `linkedSiblings` with `optional: true`, tools/optional-siblings.ts). Where
+     * one isn't cloned at its pin (a public checkout, CI), the page is left out
+     * of the run, with a note: it would only test that the feature turns off.
+     */
+    optionalSiblings?: string[];
 }
 
 /** What `--json <file>` writes. Benchmark tasks read `pages[].data` from it to make CSV rows. */

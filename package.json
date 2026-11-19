@@ -31,16 +31,14 @@
             "commit": "0e4435bd05bf4f55c8763c76facae640db35855c",
             "clone": "../pmndrs-pathtracer",
             "path": "packages/mlp",
-            "built": [
-                "src/index.ts"
-            ],
-            "build": []
+            "built": ["src/index.ts"],
+            "build": [],
+            "optional": true
         }
     },
     "devDependencies": {
         "@babylonjs/core": "9.33.2",
         "@eslint/js": "^9.18.0",
-        "@pathtracer/mlp": "link:../pmndrs-pathtracer/packages/mlp",
         "@pmndrs/upscaler": "0.5.0",
         "@types/node": "24.19.2",
         "@types/three": "0.187.0",

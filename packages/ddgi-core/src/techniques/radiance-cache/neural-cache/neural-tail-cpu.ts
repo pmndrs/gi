@@ -34,10 +34,37 @@ export function neuralTailPosition(world: Vec3, box: { lo: Vec3; scale: Vec3 }):
     return [axis(0), axis(1), axis(2)];
 }
 
-/** Training steps this frame: the warm-up rate until the gate opens, then the steady rate. */
-export function neuralTailStepsThisFrame(trainedSteps: number, settings: { warmupSteps: number; warmupStepsPerFrame: number; stepsPerFrame: number }): number {
-    if (trainedSteps < settings.warmupSteps && settings.warmupStepsPerFrame > 0) return settings.warmupStepsPerFrame;
+/** Training steps this frame: the warm-up rate until the gate opens and while `boosting` (after a change with no bounds), then the steady rate. */
+export function neuralTailStepsThisFrame(trainedSteps: number, settings: { warmupSteps: number; warmupStepsPerFrame: number; stepsPerFrame: number }, boosting = false): number {
+    if ((trainedSteps < settings.warmupSteps || boosting) && settings.warmupStepsPerFrame > 0) return Math.max(settings.warmupStepsPerFrame, settings.stepsPerFrame);
     return settings.stepsPerFrame;
+}
+
+/** The default box is centred again when the camera leaves its middle half on any axis. */
+export function neuralTailNeedsRecentre(camera: Vec3 | readonly number[], centre: readonly number[], halfSize: number): boolean {
+    return [0, 1, 2].some((axis) => Math.abs((camera[axis] ?? 0) - (centre[axis] ?? 0)) > halfSize / 2);
+}
+
+/**
+ * The training set's records: room for the cell and screen records it takes
+ * a frame (`cellRecords`, `screenRecords`, both random shares, so about
+ * those counts at any screen size) with a quarter to spare; a record past it
+ * is dropped.
+ */
+export function neuralTailSetCapacity(settings: { cellRecords: number; screenRecords: number; screenStride: number }): number {
+    const screen = settings.screenStride > 0 ? settings.screenRecords : 0;
+    return Math.max(1024, Math.ceil(((settings.cellRecords + screen) * 1.25) / 64) * 64);
+}
+
+/**
+ * The queries a screen of `maxRayCount` probe rays can need: one per
+ * second-bounce entry, (1 − p) of the first-bounce hits in expectation (p the
+ * grid's discard probability), with half again to spare, at most one per ray.
+ * An entry past it gets no answer that frame (counted out by the query kernel).
+ */
+export function neuralTailQueryCapacity(maxRayCount: number, discardProbability: number): number {
+    const kept = Math.min(Math.max(1 - discardProbability, 0), 1);
+    return Math.max(64, Math.min(maxRayCount, Math.ceil(maxRayCount * kept * 1.5 - 1e-6)));
 }
 
 /** The gate: the tail is read once the network has taken `warmupSteps` steps. */

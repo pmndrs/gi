@@ -1,8 +1,8 @@
 /**
  * The neural tail (phase 6 experiment P6.4, register E11): pmndrs/pathtracer's
- * neural radiance cache network (`@pathtracer/mlp`, MIT, linked at a pinned
- * commit; THIRD_PARTY.md) as an enhancement of the GI-1.2 hash grid, not a
- * replacement (docs/design/radiance-cache.md, "Neural tail").
+ * neural radiance cache network (`@pathtracer/mlp`, MIT; Müller et al. 2021's
+ * design as VkNRC builds it; THIRD_PARTY.md) as an enhancement of the GI-1.2
+ * hash grid, not a replacement (docs/design/radiance-cache.md, "Neural tail").
  *
  * The grid stays the near cache and keeps reacting as fast as it does: every
  * probe-ray hit is still lit, inserted and resolved by it. What the network
@@ -11,26 +11,30 @@
  * bounces in all); with the tail, `UpdateMultibounceCells` adds the
  * network's answer for the light the second hit reflects from *indirect*
  * light. The network learns that quantity from the grid's own indirect values
- * (cell records) and the screen probes' irradiance (screen records), so the
- * cells' indirect values become a fixed point that carries every bounce in
- * expectation (the furnace: ρ (ρE/π) / (1 − ρ²) = 0.4244 where two bounces
- * read 0.3183).
+ * (cell records) and one-ray estimates of it on the surfaces the camera sees
+ * (screen records), so the cells' indirect values become a fixed point that
+ * carries every bounce in expectation (the furnace: ρ (ρE/π) / (1 − ρ²) =
+ * 0.4244 where two bounces read 0.3183).
  *
- * Per frame:
+ * Per frame, all inside the hash grid's frame (its `HashGridTail` slot, after
+ * `UpdateTiles`, with GI-1.2's own second-bounce rays only): the counts
+ * cleared; cell and screen records gathered (`neural-tail-wgsl.ts`); the
+ * frame's training steps over them; then, once the gate is open, the queries
+ * gathered and answered into the grid's `neural_tail_buffer` list.
  *
- * 1. Inside the hash grid's frame (`encode`, the grid's `HashGridTail` slot,
- *    after `UpdateTiles`): the counts cleared; cell records and the queries
- *    gathered (`neural-tail-wgsl.ts`); inference over the second-bounce
- *    entries into the grid's `neural_tail_buffer` list, once the gate is open.
- * 2. After the screen's irradiance (`encodeTraining`, from the technique):
- *    screen records, then the training steps over the frame's set.
+ * The gate opens once the GPU has taken `warmupSteps` training steps (steps
+ * with no records don't count; the count is read back a frame or two late,
+ * never waited on). Until then the grid runs as GI-1.2, and the network
+ * trains at `warmupStepsPerFrame`, as it does again for `changeBoostFrames`
+ * after a change with no bounds (the sun, the sky).
  *
- * Until the network has taken `warmupSteps` steps the gate is closed: the
- * grid runs as GI-1.2, and the network trains at `warmupStepsPerFrame`.
+ * The package is loaded at run time (`mlp-loader.ts`); the technique hands it
+ * to `prepare`.
  */
 
-import { DEFAULT_TRAIN, defaultForwardRecords, forwardWorkgroupBytes, inferTiledWorkgroupBytes, initWeights, layerOffset, MLP_SHAPES, MlpEngine, type MlpShape } from '@pathtracer/mlp';
+import type { MlpEngine, MlpShape } from '@pathtracer/mlp';
 import type { GpuIndirectArgs } from '../../../platform/contract/compute.ts';
+import { GILimitError } from '../../../platform/contract/errors.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../../platform/contract/wgsl.ts';
@@ -39,7 +43,8 @@ import { HASH_GRID_COUNTER } from '../world-cache/capacity.ts';
 import type { HashGridCache, HashGridTail, HashGridTailFrame } from '../world-cache/hash-grid-cache.ts';
 import { RAY_DATA_GROUP_ENTRIES } from '../world-cache/hash-grid-population-wgsl.ts';
 import { HASH_GRID_CACHE_GROUP_ENTRIES } from '../world-cache/hash-grid-wgsl.ts';
-import { neuralTailBox, neuralTailGateOpen, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
+import type { MlpModule } from './mlp-loader.ts';
+import { neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
 import { neuralTailSettings, type NeuralTailSettings } from './neural-tail-settings.ts';
 import {
     gatherCellRecordsWgsl,
@@ -55,48 +60,39 @@ import {
     NEURAL_TAIL_PARAMS_WORD,
     NEURAL_TAIL_QUERY_VEC4,
     NEURAL_TAIL_RECORD_VEC4,
+    NEURAL_TAIL_SCREEN_GRID_GROUP,
     NEURAL_TAIL_SCREEN_GROUP,
-    NEURAL_TAIL_SCREEN_GROUP_ENTRIES,
+    NEURAL_TAIL_SCREEN_OWN_GROUP,
     NEURAL_TAIL_WORKGROUP,
     neuralTailInferHooks,
     neuralTailTrainHooks,
 } from './neural-tail-wgsl.ts';
 
-/** `GPUBufferUsage` bits (the global doesn't exist in Node, where the tests import this file). */
-const BUFFER_USAGE = { copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
+/** `GPUBufferUsage` and `GPUMapMode` bits (the globals don't exist in Node, where the tests import this file). */
+const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
+const MAP_MODE_READ = 0x1;
 const VEC4_BYTES = 16;
 const WORD_BYTES = 4;
 /** Timed as `radiance-cache/<section>`, beside the hash grid's sections. */
 const TIMER_PREFIX = 'radiance-cache';
-/** Inference records per call at most: more than any screen's second-bounce entries (the engine sizes nothing by it). */
+/** Inference records per call at most (the engine sizes nothing by it; the query buffer bounds the work). */
 const INFER_CAPACITY = 1 << 26;
-
-/** The training set: room for the cell records and a full screen's records at the default stride, with slack. */
-function setCapacity(settings: NeuralTailSettings): number {
-    const screen = settings.screenStride > 0 ? Math.ceil(3840 / settings.screenStride) * Math.ceil(2160 / settings.screenStride) : 0;
-    return Math.max(1024, Math.ceil((settings.cellRecords * 1.25 + Math.min(screen, 65536)) / 64) * 64);
-}
+/** The Adam step's word in `MlpEngine.trainState` (`NnState.step`). */
+const TRAIN_STATE_STEP_BYTE = 4;
 
 /**
  * Records per workgroup of the tiled kernels: the pathtracer's default (64 at
  * f16, 48 at f32) or the largest multiple of 16 below it that fits the
  * device's workgroup memory. `requiredLimits` asks for the adapter's maximum
- * (DECISIONS 2026-11-20; 32 KiB on the RTX 3060); a host device at WebGPU's
- * default 16 KiB still runs, with smaller tiles (the compact network's
- * 64-record inference needs 20 KiB).
+ * (DECISIONS 2026-11-20; 32 KiB on the RTX 3060); a device at WebGPU's
+ * default 16 KiB still runs the compact network, with smaller tiles. A
+ * network that can't fit at all is a `GILimitError` naming the limit.
  */
-function tiledRecords(shape: MlpShape, precision: 'f16' | 'f32', limit: number, bytes: (records: number) => number): number {
-    for (let records = defaultForwardRecords(precision); records >= 16; records -= 16) {
+function tiledRecords(mlp: MlpModule, shape: MlpShape, precision: 'f16' | 'f32', limit: number, bytes: (records: number) => number): number {
+    for (let records = mlp.defaultForwardRecords(precision); records >= 16; records -= 16) {
         if (bytes(records) <= limit) return records;
     }
-    throw new Error(`@pmndrs/gi: the neural tail's ${shape.hidden} × ${shape.width} network needs more workgroup memory than the device's ${limit} bytes`);
-}
-
-/** The screen the training reads: the irradiance the screen probes made this frame. */
-export interface NeuralTailScreen {
-    readonly irradiance: GPUTexture;
-    readonly width: number;
-    readonly height: number;
+    throw new GILimitError('maxComputeWorkgroupStorageSize', bytes(16), limit);
 }
 
 interface Prepared {
@@ -112,9 +108,13 @@ interface Prepared {
     readonly counts: GPUBuffer;
     readonly set: GPUBuffer;
     readonly setCapacity: number;
+    readonly stepReadback: GPUBuffer;
     readonly tileWords: GPUBuffer;
     readonly trainGroup: GPUBindGroup;
     readonly cellGroup: GPUBindGroup;
+    readonly screenOwnGroup: GPUBindGroup;
+    /** The grid's discard probability when the tail was made, for sizing the queries. */
+    readonly discardProbability: () => number;
 }
 
 /** Bind groups over one screen's lists and queries. */
@@ -124,6 +124,7 @@ interface ScreenData {
     readonly queryCapacity: number;
     readonly cellGroups: readonly [GPUBindGroup, GPUBindGroup];
     readonly queryGroups: readonly [GPUBindGroup, GPUBindGroup, GPUBindGroup];
+    readonly screenGridGroup: GPUBindGroup;
     readonly inferGroup: GPUBindGroup;
 }
 
@@ -132,13 +133,17 @@ export class NeuralTail implements HashGridTail {
 
     private prepared: Prepared | null = null;
     private screenData: ScreenData | null = null;
-    private screenGroup: { readonly texture: GPUTexture; readonly group: GPUBindGroup } | null = null;
     private context: TechniqueContext | null = null;
-    private trainedSteps = 0;
+    /** Training steps the GPU has taken since the network (re)started, as last read back. */
+    private gpuSteps = 0;
+    /** The step readback: `copied` once its copy is encoded, `mapping` once its map is asked for. */
+    private readbackState: 'idle' | 'copied' | 'mapping' = 'idle';
+    /** Bumped on every restart, so a readback from before it is dropped. */
+    private generation = 0;
+    /** Frames left at the warm-up training rate after a change with no bounds. */
+    private boostFramesLeft = 0;
     /** The default box's centre: the camera where the network (re)started, taken at its first frame. */
     private boxCentre: readonly [number, number, number] | null = null;
-    /** The hash grid ran the tail this frame (multibounce on), so training follows. */
-    private gatheredThisFrame = false;
     private readonly paramWords = new ArrayBuffer(NEURAL_TAIL_PARAMS_BYTES);
 
     constructor(settings: Partial<NeuralTailSettings> = {}) {
@@ -147,12 +152,12 @@ export class NeuralTail implements HashGridTail {
 
     /** The gate is open: the network has trained `warmupSteps` steps, and the grid adds its answers. */
     get active(): boolean {
-        return this.prepared !== null && neuralTailGateOpen(this.trainedSteps, this.settings.warmupSteps);
+        return this.prepared !== null && neuralTailGateOpen(this.gpuSteps, this.settings.warmupSteps);
     }
 
-    /** Training steps encoded since the network was (re)started. */
+    /** Training steps the GPU has taken since the network was (re)started (read back a frame or two late). */
     get steps(): number {
-        return this.trainedSteps;
+        return this.gpuSteps;
     }
 
     /** The network, for tests and the timing page. */
@@ -160,16 +165,17 @@ export class NeuralTail implements HashGridTail {
         return this.prepared?.mlp ?? null;
     }
 
-    /** The training set's records and its count (word `NEURAL_TAIL_COUNT_WORD.records` of `counts`), for tests. */
-    get buffers(): { readonly set: GPUBuffer; readonly counts: GPUBuffer; readonly setCapacity: number; readonly queries: GPUBuffer | null } | null {
+    /** The training set's records and its count (word `NEURAL_TAIL_COUNT_WORD.records` of `counts`), and the queries, for tests. */
+    get buffers(): { readonly set: GPUBuffer; readonly counts: GPUBuffer; readonly setCapacity: number; readonly queries: GPUBuffer | null; readonly queryCapacity: number } | null {
         const prepared = this.prepared;
-        return prepared ? { set: prepared.set, counts: prepared.counts, setCapacity: prepared.setCapacity, queries: this.screenData?.queries ?? null } : null;
+        return prepared ? { set: prepared.set, counts: prepared.counts, setCapacity: prepared.setCapacity, queries: this.screenData?.queries ?? null, queryCapacity: this.screenData?.queryCapacity ?? 0 } : null;
     }
 
+    /** GPU bytes the tail made: the network (weights, Adam, EMA, training scratch), the training set, the queries, small buffers. Its answers live in the grid's lists. */
     get memoryBytes(): number {
         const prepared = this.prepared;
         if (!prepared) return 0;
-        const own = prepared.params.size + prepared.counts.size + prepared.set.size + prepared.cellArgs.memoryBytes + prepared.queryArgs.memoryBytes;
+        const own = prepared.params.size + prepared.counts.size + prepared.set.size + prepared.stepReadback.size + prepared.cellArgs.memoryBytes + prepared.queryArgs.memoryBytes;
         return own + prepared.mlp.bufferBytes + (this.screenData?.queries.size ?? 0);
     }
 
@@ -177,7 +183,7 @@ export class NeuralTail implements HashGridTail {
         const prepared = this.prepared;
         if (!prepared) return {};
         return {
-            'training steps': this.trainedSteps,
+            'training steps': this.gpuSteps,
             'gate open': this.active ? 1 : 0,
             'network weights': prepared.mlp.weightCount,
             'GPU memory (bytes)': this.memoryBytes,
@@ -186,33 +192,33 @@ export class NeuralTail implements HashGridTail {
 
     /**
      * Compiles the network and the gather kernels and makes the training
-     * set, after the grid's own `prepare` (its layout and counters). Starts
-     * the network from fresh weights.
+     * set, after the grid's own `prepare` (its layout and counters), with the
+     * package `loadMlp` gave. Starts the network from fresh weights. Throws a
+     * `GILimitError` when the device can't hold the network's tiles.
      */
-    async prepare(context: TechniqueContext, grid: HashGridCache): Promise<void> {
+    async prepare(context: TechniqueContext, grid: HashGridCache, mlp: MlpModule): Promise<void> {
         this.dispose();
         this.context = context;
         const { device, kernels, compute, shade } = context;
         const settings = this.settings;
-        const shape = MLP_SHAPES[settings.network];
+        const shape = mlp.MLP_SHAPES[settings.network];
         const precision = settings.precision === 'auto' ? (device.features.has('shader-f16') ? 'f16' : 'f32') : settings.precision;
-        const capacity = setCapacity(settings);
-        const layout = grid.layout;
-        const tileWords = grid.buffers.tileWords;
         const limit = device.limits.maxComputeWorkgroupStorageSize;
-        const inferRecords = tiledRecords(shape, precision, limit, (records) => inferTiledWorkgroupBytes({ shape, precision }, { records }));
-        const forwardRecords = tiledRecords(shape, precision, limit, (records) => forwardWorkgroupBytes({ shape, precision }, { records }));
+        const inferRecords = tiledRecords(mlp, shape, precision, limit, (records) => mlp.inferTiledWorkgroupBytes({ shape, precision }, { records }));
+        const forwardRecords = tiledRecords(mlp, shape, precision, limit, (records) => mlp.forwardWorkgroupBytes({ shape, precision }, { records }));
         // The tiled weight gradient stages `chunk` records of deltas and activations (f32 vec4 rows each).
         const rowBytes = Math.max(shape.inputs, shape.width) * 4;
         const gradientChunk = 2 * 32 * rowBytes + 16 <= limit ? 32 : 16;
+        const capacity = neuralTailSetCapacity(settings);
+        const layout = grid.layout;
+        const tileWords = grid.buffers.tileWords;
         const word = (counter: number) => ({ buffer: tileWords, offset: counter * WORD_BYTES });
-        const ownGroups = [
-            { label: 'radiance-cache/hash-grid group', entries: HASH_GRID_CACHE_GROUP_ENTRIES },
-            { label: 'radiance-cache/hash-grid ray data', entries: RAY_DATA_GROUP_ENTRIES },
-            { label: 'radiance-cache/neural tail', entries: NEURAL_TAIL_GROUP_ENTRIES },
-        ];
-        const [mlp, gatherCells, gatherQueries, gatherScreen, cellArgs, queryArgs] = await Promise.all([
-            MlpEngine.create(device, {
+        const cacheGroup = { label: 'radiance-cache/hash-grid group', entries: HASH_GRID_CACHE_GROUP_ENTRIES };
+        const ownGroup = { label: 'radiance-cache/neural tail', entries: NEURAL_TAIL_GROUP_ENTRIES };
+        const ownGroups = [cacheGroup, { label: 'radiance-cache/hash-grid ray data', entries: RAY_DATA_GROUP_ENTRIES }, ownGroup];
+        const encoding = mlp.nrcEncodingWgsl(settings.positionBands);
+        const [engine, gatherCells, gatherQueries, gatherScreen, cellArgs, queryArgs] = await Promise.all([
+            mlp.MlpEngine.create(device, {
                 shape,
                 precision,
                 capacity: settings.batch,
@@ -222,18 +228,18 @@ export class NeuralTail implements HashGridTail {
                 forwardOptions: { records: forwardRecords },
                 gradientOptions: { chunk: gradientChunk },
                 useEma: settings.ema !== 'off',
-                train: { ...DEFAULT_TRAIN, learningRate: settings.learningRate, emaDecay: settings.ema === 'off' ? 0 : DEFAULT_TRAIN.emaDecay, emaWarmup: settings.ema === 'warmup' },
-                trainHooks: neuralTailTrainHooks(settings.positionBands),
-                inferHooks: neuralTailInferHooks(settings.positionBands),
+                train: { ...mlp.DEFAULT_TRAIN, learningRate: settings.learningRate, emaWarmup: settings.ema === 'warmup' },
+                trainHooks: neuralTailTrainHooks(encoding),
+                inferHooks: neuralTailInferHooks(encoding),
             }),
             kernels.computeKernel({ label: 'radiance-cache/NeuralTail_GatherCellRecords', modules: [shade.module], code: gatherCellRecordsWgsl(layout), entryPoint: NEURAL_TAIL_ENTRY_POINT.gatherCellRecords, ownGroups }),
             kernels.computeKernel({ label: 'radiance-cache/NeuralTail_GatherQueries', modules: [shade.module], code: gatherQueriesWgsl(layout), entryPoint: NEURAL_TAIL_ENTRY_POINT.gatherQueries, ownGroups }),
             kernels.computeKernel({
                 label: 'radiance-cache/NeuralTail_GatherScreenRecords',
                 modules: [shade.module],
-                code: gatherScreenRecordsWgsl(),
+                code: gatherScreenRecordsWgsl(layout),
                 entryPoint: NEURAL_TAIL_ENTRY_POINT.gatherScreenRecords,
-                ownGroups: [{ label: 'radiance-cache/neural tail screen', entries: NEURAL_TAIL_SCREEN_GROUP_ENTRIES }],
+                ownGroups: [cacheGroup, ownGroup],
             }),
             compute.createIndirectArgs({ label: 'radiance-cache/NeuralTail_GatherCellRecords args', count: word(HASH_GRID_COUNTER.visibilityCount0), itemsPerWorkgroup: NEURAL_TAIL_WORKGROUP }),
             compute.createIndirectArgs({ label: 'radiance-cache/NeuralTail_GatherQueries args', count: word(HASH_GRID_COUNTER.visibilityCount1), itemsPerWorkgroup: NEURAL_TAIL_WORKGROUP }),
@@ -242,9 +248,10 @@ export class NeuralTail implements HashGridTail {
         const params = device.createBuffer({ label: 'radiance-cache/neural tail params', size: NEURAL_TAIL_PARAMS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         const counts = device.createBuffer({ label: 'radiance-cache/neural tail counts', size: NEURAL_TAIL_COUNTS_BYTES, usage: storage });
         const set = device.createBuffer({ label: 'radiance-cache/neural tail training set', size: capacity * NEURAL_TAIL_RECORD_VEC4 * VEC4_BYTES, usage: storage });
+        const stepReadback = device.createBuffer({ label: 'radiance-cache/neural tail step readback', size: WORD_BYTES, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst });
         const trainGroup = device.createBindGroup({
             label: 'radiance-cache/neural tail train hooks',
-            layout: mlp.trainLayout,
+            layout: engine.trainLayout,
             entries: [
                 { binding: 0, resource: { buffer: set } },
                 { binding: 1, resource: { buffer: counts } },
@@ -252,24 +259,54 @@ export class NeuralTail implements HashGridTail {
             ],
         });
         const cellGroup = device.createBindGroup({ label: 'radiance-cache/neural tail cell records', layout: gatherCells.ownLayouts[2], entries: neuralGroupEntries(params, set, counts) });
-        this.prepared = { device, mlp, shape, gatherCells, gatherQueries, gatherScreen, cellArgs, queryArgs, params, counts, set, setCapacity: capacity, tileWords, trainGroup, cellGroup };
-        this.restartNetwork();
+        const screenOwnGroup = device.createBindGroup({ label: 'radiance-cache/neural tail screen records', layout: gatherScreen.ownLayouts[1], entries: neuralGroupEntries(params, set, counts) });
+        this.prepared = {
+            device,
+            mlp: engine,
+            shape,
+            gatherCells,
+            gatherQueries,
+            gatherScreen,
+            cellArgs,
+            queryArgs,
+            params,
+            counts,
+            set,
+            setCapacity: capacity,
+            stepReadback,
+            tileWords,
+            trainGroup,
+            cellGroup,
+            screenOwnGroup,
+            discardProbability: () => grid.options.hashGridCacheDiscardMultibounceRayProbability,
+        };
+        this.restartNetwork(initialWeights(mlp, shape, settings.seed));
+        this.freshWeights = () => initialWeights(mlp, shape, settings.seed);
     }
 
     /** Forgets what the network learned: fresh weights (a zero output layer, so it answers 0 at first) and the gate closed. */
     reset(): void {
-        if (this.prepared) this.restartNetwork();
+        if (this.prepared && this.freshWeights) this.restartNetwork(this.freshWeights());
     }
 
-    /** Inside the hash grid's frame (`HashGridTail`): gathers this frame's cell records and queries, then answers the queries once the gate is open. */
+    /** Inside the hash grid's frame (`HashGridTail`): this frame's records, training, then the queries and their answers once the gate is open. */
     encode(encoder: GPUCommandEncoder, tailFrame: HashGridTailFrame): void {
         const prepared = this.require();
         const context = this.context;
         if (!context) throw new Error('@pmndrs/gi: the neural tail is used before prepare()');
+        const settings = this.settings;
+        const camera = tailFrame.frame.camera.position;
+        // The default box follows the camera: centred again, and the network started over, when it leaves the middle half.
+        if (!settings.bounds && this.boxCentre && neuralTailNeedsRecentre(camera, this.boxCentre, settings.boundsHalfSize)) this.reset();
+        this.pollSteps(prepared);
+        // A change with no bounds (the sun, the sky) starts its epoch: train at the warm-up rate for a while.
+        const frameIndex = tailFrame.frame.frame;
+        if (tailFrame.frame.changes?.events.some((event) => event.box === null && event.epoch === frameIndex)) this.boostFramesLeft = settings.changeBoostFrames;
         const screenData = this.screenDataFor(prepared, tailFrame);
         this.writeParams(prepared, tailFrame, screenData.queryCapacity);
         encoder.clearBuffer(prepared.counts);
 
+        // The records: cells (indirect on the first-bounce count) and the screen.
         const gather = encoder.beginComputePass({ label: `${TIMER_PREFIX}/NeuralTailGather`, timestampWrites: context.timer.computePass(`${TIMER_PREFIX}/NeuralTailGather`) });
         prepared.cellArgs.encode(gather);
         prepared.gatherCells.bind(gather);
@@ -277,74 +314,87 @@ export class NeuralTail implements HashGridTail {
         gather.setBindGroup(2, screenData.cellGroups[1]);
         gather.setBindGroup(NEURAL_TAIL_HASH_GRID_GROUP, prepared.cellGroup);
         gather.dispatchWorkgroupsIndirect(prepared.cellArgs.buffer, 0);
-        if (this.active) {
-            prepared.queryArgs.encode(gather);
-            prepared.gatherQueries.bind(gather);
-            gather.setBindGroup(1, screenData.queryGroups[0]);
-            gather.setBindGroup(2, screenData.queryGroups[1]);
-            gather.setBindGroup(NEURAL_TAIL_HASH_GRID_GROUP, screenData.queryGroups[2]);
-            gather.dispatchWorkgroupsIndirect(prepared.queryArgs.buffer, 0);
+        if (settings.screenStride > 0 && settings.screenRecords > 0) {
+            prepared.gatherScreen.bind(gather);
+            gather.setBindGroup(NEURAL_TAIL_SCREEN_GRID_GROUP, screenData.screenGridGroup);
+            gather.setBindGroup(NEURAL_TAIL_SCREEN_OWN_GROUP, prepared.screenOwnGroup);
+            const blocks = [Math.ceil(tailFrame.frame.width / settings.screenStride), Math.ceil(tailFrame.frame.height / settings.screenStride)];
+            gather.dispatchWorkgroups(Math.ceil(blocks[0] / NEURAL_TAIL_SCREEN_GROUP), Math.ceil(blocks[1] / NEURAL_TAIL_SCREEN_GROUP));
         }
         gather.end();
 
-        if (this.active) {
-            // Inference's record count is the second-bounce entries' (its record r is entry r).
-            encoder.copyBufferToBuffer(prepared.tileWords, HASH_GRID_COUNTER.visibilityCount1 * WORD_BYTES, prepared.counts, NEURAL_TAIL_COUNT_WORD.queries * WORD_BYTES, WORD_BYTES);
-            prepared.mlp.encodeInfer(encoder, prepared.counts, NEURAL_TAIL_COUNT_WORD.queries, screenData.inferGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailInference`));
-        }
-        this.gatheredThisFrame = true;
-    }
-
-    /**
-     * After the screen's irradiance: the screen records, then this frame's
-     * training steps over the set. Does nothing on a frame the hash grid
-     * didn't run the tail (multibounce off).
-     */
-    encodeTraining(encoder: GPUCommandEncoder, screen: NeuralTailScreen): void {
-        const prepared = this.require();
-        const context = this.context;
-        if (!context || !this.gatheredThisFrame) return;
-        this.gatheredThisFrame = false;
-        const settings = this.settings;
-        if (settings.screenStride > 0) {
-            const group = this.screenGroupFor(prepared, screen.irradiance);
-            const pass = encoder.beginComputePass({ label: `${TIMER_PREFIX}/NeuralTailScreenRecords`, timestampWrites: context.timer.computePass(`${TIMER_PREFIX}/NeuralTailScreenRecords`) });
-            prepared.gatherScreen.bind(pass);
-            pass.setBindGroup(1, group);
-            const blocks = [Math.ceil(screen.width / settings.screenStride), Math.ceil(screen.height / settings.screenStride)];
-            pass.dispatchWorkgroups(Math.ceil(blocks[0] / NEURAL_TAIL_SCREEN_GROUP), Math.ceil(blocks[1] / NEURAL_TAIL_SCREEN_GROUP));
-            pass.end();
-        }
-        const steps = neuralTailStepsThisFrame(this.trainedSteps, settings);
+        // The frame's training steps (a step with no records is skipped on the GPU and not counted).
+        const steps = neuralTailStepsThisFrame(this.gpuSteps, settings, this.boostFramesLeft > 0);
         for (let step = 0; step < steps; step++) {
             prepared.mlp.encodeTrainStep(encoder, prepared.counts, NEURAL_TAIL_COUNT_WORD.records, prepared.trainGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailTraining`));
         }
-        this.trainedSteps += steps;
+        if (this.boostFramesLeft > 0) this.boostFramesLeft--;
+        if (this.readbackState === 'idle') {
+            encoder.copyBufferToBuffer(prepared.mlp.trainState, TRAIN_STATE_STEP_BYTE, prepared.stepReadback, 0, WORD_BYTES);
+            this.readbackState = 'copied';
+        }
+
+        if (this.active) {
+            const answer = encoder.beginComputePass({ label: `${TIMER_PREFIX}/NeuralTailGather`, timestampWrites: context.timer.computePass(`${TIMER_PREFIX}/NeuralTailGather`) });
+            prepared.queryArgs.encode(answer);
+            prepared.gatherQueries.bind(answer);
+            answer.setBindGroup(1, screenData.queryGroups[0]);
+            answer.setBindGroup(2, screenData.queryGroups[1]);
+            answer.setBindGroup(NEURAL_TAIL_HASH_GRID_GROUP, screenData.queryGroups[2]);
+            answer.dispatchWorkgroupsIndirect(prepared.queryArgs.buffer, 0);
+            answer.end();
+            // Inference's record count is the second-bounce entries' (its record r is entry r; past the queries' room it stores nothing).
+            encoder.copyBufferToBuffer(prepared.tileWords, HASH_GRID_COUNTER.visibilityCount1 * WORD_BYTES, prepared.counts, NEURAL_TAIL_COUNT_WORD.queries * WORD_BYTES, WORD_BYTES);
+            prepared.mlp.encodeInfer(encoder, prepared.counts, NEURAL_TAIL_COUNT_WORD.queries, screenData.inferGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailInference`));
+        }
     }
 
     dispose(): void {
         const prepared = this.prepared;
         this.screenData?.queries.destroy();
         this.screenData = null;
-        this.screenGroup = null;
+        this.generation++;
+        this.readbackState = 'idle';
         if (!prepared) return;
         prepared.mlp.destroy();
-        for (const buffer of [prepared.params, prepared.counts, prepared.set]) buffer.destroy();
+        for (const buffer of [prepared.params, prepared.counts, prepared.set, prepared.stepReadback]) buffer.destroy();
         prepared.cellArgs.dispose();
         prepared.queryArgs.dispose();
         this.prepared = null;
     }
 
-    private restartNetwork(): void {
+    private freshWeights: (() => Float32Array) | null = null;
+
+    private restartNetwork(weights: Float32Array): void {
         const prepared = this.require();
-        // The pathtracer's start (NrcCache.freshWeights, outputInit 'zero'): He-initialised layers and a zero
-        // output layer, so a fresh network answers 0 and its first steps don't throw light around.
-        const weights = initWeights(prepared.shape, this.settings.seed);
-        weights.fill(0, layerOffset(prepared.shape, prepared.shape.hidden));
         prepared.mlp.uploadWeights(weights);
-        this.trainedSteps = 0;
-        this.gatheredThisFrame = false;
+        this.gpuSteps = 0;
+        this.generation++;
+        this.boostFramesLeft = 0;
         this.boxCentre = null;
+    }
+
+    /**
+     * The step count, read back without waiting: the copy encoded last frame
+     * is mapped now (its frame is submitted), and the value lands a frame or
+     * two later. A restart in between drops it.
+     */
+    private pollSteps(prepared: Prepared): void {
+        if (this.readbackState !== 'copied') return;
+        this.readbackState = 'mapping';
+        const generation = this.generation;
+        const buffer = prepared.stepReadback;
+        buffer.mapAsync(MAP_MODE_READ).then(
+            () => {
+                const steps = new Uint32Array(buffer.getMappedRange())[0] ?? 0;
+                buffer.unmap();
+                if (generation === this.generation) this.gpuSteps = steps;
+                if (this.prepared?.stepReadback === buffer) this.readbackState = 'idle';
+            },
+            () => {
+                // Destroyed or lost: nothing to read.
+            },
+        );
     }
 
     private writeParams(prepared: Prepared, tailFrame: HashGridTailFrame, queryCapacity: number): void {
@@ -368,16 +418,18 @@ export class NeuralTail implements HashGridTail {
         words[at.screenStride] = this.settings.screenStride;
         words[at.screenWidth] = tailFrame.frame.width;
         words[at.screenHeight] = tailFrame.frame.height;
+        words[at.screenRecords] = this.settings.screenRecords;
         prepared.device.queue.writeBuffer(prepared.params, 0, this.paramWords);
     }
 
     /** The queries and bind groups for this screen's per-ray lists, made when the lists change. */
     private screenDataFor(prepared: Prepared, tailFrame: HashGridTailFrame): ScreenData {
         const current = this.screenData;
-        if (current && current.listWords === tailFrame.listWords && current.queryCapacity >= tailFrame.rays.capacity) return current;
+        if (current && current.listWords === tailFrame.listWords) return current;
         current?.queries.destroy();
         const { device } = prepared;
-        const queryCapacity = tailFrame.rays.capacity;
+        // The second-bounce entries a frame can have: (1 − p) of the probe rays in expectation, with room to spare.
+        const queryCapacity = neuralTailQueryCapacity(tailFrame.rays.capacity, prepared.discardProbability());
         const queries = device.createBuffer({
             label: 'radiance-cache/neural tail queries',
             size: Math.max(queryCapacity, 1) * NEURAL_TAIL_QUERY_VEC4 * VEC4_BYTES,
@@ -398,6 +450,7 @@ export class NeuralTail implements HashGridTail {
                 group(prepared.gatherQueries, 1, tailFrame.rayDataEntries, 'radiance-cache/neural tail queries: ray data'),
                 group(prepared.gatherQueries, 2, neuralGroupEntries(prepared.params, queries, prepared.counts), 'radiance-cache/neural tail queries'),
             ],
+            screenGridGroup: group(prepared.gatherScreen, 0, tailFrame.cacheEntries, 'radiance-cache/neural tail screen: hash grid'),
             inferGroup: device.createBindGroup({
                 label: 'radiance-cache/neural tail infer hooks',
                 layout: prepared.mlp.inferLayout,
@@ -412,22 +465,17 @@ export class NeuralTail implements HashGridTail {
         return data;
     }
 
-    private screenGroupFor(prepared: Prepared, irradiance: GPUTexture): GPUBindGroup {
-        const current = this.screenGroup;
-        if (current && current.texture === irradiance) return current.group;
-        const group = prepared.device.createBindGroup({
-            label: 'radiance-cache/neural tail screen records',
-            layout: prepared.gatherScreen.ownLayouts[0],
-            entries: [...neuralGroupEntries(prepared.params, prepared.set, prepared.counts), { binding: NEURAL_TAIL_BINDING.irradiance, resource: irradiance.createView() }],
-        });
-        this.screenGroup = { texture: irradiance, group };
-        return group;
-    }
-
     private require(): Prepared {
         if (!this.prepared) throw new Error('@pmndrs/gi: the neural tail is used before prepare()');
         return this.prepared;
     }
+}
+
+/** He-initialised layers and a zero output layer (the pathtracer's `NrcCache.freshWeights`, outputInit 'zero'), so a fresh network answers 0. */
+function initialWeights(mlp: MlpModule, shape: MlpShape, seed: number): Float32Array {
+    const weights = mlp.initWeights(shape, seed);
+    weights.fill(0, mlp.layerOffset(shape, shape.hidden));
+    return weights;
 }
 
 function neuralGroupEntries(params: GPUBuffer, records: GPUBuffer, counts: GPUBuffer): GPUBindGroupEntry[] {

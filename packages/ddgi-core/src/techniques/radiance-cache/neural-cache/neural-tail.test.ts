@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { MLP_SHAPES, weightCount } from '@pathtracer/mlp';
 import { hashGridCacheRayListLayout, MULTIBOUNCE_DIRECT_WORDS, NEURAL_TAIL_WORDS } from '../world-cache/hash-grid-population-wgsl.ts';
 import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD } from '../world-cache/hash-grid-wgsl.ts';
-import { furnaceCeiling, neuralTailAngles, neuralTailBox, neuralTailGateOpen, neuralTailPosition, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
+import { loadMlp, type MlpModule } from './mlp-loader.ts';
+import { furnaceCeiling, neuralTailAngles, neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailPosition, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
 import { DEFAULT_NEURAL_TAIL_SETTINGS, neuralTailSettings } from './neural-tail-settings.ts';
 import {
     gatherCellRecordsWgsl,
@@ -15,6 +15,9 @@ import {
     neuralTailTrainHooks,
 } from './neural-tail-wgsl.ts';
 import { hashGridCacheBufferLayout, hashGridCacheCapacity, DEFAULT_HASH_GRID_CACHE_OPTIONS } from '../world-cache/capacity.ts';
+
+/** The optional sibling, where this checkout has it at its pin (tools/optional-siblings.ts); null otherwise. */
+const mlp: MlpModule | null = await loadMlp().catch(() => null);
 
 describe('the neural tail (P6.4, register E11)', () => {
     it('reads the furnace answers the GPU page judges against', () => {
@@ -63,6 +66,8 @@ describe('the neural tail (P6.4, register E11)', () => {
         expect(frames).toBe(16);
         expect(neuralTailStepsThisFrame(steps, settings)).toBe(2);
         expect(neuralTailStepsThisFrame(0, { ...settings, warmupStepsPerFrame: 0 })).toBe(2);
+        // After a change with no bounds: the warm-up rate again.
+        expect(neuralTailStepsThisFrame(steps, settings, true)).toBe(16);
         expect(neuralTailGateOpen(0, 0)).toBe(true);
     });
 
@@ -72,8 +77,24 @@ describe('the neural tail (P6.4, register E11)', () => {
         expect(() => neuralTailSettings({ batch: 100 })).toThrow(/multiple of 64/);
         expect(() => neuralTailSettings({ learningRate: 0 })).toThrow(/learningRate/);
         expect(() => neuralTailSettings({ boundsHalfSize: -1 })).toThrow(/boundsHalfSize/);
-        // The compact network is the pathtracer's 64 → 3 × 32 → 3: 4,096 weights.
-        expect(weightCount(MLP_SHAPES[DEFAULT_NEURAL_TAIL_SETTINGS.network])).toBe(64 * 32 + 32 * 32 * 2 + 32 * 3);
+        expect(DEFAULT_NEURAL_TAIL_SETTINGS.ema).toBe('off');
+    });
+
+    it.skipIf(!mlp)('uses the compact network of the pathtracer (with the optional sibling)', () => {
+        // 64 → 3 × 32 → 3: 4,192 weights.
+        expect(mlp!.weightCount(mlp!.MLP_SHAPES[DEFAULT_NEURAL_TAIL_SETTINGS.network])).toBe(64 * 32 + 32 * 32 * 2 + 32 * 3);
+    });
+
+    it('sizes its buffers by what a frame gathers, not by the screen', () => {
+        // The training set: both kinds of record, a quarter to spare, the same at any screen size.
+        expect(neuralTailSetCapacity({ cellRecords: 16384, screenRecords: 16384, screenStride: 8 })).toBe(40960);
+        expect(neuralTailSetCapacity({ cellRecords: 16384, screenRecords: 16384, screenStride: 0 })).toBe(20480);
+        // The queries: (1 − p) of the probe rays with half again to spare (4K: 2,073,600 rays at p = 0.7).
+        expect(neuralTailQueryCapacity(2073600, 0.7)).toBe(933120);
+        expect(neuralTailQueryCapacity(1000, 0)).toBe(1000);
+        // The default box is centred again once the camera leaves its middle half.
+        expect(neuralTailNeedsRecentre([31, 0, 0], [0, 0, 0], 64)).toBe(false);
+        expect(neuralTailNeedsRecentre([0, 0, -33], [0, 0, 0], 64)).toBe(true);
     });
 
     it('lays its parameter words out as the WGSL struct does', () => {
@@ -81,7 +102,7 @@ describe('the neural tail (P6.4, register E11)', () => {
         expect(NEURAL_TAIL_PARAMS_WORD.inverseViewProjection).toBe(8);
         expect(NEURAL_TAIL_PARAMS_WORD.eye).toBe(8 + 16);
         expect(NEURAL_TAIL_PARAMS_WORD.frameIndex).toBe(28);
-        expect(NEURAL_TAIL_PARAMS_BYTES).toBe((NEURAL_TAIL_PARAMS_WORD.screenHeight + 1) * 4);
+        expect(NEURAL_TAIL_PARAMS_BYTES).toBe(Math.ceil((NEURAL_TAIL_PARAMS_WORD.screenRecords + 1) / 4) * 16);
     });
 
     it('gives the hash grid a tail list and a constant only with a tail', () => {
@@ -98,9 +119,10 @@ describe('the neural tail (P6.4, register E11)', () => {
         expect(gatherCellRecordsWgsl(layout)).toContain(`fn ${NEURAL_TAIL_ENTRY_POINT.gatherCellRecords}(`);
         expect(gatherCellRecordsWgsl(layout)).toContain('HashGridCache_FilteredRadianceIndirect(cell_index)');
         expect(gatherQueriesWgsl(layout)).toContain(`fn ${NEURAL_TAIL_ENTRY_POINT.gatherQueries}(`);
-        expect(gatherScreenRecordsWgsl()).toContain(`fn ${NEURAL_TAIL_ENTRY_POINT.gatherScreenRecords}(`);
-        expect(neuralTailTrainHooks(12)).toContain('fn nnTrainLoad(r: u32, x: ptr<function, array<f32, NN_IN>>) -> vec3f');
-        const infer = neuralTailInferHooks(4);
+        expect(gatherScreenRecordsWgsl(layout)).toContain(`fn ${NEURAL_TAIL_ENTRY_POINT.gatherScreenRecords}(`);
+        expect(gatherScreenRecordsWgsl(layout)).toContain('worldCacheLookup(');
+        expect(neuralTailTrainHooks('// encoding')).toContain('fn nnTrainLoad(r: u32, x: ptr<function, array<f32, NN_IN>>) -> vec3f');
+        const infer = neuralTailInferHooks('// encoding');
         expect(infer).toContain('fn nnInferLoad(r: u32) -> array<f32, NN_IN>');
         expect(infer).toContain('fn nnInferStore(r: u32, y: vec3f)');
     });

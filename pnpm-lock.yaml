@@ -14,9 +14,6 @@ importers:
       '@eslint/js':
         specifier: ^9.18.0
         version: 9.39.5
-      '@pathtracer/mlp':
-        specifier: link:../pmndrs-pathtracer/packages/mlp
-        version: link:../pmndrs-pathtracer/packages/mlp
       '@pmndrs/upscaler':
         specifier: 0.5.0
         version: 0.5.0(three@0.187.0)

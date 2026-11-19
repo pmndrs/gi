@@ -56,6 +56,7 @@ import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, SCREEN_HISTORY_
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import { SharcCache } from './world-cache/sharc/sharc-cache.ts';
+import { loadMlp } from './neural-cache/mlp-loader.ts';
 import { NeuralTail } from './neural-cache/neural-tail.ts';
 import type { WorldCache, WorldCacheChanges, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
@@ -428,9 +429,6 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
         // 7: the mask's mips, the SH and the irradiance per pixel (RC2.2).
         this.encodeIrradiance(encoder, frame, prepared, resources);
-        // P6.4: the neural tail trains on this frame's records (the grid's, gathered in its frame, and the screen's irradiance).
-        const irradianceTexture = this.irradiance?.irradiance;
-        if (this.tail && irradianceTexture) this.tail.encodeTraining(encoder, { irradiance: irradianceTexture, width: layout.width, height: layout.height });
 
         // 6 and 8: the cache's LRU order for the next frame, and this frame's depth and normals kept.
         history.encodeReorder(encoder, screen);
@@ -639,10 +637,18 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.tail?.dispose();
         this.tail = null;
         // It extends the GI-1.2 grid only: SHaRC's paths already end in their own cache (register E3).
+        // The network's package is an optional sibling, loaded here only (mlp-loader.ts): missing, at
+        // another commit than its pin, or too big for the device, the tail is off with one warning.
         if (this.settings.neuralCache === 'tail' && cache instanceof HashGridCache) {
             const tail = new NeuralTail(this.settings.neural);
-            await tail.prepare(context, cache);
-            this.tail = tail;
+            try {
+                await tail.prepare(context, cache, await loadMlp());
+                this.tail = tail;
+            } catch (error) {
+                tail.dispose();
+                const reason = error instanceof Error ? error.message : String(error);
+                context.warn(`@pmndrs/gi: the radiance cache's neuralCache 'tail' is unavailable, so it is off (GI-1.2's two bounces): ${reason}`);
+            }
         } else if (this.settings.neuralCache === 'tail') {
             context.warn("@pmndrs/gi: the radiance cache's neuralCache 'tail' extends the GI-1.2 hash grid only; with worldCache 'sharc' it is off");
         }

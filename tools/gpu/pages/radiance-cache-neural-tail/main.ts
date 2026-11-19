@@ -52,8 +52,10 @@
  *    within 5% and 1% of twice their value before the change, and the
  *    flicker of E over the 30 still frames before it (per pixel
  *    |ΔE| / max(E, 5% of the mean), mean and p95; radiance-cache-stability's
- *    measure). GI-1.2, the tail's defaults, the tail without the EMA, the
- *    tail at 4 steps a frame. Recorded, and the tail's E must settle within
+ *    measure). GI-1.2, the tail's defaults (no EMA; 16 frames of warm-up
+ *    training after the change, which the platform reports as global), the
+ *    tail without that boost, and the pathtracer's settings (the warm-up EMA,
+ *    no boost). Recorded, and the tail's E must settle within
  *    1% within the 200 frames (some frame count, not a race with GI-1.2's;
  *    1%, since the tail is a few per cent of E: a network that stopped
  *    learning would still settle within 5%).
@@ -61,13 +63,25 @@
  *    `sponza` with curtains, from the first bookmark, 100 frames): every probe
  *    ray's radiance, every tail answer and every training target finite and
  *    at least 0 after frames 1, 50 and 100, with the gate open by frame 50.
- *
  * 6. **With DDGI stacked** (the furnace, a DDGI volume under the cache with
  *    `setFallback`, 40 frames): with `secondBounce: 'auto'` the second bounce
  *    comes from DDGI (P6.3, register E10), whose field already carries the
  *    later bounces, so the tail stays off: no training step, the gate shut,
  *    one warning naming `neuralCache`; with `secondBounce: 'gi1-rays'` the
  *    tail runs as without DDGI (its gate opens, no warning).
+ *
+ * 7. **The f32 fallback** (a device without `shader-f16` and with WebGPU's
+ *    default 16 KiB of workgroup memory, as a host gets it without the
+ *    platform's advice): the compact network runs in f32 with smaller tiles
+ *    and the furnace at 8 px cells still reads every bounce within 2%; the
+ *    default 5 × 64 network can't fit, so the tail is off with a warning
+ *    naming `maxComputeWorkgroupStorageSize`.
+ * 8. **Memory** at 1280 × 720, 1920 × 1080 and 3840 × 2160 (Cornell box, 3
+ *    frames; recorded): the tail's buffers, its answers in the grid's lists,
+ *    the training set and query capacities.
+ * 9. **Training targets on Bistro exterior** (100 frames; recorded): the cell
+ *    and screen records' mean targets and the share of screen records with a
+ *    zero target (rays that missed: no sky in the targets).
  *
  * No glossy case: the platform's materials are diffuse (register D8), so
  * GI-1.1's reflections, where the pathtracer found the network halves the
@@ -85,7 +99,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { furnaceCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
-import { NEURAL_TAIL_COUNT_WORD, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
+import { NEURAL_TAIL_COUNT_WORD, NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
@@ -102,6 +116,9 @@ import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-sh
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
+const PAGE_ENV = import.meta.env as Record<string, unknown>;
+/** T2.17: scale model textures down to this side at load (Bistro on a 6 GB GPU); undefined keeps them. */
+const MAX_TEXTURE_SIZE = typeof PAGE_ENV.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Number(PAGE_ENV.VITE_DDGI_MAX_TEXTURE_SIZE) : undefined;
 const WIDTH = 1280;
 const HEIGHT = 720;
 const TOLERANCE = 0.02;
@@ -262,26 +279,38 @@ interface Run {
     readonly tailSteps: number;
     readonly tailGateOpen: boolean;
     /** The tail's state after the last frame, by surface: its answers' mean (the second hits') and its training targets' mean. */
-    readonly tailBySurface: Record<string, { answers: number; meanAnswer: number; records: number; meanTarget: number }> | null;
+    readonly tailBySurface: Record<string, TailDiagnostics> | null;
 }
 
-/** The tail's last answers and training records, grouped by the surface their hit is on. */
-async function tailBySurface(device: GPUDevice, technique: RadianceCacheTechnique, kind: SceneKind): Promise<Run['tailBySurface']> {
+/** The tail's answers and training records at one surface (or the whole scene). */
+interface TailDiagnostics {
+    answers: number;
+    meanAnswer: number;
+    cellRecords: number;
+    meanCellTarget: number;
+    screenRecords: number;
+    meanScreenTarget: number;
+    /** Screen records whose target is 0 (their ray missed, or found black): the sky is no longer in them. */
+    screenZeroTargets: number;
+}
+
+/** The tail's last answers and training records (by kind), grouped by `place` (the surface their hit is on). */
+async function tailDiagnostics(device: GPUDevice, technique: RadianceCacheTechnique, place: (position: Vec3) => string): Promise<Record<string, TailDiagnostics> | null> {
     const tail = technique.neuralTail;
     const cache = technique.worldCache;
     const lists = cache?.rayLists;
     const buffers = tail?.buffers;
     if (!tail || !cache || !lists || !buffers?.queries || !tail.active) return null;
-    const groups: Record<string, { answers: number; answerSum: number; records: number; targetSum: number }> = {};
-    const group = (surface: string) => (groups[surface] ??= { answers: 0, answerSum: 0, records: 0, targetSum: 0 });
-    const secondBounce = new Uint32Array(await readRange(device, cache.buffers.tileWords, HASH_GRID_COUNTER.visibilityCount1 * 4, 4))[0];
+    const sums: Record<string, { answers: number; answerSum: number; cell: number; cellSum: number; screen: number; screenSum: number; zero: number }> = {};
+    const group = (key: string) => (sums[key] ??= { answers: 0, answerSum: 0, cell: 0, cellSum: 0, screen: 0, screenSum: 0, zero: 0 });
+    const secondBounce = Math.min(new Uint32Array(await readRange(device, cache.buffers.tileWords, HASH_GRID_COUNTER.visibilityCount1 * 4, 4))[0], buffers.queryCapacity);
     if (secondBounce > 0) {
         const answers = new Uint32Array(await readRange(device, lists.buffer, lists.layout.neuralTailBuffer * 4, secondBounce * NEURAL_TAIL_WORDS * 4));
         const queries = new Float32Array(await readRange(device, buffers.queries, 0, secondBounce * 3 * 16));
         for (let entry = 0; entry < secondBounce; entry++) {
             if (queries[entry * 12 + 3] === 0) continue;
             const value = (halfBitsToFloat(answers[entry * 2] & 0xffff) + halfBitsToFloat(answers[entry * 2] >>> 16) + halfBitsToFloat(answers[entry * 2 + 1] & 0xffff)) / 3;
-            const entryGroup = group(classify([queries[entry * 12], queries[entry * 12 + 1], queries[entry * 12 + 2]], kind));
+            const entryGroup = group(place([queries[entry * 12], queries[entry * 12 + 1], queries[entry * 12 + 2]]));
             entryGroup.answers++;
             entryGroup.answerSum += value;
         }
@@ -290,12 +319,23 @@ async function tailBySurface(device: GPUDevice, technique: RadianceCacheTechniqu
     const set = new Float32Array(await readRange(device, buffers.set, 0, records * NEURAL_TAIL_RECORD_VEC4 * 16));
     for (let record = 0; record < records; record++) {
         const base = record * NEURAL_TAIL_RECORD_VEC4 * 4;
-        const recordGroup = group(classify([set[base], set[base + 1], set[base + 2]], kind));
-        recordGroup.records++;
-        recordGroup.targetSum += (set[base + 12] + set[base + 13] + set[base + 14]) / 3;
+        const recordGroup = group(place([set[base], set[base + 1], set[base + 2]]));
+        const target = (set[base + 12] + set[base + 13] + set[base + 14]) / 3;
+        if (set[base + 3] === NEURAL_TAIL_RECORD_KIND.screen) {
+            recordGroup.screen++;
+            recordGroup.screenSum += target;
+            if (target === 0) recordGroup.zero++;
+        } else {
+            recordGroup.cell++;
+            recordGroup.cellSum += target;
+        }
     }
+    const mean = (sum: number, count: number): number => Number((sum / Math.max(count, 1)).toPrecision(5));
     return Object.fromEntries(
-        Object.entries(groups).map(([surface, g]) => [surface, { answers: g.answers, meanAnswer: Number((g.answerSum / Math.max(g.answers, 1)).toPrecision(5)), records: g.records, meanTarget: Number((g.targetSum / Math.max(g.records, 1)).toPrecision(5)) }]),
+        Object.entries(sums).map(([key, g]) => [
+            key,
+            { answers: g.answers, meanAnswer: mean(g.answerSum, g.answers), cellRecords: g.cell, meanCellTarget: mean(g.cellSum, g.cell), screenRecords: g.screen, meanScreenTarget: mean(g.screenSum, g.screen), screenZeroTargets: g.zero },
+        ]),
     );
 }
 
@@ -362,7 +402,7 @@ async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial
             });
         }
         const tail = technique.neuralTail;
-        const bySurface = await tailBySurface(device, technique, kind);
+        const bySurface = await tailDiagnostics(device, technique, (position) => classify(position, kind));
         return judges.map((_, judgeIndex) => ({ meanError: meanError[judgeIndex], withinShare: withinShare[judgeIndex], judged: judged[judgeIndex], tailSteps: tail?.steps ?? 0, tailGateOpen: tail?.active ?? false, tailBySurface: bySurface }));
     } finally {
         screen.dispose();
@@ -556,7 +596,7 @@ async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings
 // ---- Section 5: the NaN scan ---------------------------------------------------------------------
 
 async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<() => void> {
-    const loaded = await loadScene(manifest, () => {});
+    const loaded = await loadScene(manifest, () => {}, MAX_TEXTURE_SIZE === undefined ? {} : { maxTextureSize: MAX_TEXTURE_SIZE });
     const content = new Set<object>();
     loaded.content.traverse((object) => content.add(object));
     loaded.scene.traverse((object) => {
@@ -718,6 +758,119 @@ async function runWithDdgi(device: GPUDevice, settings: Partial<RadianceCacheSet
     }
 }
 
+// ---- Section 7: the f32 fallback on a default-limits device ----------------------------------------
+
+/** A device as a host gets it without the platform's advice on workgroup memory and f16: WebGPU's 16 KiB, no shader-f16. */
+async function defaultLimitsDevice(adapter: GPUAdapter): Promise<GPUDevice> {
+    return adapter.requestDevice({
+        requiredLimits: { ...requiredLimits(adapter), maxComputeWorkgroupStorageSize: 16384 },
+        requiredFeatures: optionalFeatures(adapter).filter((feature) => feature !== 'shader-f16'),
+    });
+}
+
+/** Prepares a technique on `device` with `settings` and reports whether it made a tail, its precision, and the warnings that named `neuralCache`. */
+async function prepareOnly(device: GPUDevice, settings: Partial<RadianceCacheSettings>): Promise<{ tail: boolean; precision: string | null; warnings: string[] }> {
+    const warnings: string[] = [];
+    const consoleWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+        warnings.push(args.map(String).join(' '));
+        consoleWarn(...args);
+    };
+    const platform = new GIPlatformImpl(device, { label: 'neural tail page prepare' });
+    try {
+        const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
+        platform.setOutput(technique);
+        await platform.prepare();
+        return { tail: technique.neuralTail !== null, precision: technique.neuralTail?.network?.precision ?? null, warnings: warnings.filter((message) => message.includes('neuralCache')) };
+    } finally {
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+        console.warn = consoleWarn;
+    }
+}
+
+// ---- Section 8: memory by screen size ---------------------------------------------------------------
+
+async function memoryAt(device: GPUDevice, width: number, height: number): Promise<Record<string, number>> {
+    const manifest = loadManifest('cornell-box');
+    const bookmark = manifest.cameras[0];
+    const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
+    const platform = new GIPlatformImpl(device, { label: `neural tail page memory ${width}x${height}` });
+    try {
+        const technique = platform.addTechnique(new RadianceCacheTechnique(TAIL));
+        platform.setOutput(technique);
+        await platform.prepare();
+        describeScene(platform, manifest);
+        const screen = await PageScreen.create(platform, device, width, height);
+        try {
+            for (let index = 0; index < 3; index++) {
+                const encoder = device.createCommandEncoder({ label: 'neural tail page memory' });
+                platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, width, height) });
+                screen.encode(encoder, camera);
+                platform.encodeScreen(encoder, screen.screen);
+                device.queue.submit([encoder.finish()]);
+                await device.queue.onSubmittedWorkDone();
+            }
+            const tail = technique.neuralTail;
+            const lists = technique.worldCache?.rayLists;
+            const mib = (bytes: number): number => Number((bytes / 2 ** 20).toFixed(2));
+            // The tail's answers live in the grid's per-ray lists, last (2 words a second-bounce entry).
+            const answerBytes = lists && lists.layout.neuralTailBuffer > 0 ? lists.layout.bytes - lists.layout.neuralTailBuffer * 4 : 0;
+            return {
+                tailMiB: mib(tail?.memoryBytes ?? 0),
+                networkMiB: mib(tail?.network?.bufferBytes ?? 0),
+                answersInTheGridListsMiB: mib(answerBytes),
+                tailWithAnswersMiB: mib((tail?.memoryBytes ?? 0) + answerBytes),
+                queryCapacity: tail?.buffers?.queryCapacity ?? 0,
+                setCapacity: tail?.buffers?.setCapacity ?? 0,
+                gridListsMiB: mib(lists?.layout.bytes ?? 0),
+                techniqueMiB: mib(technique.memoryBytes),
+            };
+        } finally {
+            screen.dispose();
+        }
+    } finally {
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+// ---- Section 9: the training targets on a real scene ------------------------------------------------
+
+async function targetsOn(device: GPUDevice, id: string): Promise<{ frames: number; diagnostics: Record<string, TailDiagnostics> | null }> {
+    const manifest = loadManifest(id);
+    const bookmark = manifest.cameras[0];
+    const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 2000 };
+    const platform = new GIPlatformImpl(device, { label: `neural tail page targets ${id}` });
+    try {
+        const technique = platform.addTechnique(new RadianceCacheTechnique(TAIL));
+        platform.setOutput(technique);
+        await platform.prepare();
+        const beforeFrame = await describeLoaded(platform, device, manifest);
+        const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+        try {
+            const frames = 100;
+            for (let index = 0; index < frames; index++) {
+                beforeFrame();
+                const encoder = device.createCommandEncoder({ label: `neural tail page targets ${id}` });
+                platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) });
+                screen.encode(encoder, camera);
+                platform.encodeScreen(encoder, screen.screen);
+                device.queue.submit([encoder.finish()]);
+                if (index === 0) await platform.rays.whenBuilt();
+                if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+            }
+            await device.queue.onSubmittedWorkDone();
+            return { frames, diagnostics: await tailDiagnostics(device, technique, () => 'scene') };
+        } finally {
+            screen.dispose();
+        }
+    } finally {
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
 // ---- The page ----------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -791,8 +944,8 @@ try {
         const configurations: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
             ['gi1 multibounce', GI1],
             ['tail', TAIL],
-            ['tail, no EMA', { ...TAIL, neural: { ema: 'off' } }],
-            ['tail, 4 steps a frame', { ...TAIL, neural: { stepsPerFrame: 4 } }],
+            ['tail, no change boost', { ...TAIL, neural: { changeBoostFrames: 0 } }],
+            ['tail, warm-up EMA, no boost (the pathtracer defaults)', { ...TAIL, neural: { ema: 'warmup', changeBoostFrames: 0 } }],
         ];
         const lag: Record<string, LagResult> = {};
         for (const [name, settings] of configurations) lag[name] = await runLag(device, settings);
@@ -828,6 +981,34 @@ try {
         if (rays.inUse !== 'gi1-rays' || !rays.gateOpen || rays.warnings !== 0) {
             fail(`with DDGI stacked, 'gi1-rays': the second bounce from ${rays.inUse}, gate ${rays.gateOpen ? 'open' : 'shut'}, ${rays.warnings} warnings (expected gi1-rays, open, 0)`);
         }
+    }
+
+    // 7. The f32 fallback on a default-limits device (16 KiB of workgroup memory, no shader-f16).
+    if (runs(7)) {
+        const small = await defaultLimitsDevice(adapter);
+        try {
+            const [fallback] = await runScenario(small, 'furnace', { ...TAIL, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
+            const defaultNetwork = await prepareOnly(small, { ...TAIL, neural: { network: 'default' } });
+            const compact = await prepareOnly(small, TAIL);
+            data.f32Fallback = { device: { maxComputeWorkgroupStorageSize: small.limits.maxComputeWorkgroupStorageSize, shaderF16: small.features.has('shader-f16') }, compact, furnace: summary(fallback), defaultNetwork };
+            if (!compact.tail || compact.precision !== 'f32') fail(`f32 fallback: the compact network on a default-limits device made ${compact.tail ? `a ${compact.precision} tail` : 'no tail'} (expected f32)`);
+            if (Math.abs(final(fallback)) > TOLERANCE) fail(`f32 fallback: the furnace (8 px cells) reads ${(final(fallback) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)}`);
+            if (defaultNetwork.tail || !defaultNetwork.warnings.some((message) => message.includes('maxComputeWorkgroupStorageSize'))) {
+                fail(`f32 fallback: the default network on a default-limits device should be off with a warning naming maxComputeWorkgroupStorageSize (tail ${defaultNetwork.tail}, warnings ${JSON.stringify(defaultNetwork.warnings)})`);
+            }
+        } finally {
+            small.destroy();
+        }
+    }
+
+    // 8. Memory by screen size (recorded).
+    if (runs(8)) {
+        data.memory = { '1280x720': await memoryAt(device, 1280, 720), '1920x1080': await memoryAt(device, 1920, 1080), '3840x2160': await memoryAt(device, 3840, 2160) };
+    }
+
+    // 9. The training targets on Bistro exterior (recorded): cell and screen records' means, the screen's zero targets.
+    if (runs(9)) {
+        data.targets = { 'bistro-exterior': await targetsOn(device, 'bistro-exterior') };
     }
 
     await drainDevice(device);
