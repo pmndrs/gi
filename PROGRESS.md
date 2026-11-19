@@ -21,6 +21,26 @@ Rules:
 
 ---
 
+## 2026-11-20 · RC4.6b SHaRC against Cycles; the stacked DDGI warms up · implementer (opus)
+Did: branch `rc4-6b` from radiance-cache ccb82ff. (1) P6.1's missing Cycles run: `radiance-cache-accuracy`, configuration `default` with nothing stacked (the cache alone: each world cache's own bounces), `VITE_RC_ACCURACY_WORLD_CACHE` unset and `sharc`, on two-room, Cornell point light and Sponza (references through a junction to webgpu-ddgi's bench/references, removed after with the assets junction). (2) The viewer's `rc` entry runs the stacked DDGI's own warm-up (full passes over every probe, as prepare steps with the plain pass showing, `phase: 'warming'`) before it shows GI.
+Verified: lint, typecheck, viewer unit tests. RTX 3060, bench lock: both accuracy runs PASS; `radiance-cache-viewer` PASS on Sponza and two-room with the warm-up.
+Numbers, GI term against Cycles, bias / 8 × 8 mean / p95 (world cache alone against Cycles' direct + indirect, bias / mean, coverage):
+
+| Scene, view | GI-1.2 hash grid | SHaRC |
+| --- | --- | --- |
+| two-room lit-room | −43.5% / 43.5% / 48% (cache −54% / 56%, 1.00) | −6.4% / 6.4% / 9.2% (cache −2.7% / 4.9%, 0.99) |
+| two-room through-the-doorway | −43.5% / 43.5% / 48% (−60% / 61%) | −6.5% / 6.5% / 7.9% (−2.4% / 4.0%) |
+| two-room dark-room-leak-view | −55.6% / 55.6% / 68% (+3% / 122%) | −10.8% / 11% / 15% (−6.1% / 9.9%) |
+| Cornell point front | −22.2% / 22.9% / 32% (−30% / 40%, 0.51) | −2.9% / 6.2% / 16% (−0.3% / 5.5%, 0.93) |
+| Cornell point inside-from-red-wall | −21.9% / 23.5% / 48% (−48% / 56%, 0.90) | −0.1% / 7.1% / 27% (−0.6% / 8.1%, 0.99) |
+| Cornell point diagonal | −22.0% / 22.4% / 33% (−28% / 39%, 0.83) | −3.6% / 5.5% / 15% (−0.8% / 7.5%, 1.00) |
+| Sponza colonnade-from-the-floor | +8.2% / 12.7% / 57% (−13% / 55%, 0.90) | +6.3% / 11.0% / 49% (−3.5% / 32%, 0.76) |
+| Sponza upper-gallery | +11.4% / 19.2% / 89% (+17% / 90%, 1.00) | +8.3% / 14.6% / 57% (+7.0% / 32%, 0.97) |
+
+The hash grid alone is short by the bounces after the second in the closed rooms (as RC4.4 found); SHaRC's two bounce rays with the cache as the path's tail close most of it (within 0.1-11%). For comparison, the hash grid with DDGI stacked (RC4.6) read −1.1/−1.0/+2.4% on two-room.
+Viewer, cache alone against ours (DDGI stacked, now warmed): Sponza 1.29× (cold DDGI in RC4.6: 1.21×), two-room 0.55×, `secondBounce=gi1-rays` Sponza 0.94×, two-room 0.64×. So Sponza's cache-alone ratio was not the cold DDGI: at the viewer's first bookmark the stacked DDGI makes Sponza darker than the cache alone, while at the references' cameras it reads brighter (+14.5/+20% against +8/+11%). Not explained here; a guess to check is DDGI's coverage (c = 0 outside the volume gives a hit no later bounce, where GI-1.2's ray would).
+Next: the Sponza difference above (viewer bookmark against the accuracy cameras).
+
 ## 2026-11-20 · RC4.6 the viewer shows the shipped default · implementer (opus)
 Did: branch `rc4-6` from radiance-cache 1d34f64. The viewer's `rc` entry (`apps/viewer/src/techniques/radiance-cache-technique.ts`) puts the scene's own DDGI volume on the same platform, `setFallback(radianceCache, ddgi)` before `prepare`, and gives the frame 256 units (DDGI's probes a frame; the cache ignores units), so `secondBounce: 'auto'` reads DDGI's bounces (E10). New compare toggle "Run the cache alone (no DDGI under it)", `host.cacheAlone` (Capsaicin's value: on): a host choice in the registry (`HOST_COMPARE_DEFAULTS`, `hostCompareValue`), never in the technique's settings, always restarting the radiance cache. The status line names the stacked volume; `radiance-cache-viewer` checks DDGI is stacked and clicks every toggle with it there.
 Verified: `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,805 passed, 13 skipped; one earlier run failed a test under load and passed on the rerun). RTX 3060, bench lock, `radiance-cache-viewer` PASS on two-room, Cornell and Sponza (one run each), every toggle clicked with DDGI stacked, SHaRC's included. Picture against ours (noise two-room 2.8%, Cornell 14%, Sponza 9.5%): cache alone two-room 0.55× ours, Cornell 0.53×, Sponza 1.21× (DDGI fills at 256 probes a frame from black and has covered about 40% of Sponza's 19,425 probes 30 frames after a restart); `secondBounce=gi1-rays` 0.62 / 0.60 / 1.02; SHaRC 0.81 / 0.87 / 1.17. Screenshots with DDGI stacked (git-ignored): bench/screenshots/rc4.6/{two-room,cornell-box,sponza}/nvidia-radiance-cache-viewer.png.
