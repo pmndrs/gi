@@ -356,7 +356,7 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         expect(layout.visibilityRayBuffer).toBe(6 * maxRayCount);
         expect(layout.resolveBuffer).toBe(8 * maxRayCount);
         expect(layout.reservoirBuffer).toBe(9 * maxRayCount);
-        // Then GI-1.2's second-bounce lists (RC3.3): the BRDF and pdf, and the ray (register D35).
+        // Then GI-1.2's second-bounce lists (RC3.3): the BRDF and pdf, and the ray (register D36).
         expect(layout.multibounceInfoBuffer).toBe(9 * maxRayCount + RESERVOIR_WORDS * 2 * maxRayCount);
         expect(layout.bytes).toBe((layout.multibounceInfoBuffer + (2 + 12) * maxRayCount) * 4);
     });

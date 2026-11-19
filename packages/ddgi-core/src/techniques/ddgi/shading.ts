@@ -81,6 +81,7 @@ const ENTRY_POINTS: readonly { readonly name: string; readonly arguments: readon
             ['position', 'vec3f'],
             ['normal', 'vec3f'],
             ['view', 'u32'],
+            ['screenUV', 'vec2f'],
         ],
         returns: 'vec3f',
     },
@@ -139,7 +140,7 @@ export class DDGIShadingModule implements ShadingModule {
     /**
      * `code`, then the resources as globals at `group`, then the wrappers
      * `giIrradianceAt(position, normal, viewDirection, screenUV)`,
-     * `giCoverageAt(position, normal)` and `giDebugColorAt(position, normal, view)`.
+     * `giCoverageAt(position, normal)` and `giDebugColorAt(position, normal, view, screenUV)`.
      *
      * Bindings: every texture and sampler parameter in order from 0, then one
      * uniform buffer holding the `vec4f` parameters in order, when there are

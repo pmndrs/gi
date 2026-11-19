@@ -69,14 +69,33 @@ export function invertMat4(m: Mat4): number[] | null {
 }
 
 /**
- * `inverse(projection × view × translate(eye))`, column-major, for
- * `world = eye + (M × (ndc, 1)).xyz / w`. Throws for a camera whose
- * projection × view can't be inverted (a zero-size view, say).
+ * The projection the host drew its depth with: `translate(jitter, 0) ×
+ * projection` (`FrameCamera.jitter`, an NDC offset). In clip space that adds
+ * `jitter × w` to x and y, so each column gains `jitter × ` its w row.
  */
-export function cameraRelativeInverseViewProjection(camera: Pick<FrameCamera, 'position' | 'view' | 'projection'>): number[] {
+export function jitteredProjection(camera: Pick<FrameCamera, 'projection' | 'jitter'>): number[] {
+    const projection = Array.from(camera.projection);
+    const [jitterX, jitterY] = camera.jitter ?? [0, 0];
+    if (jitterX === 0 && jitterY === 0) return projection;
+    for (let column = 0; column < 4; column++) {
+        const w = projection[column * 4 + 3];
+        projection[column * 4 + 0] += jitterX * w;
+        projection[column * 4 + 1] += jitterY * w;
+    }
+    return projection;
+}
+
+/**
+ * `inverse(projection × view × translate(eye))`, column-major, for
+ * `world = eye + (M × (ndc, 1)).xyz / w`, with the frame's jitter in the
+ * projection (`jitteredProjection`), so a point rebuilt from the host's
+ * depth lands where it was drawn. Throws for a camera whose projection ×
+ * view can't be inverted (a zero-size view, say).
+ */
+export function cameraRelativeInverseViewProjection(camera: Pick<FrameCamera, 'position' | 'view' | 'projection' | 'jitter'>): number[] {
     const [x, y, z] = camera.position;
     const translateToEye = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
-    const relative = multiplyMat4(multiplyMat4(camera.projection, camera.view), translateToEye);
+    const relative = multiplyMat4(multiplyMat4(jitteredProjection(camera), camera.view), translateToEye);
     const inverse = invertMat4(relative);
     if (!inverse) throw new Error('@pmndrs/gi: the radiance cache needs a camera whose projection × view can be inverted');
     return inverse;

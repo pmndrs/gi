@@ -56,6 +56,13 @@
  * screen stage, then `node`. Put anything that reads a screen technique's
  * results inside `node`.
  *
+ * **After the frame's `encode`.** A screen stage rebuilds positions with the
+ * camera of the platform's latest `encode` (`ThreeGI.update`), so the host
+ * calls `update` before rendering, every frame (with `updateOnRender` the GI
+ * light does it while the pass draws, which is also before). The stage
+ * checks that a GI frame was encoded since the previous stage and warns once
+ * if not (`ScreenInputsSource.encodedFrames`).
+ *
  * **No copy** of depth, normal, velocity and albedo: they are three's own
  * render targets, read through the version-pinned backend step in
  * three-gpu-texture.ts (D13), fetched again every frame because three
@@ -116,6 +123,8 @@ type UintNode = ReturnType<typeof uint>;
 export interface ScreenInputsSource {
     readonly gi: GIPlatform;
     readonly sync: SceneSync;
+    /** GI frames encoded so far (`ThreeGI.encodedFrames`): when given, the stage checks one ran before it (file comment). */
+    readonly encodedFrames?: number;
 }
 
 export interface ScreenInputsOptions {
@@ -345,6 +354,8 @@ export class ScreenInputsNode extends Node {
     private debugChannel: ScreenChannel | null = null;
     private readonly debugNodes = new Map<ScreenChannel, TextureNode>();
     private debugPlaceholder: GPUTexture | null = null;
+    /** `source.encodedFrames` at the previous stage that ran the techniques. */
+    private encodedAtLastStage = -1;
     private readonly warned = new Set<string>();
 
     constructor(scenePass: PassNode, source: ScreenInputsSource, options: ScreenInputsOptions = {}) {
@@ -464,7 +475,10 @@ export class ScreenInputsNode extends Node {
         const showChannel = this.debugChannel;
         // A shown view says so again each frame (DebugViewNode.update), so one taken off screen stops costing.
         this.debugChannel = null;
-        if (runTechniques) gi.encodeScreen(encoder, screen);
+        if (runTechniques) {
+            this.checkEncodedBefore();
+            gi.encodeScreen(encoder, screen);
+        }
         if (showChannel !== null) {
             this.debugView ??= new ScreenInputsView(device);
             // The pass's camera planes let the depth view show distance (ScreenInputsView); only a perspective camera's.
@@ -512,6 +526,22 @@ export class ScreenInputsNode extends Node {
             outputs.setClearColor(name, 0x000000, 0);
         }
         return true;
+    }
+
+    /**
+     * Screen stages use the camera of the latest `encode`, so one must have
+     * run since the previous stage (file comment). Warns once if not; the
+     * stage still runs, with the camera it has.
+     */
+    private checkEncodedBefore(): void {
+        const encoded = this.source.encodedFrames;
+        if (encoded === undefined) return;
+        if (encoded === this.encodedAtLastStage) {
+            this.warnOnce(
+                'the screen stage ran with no GI frame encoded since the previous one, so screen techniques rebuild positions with an old camera: call ThreeGI.update(camera) before rendering every frame (gi.encode before gi.encodeScreen).',
+            );
+        }
+        this.encodedAtLastStage = encoded;
     }
 
     /** The platform's techniques read only channels this pass renders; warns once if not. */

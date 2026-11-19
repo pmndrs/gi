@@ -56,6 +56,20 @@ export interface FrameCamera {
     readonly projection: Mat4;
     readonly near: number;
     readonly far: number;
+    /**
+     * This frame's sub-pixel jitter, when the host draws its screen buffers
+     * with a jittered projection (a temporal upscaler, TAA): the offset in NDC
+     * (x right, y up) added to every projected point, so the jittered
+     * projection is `translate(jitter.x, jitter.y, 0) × projection`, and
+     * `projection` above stays the unjittered one. From `@pmndrs/upscaler`'s
+     * `Upscaler.jitter` of `(x, y)` render pixels with y down (applied with
+     * three's `setViewOffset`, which moves points by `−x`, `−y` pixels), it is
+     * `(−2x / width, +2y / height)`. Screen-space
+     * techniques rebuild positions from `FrameScreen.depth` with it, so they
+     * land where the depth was drawn. Omitted or `[0, 0]`: no jitter.
+     * World-space techniques ignore it.
+     */
+    readonly jitter?: readonly [number, number];
 }
 
 /**

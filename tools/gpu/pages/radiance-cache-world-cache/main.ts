@@ -81,7 +81,7 @@
  *   indirect value, and every probe ray reading it, is ρ² E / (π × 0.3) =
  *   1.0610: up from 0 by that much, and 1 / 0.3 = 3.33 times the second
  *   bounce's expected value ρ² E / π = 0.3183, because only kept rays add a
- *   sample (Capsaicin's arithmetic, kept; NOTES, RC3.3).
+ *   sample (Capsaicin's arithmetic, kept for now: DECISIONS 2026-11-19 fixes it by default behind a switch; NOTES, RC3.3).
  *
  * Far from the camera a tile is taller than the 3 m gap, and nearly level
  * rays up and down share a direction bin, so a far tile holds floor and
@@ -122,7 +122,7 @@
  *    1.0610 within 2%.
  * 10. **Multibounce off** (40 frames): no second-bounce entry, no shadow ray
  *    and no resolve entry (Capsaicin resolves its shadow-ray list without
- *    multibounce, register D34), and every probe ray reads 0.
+ *    multibounce, register D35), and every probe ray reads 0.
  * 11. **Both misdirected additions, predicted** (the sunlit corner with
  *    multibounce on, 40 frames; the furnace never fires the second one):
  *    every probe ray not bypassed itself reads its cell's levels, plus
@@ -1521,7 +1521,7 @@ async function checkMultibounceOff(device: GPUDevice, scenario: Scenario): Promi
     if (state.multibounceCell.length > 0) fail(`${state.multibounceCell.length} second-bounce entries`);
     // Capsaicin resolves its shadow-ray list without multibounce: the unlit ceiling has neither.
     if (state.visibilityRay.length > 0) fail(`${state.visibilityRay.length} shadow rays from the unlit ceiling`);
-    if (state.resolve.length > 0) fail(`${state.resolve.length} resolve entries without a light (register D34)`);
+    if (state.resolve.length > 0) fail(`${state.resolve.length} resolve entries without a light (register D35)`);
     let raysLit = 0;
     state.rays.forEach((_, index) => {
         if (Math.max(state.radiance[index * 4], state.radiance[index * 4 + 1], state.radiance[index * 4 + 2]) > 0) raysLit++;

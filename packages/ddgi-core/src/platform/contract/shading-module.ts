@@ -39,7 +39,9 @@
  * fn giRadiance(position: vec3f, direction: vec3f, roughness: f32, ...) -> vec3f
  *
  * // A debug color for the given debug view id (see TechniqueDebug).
- * fn giDebugColor(position: vec3f, normal: vec3f, view: u32, ...) -> vec3f
+ * // `screenUV` as for giIrradiance (RC2.2): screen-space techniques draw
+ * // their views by it; others may ignore it.
+ * fn giDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f, ...) -> vec3f
  * ```
  */
 
@@ -96,8 +98,8 @@ export interface ShadingModule {
         readonly radiance: boolean;
     };
     /**
-     * Declarations plus parameterless wrappers (`giIrradianceAt(p, n, v, uv)`
-     * and so on) for hosts that bind globals, written at the given group with
+     * Declarations plus parameterless wrappers (`giIrradianceAt(p, n, v, uv)`,
+     * `giDebugColorAt(p, n, view, uv)` and so on) for hosts that bind globals, written at the given group with
      * bindings from 0. Uniforms become one uniform buffer the host fills from
      * {@link writeUniforms}.
      *

@@ -239,3 +239,268 @@ function roundHalfToEven(value: number): number {
     if (fraction < 0.5) return floor;
     return floor % 2 === 0 ? floor : floor + 1;
 }
+
+/** `SH_GetCoefficients` (spherical_harmonics.hlsl:28-48): the nine real SH basis values at a unit direction, Capsaicin's order and signs. */
+export function shGetCoefficients(direction: Direction): number[] {
+    const [x, y, z] = direction;
+    // fC1 = x·x − y·y and fS1 = x·y + y·x, as the HLSL builds them.
+    return [
+        0.2820947917738781,
+        -0.48860251190292 * y,
+        0.4886025119029199 * z,
+        -0.48860251190292 * x,
+        0.5462742152960395 * (x * y + y * x),
+        -1.092548430592079 * z * y,
+        0.9461746957575601 * z * z - 0.3153915652525201,
+        -1.092548430592079 * z * x,
+        0.5462742152960395 * (x * x - y * y),
+    ];
+}
+
+/**
+ * `SH_GetCoefficients_ClampedCosine_Cone` (spherical_harmonics.hlsl:78-104):
+ * the clamped cosine lobe about `direction`, cut to a cone of half-angle
+ * `coneThetaMax`, as convolved SH (its sum with a radiance's coefficients is
+ * the irradiance).
+ */
+export function shGetCoefficientsClampedCosineCone(direction: Direction, coneThetaMax: number): number[] {
+    const [x, y, z] = direction;
+    const sinThetaMax = Math.sin(coneThetaMax);
+    const cosThetaMax = Math.cos(coneThetaMax);
+    const band1 = 1.023326707946489 * (1 - cosThetaMax ** 3);
+    const band2 = (4 - 3 * sinThetaMax ** 3) * sinThetaMax ** 2;
+    return [
+        0.886226925452758 * sinThetaMax ** 2,
+        -band1 * y,
+        band1 * z,
+        -band1 * x,
+        0.8580855308097834 * band2 * x * y,
+        -0.8580855308097834 * band2 * y * z,
+        0.2477079561003757 * band2 * (3 * z * z - 1),
+        -0.8580855308097834 * band2 * x * z,
+        0.4290427654048917 * band2 * (x * x - y * y),
+    ];
+}
+
+/** The solid angle of one probe cell: 2π over 64 equal-area cells (`ProjectScreenProbes`' weight here, register D25). */
+export const SH_CELL_SOLID_ANGLE = (2 * Math.PI) / (PROBE_SIZE * PROBE_SIZE);
+/** Capsaicin's weight per cell in `ProjectScreenProbes`: `1 / probe_size` (gi1.comp:1468), 4/π times the solid angle. */
+export const CAPSAICIN_SH_CELL_WEIGHT = 1 / PROBE_SIZE;
+
+/** The world direction of a probe cell's centre about `normal` (`ProjectScreenProbes`, gi1.comp:1466-1474). */
+export function probeCellDirection(cell: number, normal: Direction): Direction {
+    const { b1, b2 } = getOrthoVectors(normal);
+    const [x, y, z] = mapToHemiOctahedron(((cell % PROBE_SIZE) + 0.5) / PROBE_SIZE, (Math.floor(cell / PROBE_SIZE) + 0.5) / PROBE_SIZE);
+    return [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
+}
+
+/** Points across a cell, each way, that `ProjectScreenProbes` averages the SH basis over (register D34). */
+export const SH_CELL_SUBSAMPLES = 4;
+
+/**
+ * A probe cell's mean SH basis about `normal`: the basis averaged over
+ * `subsamples²` points spread evenly over the cell in the hemi-octahedral
+ * square (equal-area, so evenly over its solid angle too). With 1 it is the
+ * basis at the cell centre, as Capsaicin takes it (gi1.comp:1466-1474).
+ */
+export function probeCellSH(cell: number, normal: Direction, subsamples = SH_CELL_SUBSAMPLES): number[] {
+    const { b1, b2 } = getOrthoVectors(normal);
+    const sum = new Array<number>(9).fill(0);
+    for (let row = 0; row < subsamples; row++) {
+        for (let column = 0; column < subsamples; column++) {
+            const u = ((cell % PROBE_SIZE) + (column + 0.5) / subsamples) / PROBE_SIZE;
+            const v = (Math.floor(cell / PROBE_SIZE) + (row + 0.5) / subsamples) / PROBE_SIZE;
+            const [x, y, z] = mapToHemiOctahedron(u, v);
+            const direction: Direction = [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
+            shGetCoefficients(direction).forEach((value, index) => (sum[index] += value));
+        }
+    }
+    return sum.map((value) => value / (subsamples * subsamples));
+}
+
+/**
+ * `ProjectScreenProbes` (gi1.comp:1462-1511) on the CPU, as the WGSL runs it:
+ * each cell's radiance times `weight` and the cell's mean SH basis
+ * ({@link probeCellSH}), summed over the 64 cells (cells `x + y × 8`).
+ * `cellRadiance` gets the cell centre's direction. Capsaicin's own projection
+ * is `weight` {@link CAPSAICIN_SH_CELL_WEIGHT} with `subsamples` 1.
+ */
+export function projectProbe(
+    cellRadiance: (cell: number, direction: Direction) => number,
+    normal: Direction,
+    weight = SH_CELL_SOLID_ANGLE,
+    subsamples = SH_CELL_SUBSAMPLES,
+): number[] {
+    const sum = new Array<number>(9).fill(0);
+    for (let cell = 0; cell < PROBE_SIZE * PROBE_SIZE; cell++) {
+        const radiance = cellRadiance(cell, probeCellDirection(cell, normal)) * weight;
+        probeCellSH(cell, normal, subsamples).forEach((value, index) => (sum[index] += value * radiance));
+    }
+    return sum;
+}
+
+/** `ScreenProbes_CalculateSHIrradiance_BentCone` (screen_probes.hlsl:200-216) on the CPU: irradiance along `normal` from nine coefficients, never negative. */
+export function shIrradiance(coefficients: readonly number[], normal: Direction, ao = 1): number {
+    const lobe = shGetCoefficientsClampedCosineCone(normal, Math.acos(Math.sqrt(Math.min(Math.max(1 - ao, 0), 1))));
+    let irradiance = 0;
+    lobe.forEach((value, index) => (irradiance += value * coefficients[index]));
+    return Math.max(irradiance, 0);
+}
+
+/**
+ * The SH projection of a radiance over the hemisphere about `normal`
+ * (zero below), integrated finely: `steps²` equal-area points (the
+ * hemi-octahedral map is equal-area, so each weighs 2π / steps²). The
+ * reference the GPU's 64-cell projection is compared against.
+ */
+export function integrateHemisphereSH(radiance: (direction: Direction) => number, normal: Direction, steps = 256): number[] {
+    const { b1, b2 } = getOrthoVectors(normal);
+    const sum = new Array<number>(9).fill(0);
+    const weight = (2 * Math.PI) / (steps * steps);
+    for (let i = 0; i < steps; i++) {
+        for (let j = 0; j < steps; j++) {
+            const [x, y, z] = mapToHemiOctahedron((i + 0.5) / steps, (j + 0.5) / steps);
+            const direction: Direction = [x * b1[0] + y * b2[0] + z * normal[0], x * b1[1] + y * b2[1] + z * normal[1], x * b1[2] + y * b2[2] + z * normal[2]];
+            const value = radiance(direction) * weight;
+            shGetCoefficients(direction).forEach((basis, index) => (sum[index] += basis * value));
+        }
+    }
+    return sum;
+}
+
+// ---- InterpolateScreenProbes on the CPU (RC2.2 review) ------------------------------------------
+
+/** `pcgHash` (math/hash.hlsl:33-39), as `rcPcgHash` (wgsl/capsaicin.ts), in u32 arithmetic. */
+export function pcgHash(value: number): number {
+    const state = (Math.imul(value >>> 0, 747796405) + 2891336453) >>> 0;
+    const word = Math.imul(((state >>> ((state >>> 28) + 4)) ^ state) >>> 0, 277803737) >>> 0;
+    return ((word >>> 22) ^ word) >>> 0;
+}
+
+/** Capsaicin's `Random` (random_number_generator.hlsl:30-86) as `RcRandom`, started as `rcMakeRandom` does (register D18). */
+export class CpuRandom {
+    private state: number;
+
+    constructor(seed: number, index: number) {
+        const increment = ((index << 1) | 1) >>> 0;
+        this.state = (Math.imul((pcgHash(seed) + increment) >>> 0, 747796405) + increment) >>> 0;
+    }
+
+    randInt(): number {
+        const state = this.state;
+        this.state = (Math.imul(state, 747796405) + 2891336453) >>> 0;
+        const word = Math.imul(((state >>> ((state >>> 28) + 4)) ^ state) >>> 0, 277803737) >>> 0;
+        return ((word >>> 22) ^ word) >>> 0;
+    }
+
+    rand(): number {
+        return (this.randInt() >>> 8) / 16777216;
+    }
+
+    rand2(): [number, number] {
+        const first = this.rand();
+        return [first, this.rand()];
+    }
+}
+
+/** What {@link interpolateScreenProbes} reads: the frame, the host's screen buffers and the probes, as accessors. */
+export interface InterpolationInputs {
+    readonly width: number;
+    readonly height: number;
+    /** `RcFrame.frameIndex`: the interpolation's jitter is drawn from it. */
+    readonly frameIndex: number;
+    /** Capsaicin's `cell_size` per unit distance (screen-irradiance.ts, `screenProbeCellSize`). */
+    readonly cellSize: number;
+    readonly eye: Direction;
+    /** The camera's forward axis: linear depth is the distance along it. */
+    readonly viewForward: Direction;
+    readonly probeMaskMipCount: number;
+    isSky(x: number, y: number): boolean;
+    /** The position the host's depth gives at a pixel. */
+    worldPosition(x: number, y: number): Direction;
+    /** The pixel's unit normal. */
+    normal(x: number, y: number): Direction;
+    /** The probe mask's `level` at a texel (a packed seed, or {@link INVALID_ID}). */
+    probeMask(level: number, x: number, y: number): number;
+    /** The irradiance probe tile `(tileX, tileY)`'s SH gives along `normal`, never negative ({@link shIrradiance}, ao 1). */
+    probeIrradiance(tileX: number, tileY: number, normal: Direction): number;
+}
+
+const dot3 = (a: Direction, b: Direction): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const sub3 = (a: Direction, b: Direction): Direction => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+/**
+ * `InterpolateScreenProbes` (gi1.comp:1514-1625, the `#ifndef HAS_OCCLUSION`
+ * branch) for one pixel, as `wgsl/screen-irradiance.ts` runs it: the jitter
+ * from the PCG (register D27), `FindClosestProbe` up the mask's mips, the
+ * three neighbours by offset, the plane, depth and normal weights to the 8th
+ * power, the backup when all are 0. Returns E (one channel) and the
+ * denoiser hint (0 on the backup), or null for a sky pixel.
+ */
+export function interpolateScreenProbes(inputs: InterpolationInputs, x: number, y: number): { irradiance: number; hint: number; probes: number[]; weights: number[] } | null {
+    if (inputs.isSky(x, y)) return null;
+    const normal = inputs.normal(x, y);
+    const worldPos = inputs.worldPosition(x, y);
+    const cellSize = Math.hypot(...sub3(worldPos, inputs.eye)) * inputs.cellSize;
+
+    const random = new CpuRandom(x + y * inputs.width, inputs.frameIndex);
+    const s = random.rand2();
+    const jitter = s.map((value) => Math.trunc((2 * value - 1) * PROBE_SPAWN_TILE_SIZE));
+    const newPos = [Math.min(Math.max(x + jitter[0], 0), inputs.width - 1), Math.min(Math.max(y + jitter[1], 0), inputs.height - 1)];
+    const newWorldPos = inputs.worldPosition(newPos[0], newPos[1]);
+    const pos = Math.abs(dot3(sub3(newWorldPos, worldPos), normal)) < 0.5 * cellSize ? newPos : [x, y];
+
+    const maskSize = [Math.ceil(inputs.width / PROBE_SIZE), Math.ceil(inputs.height / PROBE_SIZE)];
+    const findClosest = (offset: readonly [number, number] | null): number => {
+        let dims = [...maskSize];
+        let tile = [Math.min(Math.floor(pos[0] / PROBE_SIZE), dims[0] - 1), Math.min(Math.floor(pos[1] / PROBE_SIZE), dims[1] - 1)];
+        for (let level = 0; level < inputs.probeMaskMipCount; level++) {
+            let loc = tile;
+            if (offset) {
+                loc = [tile[0] + offset[0], tile[1] + offset[1]];
+                if (loc[0] < 0 || loc[1] < 0 || loc[0] >= dims[0] || loc[1] >= dims[1]) break;
+            }
+            const probe = inputs.probeMask(level, loc[0], loc[1]);
+            if (probe !== INVALID_ID) return probe;
+            dims = [Math.max(dims[0] >> 1, 1), Math.max(dims[1] >> 1, 1)];
+            tile = [Math.min(tile[0] >> 1, dims[0] - 1), Math.min(tile[1] >> 1, dims[1] - 1)];
+        }
+        return INVALID_ID;
+    };
+
+    const probes = [findClosest(null), INVALID_ID, INVALID_ID, INVALID_ID];
+    if (probes[0] === INVALID_ID) return { irradiance: 0, hint: 1, probes, weights: [0, 0, 0, 0] };
+    const seed = unpackSeed(probes[0]);
+    const offset: [number, number] = [pos[0] < seed[0] ? -1 : 1, pos[1] < seed[1] ? -1 : 1];
+    probes[1] = findClosest([offset[0], 0]);
+    probes[2] = findClosest([0, offset[1]]);
+    probes[3] = findClosest(offset);
+    if (probes[1] === probes[0]) probes[1] = INVALID_ID;
+    if (probes[2] === probes[1] || probes[2] === probes[0]) probes[2] = INVALID_ID;
+    if (probes[3] === probes[2] || probes[3] === probes[1] || probes[3] === probes[0]) probes[3] = INVALID_ID;
+
+    const linearDepth = dot3(sub3(worldPos, inputs.eye), inputs.viewForward);
+    let weights = probes.map((probe) => {
+        if (probe === INVALID_ID) return 0;
+        const [px, py] = unpackSeed(probe);
+        const probePos = inputs.worldPosition(px, py);
+        if (Math.abs(dot3(sub3(probePos, worldPos), normal)) > cellSize) return 0;
+        let w = Math.min(Math.max(1 - Math.abs(dot3(sub3(probePos, inputs.eye), inputs.viewForward) - linearDepth) / linearDepth, 0), 1);
+        w *= Math.max(dot3(normal, inputs.normal(px, py)), 0);
+        return w ** 8;
+    });
+    let hint = 1;
+    if (weights.every((w) => w === 0)) {
+        weights = probes.map((probe, index) => (index === 0 || probe !== INVALID_ID ? 1 : 0));
+        hint = 0;
+    }
+    const total = weights.reduce((sum, w) => sum + w, 0);
+    weights = weights.map((w) => w / total);
+    let irradiance = 0;
+    probes.forEach((probe, index) => {
+        if (!(weights[index] > 0)) return;
+        const [px, py] = unpackSeed(probe);
+        irradiance += weights[index] * inputs.probeIrradiance(Math.floor(px / PROBE_SIZE), Math.floor(py / PROBE_SIZE), normal);
+    });
+    return { irradiance, hint, probes, weights };
+}

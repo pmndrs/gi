@@ -3,7 +3,7 @@
 // `gi.scene`; ThreeGI runs both once per frame. The simple path is
 // `DDGIVolume.start`; the fast path for dense scenes is `ddgi()` with `giAlbedo`
 // on three's own pass() and mrt() (docs/api/three.md).
-export { ThreeGI, type ThreeGIOptions, type ThreeGITimings } from './three-gi.ts';
+export { jitterPixelsToNdc, ThreeGI, upscalerJitter, type ThreeGIJitter, type ThreeGIOptions, type ThreeGITimings, type UpscalerJitterLike } from './three-gi.ts';
 export { GILight, GI_LIGHT_PRIORITY, entryWgsl, wgslParameterType, type GILightOptions } from './gi-light.ts';
 export { wrapGpuTexture, type GpuTextureWrapOptions } from './external-texture.ts';
 export { DDGIVolume } from './ddgi-volume.ts';

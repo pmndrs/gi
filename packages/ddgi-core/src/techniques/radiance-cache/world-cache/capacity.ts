@@ -56,7 +56,7 @@ export interface HashGridCacheOptions {
      * `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second bounce.
      * With it, `PopulateMultibounceCells`, `GenerateMultibounceReservoirs` and
      * `UpdateMultibounceCells` run and the indirect values are read; without
-     * it the cache is GI-1.0's single bounce (register D34). Changing it
+     * it the cache is GI-1.0's single bounce (register D35). Changing it
      * empties the cache, as Capsaicin's `needs_hash_grid_clear` does
      * (gi1.cpp:1740-1745).
      */

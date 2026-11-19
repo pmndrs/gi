@@ -1,13 +1,15 @@
 /**
  * The radiance cache: a faithful WebGPU port of AMD's GI-1.0/1.2 as Capsaicin
- * v1.3 builds it (docs/design/radiance-cache.md). This is phase 2's first
- * half (RC2.1): the screen probes, traced and blended into the probe atlas
- * every frame, with their debug views. The image (SH, interpolation, the
- * shading module) is RC2.2; the world cache is phase 3; history is phase 4.
+ * v1.3 builds it (docs/design/radiance-cache.md). The screen probes,
+ * traced and blended into the probe atlas every frame (RC2.1), then
+ * projected to SH and interpolated per pixel into irradiance the shading
+ * module reads by screen position (RC2.2, screen-irradiance.ts), with their
+ * debug views. The world cache (phase 3, RC3.2) lights the probe rays' hits;
+ * history is phase 4.
  *
  * Per frame, in `encodeScreen` (after the host's `encode` and its depth and
  * normal pass), the passes Capsaicin runs for the screen probes
- * (`GI1::render`, gi1.cpp:2250-2542), as far as phase 2 has them:
+ * (`GI1::render`, gi1.cpp:2250-2542), as far as phases 2 and 3 have them:
  *
  * 1. `ClearCounters` (gi1.comp:163), and `ClearProbeMask` (gi1.comp:243), which
  *    stands in for reprojection's clearing until phase 4;
@@ -20,7 +22,9 @@
  *    the hits' cells, lights one light sample per hit, updates its tiles and
  *    resolves its radiance into the probe rays (gi1.cpp:2238-2253 and
  *    2335-2528, here after the trace: `encodeWorldCache`);
- * 5. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas and the mask.
+ * 5. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas and the mask;
+ * 6. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
+ *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts (RC2.2).
  *
  * Capsaicin dispatches the per-ray passes over every possible ray
  * (`max_ray_count`, gi1.cpp:2323-2542) with an early return past the probe
@@ -40,11 +44,12 @@ import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, TechniqueScreenFrame } from '../../platform/contract/technique.ts';
 import type { ComputeKernel, WgslModule } from '../../platform/contract/wgsl.ts';
 import { cameraRelativeInverseViewProjection } from './camera.ts';
+import { ScreenIrradiance } from './screen-irradiance.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
-import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_WGSL, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
+import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
 import {
     BLEND_GROUP,
     BLEND_WGSL,
@@ -57,6 +62,7 @@ import {
     COUNTERS_BYTES,
     ENTRY_POINT,
     FRAME_UNIFORM_BYTES,
+    FRAME_UNIFORM_OFFSETS,
     POPULATE_GROUP,
     populateWgsl,
     PROBE_RAY_BYTES,
@@ -99,6 +105,10 @@ export interface RadianceCacheProbes {
     readonly probeRays: GPUBuffer;
     /** The ray results (radiance and hit distance as four halves): `rayScratch.rayResults`. */
     readonly rayScratch: RayScratch;
+    /** Each probe tile's nine SH coefficients (`packHalf4`), in a 3 × 3 block of this `rg32uint` texture (register D26). */
+    readonly probeSH: GPUTexture;
+    /** The interpolated irradiance, screen-sized `rgba16float`: rgb E, alpha Capsaicin's denoiser hint. */
+    readonly irradiance: GPUTexture;
 }
 
 /** Kernels compiled in `prepare`. */
@@ -147,6 +157,8 @@ interface ScreenResources {
 interface ScreenInputGroups {
     readonly depth: GPUTexture;
     readonly normal: GPUTexture;
+    /** `FrameScreen.normalEncoding` was `unorm` (the SH debug view decodes the normals as the probes do). */
+    readonly normalUnorm: boolean;
     readonly resources: ScreenResources;
     readonly spawn: GPUBindGroup;
     readonly sample: GPUBindGroup;
@@ -159,14 +171,27 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /** Rays through the platform's tracer; the host's depth and normals every frame (`encodeScreen`). */
     readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: true };
     readonly settings: RadianceCacheSettings;
-    readonly shading = new RadianceCacheShadingModule();
+    /** Reads the interpolated irradiance by screen position (shading.ts). */
+    readonly shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() });
     /**
-     * Empty in RC2.1: the contract's debug views are drawn through the shading
-     * module (`giDebugColor`), which has no screen position to read the atlas
-     * by. The atlas and mask views are drawn engine-free by
-     * {@link encodeDebugView}; the viewer's entry for them comes with RC2.2.
+     * Drawn per pixel through the shading module's `giDebugColor` by screen
+     * position; {@link encodeDebugView} draws the same views engine-free.
      */
-    readonly debugViews: readonly DebugView[] = [];
+    readonly debugViews: readonly DebugView[] = [
+        {
+            kind: 'screen',
+            id: RADIANCE_CACHE_DEBUG_VIEW.probeAtlas,
+            label: 'Probe atlas',
+            description: "Each probe's 8 × 8 cells of incoming light, drawn in its own 8 × 8 pixel tile; tiles without a probe this frame are a dark checkerboard.",
+        },
+        { kind: 'screen', id: RADIANCE_CACHE_DEBUG_VIEW.probeMask, label: 'Probe mask', description: 'Which 8 × 8 tiles hold a probe this frame: a colour per probe, its seed pixel white.' },
+        {
+            kind: 'screen',
+            id: RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics,
+            label: 'Probe SH',
+            description: "The light of each tile's probe as its nine SH coefficients hold it, along the pixel's normal, as a white surface would reflect it.",
+        },
+    ];
     readonly msPerUnit: number | undefined = undefined;
 
     private context: TechniqueContext | null = null;
@@ -177,6 +202,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private worldCacheResetPending = false;
     private screenResources: ScreenResources | null = null;
     private inputGroups: ScreenInputGroups | null = null;
+    /** SH projection and per-pixel interpolation (RC2.2): made in `prepare`. */
+    private irradiance: ScreenIrradiance | null = null;
     private latestFrameIndex = 0;
     private readonly frameWords = new ArrayBuffer(FRAME_UNIFORM_BYTES);
     private disposed = false;
@@ -217,6 +244,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             kernel('debug-view', DEBUG_WGSL, DEBUG_ENTRY_POINT, DEBUG_GROUP),
         ]);
         const kernels: Kernels = { clearCounters, clearProbeMask, spawn, compact, sample, populate, blend, debug };
+        const irradiance = await ScreenIrradiance.create(context);
 
         // The spawn tiles of the largest screen the device can draw: a few MB at most, so a
         // resize never has to wait for new utilities (their creation is asynchronous).
@@ -239,6 +267,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
         this.releaseScreen();
         this.releasePrepared();
+        this.irradiance = irradiance;
         this.cache = cache;
         this.prepared = {
             kernels,
@@ -266,7 +295,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         };
     }
 
-    /** No world-space work in phase 2 (the world cache is phase 3): every unit is left unused. */
+    /**
+     * No world-space work: the world cache runs in `encodeScreen`, where the
+     * probe rays are (Capsaicin updates it from the screen probes' hits), so
+     * every unit is left unused.
+     */
     encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number {
         void encoder;
         void frame;
@@ -329,24 +362,65 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         blendPass.setBindGroup(1, groups.blend);
         dispatchSplit(blendPass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
         blendPass.end();
+
+        // 6: the mask's mips, the SH and the irradiance per pixel (RC2.2).
+        this.encodeIrradiance(encoder, frame, prepared, resources);
+    }
+
+    /** The passes after the blend (screen-irradiance.ts), on this frame's probes and screen. */
+    private encodeIrradiance(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): void {
+        const irradiance = this.irradiance;
+        if (!irradiance) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
+        irradiance.encode(
+            encoder,
+            {
+                layout: resources.layout,
+                frameUniforms: prepared.frameUniforms,
+                probeSpawn: prepared.probeSpawn,
+                probeAtlas: resources.probeAtlas,
+                probeMask: resources.probeMask,
+                depth: frame.screen.depth,
+                normal: frame.screen.normal,
+            },
+            frame.camera,
+        );
+    }
+
+    /** What the shading module binds: the latest frame's textures, or 1 × 1 placeholders before the first. */
+    private shadingTextures(): { irradiance: GPUTexture; probeAtlas: GPUTexture; probeMask: GPUTexture; probeSH: GPUTexture } {
+        const irradiance = this.irradiance;
+        if (!irradiance) throw new Error('@pmndrs/gi: the radiance cache has no shading textures before prepare');
+        const placeholders = irradiance.placeholders;
+        return {
+            irradiance: irradiance.irradiance ?? placeholders.irradiance,
+            probeAtlas: this.screenResources?.probeAtlas ?? placeholders.probeAtlas,
+            probeMask: this.screenResources?.probeMask ?? placeholders.probeMask,
+            probeSH: irradiance.probeSH ?? placeholders.probeSH,
+        };
     }
 
     /**
      * Draws a debug view (wgsl/debug.ts) of the latest frame's probes into
      * `target`: an `rgba8unorm` texture with `STORAGE_BINDING` usage, at least
      * the screen's size. Engine-free: the host shows the image as it likes.
-     * `exposure` multiplies radiance before tone mapping (the atlas view).
+     * `exposure` multiplies radiance before tone mapping (the atlas and SH views).
      */
     encodeDebugView(encoder: GPUCommandEncoder, view: RadianceCacheDebugViewId, target: GPUTexture, exposure = 1): void {
         const context = this.context;
         const prepared = this.prepared;
         const resources = this.screenResources;
-        if (!context || !prepared || !resources) throw new Error('@pmndrs/gi: the radiance cache has no probes to show before its first encodeScreen');
+        const inputs = this.inputGroups;
+        const probeSH = this.irradiance?.probeSH;
+        if (!context || !prepared || !resources || !inputs || !probeSH) throw new Error('@pmndrs/gi: the radiance cache has no probes to show before its first encodeScreen');
         const { width, height } = resources.layout;
         if (target.width < width || target.height < height) throw new RangeError(`@pmndrs/gi: the debug view needs a target of at least ${width} × ${height}`);
         const words = new ArrayBuffer(DEBUG_UNIFORM_BYTES);
-        new Uint32Array(words, 0, 3).set([width, height, view]);
-        new Float32Array(words, 12, 1)[0] = exposure;
+        const uints = new Uint32Array(words);
+        const offsets = DEBUG_UNIFORM_OFFSETS;
+        uints.set([width, height], offsets.size / WORD_BYTES);
+        uints[offsets.view / WORD_BYTES] = view;
+        new Float32Array(words)[offsets.exposure / WORD_BYTES] = exposure;
+        uints[offsets.normalUnorm / WORD_BYTES] = inputs.normalUnorm ? 1 : 0;
         context.device.queue.writeBuffer(prepared.debugUniforms, 0, words);
         const group = context.device.createBindGroup({
             label: `${TECHNIQUE_ID}/debug-view`,
@@ -354,8 +428,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             entries: [
                 { binding: 0, resource: { buffer: prepared.debugUniforms } },
                 { binding: 1, resource: resources.probeAtlas.createView() },
-                { binding: 2, resource: resources.probeMask.createView({ baseMipLevel: 0, mipLevelCount: 1 }) },
+                // The whole mip chain: the SH view finds the nearest probe up it (FindClosestProbe).
+                { binding: 2, resource: resources.probeMask.createView({ baseMipLevel: 0, mipLevelCount: resources.layout.probeMaskMipCount }) },
                 { binding: 3, resource: target.createView({ baseMipLevel: 0, mipLevelCount: 1 }) },
+                { binding: 4, resource: probeSH.createView() },
+                { binding: 5, resource: screenTextureView(inputs.normal) },
             ],
         });
         const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/debug-view` });
@@ -369,7 +446,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     get probes(): RadianceCacheProbes | null {
         const prepared = this.prepared;
         const resources = this.screenResources;
-        if (!prepared || !resources) return null;
+        const irradiance = this.irradiance;
+        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance) return null;
         return {
             layout: resources.layout,
             frameIndex: this.latestFrameIndex,
@@ -380,6 +458,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             probeSpawn: prepared.probeSpawn,
             probeRays: resources.probeRays,
             rayScratch: resources.rayScratch,
+            probeSH: irradiance.probeSH,
+            irradiance: irradiance.irradiance,
         };
     }
 
@@ -401,7 +481,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const prepared = this.prepared;
         if (!prepared) return 0;
         const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + (this.screenResources?.bytes ?? 0);
-        return screenProbes + (this.cache?.memoryBytes ?? 0);
+        const screenIrradiance = this.irradiance?.memoryBytes ?? 0;
+        return screenProbes + screenIrradiance + (this.cache?.memoryBytes ?? 0);
     }
 
     /**
@@ -441,7 +522,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      */
     private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources): void {
         const cache: WorldCache | null = this.cache;
-        if (!cache) throw new Error('@pmndrs/ddgi: prepare the radiance cache before encodeScreen');
+        if (!cache) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         if (this.worldCacheResetPending) {
             cache.reset(encoder);
             this.worldCacheResetPending = false;
@@ -509,7 +590,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
     private inputGroupsFor(device: GPUDevice, prepared: Prepared, resources: ScreenResources, screen: FrameScreen): ScreenInputGroups {
         const current = this.inputGroups;
-        if (current && current.resources === resources && current.depth === screen.depth && current.normal === screen.normal) return current;
+        const normalUnorm = screen.normalEncoding === 'unorm';
+        if (current && current.resources === resources && current.depth === screen.depth && current.normal === screen.normal && current.normalUnorm === normalUnorm) return current;
         checkScreenTexture(screen.depth, 'depth');
         checkScreenTexture(screen.normal, 'normal');
         const depth = screenTextureView(screen.depth);
@@ -521,6 +603,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const groups: ScreenInputGroups = {
             depth: screen.depth,
             normal: screen.normal,
+            normalUnorm,
             resources,
             spawn: group('SpawnScreenProbes', kernels.spawn, [uniforms, depth, normal, { buffer: prepared.spawnSeeds }, { buffer: prepared.spawnFlags }]),
             sample: group('SampleScreenProbes', kernels.sample, [uniforms, normal, { buffer: prepared.probeSpawn }, { buffer: resources.probeRays }]),
@@ -550,13 +633,18 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const words = this.frameWords;
         const floats = new Float32Array(words);
         const uints = new Uint32Array(words);
-        floats.set(cameraRelativeInverseViewProjection(frame.camera), 0);
-        floats.set(frame.camera.position, 16);
-        uints[19] = this.latestFrameIndex;
-        uints.set([layout.width, layout.height, layout.probeCount[0], layout.probeCount[1], layout.maxProbeSpawnCount], 20);
-        uints[25] = frame.screen.normalEncoding === 'unorm' ? 1 : 0;
-        uints[26] = frame.screen.reversedDepth === true ? 1 : 0;
-        uints[27] = this.settings.useDirectLighting ? 1 : 0;
+        // RcFrame's fields by name (FRAME_UNIFORM_OFFSETS are bytes; the arrays index words).
+        const word = (field: keyof typeof FRAME_UNIFORM_OFFSETS): number => FRAME_UNIFORM_OFFSETS[field] / WORD_BYTES;
+        // With the camera's jitter when the host drew its depth with one (FrameCamera.jitter, camera.ts).
+        floats.set(cameraRelativeInverseViewProjection(frame.camera), word('inverseViewProjection'));
+        floats.set(frame.camera.position, word('eye'));
+        uints[word('frameIndex')] = this.latestFrameIndex;
+        uints.set([layout.width, layout.height], word('bufferDimensions'));
+        uints.set([layout.probeCount[0], layout.probeCount[1]], word('probeCount'));
+        uints[word('maxProbeSpawnCount')] = layout.maxProbeSpawnCount;
+        uints[word('normalUnorm')] = frame.screen.normalEncoding === 'unorm' ? 1 : 0;
+        uints[word('reversedDepth')] = frame.screen.reversedDepth === true ? 1 : 0;
+        uints[word('useDirectLighting')] = this.settings.useDirectLighting ? 1 : 0;
         device.queue.writeBuffer(prepared.frameUniforms, 0, words);
     }
 
@@ -577,6 +665,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         for (const buffer of [prepared.frameUniforms, prepared.counters, prepared.spawnFlags, prepared.spawnSeeds, prepared.probeSpawn, prepared.debugUniforms]) buffer.destroy();
         prepared.compaction.dispose();
         prepared.compactArgs.dispose();
+        this.irradiance?.dispose();
+        this.irradiance = null;
         this.prepared = null;
     }
 }

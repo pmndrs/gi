@@ -16,7 +16,9 @@
  * Checks on every scene:
  * 1. **Spawn:** each spawn tile's flag and seed equal the CPU's spawn rule
  *    (`SpawnScreenProbes`: the Halton jitter of the frame the technique ran,
- *    no probe on a sky pixel, sky read from the page's depth).
+ *    no probe on a sky pixel, sky read from the page's depth), at the first
+ *    checked frame and again at the next `SPAWN_FRAMES - 1` frames, each with
+ *    its own jitter (RC2.1 review).
  * 2. **Compaction:** the probe list holds exactly the non-sky tiles' seeds,
  *    in tile order, and its count is theirs; the probe mask holds each
  *    probe's seed in its 8 × 8 tile and "no probe" everywhere else.
@@ -43,11 +45,11 @@ import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/con
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import {
-    halfBitsToFloat,
     INVALID_ID,
     mapToHemiOctahedronInverse,
     packSeed,
     probeCellOf,
+    spawnJitter,
     spawnScreenProbes,
     toProbeFrame,
     unpackHalf3,
@@ -63,6 +65,7 @@ import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, readBuffer } from '../ddgi-shared/harness.ts';
+import { halves, readTexture } from './readback.ts';
 import { PageScreen, frameCamera, type PageCamera } from './screen.ts';
 
 const WIDTH = 1280;
@@ -75,6 +78,8 @@ const GRAZING_BY_HALF_PRECISION = 1e-3;
 const SKY_TOLERANCE = 0.01;
 /** The sky-plane scene's sky radiance. */
 const SKY_RADIANCE = 1;
+/** Frames whose spawn is checked against the CPU's rule, each at its own Halton jitter. */
+const SPAWN_FRAMES = 4;
 
 interface SceneRun {
     readonly name: string;
@@ -163,26 +168,38 @@ async function describeSponza(platform: GIPlatformImpl, device: GPUDevice, manif
     };
 }
 
-/** A texture's level as bytes, rows packed (the copy pads them to 256 bytes). */
-async function readTexture(device: GPUDevice, texture: GPUTexture, bytesPerTexel: number, width: number, height: number): Promise<Uint8Array> {
-    const rowBytes = width * bytesPerTexel;
-    const paddedRow = Math.ceil(rowBytes / 256) * 256;
-    const buffer = device.createBuffer({ size: paddedRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-    const encoder = device.createCommandEncoder();
-    encoder.copyTextureToBuffer({ texture, mipLevel: 0 }, { buffer, bytesPerRow: paddedRow }, [width, height]);
-    device.queue.submit([encoder.finish()]);
-    await buffer.mapAsync(GPUMapMode.READ);
-    const mapped = new Uint8Array(buffer.getMappedRange());
-    const out = new Uint8Array(rowBytes * height);
-    for (let row = 0; row < height; row++) out.set(mapped.subarray(row * paddedRow, row * paddedRow + rowBytes), row * rowBytes);
-    buffer.unmap();
-    buffer.destroy();
-    return out;
-}
-
-function halves(bytes: Uint8Array, byteOffset = 0): Float32Array {
-    const words = new Uint16Array(bytes.buffer, bytes.byteOffset + byteOffset, (bytes.byteLength - byteOffset) / 2);
-    return Float32Array.from(words, (bits) => halfBitsToFloat(bits));
+/**
+ * The spawn of the technique's latest frame against the CPU's rule at that
+ * frame's index (`SpawnScreenProbes`): every tile's flag, and the seed of
+ * every tile that spawned.
+ */
+async function checkSpawn(
+    device: GPUDevice,
+    run: SceneRun,
+    isSky: (x: number, y: number) => boolean,
+    fail: (message: string) => void,
+): Promise<{ expected: ReturnType<typeof spawnScreenProbes>; mismatches: number; frameIndex: number }> {
+    const probes = run.technique.probes;
+    if (!probes) {
+        fail('no probes after encodeScreen');
+        return { expected: [], mismatches: 1, frameIndex: -1 };
+    }
+    const { layout, frameIndex } = probes;
+    const expected = spawnScreenProbes(WIDTH, HEIGHT, frameIndex, isSky);
+    const tileCount = layout.maxProbeSpawnCount;
+    if (expected.length !== tileCount) fail(`the CPU makes ${expected.length} spawn tiles, the layout ${tileCount}`);
+    const flags = new Uint32Array(await readBuffer(device, probes.spawnFlags, tileCount * 4));
+    const seeds = new Uint32Array(await readBuffer(device, probes.spawnSeeds, tileCount * 4));
+    let mismatches = 0;
+    expected.forEach((tile, index) => {
+        const flagWrong = flags[index] !== (tile.spawned ? 1 : 0);
+        const seedWrong = tile.spawned && seeds[index] !== packSeed(tile.seed[0], tile.seed[1]);
+        if (flagWrong || seedWrong) {
+            mismatches++;
+            fail(`frame ${frameIndex} spawn tile ${index}: GPU flag ${flags[index]} seed ${seeds[index]}, CPU ${tile.spawned ? 1 : 0} at (${tile.seed.join(', ')})`);
+        }
+    });
+    return { expected, mismatches, frameIndex };
 }
 
 interface SceneChecks {
@@ -210,20 +227,8 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     };
 
     // 1. Spawn.
-    const expected = spawnScreenProbes(WIDTH, HEIGHT, frameIndex, isSky);
     const tileCount = layout.maxProbeSpawnCount;
-    if (expected.length !== tileCount) fail(`the CPU makes ${expected.length} spawn tiles, the layout ${tileCount}`);
-    const flags = new Uint32Array(await readBuffer(device, probes.spawnFlags, tileCount * 4));
-    const seeds = new Uint32Array(await readBuffer(device, probes.spawnSeeds, tileCount * 4));
-    let spawnMismatches = 0;
-    expected.forEach((tile, index) => {
-        const flagWrong = flags[index] !== (tile.spawned ? 1 : 0);
-        const seedWrong = tile.spawned && seeds[index] !== packSeed(tile.seed[0], tile.seed[1]);
-        if (flagWrong || seedWrong) {
-            spawnMismatches++;
-            fail(`spawn tile ${index}: GPU flag ${flags[index]} seed ${seeds[index]}, CPU ${tile.spawned ? 1 : 0} at (${tile.seed.join(', ')})`);
-        }
-    });
+    const { expected, mismatches: spawnMismatches } = await checkSpawn(device, run, isSky, fail);
     const spawned = expected.filter((tile) => tile.spawned);
 
     // 2. Compaction and the mask.
@@ -408,6 +413,17 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
     if (nonFinite > 0) fail(`${nonFinite} probe cells hold a negative, infinite or NaN radiance`);
     const meanRadiance = spawned.length > 0 ? radianceSum / (spawned.length * PROBE_CELLS) : 0;
 
+    // 1, again: the spawn at the next frames, each at its own jitter (the screen and its sky are unchanged).
+    const laterSpawns: Array<{ frameIndex: number; jitter: readonly [number, number]; mismatches: number; probes: number }> = [];
+    for (let extra = 1; extra < SPAWN_FRAMES; extra++) {
+        run.frame();
+        await device.queue.onSubmittedWorkDone();
+        const later = await checkSpawn(device, run, isSky, fail);
+        laterSpawns.push({ frameIndex: later.frameIndex, jitter: spawnJitter(later.frameIndex), mismatches: later.mismatches, probes: later.expected.filter((tile) => tile.spawned).length });
+    }
+    const jitters = new Set([spawnJitter(frameIndex), ...laterSpawns.map((later) => later.jitter)].map((jitter) => jitter.join(',')));
+    if (jitters.size < 2) fail(`the ${SPAWN_FRAMES} checked frames all spawned at the same jitter: the check needs different ones`);
+
     return {
         failures,
         summary: {
@@ -417,6 +433,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             skyTiles: tileCount - spawned.length,
             probes: probeCount,
             spawnMismatches,
+            laterSpawns,
             listMismatches,
             maskMismatches,
             rays: rayWords[0],

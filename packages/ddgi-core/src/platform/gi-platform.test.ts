@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError, GINotReadyError } from './contract/errors.ts';
-import type { FrameInput } from './contract/frame.ts';
-import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
+import type { FrameCamera, FrameInput } from './contract/frame.ts';
+import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueScreenFrame } from './contract/technique.ts';
 import type { WgslModule } from './contract/wgsl.ts';
 import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
 import { checkComputeLimits, isSupported, KERNEL_COMPUTE_LIMITS, optionalFeatures, requiredLimits } from './device-requirements.ts';
@@ -503,6 +503,45 @@ describe('the platform object', () => {
 
         platform.removeTechnique(surfels);
         expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: false });
+    });
+
+    it("hands a screen stage the camera, frame and time step of the frame's encode, jitter included (RC2.1, RC2.2)", async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        const seen: TechniqueScreenFrame[] = [];
+        const screenTechnique = new RecordingTechnique('screen space', []);
+        (screenTechnique as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: true };
+        (screenTechnique as GITechnique).encodeScreen = (_encoder, frame) => seen.push(frame);
+        platform.addTechnique(screenTechnique);
+        await platform.prepare();
+
+        const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
+        const screen = { width: 4, height: 2, depth: texture, normal: texture, normalEncoding: 'snorm-float' as const };
+        const camera = (x: number, jitter?: [number, number]): FrameCamera => ({
+            position: [x, 2, 3],
+            view: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -x, -2, -3, 1],
+            projection: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, -1, -1, 0, 0, -0.1, 0],
+            near: 0.1,
+            far: 100,
+            ...(jitter ? { jitter } : {}),
+        });
+        const first = camera(1, [0.001, -0.002]);
+        platform.encode(gpu.createEncoder(), { deltaTime: 0.016, budget: { units: 0 }, camera: first });
+        platform.encodeScreen(gpu.createEncoder(), screen);
+        const second = camera(5);
+        platform.encode(gpu.createEncoder(), { deltaTime: 0.02, budget: { units: 0 }, camera: second });
+        platform.encodeScreen(gpu.createEncoder(), screen);
+
+        expect(seen).toHaveLength(2);
+        // The very camera the frame's encode got, its jitter with it, and that frame's number and time step.
+        expect(seen[0].camera).toBe(first);
+        expect(seen[0].camera.jitter).toEqual([0.001, -0.002]);
+        expect(seen[1].camera).toBe(second);
+        expect(seen[1].camera.jitter).toBeUndefined();
+        expect(seen[1].frame).toBe(seen[0].frame + 1);
+        expect([seen[0].deltaTime, seen[1].deltaTime]).toEqual([0.016, 0.02]);
+        expect(seen[1].screen).toBe(screen);
+        expect(seen[1].units).toBe(0);
     });
 
     it('disposes once: buffers destroyed, techniques disposed, later calls refused', async () => {

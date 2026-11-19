@@ -85,8 +85,8 @@ fn helloGiIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f, scree
 fn helloGiCoverage(position: vec3f, normal: vec3f) -> f32 {
     return giCoverageAt(position, normal);
 }
-fn helloGiDebugColor(position: vec3f, normal: vec3f, view: u32) -> vec3f {
-    return giDebugColorAt(position, normal, view);
+fn helloGiDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f) -> vec3f {
+    return giDebugColorAt(position, normal, view, screenUV);
 }
 `;
     }
@@ -97,7 +97,7 @@ fn helloGiIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f, scree
 fn helloGiCoverage(position: vec3f, normal: vec3f) -> f32 {
     return 1.0;
 }
-fn helloGiDebugColor(position: vec3f, normal: vec3f, view: u32) -> vec3f {
+fn helloGiDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f) -> vec3f {
     return frame.flatIrradiance * HELLO_INV_PI;
 }
 `;
@@ -206,7 +206,7 @@ fn helloFragment(input: VertexOutput, @builtin(front_facing) frontFacing: bool) 
         return vec4f(draw.albedo * HELLO_INV_PI * helloGiIrradiance(position, normal, viewDirection, screenUV), 1.0);
     }
     if (frame.viewMode != VIEW_MODE_FULL) {
-        return vec4f(helloGiDebugColor(position, normal, frame.debugView), 1.0);
+        return vec4f(helloGiDebugColor(position, normal, frame.debugView, screenUV), 1.0);
     }
 
     var irradiance = helloDirectIrradiance(position, normal) + helloGiIrradiance(position, normal, viewDirection, screenUV);

@@ -144,7 +144,7 @@ struct HashGridCacheConstants {
     discard_multibounce_ray_probability: f32,
     max_multibounce_sample_count: f32,
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
-    use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D34)
+    use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D35)
     padding2: u32,
 }
 `;
