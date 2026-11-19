@@ -794,6 +794,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 { buffer: history.cellCounts },
                 { buffer: history.previousCellCounts },
                 { buffer: history.cachedCellCounts },
+                { buffer: history.expectedRays },
             ]),
             populate: group('PopulateScreenProbes', kernels.populate, [
                 uniforms,
@@ -825,6 +826,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 { buffer: history.cellCounts },
                 { buffer: history.previousCellCounts },
                 { buffer: history.cachedCellCounts },
+                { buffer: history.expectedRays },
             ]),
         };
         this.inputGroups = groups;
@@ -861,6 +863,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         uints[word('capsaicinEmptyCells')] = rules.capsaicinEmptyCells;
         floats[word('fillHitDistance')] = rules.fillHitDistance;
         uints[word('probeChangeReset')] = rules.probeChangeReset;
+        uints[word('rayGuidingCorrection')] = rules.rayGuidingCorrection;
         device.queue.writeBuffer(prepared.frameUniforms, 0, words);
     }
 
@@ -898,6 +901,7 @@ export function temporalRuleUniforms(settings: Readonly<RadianceCacheSettings>):
     capsaicinEmptyCells: number;
     fillHitDistance: number;
     probeChangeReset: number;
+    rayGuidingCorrection: number;
 } {
     return {
         historySampleCap: Math.max(1, Math.round(settings.historySampleCap)),
@@ -906,6 +910,7 @@ export function temporalRuleUniforms(settings: Readonly<RadianceCacheSettings>):
         capsaicinEmptyCells: settings.emptyCellFill === 'capsaicin' ? 1 : 0,
         fillHitDistance: settings.backupFillsAsHistory ? LARGEST_HALF : FILL_HIT_DISTANCE,
         probeChangeReset: settings.probeChangeReset ? 1 : 0,
+        rayGuidingCorrection: settings.rayGuidingCorrection ? 1 : 0,
     };
 }
 

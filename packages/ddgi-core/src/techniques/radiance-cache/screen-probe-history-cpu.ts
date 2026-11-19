@@ -59,7 +59,11 @@ export const HISTORY_SAMPLE_CAP = 8;
  * `previousCounts` the samples it stands for (0: no history). A cell with
  * rays moves to their mean by k / min(n + k, cap); a cell without keeps its
  * value and count; a cell with neither is a fill (the reached cells' mean),
- * count 0, which is never history (D47).
+ * count 0, which is never history (D47). With `expectedRays` (the rays each
+ * cell expected under ray guiding, register D62), a cell's step is k over its
+ * expected rays times n, n its reached frames up to the cap, so its expected
+ * step does not depend on what it reads; n counts the frames since its history
+ * began, reached or not, so it doesn't either.
  */
 export function blendRunningMean(
     sums: readonly number[],
@@ -67,6 +71,7 @@ export function blendRunningMean(
     previous: ReadonlyArray<number | null>,
     previousCounts: readonly number[],
     cap = HISTORY_SAMPLE_CAP,
+    expectedRays?: readonly number[],
 ): { values: number[]; counts: number[] } {
     let reached = 0;
     let meanSum = 0;
@@ -84,12 +89,16 @@ export function blendRunningMean(
         const k = counts[cell];
         if (k > 0) {
             const mean = sums[cell] / k;
-            const n = Math.min(history + k, cap);
-            values.push(history === 0 || before === null ? mean : before + (mean - before) * Math.min(k / n, 1));
+            const corrected = expectedRays !== undefined && cap > 1;
+            const n = corrected ? Math.min(history + 1, cap) : Math.min(history + k, cap);
+            const weight = corrected ? Math.min(k / (Math.max(expectedRays[cell], 1e-6) * n), 1) : Math.min(k / n, 1);
+            values.push(history === 0 || before === null ? mean : before + (mean - before) * weight);
             nextCounts.push(n);
         } else if (before !== null && history > 0) {
             values.push(before);
-            nextCounts.push(history);
+            // Corrected (D62), the count is frames since the history began, reached or not: it may not
+            // depend on whether guiding sent a ray here, or a dark cell would take bigger steps.
+            nextCounts.push(expectedRays !== undefined && cap > 1 ? Math.min(history + 1, cap) : history);
         } else {
             values.push(fill);
             nextCounts.push(0);
@@ -353,6 +362,8 @@ export interface ConstantSkyOptions {
      * and 0 otherwise (`sparse`, a bright source few rays find).
      */
     readonly noise?: 'none' | 'exponential' | 'sparse';
+    /** With the running mean: weight each step by the rays the cell expected (register D62). */
+    readonly guidingCorrection?: boolean;
 }
 
 /**
@@ -372,6 +383,21 @@ export interface ConstantSkyOptions {
  * the reprojection (a still camera keeps every probe), the world cache (no
  * hit), the probe filter and the GI denoiser (averages of equal probes).
  */
+/**
+ * The rays each cell of a probe can expect from `guidedCell`'s draws (register
+ * D62): its own ray where that isn't guided (always, or the uniform share),
+ * plus every guided ray's chance of landing in it.
+ */
+export function expectedRaysPerCell(ownHasHistory: readonly boolean[], cdf: { cdf: readonly number[]; total: number }, uniformShare = RAY_GUIDING_UNIFORM_SHARE): number[] {
+    const guided = ownHasHistory.filter(Boolean).length;
+    return ownHasHistory.map((history, cell) => {
+        const step = Math.max((cell + 1 < cdf.cdf.length ? cdf.cdf[cell + 1] : 1) - cdf.cdf[cell], 0);
+        if (uniformShare <= 0) return (history ? 0 : 1) + guided * step;
+        if (!(cdf.total > 0) || uniformShare >= 1) return 1;
+        return (history ? uniformShare : 1) + guided * (1 - uniformShare) * step;
+    });
+}
+
 export function simulateConstantSky(options: ConstantSkyOptions): Array<{ frame: number; capsaicinProjection: number; ourProjection: number; unreachedShare: number }> {
     const tiles = options.tiles ?? 16;
     const up: Direction = [0, 0, 1];
@@ -431,7 +457,8 @@ export function simulateConstantSky(options: ConstantSkyOptions): Array<{ frame:
                 unreachedCells += counts.filter((count) => count === 0).length;
                 spawnedCells += PROBE_CELLS;
                 if (options.rule === 'running') {
-                    const blended = blendRunningMean(sums, counts, previous, previousCounts);
+                    const expected = options.guidingCorrection ? expectedRaysPerCell(previous.map((value) => value !== null), cdf, options.guiding === 'fixed' ? RAY_GUIDING_UNIFORM_SHARE : 0) : undefined;
+                    const blended = blendRunningMean(sums, counts, previous, previousCounts, HISTORY_SAMPLE_CAP, expected);
                     next[ty * tiles + tx] = blended.values;
                     nextCounts[ty * tiles + tx] = blended.counts;
                 } else {

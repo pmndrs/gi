@@ -189,6 +189,15 @@ export interface RadianceCacheSettings {
      */
     rayGuidingUniformShare: number;
     /**
+     * Ray guiding draws a cell by its own estimate, so under the running mean a cell
+     * that read low gets fewer rays and stays low longer, and the mean reads dark
+     * (register D62). True (ours): each frame's step is weighted by the rays the cell
+     * got over the rays it expected, so its expected step doesn't depend on what it
+     * reads. False: the step is its rays over its sample count (RC4.1's). Capsaicin
+     * has no running mean. Read every frame.
+     */
+    rayGuidingCorrection: boolean;
+    /**
      * Where the platform reports a scene change, a probe cell whose last ray crosses a
      * changed box forgets its sample count, so its next ray replaces it (D46; ours).
      * Capsaicin has no such reset (false).
@@ -247,6 +256,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     emptyCellFill: 'keep-previous',
     backupFillsAsHistory: false,
     rayGuidingUniformShare: 0.125,
+    rayGuidingCorrection: true,
     probeChangeReset: true,
     probeHistory: true,
 });

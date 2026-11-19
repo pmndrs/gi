@@ -93,6 +93,8 @@ export interface HistoryResources {
     readonly spawnProbe: GPUBuffer;
     /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D43). */
     readonly evictedRadiance: GPUBuffer;
+    /** Per ray slot: the rays its cell expected this frame under ray guiding (f32; register D62). */
+    readonly expectedRays: GPUBuffer;
     /**
      * The history sample count of each atlas texel (D46): this frame's, last
      * frame's (then each spawned probe's previous count, from Sample), and the
@@ -223,6 +225,7 @@ export class ScreenProbeHistory {
             overrideTiles: buffer('override tiles', layout.maxProbeSpawnCount * WORD_BYTES),
             spawnProbe: buffer('spawn probe', layout.maxProbeSpawnCount * PROBE_SPAWN_PROBE_BYTES),
             evictedRadiance: buffer('evicted probe radiance', layout.maxRayCount * 8),
+            expectedRays: buffer('expected rays per cell', layout.maxRayCount * 4),
             cellCounts: buffer('cell counts', atlasTexels * WORD_BYTES),
             previousCellCounts: buffer('previous cell counts', atlasTexels * WORD_BYTES),
             cachedCellCounts: buffer('cached cell counts', atlasTexels * WORD_BYTES),
@@ -250,6 +253,7 @@ export class ScreenProbeHistory {
             resources.overrideTiles,
             resources.spawnProbe,
             resources.evictedRadiance,
+            resources.expectedRays,
             resources.cellCounts,
             resources.previousCellCounts,
             resources.cachedCellCounts,
@@ -451,6 +455,7 @@ export class ScreenProbeHistory {
             sized.overrideTiles,
             sized.spawnProbe,
             sized.evictedRadiance,
+            sized.expectedRays,
             sized.cellCounts,
             sized.previousCellCounts,
             sized.cachedCellCounts,

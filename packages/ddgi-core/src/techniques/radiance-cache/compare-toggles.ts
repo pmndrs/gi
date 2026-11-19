@@ -314,6 +314,16 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         help: "With the SHaRC cache: how many frames a cell's average reaches back (ours 32): more is steadier but slower to follow a change. Not in Capsaicin.",
     }),
 
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'rayGuidingCorrection',
+        group: 'screen-probes',
+        label: 'Ray-guiding correction',
+        urlName: 'rcguidefix',
+        register: 'D62',
+        help: "Guided rays favour cells that read bright, so a cell that read low is sampled less and stays low. On (ours) weights each cell's update by the rays it got over the rays it expected, which keeps the mean right; off is RC4.1's weighting. Capsaicin has no running mean.",
+    }),
+
     // ---- The probe filter and SSGI (RC4.2, register D59-D61) ----
     toggle<CompareBooleanToggle>({
         kind: 'boolean',
