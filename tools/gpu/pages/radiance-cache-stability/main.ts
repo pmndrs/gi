@@ -34,6 +34,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { WorldCacheKind } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
@@ -59,6 +60,11 @@ const CONFIGURATIONS = [
     ['moving', 'on'],
     ['moving', 'off'],
 ] as const;
+/**
+ * The world-cache backend (P6.1): the page's `data-world-cache` attribute, so
+ * `radiance-cache-stability-sharc` runs this page with the SHaRC cache.
+ */
+const WORLD_CACHE: WorldCacheKind = document.documentElement.dataset.worldCache === 'sharc' ? 'sharc' : 'gi1-hash-grid';
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
 
@@ -200,7 +206,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ worldCache: WORLD_CACHE }));
     platform.setOutput(technique);
     await platform.prepare();
     let beforeFrame = (): void => {};
@@ -315,7 +321,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, scenes },
+        data: { worldCache: WORLD_CACHE, width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
