@@ -93,10 +93,19 @@ export function jitteredProjection(camera: Pick<FrameCamera, 'projection' | 'jit
  * view can't be inverted (a zero-size view, say).
  */
 export function cameraRelativeInverseViewProjection(camera: Pick<FrameCamera, 'position' | 'view' | 'projection' | 'jitter'>): number[] {
-    const [x, y, z] = camera.position;
-    const translateToEye = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
-    const relative = multiplyMat4(multiplyMat4(jitteredProjection(camera), camera.view), translateToEye);
-    const inverse = invertMat4(relative);
+    const inverse = invertMat4(cameraRelativeViewProjection(camera));
     if (!inverse) throw new Error('@pmndrs/gi: the radiance cache needs a camera whose projection × view can be inverted');
     return inverse;
+}
+
+/**
+ * `projection × view × translate(eye)`, column-major, with the frame's jitter:
+ * Capsaicin's `g_ViewProjection` (gi1.comp:95) for a point given relative to
+ * the eye, `clip = M × (world − eye, 1)` (`CountScreenProbes` projects the
+ * cached probes with it, RC4.1).
+ */
+export function cameraRelativeViewProjection(camera: Pick<FrameCamera, 'position' | 'view' | 'projection' | 'jitter'>): number[] {
+    const [x, y, z] = camera.position;
+    const translateToEye = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1];
+    return multiplyMat4(multiplyMat4(jitteredProjection(camera), camera.view), translateToEye);
 }

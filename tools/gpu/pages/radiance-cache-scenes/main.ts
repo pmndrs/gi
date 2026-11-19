@@ -4,8 +4,8 @@
  * 1280 × 720 from its first bookmark, the camera still, for 60 frames, with
  * Capsaicin's default GI-1.2 multibounce on. RC3.3 adds the cells' indirect
  * values to the scan, and runs `cornell-box` and `two-room` again with
- * multibounce off: the mean probe-ray radiance after frame 60 must be higher
- * with it on in `two-room` (its closed room is lit by the second bounce; the
+ * multibounce off: the mean interpolated irradiance after frame 60 must be
+ * higher with it on in `two-room` (its closed room is lit by the second bounce; the
  * done-when's contact sheet needs the viewer, RC2.2), and is reported for
  * `cornell-box`.
  *
@@ -120,6 +120,13 @@ interface Scan {
     /** This frame's shadow rays (first and second bounce), and how many drew the sky (RC3.4). */
     readonly shadowRays: number;
     readonly skyDrawn: number;
+    /**
+     * The mean of the interpolated irradiance over the screen. The comparison
+     * reads this, not the rays' mean: since RC4.1 ray guiding sends more rays
+     * where a probe is bright, so the rays' mean follows how the rays were
+     * spread as much as the light.
+     */
+    readonly meanIrradiance: number;
     readonly firstBad: string | null;
 }
 
@@ -173,7 +180,7 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         }
     }
 
-    // The frame's reservoirs: how many drew the sky as their light (RC3.4, register D39).
+    // The frame's reservoirs: how many drew the sky as their light (RC3.4, register D49).
     const lists = cache.rayLists;
     const counters = new Uint32Array(await readRange(device, cache.buffers.tileWords, 0, 64 * 4));
     const shadowRays = counters[HASH_GRID_COUNTER.visibilityRayCount];
@@ -182,6 +189,9 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         const reservoirs = new Uint32Array(await readRange(device, lists.buffer, lists.layout.reservoirBuffer * 4, shadowRays * RESERVOIR_WORDS * 4));
         for (let ray = 0; ray < shadowRays; ray++) if (reservoirs[ray * RESERVOIR_WORDS] === DIRECT_SKY_LIGHT) skyDrawn++;
     }
+    const irradianceBits = await readHalfTexture(device, probes.irradiance);
+    let irradianceSum = 0;
+    for (let index = 0; index < irradianceBits.length; index++) if (index % 4 !== 3) irradianceSum += halfBitsToFloat(irradianceBits[index]);
 
     return {
         frame,
@@ -195,6 +205,7 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         meanRayRadiance: rays.checked > 0 ? radianceSum / rays.checked : 0,
         meanHitRayRadiance: hitRays > 0 ? hitRadianceSum / hitRays : 0,
         hitRays,
+        meanIrradiance: irradianceSum / Math.max((irradianceBits.length / 4) * 3, 1),
         firstBad: rays.first ?? atlas.first ?? firstCell,
     };
 }
@@ -294,13 +305,13 @@ try {
         }
     }
     // The second bounce lights two-room's closed room: the mean probe radiance after frame 60 rises with it.
-    const lastMean = (id: string): number => scenes[id]?.[scenes[id].length - 1]?.meanRayRadiance ?? 0;
+    const lastMean = (id: string): number => scenes[id]?.[scenes[id].length - 1]?.meanIrradiance ?? 0;
     const multibounceGain = {
         'two-room': lastMean('two-room') / Math.max(lastMean('two-room (multibounce off)'), 1e-9),
         'cornell-box': lastMean('cornell-box') / Math.max(lastMean('cornell-box (multibounce off)'), 1e-9),
     };
     if (!(lastMean('two-room') > lastMean('two-room (multibounce off)'))) {
-        failures.push(`two-room's mean probe radiance after frame 60 is ${lastMean('two-room')} with multibounce and ${lastMean('two-room (multibounce off)')} without: the second bounce should raise it`);
+        failures.push(`two-room's mean irradiance after frame 60 is ${lastMean('two-room')} with multibounce and ${lastMean('two-room (multibounce off)')} without: the second bounce should raise it`);
     }
     // RC3.4: the sky as a light at cache hits, before (off) and after (on), on Bistro exterior.
     const lastScan = (id: string): Scan | undefined => scenes[id]?.[scenes[id].length - 1];
@@ -310,10 +321,12 @@ try {
         'bistro-exterior': {
             meanHitRayRadiance: { on: skyOn?.meanHitRayRadiance ?? 0, off: skyOff?.meanHitRayRadiance ?? 0, ratio: (skyOn?.meanHitRayRadiance ?? 0) / Math.max(skyOff?.meanHitRayRadiance ?? 0, 1e-9) },
             meanRayRadiance: { on: skyOn?.meanRayRadiance ?? 0, off: skyOff?.meanRayRadiance ?? 0, ratio: (skyOn?.meanRayRadiance ?? 0) / Math.max(skyOff?.meanRayRadiance ?? 0, 1e-9) },
+            meanIrradiance: { on: skyOn?.meanIrradiance ?? 0, off: skyOff?.meanIrradiance ?? 0, ratio: (skyOn?.meanIrradiance ?? 0) / Math.max(skyOff?.meanIrradiance ?? 0, 1e-9) },
         },
     };
-    if (!((skyOn?.meanHitRayRadiance ?? 0) > (skyOff?.meanHitRayRadiance ?? 0))) {
-        failures.push(`bistro-exterior's hit probe rays read ${skyOn?.meanHitRayRadiance} with the sky as a light and ${skyOff?.meanHitRayRadiance} without: the skylight at hits should raise it`);
+    // Judged on the screen's irradiance, as the multibounce gain is (ray guiding moves the rays' mean, RC4.1).
+    if (!((skyOn?.meanIrradiance ?? 0) > (skyOff?.meanIrradiance ?? 0))) {
+        failures.push(`bistro-exterior's mean irradiance reads ${skyOn?.meanIrradiance} with the sky as a light and ${skyOff?.meanIrradiance} without: the skylight at hits should raise it`);
     }
     await drainDevice(device);
     reportGpuTest({

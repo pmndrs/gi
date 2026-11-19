@@ -145,7 +145,7 @@
  *    see their undersides; they are left out of the ceiling averages.
  *
  * Sections 15 to 18 (RC3.4) are the sky as one of a hit's lights (register
- * D39): no sun unless named, multibounce on, the sky the only light, so every
+ * D49): no sun unless named, multibounce on, the sky the only light, so every
  * reservoir (first and second bounce) must draw the sky with weight 1. Each
  * cell's direct value is judged against the mean, over this frame's entries
  * in it, of ρ L (1 − F), F the share of the point's cosine-weighted sky its

@@ -76,6 +76,14 @@ export interface RadianceCacheSettings {
     hashGridCacheMaxMultibounceSampleCount: number;
     /** `gi1_reservoir_cache_cell_size` (gi1.h:71, default 16): world-space ReSTIR's cell, with `useResampling`. */
     reservoirCacheCellSize: number;
+    /**
+     * `InterpolateScreenProbes` jitters each pixel's lookup position by up to a
+     * spawn tile (gi1.comp:1540-1551; default true, as Capsaicin). The jitter is
+     * meant for the GI denoiser (RC4.3) to average away; until it exists it is
+     * part of the frame-to-frame change. Off only to measure that (RC4.1 review).
+     * Read every frame.
+     */
+    interpolationJitter: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -95,6 +103,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
+    interpolationJitter: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

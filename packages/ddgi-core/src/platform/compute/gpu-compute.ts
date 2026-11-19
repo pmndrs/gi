@@ -28,7 +28,10 @@ import type {
     GpuWord,
     IndirectArgsOptions,
     PrefixScanOptions,
+    GpuScreenHistory,
+    ScreenHistoryOptions,
 } from '../contract/compute.ts';
+import { compileScreenHistoryKernel, ScreenHistory, type ScreenHistoryKernel } from '../screen/screen-history.ts';
 import type { WgslModule } from '../contract/wgsl.ts';
 import {
     COMPACTION_IO,
@@ -112,6 +115,7 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
     private readonly label: string;
     private readonly scanKernels = new Map<ScanVariant, Promise<ScanKernels>>();
     private writerKernel: Promise<WriterKernel> | null = null;
+    private screenHistoryKernel: Promise<ScreenHistoryKernel> | null = null;
 
     constructor(device: GPUDevice, options: PlatformGpuComputeOptions = {}) {
         this.device = device;
@@ -129,19 +133,29 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
         checkStorageBuffer(options.input, bytes, 'the input', options.label);
         if (!inPlace && options.output) checkStorageBuffer(options.output, bytes, 'the output', options.label);
         const kernels = await this.scanKernelsFor(variant);
-        const run = new ScanRun(this.device, kernels, {
-            label: options.label,
-            capacity: options.capacity,
-            source: options.input,
-            destination: inPlace ? undefined : options.output,
-        });
+        const label = options.label;
+        let run = new ScanRun(this.device, kernels, { label, capacity: options.capacity, source: options.input, destination: inPlace ? undefined : options.output });
         return {
-            capacity: options.capacity,
-            total: run.result,
+            get capacity() {
+                return run.capacity;
+            },
+            get total() {
+                return run.result;
+            },
             get memoryBytes() {
                 return run.memoryBytes;
             },
             encode: (pass, count) => run.encode(pass, count),
+            rebind: (next) => {
+                const nextInPlace = next.output === undefined || next.output === next.input;
+                if (nextInPlace !== inPlace) throw new Error(`@pmndrs/gi: ${label}: rebind keeps the scan ${inPlace ? 'in place' : 'to an output'}`);
+                this.checkCapacity(next.capacity, label);
+                checkStorageBuffer(next.input, next.capacity * WORD_BYTES, 'the input', label);
+                if (!nextInPlace && next.output) checkStorageBuffer(next.output, next.capacity * WORD_BYTES, 'the output', label);
+                // Destroying the old scratch is safe for command buffers already submitted (WebGPU waits for them).
+                run.dispose();
+                run = new ScanRun(this.device, kernels, { label, capacity: next.capacity, source: next.input, destination: nextInPlace ? undefined : next.output });
+            },
             dispose: () => run.dispose(),
         };
     }
@@ -179,6 +193,11 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
         checkStorageBuffer(count.buffer, count.offset + WORD_BYTES, 'the count', label);
         const kernel = await this.writerKernelFor();
         return new IndirectArgsWriter(this.device, kernel, options);
+    }
+
+    async createScreenHistory(options: ScreenHistoryOptions): Promise<GpuScreenHistory> {
+        this.screenHistoryKernel ??= compileScreenHistoryKernel(this.device, this.label);
+        return new ScreenHistory(this.device, await this.screenHistoryKernel, options);
     }
 
     /** At least one item, and no more than one storage binding holds. */
@@ -273,7 +292,7 @@ class ScanRun {
     private readonly resultBuffer: GPUBuffer;
     /** The bind group entries except the parameters, which each page adds. */
     private readonly entries: readonly GPUBindGroupEntry[];
-    private readonly capacity: number;
+    readonly capacity: number;
     private readonly maxPerDimension: number;
     private readonly slotBytes: number;
     private readonly pages: ParamPage[] = [];

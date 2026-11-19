@@ -123,6 +123,61 @@ fn rcRecoverRadiance(quantized: vec4u) -> vec4f {
     return vec4f(quantized) / RC_FLOAT_QUANTIZE;
 }
 
+// f32tof16 (HLSL): the half's bits in the low 16 bits, for a value within the half range.
+fn rcF32ToF16Bits(value: f32) -> u32 {
+    return pack2x16float(vec2f(clamp(value, -RC_LARGEST_HALF, RC_LARGEST_HALF), 0.0)) & 0xffffu;
+}
+
+// The half nearest a value (a tie to the even one), as an f32 that an rgba16float store keeps
+// exactly. pack2x16float and rgba16float stores truncate on our GPUs (NOTES), and the probe
+// atlas is stored, read and stored again every frame (the reprojection, the taps, the running
+// mean), so truncation would drag it down by up to a step each time (register D48; the same
+// rule as D31's HashGridCache_RoundHalfBits for the world cache).
+fn rcNearestHalf(value: f32) -> f32 {
+    let clamped = clamp(value, -RC_LARGEST_HALF, RC_LARGEST_HALF);
+    let bits = pack2x16float(vec2f(clamped, 0.0)) & 0xffffu;
+    let magnitude = abs(clamped);
+    let packedMagnitude = abs(unpack2x16float(bits).x);
+    if (magnitude == packedMagnitude) {
+        return unpack2x16float(bits).x;
+    }
+    var lower = bits;
+    var upper = bits + 1u;
+    if (packedMagnitude > magnitude) {
+        lower = bits - 1u;
+        upper = bits;
+    } else if ((bits & 0x7fffu) >= 0x7bffu) {
+        return unpack2x16float(bits).x;
+    }
+    let below = magnitude - abs(unpack2x16float(lower).x);
+    let above = abs(unpack2x16float(upper).x) - magnitude;
+    let upperIsEven = (upper & 1u) == 0u;
+    return unpack2x16float(select(lower, upper, above < below || (above == below && upperIsEven))).x;
+}
+
+fn rcNearestHalf4(value: vec4f) -> vec4f {
+    return vec4f(rcNearestHalf(value.x), rcNearestHalf(value.y), rcNearestHalf(value.z), rcNearestHalf(value.w));
+}
+
+// ---- math/color.hlsl, math/pack.hlsl --------------------------------------------------------
+
+// luminance (color.hlsl): Rec. 709 weights.
+fn rcLuminance(color: vec3f) -> f32 {
+    return dot(color, vec3f(0.2126, 0.7152, 0.0722));
+}
+
+// packNormal (pack.hlsl): three 10-bit snorms in one word.
+fn rcPackNormal(value: vec3f) -> u32 {
+    let packedValue = vec3u(vec3i(clamp(value, vec3f(-1.0), vec3f(1.0)) * 511.0 + 0.5 * sign(value))) & vec3u(0x3ffu);
+    return packedValue.x | (packedValue.y << 10u) | (packedValue.z << 20u);
+}
+
+// unpackNormal (pack.hlsl): the three 10-bit snorms back, sign-extended.
+fn rcUnpackNormal(packedValue: u32) -> vec3f {
+    let value = vec3i(bitcast<i32>(packedValue << 22u), bitcast<i32>(packedValue << 12u), bitcast<i32>(packedValue << 2u)) >> vec3u(22u);
+    return vec3f(value) * (1.0 / 511.0);
+}
+
 // ---- math/sampling.hlsl ---------------------------------------------------------------------
 
 // mapToHemiOctahedron (sampling.hlsl:61-83): a point of the unit square to a +z-hemisphere
@@ -210,6 +265,11 @@ fn rcRandInt(random: ptr<function, RcRandom>) -> u32 {
     var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     word = (word >> 22u) ^ word;
     return word;
+}
+
+// Random::randInt(max) (random_number_generator.hlsl:48-56): with its slight modulo bias.
+fn rcRandIntBelow(random: ptr<function, RcRandom>, maximum: u32) -> u32 {
+    return rcRandInt(random) % maximum;
 }
 
 // Random::rand (random_number_generator.hlsl:62-67): the upper 24 bits, so the float is exact.

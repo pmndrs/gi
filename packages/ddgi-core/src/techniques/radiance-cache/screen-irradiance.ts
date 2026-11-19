@@ -142,16 +142,25 @@ export class ScreenIrradiance {
     }
 
     /**
+     * The SH texture for `layout`, made when the size changes. The screen
+     * probes' reprojection (RC4.1) copies last frame's SH into it before
+     * {@link encode} projects this frame's probes.
+     */
+    probeSHFor(layout: ScreenProbeLayout): GPUTexture {
+        return this.sizedFor(layout).probeSH;
+    }
+
+    /**
      * Records the three passes, after `BlendScreenProbes` in the same
      * encoder. `camera` is the frame's (`TechniqueScreenFrame.camera`): its
      * projection sizes the interpolation's cells, its view gives the axis
      * linear depth is measured along.
      */
-    encode(encoder: GPUCommandEncoder, inputs: ScreenIrradianceInputs, camera: FrameCamera): void {
+    encode(encoder: GPUCommandEncoder, inputs: ScreenIrradianceInputs, camera: FrameCamera, interpolationJitter = true): void {
         const { layout } = inputs;
         const sized = this.sizedFor(layout);
         const groups = this.groupsFor(sized, inputs);
-        this.writeConstants(layout, camera);
+        this.writeConstants(layout, camera, interpolationJitter);
         const { kernels } = this;
         const timer = this.context.timer;
         const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
@@ -186,7 +195,7 @@ export class ScreenIrradiance {
      * `RcScreenProbesConstants`: the camera's forward axis (linear depth),
      * Capsaicin's `cell_size` (gi1.cpp:1839-1843) and the mask's mip count.
      */
-    private writeConstants(layout: ScreenProbeLayout, camera: FrameCamera): void {
+    private writeConstants(layout: ScreenProbeLayout, camera: FrameCamera, interpolationJitter: boolean): void {
         const words = this.constantWords;
         const floats = new Float32Array(words);
         const uints = new Uint32Array(words);
@@ -194,6 +203,7 @@ export class ScreenIrradiance {
         floats.set(viewForward(camera), offsets.viewForward / WORD_BYTES);
         floats[offsets.cellSize / WORD_BYTES] = screenProbeCellSize(camera, layout.width, layout.height);
         uints[offsets.probeMaskMipCount / WORD_BYTES] = layout.probeMaskMipCount;
+        uints[offsets.interpolationJitter / WORD_BYTES] = interpolationJitter ? 1 : 0;
         this.context.device.queue.writeBuffer(this.constants, 0, words);
     }
 
@@ -207,7 +217,7 @@ export class ScreenIrradiance {
             label: `${TECHNIQUE_ID} probe SH`,
             size: shSize,
             format: 'rg32uint',
-            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
+            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst,
         });
         const irradiance = device.createTexture({
             label: `${TECHNIQUE_ID} irradiance`,

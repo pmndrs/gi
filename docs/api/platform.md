@@ -446,6 +446,7 @@ A technique gets the platform's services when attached, and never sees the host.
 | `GpuCompaction`, `CompactionOptions` | Stream compaction: the kept items' indices, in order, and their count on the GPU; and its options. |
 | `GpuIndirectArgs`, `IndirectArgsOptions` | Indirect dispatch arguments made from a count the GPU computed; and its options. |
 | `GpuWord` | One `u32` a pass wrote on the GPU (a total, a count) for later passes to read. |
+| `GpuScreenHistory`, `ScreenHistoryOptions`, `ScreenHistoryTextures` | `compute.createScreenHistory`: the previous frame's depth (`r32float`) and normals (decoded, `rgba16float`), copied by one compute pass at the end of a frame, for techniques that reproject (RC4.1); and its options and textures. |
 | `ComputeReduction` | How a workgroup combines its threads' values: `'subgroups'` or the `'workgroup'` memory fallback. |
 
 ## Every export of `@pmndrs/gi/ddgi`
