@@ -36,7 +36,7 @@ export type DDGIPresetName = 'low' | 'medium' | 'high';
 export const DDGI_PRESET_NAMES: readonly DDGIPresetName[] = ['low', 'medium', 'high'];
 
 /** The DDGI settings a preset sets; every other setting keeps its default. */
-export type DDGIPresetSettings = Pick<DDGISettings, 'raysPerProbe' | 'irradianceTexels' | 'distanceTexels'>;
+export type DDGIPresetSettings = Pick<DDGISettings, 'raysPerProbe' | 'irradianceTexels' | 'distanceTexels' | 'maxProbesPerFrame'>;
 
 export interface DDGIPreset {
     readonly name: DDGIPresetName;
@@ -76,11 +76,36 @@ export interface DDGIPreset {
  *   only hits up close see fewer texels.
  * - **Spacing:** 2 m has an eighth of 1 m's probes; light changes over
  *   less than 2 m (a doorway, a corner) blur, and thin walls leak sooner.
+ * - **Warm-up batch** (`maxProbesPerFrame`, the most probes one frame may
+ *   update, which the warm-up uses in full): 1,024 for `low` (TU.1,
+ *   DECISIONS 2026-11-19). Measured on the Intel UHD (`ddgi-low-warmup`,
+ *   two-room refined to 25,194 probes): 4,096 gave 47-70 ms warm-up frames
+ *   and a 3.6 s warm-up, 1,024 about 20 ms frames and 4.6 s. A page keeps
+ *   turning while it warms; it takes about a second longer. The others keep
+ *   the default 4,096.
  */
 const PRESETS: Readonly<Record<DDGIPresetName, DDGIPreset>> = {
-    low: { name: 'low', ddgi: { raysPerProbe: 128, irradianceTexels: 6, distanceTexels: 8 }, budget: { gpuMs: 1 }, textureLayerSize: 128, probeSpacing: 2 },
-    medium: { name: 'medium', ddgi: { raysPerProbe: 192, irradianceTexels: 6, distanceTexels: 10 }, budget: { gpuMs: 1.5 }, textureLayerSize: 256, probeSpacing: 1.5 },
-    high: { name: 'high', ddgi: { raysPerProbe: 256, irradianceTexels: 6, distanceTexels: 14 }, budget: { gpuMs: 2 }, textureLayerSize: 256, probeSpacing: 1 },
+    low: {
+        name: 'low',
+        ddgi: { raysPerProbe: 128, irradianceTexels: 6, distanceTexels: 8, maxProbesPerFrame: 1024 },
+        budget: { gpuMs: 1 },
+        textureLayerSize: 128,
+        probeSpacing: 2,
+    },
+    medium: {
+        name: 'medium',
+        ddgi: { raysPerProbe: 192, irradianceTexels: 6, distanceTexels: 10, maxProbesPerFrame: 4096 },
+        budget: { gpuMs: 1.5 },
+        textureLayerSize: 256,
+        probeSpacing: 1.5,
+    },
+    high: {
+        name: 'high',
+        ddgi: { raysPerProbe: 256, irradianceTexels: 6, distanceTexels: 14, maxProbesPerFrame: 4096 },
+        budget: { gpuMs: 2 },
+        textureLayerSize: 256,
+        probeSpacing: 1,
+    },
 };
 
 export function isDDGIPresetName(value: unknown): value is DDGIPresetName {

@@ -227,9 +227,10 @@ export const UNIFORM_WORD = {
     holdFineProbes: 91,
     sunLight: 92,
     probeBase: 96,
+    backFaceRayThreshold: 97,
     volumeWindow: 100,
 } as const;
-/** 104 words: probeBase padded to the next vec4f, then the window. */
+/** 104 words: probeBase and backFaceRayThreshold padded to the next vec4f, then the window. */
 export const UNIFORM_WORDS = 104;
 /** The six frustum planes in UNIFORM_WORD, in the order `frustumPlanes` (camera.ts) returns them. */
 export const FRUSTUM_PLANE_WORDS = [
@@ -452,7 +453,13 @@ export const SCHEDULE_STATE_REPORTED_WORDS = 8;
  */
 export const CENSUS_DIRECT_HITS = CENSUS_SCHEDULE_STATE + SCHEDULE_STATE_REPORTED_WORDS;
 export const CENSUS_DIRECT_DROPPED = CENSUS_DIRECT_HITS + 1;
-export const CENSUS_WORDS = CENSUS_DIRECT_DROPPED + 1;
+/**
+ * Probe updates `ddgi/blend` skipped since `prepare` because too many of
+ * their blended rays hit back faces (RTXGI's rule, `backFaceRayThreshold`;
+ * TU.5). Never cleared; always 0 with the rule off.
+ */
+export const CENSUS_BACK_FACE_SKIPS_TOTAL = CENSUS_DIRECT_DROPPED + 1;
+export const CENSUS_WORDS = CENSUS_BACK_FACE_SKIPS_TOTAL + 1;
 
 /**
  * The change clock counts changes in units of 1/4096 of a relative change r

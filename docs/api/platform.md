@@ -68,7 +68,7 @@ gi.encode(encoder, { deltaTime, budget: preset.budget, camera });
 
 A preset has four parts:
 
-- `ddgi`: the DDGI settings it changes (rays per probe and the two tile sizes). Every other setting keeps its default. Spread it before your own settings, so yours win.
+- `ddgi`: the DDGI settings it changes (rays per probe, the two tile sizes and the warm-up batch). Every other setting keeps its default. Spread it before your own settings, so yours win.
 - `budget`: the per-frame budget to pass as `frame.budget`.
 - `textureLayerSize`: `createGI`'s option for the texture store, the platform's own copy of every material texture that rays read.
 - `probeSpacing`: metres between probes, for hosts that don't set a spacing themselves (three: a `DDGIVolume` made without probe counts). A host that sets one keeps it.
@@ -81,6 +81,7 @@ A preset has four parts:
 | Budget (`budget.gpuMs`) | 1 ms | 1.5 ms | 2 ms | Fewer probes updated a frame, so light follows changes more slowly. The platform's floor still sweeps every probe within a few seconds. |
 | Texture store (`textureLayerSize`) | 128² | 256² | 256² | Only rays hitting a texture up close see fewer texels: GI rays mostly read coarse mips. A quarter of the memory. |
 | Spacing when the host sets none (`probeSpacing`) | 2 m | 1.5 m | 1 m | Light that changes over less than the spacing (a doorway, a corner) blurs. 2 m has an eighth of 1 m's probes. |
+| Warm-up batch (`maxProbesPerFrame`) | 1,024 | 4,096 | 4,096 | The warm-up takes a little longer, in shorter frames. On the Intel UHD (two-room refined to 25,194 probes, `ddgi-low-warmup`): 4,096 gave 47–70 ms frames for 3.6 s, 1,024 about 20 ms frames for 4.6 s (TU.1, DECISIONS 2026-11-19). It is also the most probes any frame may update. |
 
 `high` is exactly the defaults: what M1 to M4 were checked with on the RTX 3060, and what the M5 Pro runs. A unit test holds it to that (`presets.test.ts`). `low` is for the correctness devices (the Intel UHD, the iPad, older iOS). Values are from the settings' own ranges, not tuned (DECISIONS 2026-11-10, "Feature coverage before tuning").
 
@@ -398,7 +399,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | --- | --- |
 | `ShadingModule` | `gi.shading`: the WGSL, its `parameters`, `globalsCode(group)`, `writeUniforms`, `version` ([the adapter guide, step 9](../guides/adapter.md#step-9-sampling-gi-in-your-shaders)). |
 | `ShadingParameter` | One resource the module's functions take: a texture, a sampler or a `vec4f`. |
-| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture. |
+| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture, optionally with the shading-module function that gives each point's own light (`irradianceFunction`). |
 
 ### Stats and GPU timing
 
@@ -464,6 +465,7 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 | `DDGI_SHADING_PARAMETER_NAMES` | The names of DDGI's shading parameters. |
 | `DDGI_SAMPLE_WGSL` | The one WGSL function that samples DDGI's field, for engine-free test views. |
 | `DDGI_DEBUG_VIEW` | DDGI's debug view ids: `points`, `giOnly`, `coverage`, `probeStates`. |
+| `DDGI_PROBE_IRRADIANCE_FUNCTION` | `'giProbeIrradiance'`, the shading-module function the `points` view names for each probe's own light. |
 | `DDGI_DEBUG_COLORS` | The colours its debug views use, for checks. |
 
 ### Quality presets
@@ -537,6 +539,7 @@ The functions are:
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
 - `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It is on SPEC's after-v1 list.
 - `giDebugColor(position, normal, view, ...)` drives the debug views.
+- A technique may add its own functions. DDGI's `giProbeIrradiance(point, direction, ...)` returns the irradiance one probe holds for a surface facing `direction`, from that probe's tile alone (`point` is its index in the `points` debug view). The `points` view names it in `irradianceFunction`, so an adapter can shade each probe's sphere by its own light, RTXGI's standard probe view (TU.5, DV-03).
 
 `screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it.
 
