@@ -761,7 +761,10 @@ async function runWithDdgi(device: GPUDevice, settings: Partial<RadianceCacheSet
 // ---- Section 7: the f32 fallback on a default-limits device ----------------------------------------
 
 /** A device as a host gets it without the platform's advice on workgroup memory and f16: WebGPU's 16 KiB, no shader-f16. */
-async function defaultLimitsDevice(adapter: GPUAdapter): Promise<GPUDevice> {
+async function defaultLimitsDevice(): Promise<GPUDevice> {
+    // A fresh adapter: one adapter makes one device.
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) throw new Error('f32 fallback: no second adapter');
     return adapter.requestDevice({
         requiredLimits: { ...requiredLimits(adapter), maxComputeWorkgroupStorageSize: 16384 },
         requiredFeatures: optionalFeatures(adapter).filter((feature) => feature !== 'shader-f16'),
@@ -985,7 +988,7 @@ try {
 
     // 7. The f32 fallback on a default-limits device (16 KiB of workgroup memory, no shader-f16).
     if (runs(7)) {
-        const small = await defaultLimitsDevice(adapter);
+        const small = await defaultLimitsDevice();
         try {
             const [fallback] = await runScenario(small, 'furnace', { ...TAIL, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
             const defaultNetwork = await prepareOnly(small, { ...TAIL, neural: { network: 'default' } });
