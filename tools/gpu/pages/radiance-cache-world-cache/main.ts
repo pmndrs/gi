@@ -1,11 +1,11 @@
 /**
- * RC3.2 and RC3.3: the radiance cache's world cache (Capsaicin's hash grid)
- * populated and resolved through the technique, on the GPU; and GI-1.2's
- * multibounce.
+ * RC3.2, RC3.3 and RC3.5: the radiance cache's world cache (Capsaicin's hash
+ * grid) populated and resolved through the technique, on the GPU; and GI-1.2's
+ * multibounce, with Capsaicin's errors in it fixed (RC3.5).
  *
  * Sections 1 to 7 are GI-1.0's single bounce: they run with multibounce off
  * (`useMultibounce: false`), and pass as they did in RC3.2 (the single-bounce
- * path is unchanged by RC3.3). Sections 8 to 10 are the multibounce.
+ * path is unchanged by RC3.3). Sections 8 to 11 and 13 are the multibounce.
  *
  * The scene is a corner: a 400 m floor (y = 0, facing up) and a 40 × 10 m
  * wall (z = 0, facing +z), both grey (albedo 0.5), under a black sky. The
@@ -76,12 +76,12 @@
  * - The ceiling gets no direct light: its cells' direct values have no
  *   samples, and with multibounce off its probe rays read 0.
  * - With multibounce on, 30% of the ceiling hits trace a cosine-weighted
- *   ray down to the floor; each sample is L_f × BRDF / pdf / (1 - 0.7) =
- *   ρ L_f / 0.3, and a cell averages the samples it gets, so a ceiling cell's
- *   indirect value, and every probe ray reading it, is ρ² E / (π × 0.3) =
- *   1.0610: up from 0 by that much, and 1 / 0.3 = 3.33 times the second
- *   bounce's expected value ρ² E / π = 0.3183, because only kept rays add a
- *   sample (Capsaicin behaviour, to be fixed under DECISIONS 2026-11-19; NOTES, RC3.3).
+ *   ray down to the floor; each kept ray adds L_f × BRDF / pdf = ρ L_f
+ *   (a miss, about 1 in 10,000 here, adds a sample of no light), and a cell
+ *   averages the samples it gets, so a ceiling cell's indirect value, and
+ *   every probe ray reading it, is the second bounce ρ² E / π = 0.3183
+ *   (RC3.5, register D37; Capsaicin's estimate read 1 / 0.3 = 3.33 times
+ *   that, 1.0610).
  *
  * Far from the camera a tile is taller than the 3 m gap, and nearly level
  * rays up and down share a direction bin, so a far tile holds floor and
@@ -89,53 +89,57 @@
  * through its tile"): there a ceiling ray also reads the floor's direct
  * light. The checks allow for it where tiles reach 2 m.
  *
- * Two of Capsaicin's index uses are ported as they are (NOTES, RC3.3), and
- * the checks expect what they do: a second-bounce shadow ray that bypasses
- * the cache (far from the camera a floor cell is wider than the 3 m ray)
- * adds the floor's light, L_f, to the probe ray numbered as its first-bounce
- * entry (`PopulateCells`), and `UpdateMultibounceCells` reads the shadow-ray
- * list at a second-bounce entry's visibility index and, where that word has
- * the bypass bit, adds its sample (about 1.0610) to the probe ray numbered
- * as the first-bounce entry. A probe ray's expected reading is its cell's
- * levels plus those additions.
+ * A probe ray's expected reading (`predictProbeRays`) is its cell's levels,
+ * or its own sample where it bypasses the cache, plus the one addition
+ * `UpdateMultibounceCells` makes since RC3.5 (register D38): a bypassing
+ * first bounce's own probe ray gets its second-bounce draw over 1 - p.
+ * Capsaicin's two misdirected additions are gone, so a ray that read one
+ * would be off.
  *
- * 8. **Multibounce, converged** (40 frames): every probe ray that hit the
- *    ceiling reads what its cell's levels hold (direct plus indirect, as
- *    `ResolveCells` picks them), and where its tile is under 2 m (it can't
- *    reach the floor) that is no direct light and an indirect 1.0610 within
- *    2%; every cell with indirect samples has an indirect mean of 1.0610
- *    within 2%, and every cell with direct samples (the floor's, from the
- *    second-bounce hits) a direct mean of L_f within 2%. The last
- *    frame's draws match the CPU twin (`multibounce-cpu.ts`): the first-bounce
- *    entries whose `rand()` is above 0.7 are exactly those with a
- *    second-bounce entry (less the rays the CPU sees leave the planes), each
- *    second-bounce ray's direction is the CPU's within half precision, its
- *    BRDF / pdf is ρ and its pdf cos / π. The update list holds each tile
- *    once (register D32).
+ * 8. **Multibounce, converged** (40 frames): every probe ray reads its
+ *    prediction, and where its tile is under 2 m (it can't reach the floor)
+ *    that is no direct light and an indirect 0.3183 within 2% (up to 1% of
+ *    the rays and cells may hold one of the rare misses), averaging 0.3183
+ *    within 1%; the cells' indirect means average the true second bounce
+ *    within 1%, and every cell with direct samples (the floor's, from the
+ *    second-bounce hits) has a direct mean of L_f within 2%. The last
+ *    frame's draws match the CPU twin (`multibounce-cpu.ts`): the
+ *    first-bounce entries whose `rand()` is above 0.7 are exactly those with
+ *    a second-bounce entry, a miss where the CPU sees the ray leave the
+ *    planes, each direction is the CPU's within half precision, its BRDF /
+ *    pdf is ρ and its pdf cos / π. The update list holds each tile once
+ *    (register D32).
  * 9. **The one-frame lag** (multibounce turned on after two frames with it
  *    off, which empties the cache and its indirect scratch; then one frame,
  *    then a second): after the first frame no ceiling cell has an indirect
  *    sample and the ceiling rays under 2 m tiles read 0, while each ceiling
  *    cell's indirect scratch holds one count per second-bounce entry whose
- *    first bounce is in it, and the quantised sum of their samples; after the
- *    second frame those rays that read an indirect level with samples read
- *    1.0610 within 2%.
+ *    first bounce is in it, and the quantised sum of their samples (ρ L_f a
+ *    hit, 0 a miss); after the second frame those rays read 0.3183.
  * 10. **Multibounce off** (40 frames): no second-bounce entry, no shadow ray
  *    and no resolve entry (Capsaicin resolves its shadow-ray list without
  *    multibounce, register D35), and every probe ray reads 0.
- * 11. **Both misdirected additions, predicted** (the sunlit corner with
- *    multibounce on, 40 frames; the furnace never fires the second one):
- *    every probe ray not bypassed itself reads its cell's levels, plus
- *    `UpdateMultibounceCells`' addition where predicted (its exact sample,
- *    from the second cell's levels and the entry's BRDF and pdf), plus 0 or
- *    albedo / π × E where `PopulateCells`' is (the wall shades some second
- *    hits); both must fire. Rays that bypass the cache themselves are left
- *    out: their own addition and a misdirected one in the same dispatch can
- *    race (`ScreenProbes_AccumulateRadiance` is not atomic; NOTES).
+ * 11. **The bypass additions, predicted** (section 6's corner with the
+ *    slab, multibounce on, 40 frames): every probe ray reads its prediction,
+ *    a self-bypassed ray its own sun sample (0 in the slab's shade) plus its
+ *    first bounce's draw over 1 - p, that draw from the second hit's own light
+ *    where its segment bypasses (near the shade's edge that differs from its
+ *    cell's); the first-bounce bypass flags match the resolve list, every
+ *    second hit's own light is 0 or albedo / π × E, and both kinds of
+ *    addition fire.
  * 12. **Emptied when a cell size changes** (the corner, single bounce): after
  *    a frame with `hashGridCacheCellSize`, then `hashGridCacheMinCellSize`,
  *    changed, the live tiles are exactly the frame's (gi1.cpp:1740-1745);
  *    a frame with nothing changed keeps more.
+ * 13. **An open scene** (the furnace with its floor as strips 5 cm wide every
+ *    10 cm, 40 frames): half of a near ceiling cell's kept second-bounce rays
+ *    hit (the CPU lands the recorded rays and agrees which), so its indirect
+ *    value is the second bounce ρ L_f × 1/2 = 0.1592: the near ceiling cells
+ *    and rays average it within 2% (one cell is a noisy mean of hits and
+ *    misses, so only the averages are judged); a mean over the hits alone, as
+ *    Capsaicin's, would read 0.3183. A few probes on the strips start just
+ *    below them (the depth's precision at a grazing view, register D17) and
+ *    see their undersides; they are left out of the ceiling averages.
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
@@ -236,7 +240,7 @@ const FLOOR_RADIANCE = (FURNACE.albedo * FURNACE.sunIntensity) / Math.PI;
 const TRUE_SECOND_BOUNCE = FURNACE.albedo * FLOOR_RADIANCE;
 /**
  * Capsaicin's factor on it, 1 / (1 - p) (its estimate averaged kept rays and still divided by
- * 1 - p), fixed in RC3.5 (register D37); reported beside the measured ratio.
+ * 1 - p), fixed in RC3.5 (register D37); reported beside the measured ratio, now 1.
  */
 const CAPSAICIN_FACTOR = 1 / (1 - DISCARD_PROBABILITY);
 /** A ceiling cell's settled indirect value: the second bounce itself (`multibounceSettledIndirect`, every kept ray hits). */
