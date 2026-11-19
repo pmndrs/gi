@@ -1,11 +1,14 @@
 /**
- * RC3.2, RC3.3 and RC3.5: the radiance cache's world cache (Capsaicin's hash
- * grid) populated and resolved through the technique, on the GPU; and GI-1.2's
- * multibounce, with Capsaicin's errors in it fixed (RC3.5).
+ * RC3.2, RC3.3, RC3.4 and RC3.5: the radiance cache's world cache (Capsaicin's
+ * hash grid) populated and resolved through the technique, on the GPU; GI-1.2's
+ * multibounce, with Capsaicin's errors in it fixed (RC3.5); and the sky as one
+ * of a hit's lights (RC3.4).
  *
  * Sections 1 to 7 are GI-1.0's single bounce: they run with multibounce off
  * (`useMultibounce: false`), and pass as they did in RC3.2 (the single-bounce
  * path is unchanged by RC3.3). Sections 8 to 11 and 13 are the multibounce.
+ * Sections 1 to 14 have a black sky, so the sky light (RC3.4) is never drawn
+ * there (its weight is 0); sections 15 to 18 are under a sky.
  *
  * The scene is a corner: a 400 m floor (y = 0, facing up) and a 40 × 10 m
  * wall (z = 0, facing +z), both grey (albedo 0.5), under a black sky. The
@@ -140,6 +143,42 @@
  *    Capsaicin's, would read 0.3183. A few probes on the strips start just
  *    below them (the depth's precision at a grazing view, register D17) and
  *    see their undersides; they are left out of the ceiling averages.
+ *
+ * Sections 15 to 18 (RC3.4) are the sky as one of a hit's lights (register
+ * D39): no sun unless named, multibounce on, the sky the only light, so every
+ * reservoir (first and second bounce) must draw the sky with weight 1. Each
+ * cell's direct value is judged against the mean, over this frame's entries
+ * in it, of ρ L (1 − F), F the share of the point's cosine-weighted sky its
+ * occluder hides (Lambert's contour integral over the occluding polygon, exact;
+ * checked against the infinite strip's closed form), within 2% plus five
+ * standard deviations of its samples' mean (a sample is ρ L or 0 by its
+ * shadow ray), 0.1% of cells allowed past it; the means are held to 0.5-1%.
+ * ρ = 0.5, L = 1.5. Expected, before the run:
+ *
+ * 15. **The open floor** (`SkyScene` openFloor: the 400 m floor, a 4 m probe
+ *    patch 50 m up): every floor cell and the floor's probe rays read ρ L =
+ *    0.75 (F ≤ 0.2%); the second bounce goes up into the sky, and its misses
+ *    add no light, so the floor's indirect values stay under 1% of ρ L (a miss
+ *    reading the sky would add ρ L again).
+ * 16. **The coded sky and a sun** (the same scene; the sky (1 + d) / 2 per
+ *    channel × 2, the sun of section 1 casting no shadow): on the floor the sky
+ *    weighs the luminance of its irradiance, S (π/2, 5π/6, π/2), the sun its
+ *    E = 8 cos 45°, so the sky is drawn for 45.06% of hits, each weighed 1 / q;
+ *    the floor cells average ρ / π (E_sky + E_sun) per channel within 1% (the
+ *    sky read along the normal instead of the drawn direction would put
+ *    green's sky part 20% high; a wrong weight shows in the share).
+ * 17. **The ceiling only** (the done-when): the 400 m ceiling 3 m up, a black
+ *    1 m probe patch on the ground: the ceiling's cells read ρ L (1 − F), F up
+ *    to 3.5% over the patch; its second-bounce rays go down and nearly all
+ *    miss (the rest hit the black patch), so every ceiling cell's indirect
+ *    value is exactly 0 with samples counted. The sky reaches the ceiling
+ *    through its own light sample; a miss reading it would count it twice.
+ * 18. **The corner** (sections 1-7's floor and 40 × 10 m wall): floor cells
+ *    ρ L (1 − F_wall), wall cells ρ L (1 − F_floor), the cells that see half
+ *    their sky hidden within 2% on average (so the shadow ray is traced); the
+ *    second bounce near the corner (each kept ray brings the other surface's
+ *    direct value × ρ, a CPU quadrature over cosine-weighted directions,
+ *    tabulated) summed over every near cell within 3% of its sum, a surface.
  *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
