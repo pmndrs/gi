@@ -1,4 +1,4 @@
 {
-    "description": "P6.2b experiment E9: noise and lag of the radiance cache irradiance after a light doubles (Sponza sun, two-room lamp, two-room with multibounce off) and during a change that goes on (Sponza sun turning, a box crossing two-room), E9 off, on, and on keeping 3 samples; gates on noise and lag with E9 keeping 3 against E9 off.",
+    "description": "P6.2b experiment E9: noise and lag of the radiance cache irradiance after a light doubles (Sponza sun, two-room lamp, two-room with multibounce off) and during a change that goes on (Sponza sun turning, a box crossing two-room), E9 off, on, and on keeping 3 samples; gates on noise and lag with E9's default (history dropped) against E9 off.",
     "timeoutMs": 1200000
 }
