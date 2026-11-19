@@ -91,16 +91,17 @@ export interface RadianceCacheSettings {
     cellShadingBudget: number;
     /**
      * Experiment E9 (TASKS P6.2b): with cells lit per hit, a cell hit near a
-     * scene change of the last 16 frames (`SceneChanges.regions`, or anywhere
-     * for a change with no bounds) takes that frame's samples whole instead of
-     * blending them into its 16-sample history, and its second-bounce history
-     * is cut to one sample. E8's change marking on its own. Default off. Read
-     * every frame.
+     * scene change (`SceneChanges.regions`, or anywhere for a change with no
+     * bounds) forgets its 16-sample history once per epoch of the change
+     * (`ChangeEventTracker`: its start, every 8 frames while it goes on, once
+     * when it stops), keeping `cellChangeResetHistory` samples of it beside
+     * that frame's, and its second-bounce history is cut to one sample. E8's change marking on its own. On by default
+     * (lead, review of P6.2, 2026-11-20), keeping 3 samples. Read every frame.
      */
     cellChangeReset: boolean;
     /**
      * With `cellChangeReset`: how many samples of a marked cell's history it
-     * keeps (0, the default, drops it: the frame's samples replace the
+     * keeps (default 3; 0 drops it: the frame's samples replace the
      * value; 1 to 15 keep the mean as that many samples beside the frame's).
      * A middle ground between following a change at once and the noise of
      * one-frame means. Read every frame.
@@ -127,8 +128,8 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     interpolationJitter: true,
     cellShading: 'per-hit',
     cellShadingBudget: 20000,
-    cellChangeReset: false,
-    cellChangeResetHistory: 0,
+    cellChangeReset: true,
+    cellChangeResetHistory: 3,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

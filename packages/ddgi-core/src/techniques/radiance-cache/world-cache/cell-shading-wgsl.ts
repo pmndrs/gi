@@ -293,6 +293,8 @@ fn ${CELL_SHADING_ENTRY_POINT.prioritizeCells}(@builtin(local_invocation_index) 
     }
     // Each bin's first slot: the candidates in the bins before it.
     HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_priority_bins, bin, lds_PrioritizeCells_Sums[bin] - count);
+    // Each bin's cursor starts at its first slot (ScatterCells takes slots from it).
+    HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_priority_bins, 2u * HASHGRIDCACHE_CELL_BINS + bin, lds_PrioritizeCells_Sums[bin] - count);
 
     if (bin == 0u) {
         let candidates = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT]);
@@ -339,20 +341,22 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
 
     // A bin wholly under the target is lit; the one bin the target cuts is thinned by a hash of the
     // cell, each lit with the share of the bin the target leaves (lighting it in claim order leaned
-    // the drawn hits toward lower entries); the lit list takes them up to the target.
+    // the drawn hits toward lower entries). Slots come from the candidate's own bin, so the bins
+    // under the target fill their slots whatever the order, and the cut bin's lit cells follow them
+    // up to the target; the lit count is what ShadeCells reads.
     var lit = first + count <= lit_target;
     if (!lit && first < lit_target) {
         let share = f32(lit_target - first) / f32(count);
         lit = f32(rcPcgHash(rcPcgHash(cell_index ^ HASHGRIDCACHE_CELL_THIN_SALT) + rcPcgHash(g_HashGridCacheConstants.frame_index)) >> 8u) * (1.0 / 16777216.0) < share;
     }
     if (lit) {
-        let slot = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], 1u);
+        let slot = atomicAdd(&g_HashGridCache_CellLists[g_HashGridCache_RayLists.cell_priority_bins + 2u * HASHGRIDCACHE_CELL_BINS + bin], 1u);
         if (slot < lit_target) {
             HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_shade_buffer, slot, candidate);
+            atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], 1u);
             return;
         }
-        // Past the target (the thinned bin drew more than its share): not lit (ShadeCells reads the
-        // list up to the target).
+        // Past the target (the thinned bin drew more than its share): not lit.
     }
     // Not lit this frame: the key and the claim leave the scratch, which UpdateTiles then reads as
     // no sample (the cell keeps its value).

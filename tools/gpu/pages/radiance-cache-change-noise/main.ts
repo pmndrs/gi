@@ -19,9 +19,10 @@
  *
  * 1. **A light doubled once** (Sponza's sun; two-room's lamp; and two-room
  *    with multibounce off, to tell the second bounce's pace from the rest):
- *    noise before and over the 16 frames after, and the lag. Gates: with E9
- *    keeping 3, the noise after is at most 1.3 times E9 off's, and the lag no
- *    longer than E9 off's.
+ *    noise before and over the 16 frames after, the lag, and the mean E 16
+ *    frames after over the settled. Gates: with E9 keeping 3, the noise after
+ *    is at most 1.3 times E9 off's, and the image follows no slower (the lag
+ *    no longer, frame 16 no further from settled).
  * 2. **A change that goes on** for 60 frames (Sponza's sun turning 0.5° a
  *    frame; a 0.6 m box crossing two-room's lit room at 2 cm a frame), then
  *    held for 120: the noise over frames 10-59 of the motion, and the
@@ -404,7 +405,9 @@ try {
     }
     for (const [name, results] of Object.entries(steps)) {
         if (results[KEPT].noiseMean > 1.3 * results[OFF].noiseMean) failures.push(`${name}: noise after the change ${results[KEPT].noiseMean} with ${KEPT}, over 1.3 times ${OFF}'s ${results[OFF].noiseMean}`);
-        if (results[KEPT].lagFrames > results[OFF].lagFrames) failures.push(`${name}: lag ${results[KEPT].lagFrames} frames with ${KEPT}, ${results[OFF].lagFrames} with ${OFF}`);
+        if (results[KEPT].lagFrames > results[OFF].lagFrames || results[KEPT].meanE16OverSettled < results[OFF].meanE16OverSettled) {
+            failures.push(`${name}: with ${KEPT} the lag is ${results[KEPT].lagFrames} frames and frame 16 at ${results[KEPT].meanE16OverSettled} of settled, with ${OFF} ${results[OFF].lagFrames} and ${results[OFF].meanE16OverSettled}`);
+        }
     }
     for (const [name, results] of Object.entries(motions)) {
         if (results[KEPT].noiseMean > 1.25 * results[OFF].noiseMean) failures.push(`${name}: noise during the change ${results[KEPT].noiseMean} with ${KEPT}, over 1.25 times ${OFF}'s ${results[OFF].noiseMean}`);

@@ -4,7 +4,7 @@ import { cellShadingListLayout } from './cell-shading-common.ts';
 import { cellPriorityClass, keepOneSample, prioritizeCells, scatterCells, simulateCell } from './cell-shading-cpu.ts';
 import { CELL_PRIORITY_CLASS, CELL_SHADING_ENTRY_POINT, CELL_SHADING_UNIFORM_BYTES, claimCellsWgsl, prioritizeCellsWgsl, scatterCellsWgsl, shadeCellsWgsl } from './cell-shading-wgsl.ts';
 import { cellShadingWords } from './hash-grid-cache.ts';
-import { generateReservoirsWgsl, hashGridCacheRayListLayout, updateTilesWgsl } from './hash-grid-population-wgsl.ts';
+import { generateReservoirsWgsl, updateTilesWgsl } from './hash-grid-population-wgsl.ts';
 import { makeRandom, rand } from './multibounce-cpu.ts';
 
 const MAX_SAMPLE_COUNT = DEFAULT_HASH_GRID_CACHE_OPTIONS.hashGridCacheMaxSampleCount;
@@ -116,7 +116,7 @@ describe("lever E8's kernels and lists", () => {
         const lists = cellShadingListLayout(2000);
         expect(lists.lit).toBe(lists.candidates + 2 * 2000);
         expect(lists.bins).toBe(lists.lit + 2000);
-        expect(lists.bytes).toBe((lists.bins + 2 * CELL_SHADING_BINS) * 4);
+        expect(lists.bytes).toBe((lists.bins + 3 * CELL_SHADING_BINS) * 4);
     });
 
     it('pack the budget and the change events: each box with its epoch plus one, a change with no bounds as the whole world', () => {

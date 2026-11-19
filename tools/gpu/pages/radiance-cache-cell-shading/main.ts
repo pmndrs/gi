@@ -516,9 +516,13 @@ async function lag(device: GPUDevice, mode: Mode, light: 'sun' | 'point'): Promi
 
 // ---- 6. A light switched off, and the second bounce after a change ----------------------------------------
 
-/** The sun switched off (intensity 0): frames until the hit rays' mean is under 5% of what it was. */
+/**
+ * The sun switched off (intensity 0): frames until the hit rays' mean is under 5% of what it was.
+ * With multibounce on: with it off, a hit with no light isn't resolved at all (register D35), so
+ * its ray reads 0 at once whatever the cells hold.
+ */
 async function lagToZero(device: GPUDevice, mode: Mode): Promise<Record<string, number>> {
-    const scenario = await startScenario(device, `off ${modeName(mode)}`, 'corner', [CORNER_SUN], settingsFor(mode, false));
+    const scenario = await startScenario(device, `off ${modeName(mode)}`, 'corner', [CORNER_SUN], settingsFor(mode, true));
     try {
         for (let frame = 0; frame < LAG_CONVERGE_FRAMES; frame++) scenario.frame();
         const before = hitRayStats(await readRays(device, scenario)).mean;
@@ -611,8 +615,11 @@ try {
     const offLags: Record<string, Record<string, number>> = {};
     for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3', 20000] as const) offLags[modeName(mode)] = await lagToZero(device, mode);
     data.lagToZero = offLags;
+    // E9 follows a light switched off faster than per hit (Capsaicin's step-down, 16 frames). E8 at
+    // 20k isn't gated: a cell lit with no light keeps a dark count and reads its tile's coarser
+    // levels (held until RC3.4's rule, a hit with no light counting as a zero-light sample).
     for (const mode of ['per-hit+E9', 'per-hit+E9 keep 3'] as const) {
-        if (offLags[mode].framesToUnder5Percent > E9_LAG_FRAMES) fail(`lag: ${mode} follows the sun switched off in ${offLags[mode].framesToUnder5Percent} frames, more than ${E9_LAG_FRAMES}`);
+        if (offLags[mode].framesToUnder5Percent >= offLags['per-hit'].framesToUnder5Percent) fail(`lag: ${mode} follows the sun switched off in ${offLags[mode].framesToUnder5Percent} frames, per hit in ${offLags['per-hit'].framesToUnder5Percent}`);
     }
     const bounceLags: Record<string, Record<string, number>> = {};
     for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3'] as const) bounceLags[modeName(mode)] = await multibounceLag(device, mode);

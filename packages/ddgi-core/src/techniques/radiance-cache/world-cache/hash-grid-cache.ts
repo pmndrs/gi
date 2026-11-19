@@ -584,7 +584,7 @@ export class HashGridCache implements WorldCache {
         if (!budgeted) return false;
         // The candidate and lit counts and the priority bins' counts start at zero (the turn period is kept).
         encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellCandidateCount * WORD_BYTES, 2 * WORD_BYTES);
-        encoder.clearBuffer(rayData.cellLists as GPUBuffer, rayData.cellListLayout.bins * WORD_BYTES, 2 * CELL_SHADING_BINS * WORD_BYTES);
+        encoder.clearBuffer(rayData.cellLists as GPUBuffer, rayData.cellListLayout.bins * WORD_BYTES, 3 * CELL_SHADING_BINS * WORD_BYTES);
         return true;
     }
 

@@ -914,11 +914,11 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // Capsaicin's blend.
         if (g_HashGridCacheConstants.use_multibounce != 0u) {
             var previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
-            // E9: the second bounce's history is cut to max(cellChangeResetHistory, 1) samples (its mean
-            // kept), so it follows too.
-            let indirect_kept = max(HashGridCache_ChangeResetHistory(), 1.0);
-            if (change_reset && previous_indirect_radiance.w > indirect_kept) {
-                previous_indirect_radiance = vec4f(previous_indirect_radiance.rgb / previous_indirect_radiance.w * indirect_kept, indirect_kept);
+            // E9: the second bounce's history is cut to one sample (its mean kept), so it follows too.
+            // One whatever the direct value keeps: its samples come at about 0.3 a frame per hit,
+            // and kept as 3 samples the furnace's second bounce followed no faster than per hit.
+            if (change_reset && previous_indirect_radiance.w > 1.0) {
+                previous_indirect_radiance = vec4f(previous_indirect_radiance.rgb / previous_indirect_radiance.w, 1.0);
             }
             let new_indirect_samples = UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index);
             var indirect_radiance = previous_indirect_radiance;

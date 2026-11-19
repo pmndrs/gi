@@ -192,7 +192,7 @@ export interface CellShadingListLayout {
     readonly candidates: number;
     /** One word per lit cell: its visibility entry with the changed bit. */
     readonly lit: number;
-    /** `CELL_SHADING_BINS` words of first slots, then as many of counts. */
+    /** `CELL_SHADING_BINS` words of first slots, then as many of counts, then as many of cursors (the next slot). */
     readonly bins: number;
     readonly bytes: number;
 }
@@ -201,5 +201,5 @@ export function cellShadingListLayout(maxCombinedRayCount: number): CellShadingL
     const candidates = 0;
     const lit = candidates + 2 * maxCombinedRayCount;
     const bins = lit + maxCombinedRayCount;
-    return { candidates, lit, bins, bytes: (bins + 2 * CELL_SHADING_BINS) * 4 };
+    return { candidates, lit, bins, bytes: (bins + 3 * CELL_SHADING_BINS) * 4 };
 }
