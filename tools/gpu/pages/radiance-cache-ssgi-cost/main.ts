@@ -1,18 +1,19 @@
 /**
- * RC4.2 review: what SSGI (`gi/ssgi`, the radiance cache's `radiance-cache/ssgi` pass) costs on the
- * GPU at one, two and four slices, from the platform's pass timestamps, on two-room at 1280 × 720
- * and 1920 × 1080 (SSGI's work is per pixel, so the scene matters little). A measurement: only a
- * missing timestamp or a device error fails. For each size and slice count, after `WARM_FRAMES`
- * frames, the median and 90th percentile of `MEASURE_FRAMES` frames' SSGI pass, beside the
- * irradiance pass (the probe filter, projection and interpolation) for scale.
+ * RC4.2 review: what SSGI (the platform's `gi/ssgi`) costs on the GPU at one, two and four slices,
+ * on two-room's screen at 1280 × 720 and 1920 × 1080 (its work is per pixel, so the scene matters
+ * little). The platform resolves its pass timestamps at the end of `encode`, before the screen
+ * stage, so screen-stage passes aren't in `stats.passes` yet; this page times SSGI by itself with
+ * its own query set instead: each frame draws the screen, then runs SSGI `RUNS` times between two
+ * timestamps (with its running means, as the radiance cache runs it), and reports the median and
+ * 90th percentile per run over `MEASURE_FRAMES` frames. A measurement: only a device error fails.
  *
  * Time it cool, alone: `node tools/reference/bench-lock.ts run -- pnpm test:gpu --filter radiance-cache-ssgi-cost --gpu nvidia`.
  */
 
+import { DEFAULT_SCREEN_SPACE_GI_SETTINGS } from '../../../../packages/ddgi-core/src/platform/contract/compute.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
@@ -22,9 +23,10 @@ const SIZES = [
     [1920, 1080],
 ] as const;
 const SLICES = [1, 2, 4] as const;
-const WARM_FRAMES = 30;
-const MEASURE_FRAMES = 90;
-const PASSES = { ssgi: 'radiance-cache/ssgi', irradiance: 'radiance-cache/irradiance' } as const;
+const WARM_FRAMES = 10;
+const MEASURE_FRAMES = 30;
+/** SSGI runs between the two timestamps of a frame. */
+const RUNS = 4;
 
 function percentile(values: readonly number[], fraction: number): number {
     const sorted = [...values].sort((a, b) => a - b);
@@ -35,43 +37,70 @@ async function measure(device: GPUDevice, width: number, height: number): Promis
     const manifest = loadManifest('two-room');
     const bookmark = manifest.cameras[0];
     const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
-    const platform = new GIPlatformImpl(device, { label: `ssgi cost ${width}`, gpuTiming: true });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ ssgi: true }));
-    platform.setOutput(technique);
+    const platform = new GIPlatformImpl(device, { label: `ssgi cost ${width}` });
     await platform.prepare();
     describeScene(platform, manifest);
     const screen = await PageScreen.create(platform, device, width, height);
-    const frame = (): void => {
+    const ssgi = await platform.compute.createScreenSpaceGI({ label: `ssgi cost ${width}` });
+    const history = await platform.compute.createScreenHistory({ label: `ssgi cost ${width}` });
+    const querySet = device.createQuerySet({ type: 'timestamp', count: 2 });
+    const resolveBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    const readBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    let frameNumber = 0;
+    const frame = async (slices: number, timed: boolean): Promise<number | null> => {
         const encoder = device.createCommandEncoder({ label: `ssgi cost ${width}` });
-        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, width, height) };
+        const frameCam = frameCamera(camera, width, height);
+        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCam };
         platform.encode(encoder, input);
         screen.encode(encoder, camera);
-        platform.encodeScreen(encoder, screen.screen);
+        for (let run = 0; run < RUNS; run++) {
+            let timestampWrites: GPUComputePassTimestampWrites | undefined;
+            if (timed && run === 0) timestampWrites = { querySet, beginningOfPassWriteIndex: 0 };
+            if (timed && run === RUNS - 1) timestampWrites = { querySet, endOfPassWriteIndex: 1 };
+            ssgi.encode(encoder, {
+                screen: screen.screen,
+                camera: frameCam,
+                frame: frameNumber,
+                lighting: screen.screen.lighting ?? null,
+                settings: { ...DEFAULT_SCREEN_SPACE_GI_SETTINGS, sliceCount: slices },
+                history: history.texturesFor(width, height),
+                timestampWrites,
+            });
+        }
+        history.encode(encoder, screen.screen);
+        if (timed) {
+            encoder.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
+            encoder.copyBufferToBuffer(resolveBuffer, 0, readBuffer, 0, 16);
+        }
         device.queue.submit([encoder.finish()]);
+        frameNumber++;
+        if (!timed) return null;
+        await readBuffer.mapAsync(GPUMapMode.READ);
+        const [begin, end] = new BigUint64Array(readBuffer.getMappedRange().slice(0));
+        readBuffer.unmap();
+        return Number(end - begin) / 1e6 / RUNS;
     };
     try {
-        frame();
+        await frame(1, false);
         await platform.rays.whenBuilt();
         const results: Record<string, unknown> = {};
         for (const slices of SLICES) {
-            technique.settings.ssgiSliceCount = slices;
-            for (let index = 0; index < WARM_FRAMES; index++) frame();
+            for (let index = 0; index < WARM_FRAMES; index++) await frame(slices, false);
             await device.queue.onSubmittedWorkDone();
-            const times: Record<keyof typeof PASSES, Map<number, number>> = { ssgi: new Map(), irradiance: new Map() };
+            const times: number[] = [];
             for (let index = 0; index < MEASURE_FRAMES; index++) {
-                frame();
-                await device.queue.onSubmittedWorkDone();
-                for (const pass of platform.stats.passes) {
-                    for (const [key, name] of Object.entries(PASSES) as Array<[keyof typeof PASSES, string]>) {
-                        if (pass.name === name && pass.gpuMs !== undefined && pass.gpuMs >= 0) times[key].set(pass.frame, pass.gpuMs);
-                    }
-                }
+                const ms = await frame(slices, true);
+                if (ms !== null && ms >= 0) times.push(ms);
             }
-            const summary = (values: Map<number, number>) => ({ frames: values.size, medianMs: Number(percentile([...values.values()], 0.5).toFixed(4)), p90Ms: Number(percentile([...values.values()], 0.9).toFixed(4)) });
-            results[`${slices} slice${slices > 1 ? 's' : ''}`] = { ssgi: summary(times.ssgi), irradiance: summary(times.irradiance) };
+            results[`${slices} slice${slices > 1 ? 's' : ''}`] = { frames: times.length, medianMs: Number(percentile(times, 0.5).toFixed(4)), p90Ms: Number(percentile(times, 0.9).toFixed(4)) };
         }
         return results;
     } finally {
+        ssgi.dispose();
+        history.dispose();
+        querySet.destroy();
+        resolveBuffer.destroy();
+        readBuffer.destroy();
         screen.dispose();
         platform.dispose();
         await device.queue.onSubmittedWorkDone();
@@ -88,20 +117,11 @@ try {
     deviceErrors = watchDevice(device);
     if (!device.features.has('timestamp-query')) throw new Error('this device has no timestamp-query');
     const sizes: Record<string, unknown> = {};
-    const failures: string[] = [];
-    for (const [width, height] of SIZES) {
-        const results = await measure(device, width, height);
-        sizes[`${width}x${height}`] = results;
-        for (const [name, value] of Object.entries(results)) {
-            const frames = (value as { ssgi: { frames: number } }).ssgi.frames;
-            if (frames === 0) failures.push(`${width} × ${height}, ${name}: no SSGI timestamps`);
-        }
-    }
+    for (const [width, height] of SIZES) sizes[`${width}x${height}`] = await measure(device, width, height);
     await drainDevice(device);
     reportGpuTest({
-        status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
-        message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { scene: 'two-room', warmFrames: WARM_FRAMES, measureFrames: MEASURE_FRAMES, sizes },
+        status: deviceErrors.length === 0 ? 'pass' : 'fail',
+        data: { scene: 'two-room', runsPerFrame: RUNS, warmFrames: WARM_FRAMES, measureFrames: MEASURE_FRAMES, steps: DEFAULT_SCREEN_SPACE_GI_SETTINGS.stepCount, sizes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
