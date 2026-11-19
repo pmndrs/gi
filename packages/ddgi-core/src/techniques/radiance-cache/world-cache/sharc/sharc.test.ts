@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RadianceCacheTechnique } from '../../radiance-cache-technique.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../settings.ts';
-import { SharcCache, sharcLightMask } from './sharc-cache.ts';
+import { SharcCache, sharcLightMask, sharcPathCapacity, sharcRayWordsBytes } from './sharc-cache.ts';
 import {
     sharcCellSize,
     sharcCellSizePerMetre,
@@ -146,7 +146,7 @@ describe('SHaRC hash cache: the furnace answers', () => {
 describe('SHaRC hash cache: settings', () => {
     it('defaults to the pathtracer tuned cell and table, and the two-bounce cache-tail path', () => {
         expect(resolveSharcSettings()).toEqual({ ...DEFAULT_SHARC_SETTINGS });
-        expect(DEFAULT_SHARC_SETTINGS).toMatchObject({ log2Entries: 20, cellPixels: 16, minSamples: 64, historyFrames: 32, staleFrames: 64, fallbackLevels: 3, pyramid: true, bounceRays: 2, cacheTail: true, updateFraction: 0.25 });
+        expect(DEFAULT_SHARC_SETTINGS).toMatchObject({ log2Entries: 20, cellPixels: 16, minSamples: 16, historyFrames: 32, staleFrames: 64, fallbackLevels: 3, pyramid: true, bounceRays: 2, cacheTail: true, updateFraction: 0.25 });
     });
 
     it('names the setting out of range', () => {
@@ -221,5 +221,25 @@ describe('SHaRC hash cache: the sky is counted once (register E4)', () => {
         expect(code).toContain('return (g_Sharc.lightMask & SHARC_SKY_LIGHT_BIT) == 0u;');
         expect(code).toContain('select(vec3f(0.0), giSkyRadiance(direction), sharcSkyOnMiss())');
         expect(sharcLightWgsl({ fallbackLevels: 3, pyramid: true })).toContain('giDirectChooseLight(surface, g_Sharc.lightMask,');
+    });
+});
+
+describe('SHaRC hash cache: per-ray memory', () => {
+    const rays = (width: number, height: number): number => Math.ceil(width / 16) * Math.ceil(height / 16) * 64;
+    it('sizes the path lists by updateFraction with a margin, not for every ray', () => {
+        const capacity = rays(1280, 720);
+        const paths = sharcPathCapacity(capacity, 0.25);
+        expect(paths % 64).toBe(0);
+        expect(paths).toBeGreaterThanOrEqual(capacity * (0.25 * 1.25 + 0.2));
+        expect(paths).toBeLessThan(capacity * 0.52);
+        expect(sharcPathCapacity(capacity, 1)).toBe(capacity);
+    });
+
+    it('fits 2560 x 1440 under the default 128 MiB storage binding, and 3840 x 2160 at about 31 bytes a pixel', () => {
+        const bytesAt = (width: number, height: number): number => sharcRayWordsBytes(rays(width, height), sharcPathCapacity(rays(width, height), 0.25));
+        expect(bytesAt(2560, 1440)).toBeLessThan(128 * 2 ** 20);
+        const fourK = bytesAt(3840, 2160);
+        expect(fourK / (3840 * 2160)).toBeGreaterThan(29);
+        expect(fourK / (3840 * 2160)).toBeLessThan(32);
     });
 });

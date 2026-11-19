@@ -348,6 +348,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.latestFrameIndex = frame.frame >>> 0;
         this.writeFrameUniforms(context.device, prepared, layout, frame);
         context.device.queue.writeBuffer(prepared.historyChanges, 0, historyChangesWords(this.pendingChanges));
+        // The world cache gets the same changes (P6.1: the SHaRC cache lets go of its history there).
+        const changes = this.pendingChanges;
         this.pendingChanges = NO_HISTORY_CHANGES;
         const { kernels, history } = prepared;
         const timer = context.timer;
@@ -397,7 +399,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         tracePass.end();
 
         // 5: the world cache lights the rays' hits.
-        this.encodeWorldCache(encoder, frame, resources);
+        this.encodeWorldCache(encoder, frame, resources, changes);
 
         // 6: the rays into the probe atlas, the mask and the off-screen cache.
         const blendPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/blend`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/blend`) });
@@ -599,7 +601,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * their radiance slots (docs/design/radiance-cache.md, "The world-cache
      * interface"), and first, after `resetHistory`, its `reset`.
      */
-    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources): void {
+    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources, changes: HistoryChanges): void {
         const cache: WorldCache | null = this.cache;
         if (!cache) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         if (this.worldCacheResetPending) {
@@ -612,7 +614,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             capacity: resources.layout.maxRayCount,
             radiance: resources.rayScratch.rayResults,
         };
-        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height }, rays);
+        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height, changes }, rays);
     }
 
     private resourcesFor(context: TechniqueContext, prepared: Prepared, screen: FrameScreen): ScreenResources {
@@ -620,6 +622,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (current && current.layout.width === screen.width && current.layout.height === screen.height) return current;
         const device = context.device;
         const layout = screenProbeLayout(screen.width, screen.height);
+        // The world cache's per-ray data first: a device that can't hold it throws here, before
+        // anything for the new size is made (P6.1).
+        this.cache?.prepareScreen?.(layout.maxRayCount);
         this.releaseScreen();
         // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by RC2.2's projection, SampleScreenProbes' taps and
         // the debug view; copied by tests and, as last frame's, by the history.

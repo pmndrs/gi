@@ -69,12 +69,14 @@ export const SHARC_CLAMP = 1000;
 export const SHARC_MAX_LEVEL = 24;
 /** The most bounce rays an update path traces (`SharcSettings.bounceRays`). */
 export const SHARC_MAX_BOUNCE_RAYS = 2;
-/** Words per slot in the accumulator buffer: r, g, b, count (atomic), then the frame it last had samples. */
-export const SHARC_SLOT_WORDS = 5;
+/** Words per slot in the accumulator buffer: r, g, b, count (atomic), the frame it last had samples, and the cell (x, y, z, level and bin) for the change reset. */
+export const SHARC_SLOT_WORDS = 9;
 /** Words before the first slot in the accumulator buffer: the counters. */
 export const SHARC_COUNTER_WORDS = 16;
 /** Bytes of `SharcParams`. */
-export const SHARC_PARAMS_BYTES = 80;
+export const SHARC_PARAMS_BYTES = 608;
+/** Changed boxes the params carry (the radiance cache's `MAX_HISTORY_CHANGE_BOXES`; more count as everything). */
+export const SHARC_MAX_CHANGE_BOXES = 16;
 /** Words a probe ray keeps for the lookup: its own estimate and flag, where its cell is (two vec4 of words). */
 export const SHARC_RAY_SAMPLE_WORDS = 8;
 /** Words of a path record (`PATH_WGSL`). */
@@ -121,6 +123,14 @@ export const SHARC_COUNTER = {
     secondBounces: 10,
     /** Light entries: `SharcLight` runs on it. */
     lightEntries: 11,
+    /** Paths refused because the path list was full (those rays read their cell, or black). */
+    refusedPaths: 12,
+    /** Paths made for a ray shorter than its cell in a probe not updating this frame (the bypass needs its own estimate). */
+    shortRayPaths: 13,
+    /** Paths made for a ray whose cell has no samples at any level it may read, in a probe not updating this frame. */
+    uncachedPaths: 14,
+    /** Probe rays that read nothing (their path was refused and their cell is empty). */
+    emptyReads: 15,
 } as const;
 
 /** `w` of a probe ray's kept sample (`SharcRaySample.sample`): what the lookup does with the ray. */
@@ -131,6 +141,8 @@ export const SHARC_RAY = {
     lookup: 0,
     /** The ray is shorter than its cell: it reads its own sample. */
     own: 1,
+    /** The ray reads its cell, and has its own estimate to read where its cell has nothing (a refused insert). */
+    lookupWithEstimate: 2,
 } as const;
 
 /** Entry points. */
@@ -211,6 +223,13 @@ export const SHARC_PARAMS_WORD = {
     pathBase: 16,
     bounceListBase: 17,
     lightListBase: 18,
+    pathCapacity: 19,
+    changeBoxCount: 20,
+    changeEverything: 21,
+    changeKeepSamples: 22,
+    changeReset: 23,
+    /** 2 vec4f per box (min, max), from word 24. */
+    changeBoxes: 24,
 } as const;
 
 /**
@@ -244,7 +263,12 @@ struct SharcParams {
     pathBase: u32,            // where the path records start in g_SharcRayWords
     bounceListBase: u32,      // where the second-bounce list starts
     lightListBase: u32,       // where the light-entry list starts
-    reserved: u32,
+    pathCapacity: u32,        // path records (and second-bounce entries) the lists hold; 3 light entries each
+    changeBoxCount: u32,      // this frame's changed boxes (SceneChanges' regions)
+    changeEverything: u32,    // 1: a change with no bounds (the sun, the environment, too many boxes)
+    changeKeepSamples: f32,   // a changed cell keeps at most this much sample weight
+    changeReset: u32,         // 1: changed cells drop their history to changeKeepSamples
+    changeBoxes: array<vec4f, ${2 * SHARC_MAX_CHANGE_BOXES}>,  // min, max per box
 }
 
 const SHARC_BUCKET: u32 = ${SHARC_BUCKET}u;
@@ -331,12 +355,17 @@ struct SharcCellRead {
 
 // The radiance leaving 'position' on the side 'normal' faces: the finest of the cell and its
 // SHARC_FALLBACK_LEVELS coarser cells with at least minSamples of weight; if none has that many,
-// the one with the most weight (so a young cache reads its best guess, not black).
-fn sharcRead(position: vec3f, normal: vec3f) -> SharcCellRead {
+// the one with the most weight (so a young cache reads its best guess, not black). Levels whose
+// cell is larger than 'maxCellSize' are skipped: a ray read from a cell wider than its segment
+// would take light from beyond what it can see (SHaRC's segment rule, applied at every level).
+fn sharcRead(position: vec3f, normal: vec3f, maxCellSize: f32) -> SharcCellRead {
     let level = sharcLevel(position);
     let bin = sharcNormalBin(normal);
     var best = SharcCellRead(vec3f(0.0), 0.0, 0u);
     for (var j = 0u; j <= SHARC_FALLBACK_LEVELS; j++) {
+        if (sharcCellSize(min(level + j, 31u)) > maxCellSize) {
+            break;
+        }
         let slot = sharcFind(sharcKey(position, bin, min(level + j, 31u)));
         if (slot < 0) {
             continue;
@@ -393,6 +422,7 @@ fn sharcSetRayWhere(ray: u32, position: vec3f, normal: vec3f) {
 const SHARC_RAY_NONE: f32 = ${SHARC_RAY.none}.0;
 const SHARC_RAY_LOOKUP: f32 = ${SHARC_RAY.lookup}.0;
 const SHARC_RAY_OWN: f32 = ${SHARC_RAY.own}.0;
+const SHARC_RAY_LOOKUP_WITH_ESTIMATE: f32 = ${SHARC_RAY.lookupWithEstimate}.0;
 
 // Adds to a probe ray's radiance, keeping its hit distance (w), rounded to the nearest half as the
 // hash grid's ScreenProbes_AccumulateRadiance does (register D31: pack2x16float truncates on our GPUs).
@@ -577,8 +607,8 @@ fn sharcBounce(path: u32, start: GiSurface, hitWord: u32, asVertex: bool, vertex
         g_SharcRayWords[g_Sharc.bounceListBase + entry] = path;
         return;
     }
-    if (g_Sharc.cacheTail != 0u && hit.t >= sharcCellSize(sharcLevel(next.position))) {
-        let read = sharcRead(next.position, next.normal);
+    if (g_Sharc.cacheTail != 0u) {
+        let read = sharcRead(next.position, next.normal, hit.t);
         if (read.weight >= g_Sharc.minSamples) {
             sharcSetPathVec3(path, SHARC_PATH_TAIL, emission + read.radiance);
             sharcCount(${SHARC_COUNTER.tailFromCache}u, 1u);
@@ -602,7 +632,9 @@ fn sharcInsertSample(position: vec3f, normal: vec3f, radiance: vec3f, random: pt
     let level = sharcLevel(position);
     let bin = sharcNormalBin(normal);
     for (var j = 0u; j <= SHARC_PYRAMID_LEVELS; j++) {
-        let slot = sharcInsert(sharcKey(position, bin, min(level + j, 31u)));
+        let cellLevel = min(level + j, 31u);
+        let cell = vec4u(bitcast<vec3u>(vec3i(floor(position / sharcCellSize(cellLevel)))), cellLevel);
+        let slot = sharcInsert(sharcKey(position, bin, cellLevel), cell);
         if (slot < 0) {
             sharcCount(${SHARC_COUNTER.droppedInserts}u, 1u);
             continue;
@@ -617,7 +649,7 @@ fn sharcInsertSample(position: vec3f, normal: vec3f, radiance: vec3f, random: pt
 
 // The slot of the cell, claimed if absent; -1 when its bucket is full. atomicCompareExchangeWeak may
 // fail spuriously, so a failure that leaves the slot empty is tried once more (register D22's rule).
-fn sharcInsert(key: vec2u) -> i32 {
+fn sharcInsert(key: vec2u, cell: vec4u) -> i32 {
     for (var i = 0u; i < SHARC_BUCKET; i++) {
         if (atomicLoad(&g_SharcKeys[key.x + i]) == key.y) {
             return i32(key.x + i);
@@ -632,11 +664,25 @@ fn sharcInsert(key: vec2u) -> i32 {
             return i32(slot);
         }
         if (current == 0u) {
+            // The weak exchange may fail spuriously (leaving the slot 0): retry, bounded, so two
+            // spurious failures in a row can't send this cell on to a second slot.
             var result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
-            if (!result.exchanged && result.old_value == 0u) {
+            for (var attempt = 0u; attempt < 8u; attempt++) {
+                if (result.exchanged || result.old_value != 0u) {
+                    break;
+                }
                 result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
             }
-            if (result.exchanged || result.old_value == key.y) {
+            if (result.exchanged) {
+                // The cell's place, for the change reset in SharcResolve.
+                let word = sharcSlotWord(slot);
+                atomicStore(&g_SharcAccum[word + 5u], cell.x);
+                atomicStore(&g_SharcAccum[word + 6u], cell.y);
+                atomicStore(&g_SharcAccum[word + 7u], cell.z);
+                atomicStore(&g_SharcAccum[word + 8u], cell.w);
+                return i32(slot);
+            }
+            if (result.old_value == key.y) {
                 return i32(slot);
             }
         }
@@ -695,11 +741,28 @@ ${perItemEntry(SHARC_ENTRY_POINT.begin)}
     sharcSetRaySample(did, vec3f(0.0), SHARC_RAY_LOOKUP);
     sharcSetRayWhere(did, surface.position, surface.normal);
     let probe = did / ${SHARC_WORKGROUP_SIZE}u;
-    let updates = f32(rcPcgHash(probe ^ rcPcgHash(g_Sharc.frame ^ SHARC_SEED_SALT)) >> 8u) * (1.0 / 16777216.0) < g_Sharc.updateFraction;
+    let selected = f32(rcPcgHash(probe ^ rcPcgHash(g_Sharc.frame ^ SHARC_SEED_SALT)) >> 8u) * (1.0 / 16777216.0) < g_Sharc.updateFraction;
+    // A ray in a probe not updating this frame still needs its own estimate when it is shorter than
+    // its cell (the bypass), or when no cell it may read has samples (it would read black).
+    var updates = selected;
+    if (!selected) {
+        if (probeRay.hitT < sharcCellSize(sharcLevel(surface.position))) {
+            updates = true;
+            sharcCount(${SHARC_COUNTER.shortRayPaths}u, 1u);
+        } else if (sharcRead(surface.position, surface.normal, probeRay.hitT).weight <= 0.0) {
+            updates = true;
+            sharcCount(${SHARC_COUNTER.uncachedPaths}u, 1u);
+        }
+    }
     if (!updates) {
         return;
     }
     let path = atomicAdd(&g_SharcAccum[${SHARC_COUNTER.paths}u], 1u);
+    if (path >= g_Sharc.pathCapacity) {
+        // The lists are full (sized for updateFraction plus a margin): the ray reads its cell.
+        sharcCount(${SHARC_COUNTER.refusedPaths}u, 1u);
+        return;
+    }
     sharcSetPathWord(path, SHARC_PATH_RAY, did);
     sharcSetPathWord(path, SHARC_PATH_VERTICES, 1u);
     sharcSetPathVec3(path, SHARC_PATH_TAIL, vec3f(0.0));
@@ -713,7 +776,7 @@ export function sharcBounce1Wgsl(options: SharcCompileOptions): string {
     return /* wgsl */ `
 ${updateHeadWgsl(options)}
 ${perItemEntry(SHARC_ENTRY_POINT.bounce1)}
-    if (did >= atomicLoad(&g_SharcAccum[${SHARC_COUNTER.paths}u]) || g_Sharc.bounceRays == 0u) {
+    if (did >= min(atomicLoad(&g_SharcAccum[${SHARC_COUNTER.paths}u]), g_Sharc.pathCapacity) || g_Sharc.bounceRays == 0u) {
         return;
     }
     let ray = sharcPathWord(did, SHARC_PATH_RAY);
@@ -800,7 +863,7 @@ export function sharcCombineWgsl(options: SharcCompileOptions): string {
     return /* wgsl */ `
 ${updateHeadWgsl(options)}
 ${perItemEntry(SHARC_ENTRY_POINT.combine)}
-    if (did >= atomicLoad(&g_SharcAccum[${SHARC_COUNTER.paths}u])) {
+    if (did >= min(atomicLoad(&g_SharcAccum[${SHARC_COUNTER.paths}u]), g_Sharc.pathCapacity)) {
         return;
     }
     let ray = sharcPathWord(did, SHARC_PATH_RAY);
@@ -819,7 +882,7 @@ ${perItemEntry(SHARC_ENTRY_POINT.combine)}
     let estimate = sharcPathVec3(did, SHARC_PATH_DIRECT0) + first.albedo * arriving;
     sharcInsertSample(first.position, first.normal, estimate, &random);
     let own = probeRay.hitT < sharcCellSize(sharcLevel(first.position));
-    sharcSetRaySample(ray, select(vec3f(0.0), estimate, sharcFinite(estimate)), select(SHARC_RAY_LOOKUP, SHARC_RAY_OWN, own));
+    sharcSetRaySample(ray, select(vec3f(0.0), estimate, sharcFinite(estimate)), select(SHARC_RAY_LOOKUP_WITH_ESTIMATE, SHARC_RAY_OWN, own));
 }
 `;
 }
@@ -833,6 +896,32 @@ export function sharcResolveWgsl(options: SharcCompileOptions): string {
     return /* wgsl */ `
 ${sharcCommonWgsl(SHARC_CACHE_GROUP, options, 'read_write')}
 ${ACCUM_WGSL}
+
+// Whether this frame's changes touch the cell in slot words 'word' (its integer cell and level, kept
+// at its claim): everything, or a changed box overlapping the cell's box.
+fn sharcSlotChanged(word: u32) -> bool {
+    if (g_Sharc.changeEverything != 0u) {
+        return true;
+    }
+    if (g_Sharc.changeBoxCount == 0u) {
+        return false;
+    }
+    let cell = bitcast<vec3i>(vec3u(atomicLoad(&g_SharcAccum[word + 5u]), atomicLoad(&g_SharcAccum[word + 6u]), atomicLoad(&g_SharcAccum[word + 7u])));
+    let size = sharcCellSize(atomicLoad(&g_SharcAccum[word + 8u]));
+    let low = vec3f(cell) * size;
+    let high = low + size;
+    for (var box = 0u; box < ${SHARC_MAX_CHANGE_BOXES}u; box++) {
+        if (box >= g_Sharc.changeBoxCount) {
+            break;
+        }
+        let boxLow = g_Sharc.changeBoxes[2u * box].xyz;
+        let boxHigh = g_Sharc.changeBoxes[2u * box + 1u].xyz;
+        if (all(low <= boxHigh) && all(high >= boxLow)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 @compute @workgroup_size(${SHARC_RESOLVE_WORKGROUP_SIZE})
 fn ${SHARC_ENTRY_POINT.resolve}(
@@ -849,9 +938,16 @@ fn ${SHARC_ENTRY_POINT.resolve}(
     }
     let word = sharcSlotWord(slot);
     let count = atomicLoad(&g_SharcAccum[word + 3u]);
+    // A cell the scene changed in (a moved object's or a light's box, or everything for the sun or the
+    // sky) keeps at most changeKeepSamples of history, so this frame's samples, taken in the changed
+    // scene, outweigh what it learned before (the cache's version of D46's reset; register E8).
+    var previous = g_SharcResolved[slot];
+    if (g_Sharc.changeReset != 0u && previous.w > g_Sharc.changeKeepSamples && sharcSlotChanged(word)) {
+        previous.w = g_Sharc.changeKeepSamples;
+        g_SharcResolved[slot] = previous;
+    }
     if (count > 0u) {
         let sum = vec3f(f32(atomicLoad(&g_SharcAccum[word + 0u])), f32(atomicLoad(&g_SharcAccum[word + 1u])), f32(atomicLoad(&g_SharcAccum[word + 2u]))) / SHARC_SCALE;
-        let previous = g_SharcResolved[slot];
         let history = previous.w * g_Sharc.decay;
         let weight = history + f32(count);
         g_SharcResolved[slot] = vec4f((previous.xyz * history + sum) / weight, weight);
@@ -884,6 +980,7 @@ var<workgroup> wg_SharcOwn: atomic<u32>;
 var<workgroup> wg_SharcCoarse: atomic<u32>;
 var<workgroup> wg_SharcThin: atomic<u32>;
 var<workgroup> wg_SharcCache: atomic<u32>;
+var<workgroup> wg_SharcEmpty: atomic<u32>;
 
 @compute @workgroup_size(${SHARC_WORKGROUP_SIZE})
 fn ${SHARC_ENTRY_POINT.lookup}(
@@ -896,6 +993,7 @@ fn ${SHARC_ENTRY_POINT.lookup}(
         atomicStore(&wg_SharcCoarse, 0u);
         atomicStore(&wg_SharcThin, 0u);
         atomicStore(&wg_SharcCache, 0u);
+        atomicStore(&wg_SharcEmpty, 0u);
     }
     workgroupBarrier();
     let did = sharcWorkgroupIndex(workgroup, workgroups) * ${SHARC_WORKGROUP_SIZE}u + localIndex;
@@ -904,14 +1002,21 @@ fn ${SHARC_ENTRY_POINT.lookup}(
         if (kept.w == SHARC_RAY_OWN) {
             sharcAddToProbeRay(did, kept.xyz);
             atomicAdd(&wg_SharcOwn, 1u);
-        } else if (kept.w == SHARC_RAY_LOOKUP) {
+        } else if (kept.w == SHARC_RAY_LOOKUP || kept.w == SHARC_RAY_LOOKUP_WITH_ESTIMATE) {
             let base = did * ${SHARC_RAY_SAMPLE_WORDS}u + 4u;
             let position = bitcast<vec3f>(vec3u(g_SharcRayWords[base], g_SharcRayWords[base + 1u], g_SharcRayWords[base + 2u]));
             let normal = unpack4x8snorm(g_SharcRayWords[base + 3u]).xyz;
-            let read = sharcRead(position, normal);
-            // The ray's own estimate went into its cell this frame, so a cell is always there unless
-            // its bucket was full; then the ray reads its own estimate.
-            sharcAddToProbeRay(did, select(kept.xyz, read.radiance, read.weight > 0.0));
+            let read = sharcRead(position, normal, g_SharcProbeRays.rays[did].hitT);
+            // A ray with its own estimate put it into its cell this frame, so a cell is there unless its
+            // bucket was full; then it reads its own estimate. A ray without one (its path was refused)
+            // and no cell reads nothing, counted.
+            if (read.weight > 0.0) {
+                sharcAddToProbeRay(did, read.radiance);
+            } else if (kept.w == SHARC_RAY_LOOKUP_WITH_ESTIMATE) {
+                sharcAddToProbeRay(did, kept.xyz);
+            } else {
+                atomicAdd(&wg_SharcEmpty, 1u);
+            }
             atomicAdd(&wg_SharcCache, 1u);
             if (read.levelOffset > 0u) {
                 atomicAdd(&wg_SharcCoarse, 1u);
@@ -927,6 +1032,7 @@ fn ${SHARC_ENTRY_POINT.lookup}(
         sharcCount(${SHARC_COUNTER.coarseReads}u, atomicLoad(&wg_SharcCoarse));
         sharcCount(${SHARC_COUNTER.thinReads}u, atomicLoad(&wg_SharcThin));
         sharcCount(${SHARC_COUNTER.cacheReads}u, atomicLoad(&wg_SharcCache));
+        sharcCount(${SHARC_COUNTER.emptyReads}u, atomicLoad(&wg_SharcEmpty));
     }
 }
 `;
@@ -944,7 +1050,7 @@ export function sharcLookupFunctionWgsl(group: number, options: SharcCompileOpti
 ${sharcCommonWgsl(group, options, 'read')}
 
 fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
-    let read = sharcRead(position, normal);
+    let read = sharcRead(position, normal, 3.0e38);
     return vec4f(read.radiance, select(0.0, 1.0, read.weight > 0.0));
 }
 `;

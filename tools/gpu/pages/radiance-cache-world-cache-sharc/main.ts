@@ -49,6 +49,30 @@
  *    twice that); every bounce: `sharcFurnaceCeiling(..., 0.5)` = 0.1819
  *    (SHaRC's defaults, 200 frames). Judged on the near ceiling rays' mean,
  *    within 2% (a ray's value is a noisy mix of hits and misses).
+ * 7. **Shadow edge** (section 2's slab, 40 frames, the last 10 pooled): the
+ *    floor rays across the shadow's edge at z = 2, binned by distance from it
+ *    (4 cm bins); the width from 10% to 90% of the lit value. SHaRC's must be
+ *    at most 4 of its finest cells there, and the 50% point within one cell of
+ *    the edge. Section 2 leaves rays within 8 cells of the edge out; this is
+ *    where coarse reads would show.
+ * 8. **Lag and flicker** (the corner, multibounce, the sun doubled after 150
+ *    frames, 200 frames after): frames until the mean irradiance E over the
+ *    screen, and the mean hit-ray radiance, stay within 5% and 1% of twice
+ *    their value before the change; and the flicker of E over the 30 still
+ *    frames before it (radiance-cache-stability's measure: per pixel
+ *    |ΔE| / max(E, 5% of the mean), mean and p95). For GI-1.2 single and
+ *    multibounce, SHaRC's defaults and SHaRC without the change reset, with a
+ *    64-sample threshold and with a 16-frame history, so flicker isn't bought
+ *    with lag. SHaRC's defaults must reach 5% (E) no later than GI-1.2's
+ *    multibounce.
+ * 9. **A sky, not black** (section 5's strips and ceiling, no sun, a sky of
+ *    radiance 1; SHaRC with one bounce ray and no tail): a bounce ray from the
+ *    ceiling that misses through a gap brings the sky (no sky light in the
+ *    light choice yet, register E4), one that hits a strip brings its light
+ *    (none), so the ceiling reads ρ × 1/2 × 1 = 0.25 within 2%. A sky-on-miss
+ *    rule turned the wrong way reads 0. TODO(rc3-4 merge): with
+ *    `environmentLightEnable` on, misses bring nothing and the strips' sky
+ *    light sample is blocked by the ceiling, so run this with it off.
  * 6. **NaN scan** (SHaRC's defaults on `cornell-box`, `two-room` and `sponza`
  *    with curtains, from the first bookmark, 60 frames): every probe ray's
  *    radiance and every resolved slot finite and at least 0 after frames 1,
@@ -79,6 +103,7 @@ import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
 const WIDTH = 1280;
@@ -113,7 +138,10 @@ const SHARC_DIRECT: Partial<RadianceCacheSettings> = { worldCache: 'sharc', shar
 const SHARC_ONE_BOUNCE: Partial<RadianceCacheSettings> = { worldCache: 'sharc', sharc: { bounceRays: 1, cacheTail: false } };
 const SHARC_DEFAULT: Partial<RadianceCacheSettings> = { worldCache: 'sharc' };
 
-type SceneKind = 'corner' | 'slab' | 'furnace' | 'strips';
+type SceneKind = 'corner' | 'slab' | 'furnace' | 'strips' | 'skyStrips';
+/** Section 9's sky: a constant radiance. */
+const SKY_RADIANCE = 1;
+const SKY_STRIPS_CEILING = ALBEDO * (1 - STRIPS.fill) * SKY_RADIANCE;
 type Surface = 'floor' | 'wall' | 'slab' | 'ceiling' | 'other';
 
 interface ProbeRay {
@@ -155,12 +183,16 @@ function stripFloor(platform: GIPlatformImpl): void {
 
 function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
     const half = 200;
-    if (kind === 'furnace' || kind === 'strips') {
-        if (kind === 'strips') stripFloor(platform);
-        else quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
+    if (kind === 'furnace' || kind === 'strips' || kind === 'skyStrips') {
+        if (kind === 'furnace') quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
+        else stripFloor(platform);
         quad(platform, 'ceiling', [[-half, CEILING_Y, -half], [half, CEILING_Y, -half], [half, CEILING_Y, half], [-half, CEILING_Y, half]], [0, -1, 0]);
-        platform.scene.createLight(FURNACE_SUN);
-        platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+        if (kind === 'skyStrips') {
+            platform.scene.setEnvironment({ type: 'color', color: [SKY_RADIANCE, SKY_RADIANCE, SKY_RADIANCE], intensity: 1 });
+        } else {
+            platform.scene.createLight(FURNACE_SUN);
+            platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+        }
         return FURNACE_CAMERA;
     }
     quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
@@ -175,7 +207,7 @@ function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
 }
 
 function classify(hit: Vec3, kind: SceneKind): Surface {
-    if (kind === 'furnace' || kind === 'strips') return Math.abs(hit[1] - CEILING_Y) < 1e-3 ? 'ceiling' : Math.abs(hit[1]) < 1e-3 ? 'floor' : 'other';
+    if (kind === 'furnace' || kind === 'strips' || kind === 'skyStrips') return Math.abs(hit[1] - CEILING_Y) < 1e-3 ? 'ceiling' : Math.abs(hit[1]) < 1e-3 ? 'floor' : 'other';
     if (kind === 'slab' && Math.abs(hit[1] - SLAB.y) < 1e-3 && hit[0] >= SLAB.minX - 1e-3 && hit[0] <= SLAB.maxX + 1e-3 && hit[2] >= SLAB.minZ - 1e-3 && hit[2] <= SLAB.maxZ + 1e-3) return 'slab';
     if (Math.abs(hit[1]) < 1e-3) return 'floor';
     if (Math.abs(hit[2]) < 1e-3) return 'wall';
@@ -252,7 +284,7 @@ function warmFrame(passes: readonly boolean[]): number | null {
     return first;
 }
 
-async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial<RadianceCacheSettings>, frames: number, judge: Judge): Promise<Run> {
+async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial<RadianceCacheSettings>, frames: number, judge: Judge, observe?: (state: FrameState, frame: number) => void): Promise<Run> {
     const backend = settings.worldCache === 'sharc' ? 'sharc' : 'gi1';
     const platform = new GIPlatformImpl(device, { label: `sharc page ${kind} ${backend}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
@@ -282,6 +314,7 @@ async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial
             frame();
             await device.queue.onSubmittedWorkDone();
             state = await readFrame(device, technique, kind);
+            observe?.(state, index);
             let sum = 0;
             let expectedSum = 0;
             let within = 0;
@@ -362,6 +395,181 @@ const shadowJudge: Judge = (ray, backend) => {
 /** The furnace's ceiling rays whose GI-1.2 tile is under 2 m. */
 function ceilingJudge(expected: number): Judge {
     return (ray) => (ray.hitT >= 0 && ray.surface === 'ceiling' && ray.direction[1] > 0 && gi1TileSize(ray.hit, FURNACE_CAMERA) < 2 ? expected : null);
+}
+
+// ---- Section 7: the shadow's edge -----------------------------------------------------------------
+
+/** Floor rays across the slab shadow's edge at z = 2, away from its ends, binned by z - 2. */
+class EdgeProfile {
+    static readonly BIN = 0.04;
+    static readonly REACH = 0.6;
+    readonly sums = new Float64Array(Math.round((2 * EdgeProfile.REACH) / EdgeProfile.BIN));
+    readonly counts = new Uint32Array(this.sums.length);
+
+    add(state: FrameState): void {
+        state.rays.forEach((ray, index) => {
+            if (ray.hitT < 0 || ray.surface !== 'floor') return;
+            const [x, , z] = ray.hit;
+            if (x < SLAB.minX + 0.3 || x > SLAB.maxX - 0.3 || Math.abs(z - 2) >= EdgeProfile.REACH) return;
+            const bin = Math.floor((z - 2 + EdgeProfile.REACH) / EdgeProfile.BIN);
+            this.sums[bin] += (state.radiance[index * 4] + state.radiance[index * 4 + 1] + state.radiance[index * 4 + 2]) / 3;
+            this.counts[bin]++;
+        });
+    }
+
+    /** The 10%, 50% and 90% crossings of the lit value, from the shadow side (negative) to the lit side, in metres from the edge. */
+    result(): { width: number; middle: number; profile: number[] } {
+        const profile = Array.from(this.sums, (sum, bin) => (this.counts[bin] > 0 ? sum / this.counts[bin] / LIT_RADIANCE : NaN));
+        const crossing = (level: number): number => {
+            for (let bin = 1; bin < profile.length; bin++) {
+                const a = profile[bin - 1];
+                const b = profile[bin];
+                if (!(a < level && b >= level)) continue;
+                const t = (level - a) / (b - a);
+                return -EdgeProfile.REACH + (bin - 0.5 + t) * EdgeProfile.BIN;
+            }
+            return NaN;
+        };
+        return { width: crossing(0.9) - crossing(0.1), middle: crossing(0.5), profile: profile.map((value) => Number(value.toFixed(3))) };
+    }
+}
+
+// ---- Section 8: lag and flicker ---------------------------------------------------------------------
+
+const HALF_TABLE = Float32Array.from({ length: 65536 }, (_, bits) => halfBitsToFloat(bits));
+
+interface LagResult {
+    readonly flickerMean: number;
+    readonly flickerP95: number;
+    readonly irradianceFramesTo5: number | null;
+    readonly irradianceFramesTo1: number | null;
+    readonly rayFramesTo5: number | null;
+    readonly rayFramesTo1: number | null;
+    /** E's mean over the last frame, over twice its mean before the change. */
+    readonly finalIrradianceRatio: number;
+    readonly counters: Record<string, number>;
+}
+
+/** The first frame after the change (1-based) from which every later frame is within `tolerance` of the target. */
+function settledAfter(values: readonly number[], target: number, tolerance: number): number | null {
+    return warmFrame(values.map((value) => Math.abs(value / target - 1) <= tolerance));
+}
+
+async function runLag(device: GPUDevice, settings: Partial<RadianceCacheSettings>): Promise<LagResult> {
+    const BEFORE = 150;
+    const AFTER = 200;
+    const STILL = 30;
+    const platform = new GIPlatformImpl(device, { label: 'sharc page lag' });
+    const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
+    platform.setOutput(technique);
+    await platform.prepare();
+    const camera = describe(platform, 'corner');
+    const sun = platform.scene.createLight({ type: 'directional', direction: SUN_TRAVEL, color: [1, 1, 1], intensity: SUN_INTENSITY, label: 'lag sun' });
+    const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+    const frame = (): void => {
+        const encoder = device.createCommandEncoder({ label: 'sharc page lag' });
+        platform.encode(encoder, input);
+        screen.encode(encoder, camera);
+        platform.encodeScreen(encoder, screen.screen);
+        device.queue.submit([encoder.finish()]);
+    };
+    // describe() makes the corner's sun; a second one along the same direction, dark until the change and
+    // then as bright, doubles the light (a change the platform reports as global, like a sun change).
+    platform.scene.updateLight(sun, { intensity: 0 });
+    try {
+        frame();
+        await platform.rays.whenBuilt();
+        frame();
+        await device.queue.onSubmittedWorkDone();
+        technique.resetHistory();
+        const depth = new Float32Array(WIDTH * HEIGHT);
+        const readE = async (): Promise<Float32Array> => {
+            const probes = technique.probes;
+            if (!probes) throw new Error('lag: no probes');
+            const bytes = await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT);
+            const halves = new Uint16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
+            const e = new Float32Array(WIDTH * HEIGHT);
+            for (let pixel = 0; pixel < e.length; pixel++) e[pixel] = (HALF_TABLE[halves[pixel * 4]] + HALF_TABLE[halves[pixel * 4 + 1]] + HALF_TABLE[halves[pixel * 4 + 2]]) / 3;
+            return e;
+        };
+        const surfaceMean = (e: Float32Array): number => {
+            let sum = 0;
+            let count = 0;
+            for (let pixel = 0; pixel < e.length; pixel++) {
+                if (depth[pixel] === 1) continue;
+                sum += e[pixel];
+                count++;
+            }
+            return sum / Math.max(count, 1);
+        };
+        const rayMean = async (): Promise<number> => {
+            const state = await readFrame(device, technique, 'corner');
+            let sum = 0;
+            let count = 0;
+            state.rays.forEach((ray, index) => {
+                if (ray.hitT < 0) return;
+                sum += (state.radiance[index * 4] + state.radiance[index * 4 + 1] + state.radiance[index * 4 + 2]) / 3;
+                count++;
+            });
+            return sum / Math.max(count, 1);
+        };
+        const changes: number[] = [];
+        let previous: Float32Array | null = null;
+        let beforeE = 0;
+        let beforeRay = 0;
+        for (let index = 0; index < BEFORE; index++) {
+            frame();
+            if (index < BEFORE - STILL) {
+                if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+                continue;
+            }
+            await device.queue.onSubmittedWorkDone();
+            if (index === BEFORE - STILL) depth.set(new Float32Array((await readTexture(device, screen.screen.depth, 4, WIDTH, HEIGHT)).buffer));
+            const e = await readE();
+            const mean = surfaceMean(e);
+            beforeE += mean / STILL;
+            beforeRay += (await rayMean()) / STILL;
+            if (previous) {
+                const floor = 0.05 * mean;
+                for (let pixel = 0; pixel < e.length; pixel++) {
+                    if (depth[pixel] === 1) continue;
+                    changes.push(Math.abs(e[pixel] - previous[pixel]) / Math.max(previous[pixel], floor));
+                }
+            }
+            previous = e;
+        }
+        platform.scene.updateLight(sun, { intensity: SUN_INTENSITY });
+        const eAfter: number[] = [];
+        const rayAfter: number[] = [];
+        for (let index = 0; index < AFTER; index++) {
+            frame();
+            await device.queue.onSubmittedWorkDone();
+            eAfter.push(surfaceMean(await readE()));
+            rayAfter.push(await rayMean());
+        }
+        changes.sort((a, b) => a - b);
+        const counters: Record<string, number> = {};
+        const backend = technique.worldCacheBackend;
+        if (backend?.id === 'sharc') {
+            const words = new Uint32Array(await readRange(device, (backend as SharcCache).buffers.accum, 0, SHARC_COUNTER_WORDS * 4));
+            for (const [counter, word] of Object.entries(SHARC_COUNTER)) counters[counter] = words[word];
+        }
+        return {
+            flickerMean: Number((changes.reduce((sum, value) => sum + value, 0) / Math.max(changes.length, 1)).toFixed(5)),
+            flickerP95: Number((changes[Math.floor(0.95 * (changes.length - 1))] ?? NaN).toFixed(4)),
+            irradianceFramesTo5: settledAfter(eAfter, 2 * beforeE, 0.05),
+            irradianceFramesTo1: settledAfter(eAfter, 2 * beforeE, 0.01),
+            rayFramesTo5: settledAfter(rayAfter, 2 * beforeRay, 0.05),
+            rayFramesTo1: settledAfter(rayAfter, 2 * beforeRay, 0.01),
+            finalIrradianceRatio: Number((eAfter[eAfter.length - 1] / (2 * beforeE)).toFixed(4)),
+            counters,
+        };
+    } finally {
+        screen.dispose();
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
 }
 
 // ---- Section 6: the NaN scan ---------------------------------------------------------------------
@@ -493,7 +701,17 @@ try {
         const dark = (ray: ProbeRay, backend: 'gi1' | 'sharc'): number | null => (shadowJudge(ray, backend) === 0 ? 0 : null);
         const results: Record<string, unknown> = {};
         for (const [name, settings] of [['gi1', GI1_SINGLE], ['sharc', SHARC_DIRECT]] as const) {
-            const litRun = await runScenario(device, 'slab', settings, 40, lit);
+            const edge = new EdgeProfile();
+            const litRun = await runScenario(device, 'slab', settings, 40, lit, (state, frame) => {
+                if (frame >= 30) edge.add(state);
+            });
+            const profile = edge.result();
+            const finest = sharcCellSize(sharcLevel([0.5, 0, 2], SHARC_CONSTANTS(CORNER_CAMERA)), DEFAULT_SHARC_SETTINGS.minCell);
+            results[`${name}Edge`] = { ...profile, finestCell: finest };
+            if (name === 'sharc') {
+                if (!(profile.width <= 4 * finest)) fail(`shadow edge: SHaRC's 10-90% width is ${profile.width.toFixed(3)} m, over 4 finest cells (${(4 * finest).toFixed(3)} m)`);
+                if (!(Math.abs(profile.middle) <= finest)) fail(`shadow edge: SHaRC's 50% point is ${profile.middle.toFixed(3)} m from the edge, over one finest cell (${finest.toFixed(3)} m)`);
+            }
             const darkRun = await runScenario(device, 'slab', settings, 40, dark);
             const darkMean = darkRun.meanError[darkRun.meanError.length - 1];
             results[name] = { lit: summary(litRun), darkMeanOverLit: Number((darkMean / LIT_RADIANCE).toFixed(5)), darkRays: darkRun.judged };
@@ -537,6 +755,32 @@ try {
             const final = run.meanError[run.meanError.length - 1];
             if (Math.abs(final) > TOLERANCE) fail(`strips, ${name}: SHaRC's ceiling rays average ${(final * 100).toFixed(2)}% off ${expected.toFixed(4)}`);
         }
+    }
+
+    // 8. Lag and flicker.
+    {
+        const configurations: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
+            ['gi1 single bounce', GI1_SINGLE],
+            ['gi1 multibounce', GI1_MULTI],
+            ['sharc', SHARC_DEFAULT],
+            ['sharc, no change reset', { worldCache: 'sharc', sharc: { changeReset: false } }],
+            ['sharc, 64-sample threshold', { worldCache: 'sharc', sharc: { minSamples: 64 } }],
+            ['sharc, 16-frame history, no change reset', { worldCache: 'sharc', sharc: { historyFrames: 16, changeReset: false } }],
+        ];
+        const lag: Record<string, LagResult> = {};
+        for (const [name, settings] of configurations) lag[name] = await runLag(device, settings);
+        data.lag = lag;
+        const sharcFrames = lag.sharc.irradianceFramesTo5;
+        const gi1Frames = lag['gi1 multibounce'].irradianceFramesTo5;
+        if (sharcFrames === null || (gi1Frames !== null && sharcFrames > gi1Frames)) fail(`lag: SHaRC's E reaches 5% after ${sharcFrames ?? 'never'} frames, GI-1.2 multibounce's after ${gi1Frames ?? 'never'}`);
+    }
+
+    // 9. A sky, not black.
+    {
+        const run = await runScenario(device, 'skyStrips', SHARC_ONE_BOUNCE, 40, ceilingJudge(SKY_STRIPS_CEILING));
+        data.sky = { expected: SKY_STRIPS_CEILING, sharcOneBounce: summary(run) };
+        const final = run.meanError[run.meanError.length - 1];
+        if (!(Math.abs(final) <= TOLERANCE)) fail(`sky: SHaRC's ceiling rays average ${(final * 100).toFixed(2)}% off ${SKY_STRIPS_CEILING.toFixed(4)} (the sky through bounce rays that miss)`);
     }
 
     // 6. NaN scan.

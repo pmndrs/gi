@@ -24,7 +24,7 @@ import type { GpuIndirectArgs, GpuWord } from '../../../../platform/contract/com
 import { GILimitError } from '../../../../platform/contract/errors.ts';
 import type { ComputeKernel } from '../../../../platform/contract/wgsl.ts';
 import { verticalFieldOfView } from '../hash-grid-cpu.ts';
-import type { WorldCache, WorldCacheContext, WorldCacheFrame, WorldCacheLookup, WorldCacheProbeRays } from '../world-cache.ts';
+import type { WorldCache, WorldCacheChanges, WorldCacheContext, WorldCacheFrame, WorldCacheLookup, WorldCacheProbeRays } from '../world-cache.ts';
 import { sharcCellSizePerMetre } from './sharc-cpu.ts';
 import { resolveSharcSettings, type SharcSettings } from './sharc-settings.ts';
 import {
@@ -35,7 +35,9 @@ import {
     SHARC_COUNTER_WORDS,
     SHARC_ENTRY_POINT,
     SHARC_LIGHT_GROUPS,
+    SHARC_LIGHTS_PER_PATH,
     SHARC_LOOKUP_GROUP_ENTRIES,
+    SHARC_MAX_CHANGE_BOXES,
     SHARC_PARAMS_BYTES,
     SHARC_PARAMS_WORD,
     SHARC_PATH_WORDS,
@@ -46,7 +48,6 @@ import {
     SHARC_RESOLVE_WORKGROUP_SIZE,
     SHARC_SKY_LIGHT_BIT,
     SHARC_SLOT_WORDS,
-    SHARC_WORDS_PER_RAY,
     SHARC_WORKGROUP_SIZE,
     sharcBeginWgsl,
     sharcBounce1Wgsl,
@@ -85,6 +86,26 @@ export interface SharcCacheOptions {
 /** The light mask for a hit's light sample: the four groups, and the sky when it is a light (then the misses bring none). */
 export function sharcLightMask(options: Pick<SharcCacheOptions, 'environmentLightEnable'>): number {
     return SHARC_LIGHT_GROUPS | (options.environmentLightEnable ? SHARC_SKY_LIGHT_BIT : 0);
+}
+
+/**
+ * The share of probe rays the path lists hold beyond `updateFraction`: rays in
+ * probes not updating this frame that still need their own estimate (shorter
+ * than their cell, or no cell with samples; register E9). Measured on Sponza
+ * and Bistro exterior (PROGRESS, P6.1); a ray past the lists is refused and
+ * counted (`refusedPaths`).
+ */
+export const SHARC_EXTRA_PATH_SHARE = 0.2;
+
+/** Path records the lists hold for `rayCapacity` probe rays at `updateFraction`: its share with a quarter's margin, plus the extra share. */
+export function sharcPathCapacity(rayCapacity: number, updateFraction: number): number {
+    const share = Math.min(1, updateFraction * 1.25 + SHARC_EXTRA_PATH_SHARE);
+    return Math.max(64, Math.ceil((rayCapacity * share) / 64) * 64);
+}
+
+/** Bytes of the per-ray buffer: each ray's sample, then the path records, the second-bounce list and the light list. */
+export function sharcRayWordsBytes(rayCapacity: number, pathCapacity: number): number {
+    return (Math.max(rayCapacity, 1) * SHARC_RAY_SAMPLE_WORDS + pathCapacity * (SHARC_PATH_WORDS + 1 + SHARC_LIGHTS_PER_PATH)) * WORD_BYTES;
 }
 
 /** The cache's buffers, for tests and debug readbacks. */
@@ -143,6 +164,13 @@ interface Prepared {
     readonly memoryBytes: number;
 }
 
+/** The per-ray buffer, made for a screen (`prepareScreen`). */
+interface RayStorage {
+    readonly rayCapacity: number;
+    readonly pathCapacity: number;
+    readonly rayWords: GPUBuffer;
+}
+
 interface RayData {
     readonly rays: WorldCacheProbeRays;
     /** `SHARC_WORDS_PER_RAY` words per probe ray: the rays' samples, then the path records and the lists. */
@@ -157,6 +185,7 @@ export class SharcCache implements WorldCache {
     readonly options: SharcCacheOptions;
 
     private prepared: Prepared | null = null;
+    private rayStorage: RayStorage | null = null;
     private rayData: RayData | null = null;
     private readonly paramWords = new ArrayBuffer(SHARC_PARAMS_BYTES);
 
@@ -183,13 +212,18 @@ export class SharcCache implements WorldCache {
         return this.rayData?.rayWords ?? null;
     }
 
+    /** Path records the per-ray buffer holds (`sharcPathCapacity`), or 0 before a screen. */
+    get pathCapacity(): number {
+        return this.rayStorage?.pathCapacity ?? 0;
+    }
+
     /** One of the counter words (`SHARC_COUNTER`), cleared at the start of each frame (but the ray count). */
     counter(name: keyof typeof SHARC_COUNTER): GpuWord {
         return { buffer: this.require().buffers.accum, offset: SHARC_COUNTER[name] * WORD_BYTES };
     }
 
     get memoryBytes(): number {
-        return (this.prepared?.memoryBytes ?? 0) + (this.rayData?.rayWords.size ?? 0);
+        return (this.prepared?.memoryBytes ?? 0) + (this.rayStorage?.rayWords.size ?? 0);
     }
 
     get stats(): Readonly<Record<string, number>> {
@@ -197,7 +231,8 @@ export class SharcCache implements WorldCache {
         if (!prepared) return {};
         return {
             slots: prepared.entries,
-            'per-ray words (bytes)': this.rayData?.rayWords.size ?? 0,
+            'per-ray words (bytes)': this.rayStorage?.rayWords.size ?? 0,
+            'path records': this.rayStorage?.pathCapacity ?? 0,
             'GPU memory (bytes)': this.memoryBytes,
         };
     }
@@ -292,6 +327,27 @@ export class SharcCache implements WorldCache {
         };
     }
 
+    /**
+     * Makes the per-ray buffer for a screen of up to `maxRayCount` probe rays:
+     * each ray's sample, and path records for `sharcPathCapacity` of them.
+     * Throws `GILimitError` naming the limit when the device can't hold it;
+     * the technique calls this where it makes its screen resources, so a
+     * resize never throws inside `encodeFrame`.
+     */
+    prepareScreen(maxRayCount: number): void {
+        const prepared = this.require();
+        const pathCapacity = sharcPathCapacity(maxRayCount, resolveSharcSettings(this.options.sharc).updateFraction);
+        const current = this.rayStorage;
+        if (current && current.rayCapacity === maxRayCount && current.pathCapacity === pathCapacity) return;
+        const bytes = sharcRayWordsBytes(maxRayCount, pathCapacity);
+        const { limits } = prepared.device;
+        if (bytes > limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', bytes, limits.maxStorageBufferBindingSize);
+        if (bytes > limits.maxBufferSize) throw new GILimitError('maxBufferSize', bytes, limits.maxBufferSize);
+        this.releaseRayData();
+        const rayWords = prepared.device.createBuffer({ label: 'radiance-cache/sharc per-ray words', size: bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
+        this.rayStorage = { rayCapacity: maxRayCount, pathCapacity, rayWords };
+    }
+
     /** Empties the table: keys, accumulators, counters and resolved values back to zero, as `prepare` leaves them. */
     reset(encoder: GPUCommandEncoder): void {
         const { buffers } = this.require();
@@ -303,7 +359,8 @@ export class SharcCache implements WorldCache {
     encodeFrame(encoder: GPUCommandEncoder, frame: WorldCacheFrame, rays: WorldCacheProbeRays): void {
         const prepared = this.require();
         const rayData = this.rayDataFor(prepared, rays);
-        this.writeParams(prepared, frame, rays.capacity);
+        const storage = this.rayStorage as RayStorage;
+        this.writeParams(prepared, frame, storage);
         const { buffers } = prepared;
 
         // This frame's counters from zero; the ray count where the indirect arguments read it.
@@ -358,15 +415,26 @@ export class SharcCache implements WorldCache {
 
     /** The per-ray buffer and the ray groups for these probe rays, made again when the screen's buffers change. */
     private rayDataFor(prepared: Prepared, rays: WorldCacheProbeRays): RayData {
+        // A screen the technique didn't prepare (or a bigger updateFraction since): make the storage now.
+        // The technique's prepareScreen makes it where it makes its screen resources instead.
+        const wantedPaths = sharcPathCapacity(rays.capacity, resolveSharcSettings(this.options.sharc).updateFraction);
+        const storage = this.rayStorage;
+        if (!storage || storage.rayCapacity !== rays.capacity) {
+            this.prepareScreen(rays.capacity);
+        } else if (storage.pathCapacity < wantedPaths) {
+            // updateFraction went up since: grow the lists if the device holds them, else keep the old
+            // ones (rays past them are refused and counted); never throw inside a frame for it.
+            try {
+                this.prepareScreen(rays.capacity);
+            } catch (error) {
+                if (!(error instanceof GILimitError)) throw error;
+            }
+        }
         const current = this.rayData;
         if (current && sameRays(current.rays, rays)) return current;
-        this.releaseRayData();
+        this.rayData = null;
         const { device } = prepared;
-        // Per ray: its sample, a path record, a second-bounce entry and three light entries (48 MB at 1280 x 720).
-        const bytes = Math.max(rays.capacity, 1) * SHARC_WORDS_PER_RAY * WORD_BYTES;
-        if (bytes > device.limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', bytes, device.limits.maxStorageBufferBindingSize);
-        if (bytes > device.limits.maxBufferSize) throw new GILimitError('maxBufferSize', bytes, device.limits.maxBufferSize);
-        const rayWords = device.createBuffer({ label: 'radiance-cache/sharc per-ray words', size: bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
+        const rayWords = (this.rayStorage as RayStorage).rayWords;
         const entries: GPUBindGroupEntry[] = [
             { binding: SHARC_RAY_BINDING.probeRays, resource: { buffer: rays.buffer } },
             { binding: SHARC_RAY_BINDING.radiance, resource: rays.radiance },
@@ -380,12 +448,13 @@ export class SharcCache implements WorldCache {
     }
 
     private releaseRayData(): void {
-        this.rayData?.rayWords.destroy();
+        this.rayStorage?.rayWords.destroy();
+        this.rayStorage = null;
         this.rayData = null;
     }
 
     /** `SharcParams` for this frame, from the settings as they are now (the compiled ones aside). */
-    private writeParams(prepared: Prepared, frame: WorldCacheFrame, rayCapacity: number): void {
+    private writeParams(prepared: Prepared, frame: WorldCacheFrame, storage: RayStorage): void {
         const live = { ...resolveSharcSettings(this.options.sharc), log2Entries: prepared.settings.log2Entries };
         const floats = new Float32Array(this.paramWords);
         const words = new Uint32Array(this.paramWords);
@@ -405,10 +474,11 @@ export class SharcCache implements WorldCache {
         words[word.lightMask] = sharcLightMask(this.options);
         floats[word.updateFraction] = live.updateFraction;
         // The per-ray words: the rays' samples, then the path records, the second-bounce list and the light list.
-        const capacity = Math.max(rayCapacity, 1);
-        words[word.pathBase] = capacity * SHARC_RAY_SAMPLE_WORDS;
-        words[word.bounceListBase] = words[word.pathBase] + capacity * SHARC_PATH_WORDS;
-        words[word.lightListBase] = words[word.bounceListBase] + capacity;
+        words[word.pathBase] = Math.max(storage.rayCapacity, 1) * SHARC_RAY_SAMPLE_WORDS;
+        words[word.bounceListBase] = words[word.pathBase] + storage.pathCapacity * SHARC_PATH_WORDS;
+        words[word.lightListBase] = words[word.bounceListBase] + storage.pathCapacity;
+        words[word.pathCapacity] = storage.pathCapacity;
+        writeChanges(floats, words, frame.changes, live.changeReset, live.changeKeepSamples);
         prepared.device.queue.writeBuffer(prepared.buffers.params, 0, this.paramWords);
     }
 
@@ -427,4 +497,21 @@ function sameRays(a: WorldCacheProbeRays, b: WorldCacheProbeRays): boolean {
         (a.radiance.offset ?? 0) === (b.radiance.offset ?? 0) &&
         a.radiance.size === b.radiance.size
     );
+}
+
+/** The change words of `SharcParams` (register E8): more boxes than it holds count as everything. */
+function writeChanges(floats: Float32Array, words: Uint32Array, changes: WorldCacheChanges | undefined, reset: boolean, keepSamples: number): void {
+    const word = SHARC_PARAMS_WORD;
+    const boxes = changes?.boxes ?? [];
+    const everything = (changes?.everything ?? false) || boxes.length > SHARC_MAX_CHANGE_BOXES;
+    words[word.changeReset] = reset ? 1 : 0;
+    floats[word.changeKeepSamples] = keepSamples;
+    words[word.changeEverything] = everything ? 1 : 0;
+    words[word.changeBoxCount] = everything ? 0 : boxes.length;
+    floats.fill(0, word.changeBoxes, word.changeBoxes + 8 * SHARC_MAX_CHANGE_BOXES);
+    if (everything) return;
+    boxes.forEach((box, index) => {
+        floats.set([box.min[0], box.min[1], box.min[2], 0], word.changeBoxes + index * 8);
+        floats.set([box.max[0], box.max[1], box.max[2], 0], word.changeBoxes + index * 8 + 4);
+    });
 }
