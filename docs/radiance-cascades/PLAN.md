@@ -35,6 +35,12 @@ The interactive gallery starts with the native solver and 1.5× temporal upscali
 
 For the glossy experiments, open the gallery with `scene=polished`, `scene=roughness` or `scene=reflection-motion`. Select the native interval backend and use `view=specular` to see the reflected contribution alone. Use `specular=off` for a matched composite, or `roughness=0.15` and `roughness=0.85` on a single-finish floor. The reflection-motion preset accepts `motion=left|right|still|sequence`. The GPU fixtures are `rc-native-reflections` and `rc-rough-motion`.
 
+To compare reconstruction on the polished rail, run `pnpm test:gpu --gpu nvidia --filter rc-polished-quality`. The fixture replays the same 24 poses at 960 × 540 using the native interval solver throughout. It compares 1.5× and 2× temporal upscaling with full-resolution TRAA, repeats the full-resolution run to check reproducibility, and measures both spatial error and frame-to-frame changes in display RGB.
+
+On NVIDIA run `node tools/gpu/pages/rc-polished-budget/run.ts` to collect three alternating on/off pairs under the shared GPU lock. Each arm replays the same 60 moving rail frames at 640 × 360 internal and 960 × 540 display. The timestamps span the G-buffer through the final canvas blit. The runner saves per-frame timestamps, temperature, clocks, pre-launch GPU utilization and a summary under `bench/screenshots/rc-polished-budget/`.
+
+For the outstanding Mac check, build with `PAGES_BASE=/gi/ pnpm examples:build`, then run `pnpm test:gpu --filter rc-native-core,rc-native-reflections,rc-transport,rc-polished-quality --json rc-metal.json`. Omit the Windows vendor selector so Chrome can use the Apple adapter. Check the recorded adapter and the output of each fixture before marking Metal complete. For reflection timing, run the `rc-polished-budget` fixture once for each `VITE_RC_REFLECTION_PAIR` value (1, 2, 3) and record the thermal conditions on that machine.
+
 Set `VITE_RC_AB_SIZE=960x540` to repeat the backend A/B at the capped preview size. The default is 640 × 360.
 
 Reproduce the independent emitter-only numerical check with `node tools/gpu/pages/rc-door-response/emitter-oracle.ts`. It integrates direct transfer from the recessed emitting surface to the fixed receiver patch.

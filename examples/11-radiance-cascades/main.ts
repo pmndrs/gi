@@ -92,10 +92,11 @@ async function start() {
         throw new Error(`The cascade tracer needs ${bindings} storage buffers per stage. This adapter supports ${adapter.limits.maxStorageBuffersPerShaderStage}.`);
     }
     const timing = adapter.features.has('timestamp-query');
+    const referenceTiming = backend.value === 'three' && timing;
     const renderer = new THREE.WebGPURenderer({
         antialias: false,
         powerPreference: 'high-performance',
-        trackTimestamp: timing,
+        trackTimestamp: referenceTiming,
         requiredLimits: {
             maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
             maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
@@ -151,9 +152,9 @@ async function start() {
     let lastHud = 0;
 
     function timings() {
-        if (!timing || pendingTiming) return;
+        if (!referenceTiming || !reference || pendingTiming) return;
         // Neither query pool may fill. Read the tagged compute group independently of presentation.
-        pendingTiming = Promise.all([reference?.readGPUTime(renderer) ?? renderer.resolveTimestampsAsync('compute').then(() => null), renderer.resolveTimestampsAsync('render')])
+        pendingTiming = Promise.all([reference.readGPUTime(renderer), renderer.resolveTimestampsAsync('render')])
             .then(([ms]) => { if (ms !== null && Number.isFinite(ms)) computeMs = ms; })
             .catch(() => { computeMs = null; })
             .finally(() => { pendingTiming = null; });
@@ -234,7 +235,7 @@ async function start() {
         capture.height = 36;
         const ctx = capture.getContext('2d', { willReadFrequently: true })!;
         async function drainTimers() {
-            if (timing) await Promise.all([renderer.resolveTimestampsAsync('compute'), renderer.resolveTimestampsAsync('render')]);
+            if (referenceTiming) await Promise.all([renderer.resolveTimestampsAsync('compute'), renderer.resolveTimestampsAsync('render')]);
         }
         Object.assign(window, { __rcRailVerify: {
             async render(request: VerifyOptions) {
@@ -281,7 +282,7 @@ async function start() {
                     gpu?.mark(2*i);
                     draw(!measured);
                     gpu?.mark(2*i+1);
-                    if (measured && timing && reference) {
+                    if (measured && referenceTiming) {
                         // Same identifier used by the pinned addon's readGPUTime(). Resolve all frames in one batch.
                         const uid = (rc as unknown as { _timestampUID: string | null })._timestampUID;
                         if (uid !== null) queryIds.push(uid);
@@ -303,7 +304,7 @@ async function start() {
                 }
                 const gpuFrameMs = gpu ? await gpu.finish() : [];
                 const gpuComputeMs: number[] = [];
-                if (measured) {
+                if (measured && referenceTiming) {
                     await drainTimers();
                     const pool = (renderer.backend as unknown as {
                         timestampQueryPool: { compute?: { timestamps: Map<string, number> } };
@@ -327,6 +328,8 @@ async function start() {
                     pixels: ctx.getImageData(0, 0, capture.width, capture.height).data, width:capture.width, height:capture.height, frame, renderedFrames, computeMs,
                     occupancy: request.occupancy && reference ? { peakProbes, capacities: reference.capacities, probeBytes: rc.memory } : undefined,
                     measurement: measured ? {
+                        // Query-pool objects exist only after Three has instrumented a pass.
+                        threeTimestampPools: Object.values((renderer.backend as unknown as { timestampQueryPool: Record<string, unknown> }).timestampQueryPool).filter(Boolean).length,
                         frameIntervalsMs, gpuFrameMs, gpuComputeMs, timestampSupported: timing, renderWidth: reconstruction.renderWidth, renderHeight: reconstruction.renderHeight,
                         stride, probeBytes: rc.memory, hitScratchBytes: rc.hitScratchBytes,
                     } : undefined,
