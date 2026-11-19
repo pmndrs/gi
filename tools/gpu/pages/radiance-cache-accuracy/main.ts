@@ -55,7 +55,8 @@
  * lack (registers D21, D33). DDGI is attached only when one of these is
  * picked; it runs at 0 probes a frame in the other settings (its field stays
  * as it was) and keeps its field across settings and views (it is warm, as
- * in an application, rather than restarted per setting).
+ * in an application, rather than restarted per setting). `ddgi cap4 512 history
+ * off` drops the screen probes' history as `history off` does.
  *
  * **Picking scenes, settings and frame counts** (vite env, as other pages):
  * `VITE_RC_ACCURACY_SCENES=two-room,sponza`, `VITE_RC_ACCURACY_CONFIGS=default,history off`,
@@ -140,6 +141,8 @@ const E10_CONFIGURATIONS: readonly Configuration[] = [
         ddgiUnits: 512,
         ddgiEnvironment: false,
     },
+    // With the screen probes' history off, which RC4.4 found too bright on Sponza.
+    { name: 'ddgi cap4 512 history off', settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 }, history: false, ddgiUnits: 512 },
 ];
 const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
 const CONFIGURATIONS = configurationNames
