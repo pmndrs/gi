@@ -13,11 +13,15 @@
  * - per frame after the move: the mean relative error of the denoised E against that reference
  *   (|E − ref| / max(ref, 5% of its mean)), and the frame-to-frame change of the denoised E;
  * - settled: the first frame after which the error stays within 1.25× its final level (the
- *   mean over the last `REFERENCE_FRAMES`).
+ *   mean over the last `REFERENCE_FRAMES`), for the denoised E and for the raw E it reads (the
+ *   radiance cache itself takes many frames to follow a moved light); the denoiser's lag is the
+ *   difference.
  *
  * The frame-to-frame change over the first 8 frames after the move shows whether the history
- * is kept (a dropped history shows the raw input's noise). Gate (defaults: clamp on, reset
- * on): settled within `SETTLE_GATE` frames, no NaN or negative values, no device errors.
+ * is kept (a dropped history shows the raw input's noise; the raw change is reported beside
+ * it). Gate (defaults: clamp on, reset on): 64 frames after the move the denoised error is at
+ * most `ERROR_RATIO_GATE` times the raw input's (the radiance cache itself takes about 60
+ * frames to follow), no NaN or negative values, no device errors.
  *
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-denoiser-change --gpu nvidia`
  */
@@ -39,7 +43,7 @@ const WARM_FRAMES = 60;
 const CONVERGE_FRAMES = 120;
 const AFTER_FRAMES = 160;
 const REFERENCE_FRAMES = 40;
-const SETTLE_GATE = 16;
+const ERROR_RATIO_GATE = 1.25;
 const DARK_FLOOR = 0.05;
 /** Where the lamp goes: the manifest's `light-step` key in the same room (it starts at [2, 2.45, 2]). */
 const LAMP_B: [number, number, number] = [1.0, 1.8, 2.0];
@@ -53,11 +57,26 @@ async function readE(device: GPUDevice, texture: GPUTexture): Promise<Float32Arr
     return e;
 }
 
-interface Run {
+interface Curve {
+    /** The first frame from which the error stays within 1.25x its final level (null: not before the reference frames). */
     readonly settledFrame: number | null;
     readonly finalError: number;
     readonly errorAtFrame: Record<number, number>;
+    /** Mean per-pixel frame-to-frame change over the first 8 frames after the move. */
     readonly meanChangeFirst8: number;
+}
+
+interface Run {
+    readonly denoised: Curve;
+    /** The interpolated irradiance the denoiser reads: how fast the radiance cache itself follows. */
+    readonly raw: Curve;
+    /**
+     * Denoised error over raw error at frame 64 after the move: the radiance cache itself takes
+     * about 60 frames to follow the light, and the denoiser can't be faster than its input; this
+     * says how much it adds. Settle frames don't compare (the denoised curve keeps falling below
+     * the raw one's noise floor).
+     */
+    readonly errorRatioAt64: number;
     readonly bad: number;
 }
 
@@ -92,11 +111,24 @@ async function measure(device: GPUDevice, clamp: 'neighbourhood' | 'none', reset
         const depth = new Float32Array((await readTexture(device, screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
         const surface = (pixel: number): boolean => depth[pixel] !== 1;
         let previous = await readE(device, technique.probes!.denoisedIrradiance!);
+        let previousRaw = await readE(device, technique.probes!.irradiance);
 
         platform.scene.updateLight(lights[0], { position: LAMP_B });
         const denoisedFrames: Float32Array[] = [];
+        const rawFrames: Float32Array[] = [];
         const rawSum = new Float64Array(WIDTH * HEIGHT);
         const changes: number[] = [];
+        const rawChanges: number[] = [];
+        const change = (now: Float32Array, before: Float32Array): number => {
+            let sum = 0;
+            let count = 0;
+            for (let pixel = 0; pixel < now.length; pixel++) {
+                if (!surface(pixel)) continue;
+                sum += Math.abs(now[pixel] - before[pixel]) / Math.max(before[pixel], 1e-6);
+                count++;
+            }
+            return sum / Math.max(count, 1);
+        };
         let bad = 0;
         for (let index = 0; index < AFTER_FRAMES; index++) {
             frame();
@@ -104,20 +136,14 @@ async function measure(device: GPUDevice, clamp: 'neighbourhood' | 'none', reset
             const probes = technique.probes!;
             const denoised = await readE(device, probes.denoisedIrradiance!);
             denoisedFrames.push(denoised);
-            if (index >= AFTER_FRAMES - REFERENCE_FRAMES) {
-                const raw = await readE(device, probes.irradiance);
-                for (let pixel = 0; pixel < raw.length; pixel++) rawSum[pixel] += raw[pixel];
-            }
+            const raw = await readE(device, probes.irradiance);
+            rawFrames.push(raw);
+            if (index >= AFTER_FRAMES - REFERENCE_FRAMES) for (let pixel = 0; pixel < raw.length; pixel++) rawSum[pixel] += raw[pixel];
             if (index < 8) {
-                let sum = 0;
-                let count = 0;
-                for (let pixel = 0; pixel < denoised.length; pixel++) {
-                    if (!surface(pixel)) continue;
-                    sum += Math.abs(denoised[pixel] - previous[pixel]) / Math.max(previous[pixel], 1e-6);
-                    count++;
-                }
-                changes.push(sum / Math.max(count, 1));
+                changes.push(change(denoised, previous));
+                rawChanges.push(change(raw, previousRaw));
             }
+            previousRaw = raw;
             for (let pixel = 0; pixel < denoised.length; pixel++) if (surface(pixel) && !(Number.isFinite(denoised[pixel]) && denoised[pixel] >= 0)) bad++;
             previous = denoised;
         }
@@ -130,25 +156,33 @@ async function measure(device: GPUDevice, clamp: 'neighbourhood' | 'none', reset
             surfaceCount++;
         }
         const floor = (DARK_FLOOR * referenceMean) / Math.max(surfaceCount, 1);
-        const errors = denoisedFrames.map((e) => {
-            let sum = 0;
-            for (let pixel = 0; pixel < e.length; pixel++) if (surface(pixel)) sum += Math.abs(e[pixel] - reference[pixel]) / Math.max(reference[pixel], floor);
-            return sum / Math.max(surfaceCount, 1);
-        });
-        const finalError = errors.slice(-REFERENCE_FRAMES).reduce((a, b) => a + b, 0) / REFERENCE_FRAMES;
-        // The first frame from which the error stays within 1.25x its final level.
-        let lastAbove = -1;
-        errors.forEach((error, index) => {
-            if (error > 1.25 * finalError) lastAbove = index;
-        });
-        const settledFrame = lastAbove + 2 <= errors.length - REFERENCE_FRAMES ? lastAbove + 2 : null;
-        const errorAtFrame: Record<number, number> = {};
-        for (const at of [1, 2, 4, 8, 16, 32, 64, 120]) errorAtFrame[at] = Number(errors[at - 1].toFixed(4));
+        const curve = (frames: Float32Array[], frameChanges: number[]): Curve => {
+            const errors = frames.map((e) => {
+                let sum = 0;
+                for (let pixel = 0; pixel < e.length; pixel++) if (surface(pixel)) sum += Math.abs(e[pixel] - reference[pixel]) / Math.max(reference[pixel], floor);
+                return sum / Math.max(surfaceCount, 1);
+            });
+            const finalError = errors.slice(-REFERENCE_FRAMES).reduce((a, b) => a + b, 0) / REFERENCE_FRAMES;
+            // The first frame from which the error stays within 1.25x its final level.
+            let lastAbove = -1;
+            errors.forEach((error, index) => {
+                if (error > 1.25 * finalError) lastAbove = index;
+            });
+            const errorAtFrame: Record<number, number> = {};
+            for (const at of [1, 2, 4, 8, 16, 32, 64, 120]) errorAtFrame[at] = Number(errors[at - 1].toFixed(4));
+            return {
+                settledFrame: lastAbove + 2 <= errors.length - REFERENCE_FRAMES ? lastAbove + 2 : null,
+                finalError: Number(finalError.toFixed(4)),
+                errorAtFrame,
+                meanChangeFirst8: Number((frameChanges.reduce((a, b) => a + b, 0) / frameChanges.length).toFixed(4)),
+            };
+        };
+        const denoisedCurve = curve(denoisedFrames, changes);
+        const rawCurve = curve(rawFrames, rawChanges);
         return {
-            settledFrame,
-            finalError: Number(finalError.toFixed(4)),
-            errorAtFrame,
-            meanChangeFirst8: Number((changes.reduce((a, b) => a + b, 0) / changes.length).toFixed(4)),
+            denoised: denoisedCurve,
+            raw: rawCurve,
+            errorRatioAt64: Number((denoisedCurve.errorAtFrame[64] / rawCurve.errorAtFrame[64]).toFixed(3)),
             bad,
         };
     } finally {
@@ -173,7 +207,7 @@ try {
     const failures: string[] = [];
     for (const [name, run] of Object.entries(runs)) if (run.bad > 0) failures.push(`${name}: ${run.bad} bad values`);
     const defaults = runs['clamp neighbourhood, change reset on'];
-    if (defaults.settledFrame === null || defaults.settledFrame > SETTLE_GATE) failures.push(`defaults settle at frame ${defaults.settledFrame}, gate ${SETTLE_GATE}`);
+    if (!(defaults.errorRatioAt64 <= ERROR_RATIO_GATE)) failures.push(`defaults: denoised error ${defaults.errorRatioAt64}x the raw input's at frame 64, gate ${ERROR_RATIO_GATE}`);
     await drainDevice(device);
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
