@@ -3,8 +3,11 @@
  * GI-1.2 hash grid it enhances, on `sponza` (with curtains) and
  * `bistro-exterior` at 1280 × 720 from each scene's first bookmark, the
  * camera still: GI-1.2's multibounce (`neuralCache: 'off'`), the tail at its
- * defaults (the compact network, 64 → 3 × 32 → 3, f16, 2 steps a frame), and
- * the tail with the pathtracer's default network (64 → 5 × 64 → 3).
+ * defaults (the compact network, 64 → 3 × 32 → 3, f16, 2 steps a frame), the
+ * tail in f32, and the tail with the pathtracer's default network (64 → 5 ×
+ * 64 → 3). The device is the platform's plus `shader-f16` and the adapter's
+ * workgroup memory (32 KiB on the RTX 3060), as a host using the tail would
+ * ask; on the platform's own device the tail runs f32 with smaller tiles.
  *
  * Each configuration warms for `WARM_FRAMES` frames from an empty cache and a
  * fresh network (the gate opens at frame 17), then times `TIMED_FRAMES`
@@ -51,6 +54,7 @@ const MAX_TEXTURE_SIZE = typeof env.VITE_DDGI_MAX_TEXTURE_SIZE === 'string' ? Nu
 const ALL_CONFIGURATIONS: readonly (readonly [string, Partial<RadianceCacheSettings>])[] = [
     ['gi1 multibounce', { useMultibounce: true, neuralCache: 'off' }],
     ['tail', { useMultibounce: true, neuralCache: 'tail' }],
+    ['tail, f32', { useMultibounce: true, neuralCache: 'tail', neural: { precision: 'f32' } }],
     ['tail, default network', { useMultibounce: true, neuralCache: 'tail', neural: { network: 'default' } }],
 ];
 /** `VITE_NEURAL_TIMING_CONFIGS`: a semicolon-separated subset of the names above (all by default). */
@@ -194,6 +198,7 @@ async function timeConfiguration(device: GPUDevice, loaded: Loaded, name: string
             tailMemoryMiB: mib(tail?.memoryBytes ?? 0),
             networkMemoryMiB: mib(tail?.network?.bufferBytes ?? 0),
             techniqueMemoryMiB: mib(technique.memoryBytes),
+            workgroupStorageBytes: device.limits.maxComputeWorkgroupStorageSize,
             tail: tail ? { steps: tail.steps, gateOpen: tail.active, network: `${tail.network?.inferBackend} ${tail.network?.precision}`, weights: tail.network?.weightCount } : null,
             firstBounceEntries: counts?.[HASH_GRID_COUNTER.visibilityCount0] ?? null,
             secondBounceEntries: counts?.[HASH_GRID_COUNTER.visibilityCount1] ?? null,
@@ -212,7 +217,13 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
+    // The platform's device plus what the pathtracer's network runs best with, as a host using the tail would ask:
+    // shader-f16 and the adapter's workgroup memory (the platform's device has neither; NOTES, P6.4).
+    const features = [...optionalFeatures(adapter), ...(adapter.features.has('shader-f16') ? (['shader-f16'] as const) : [])];
+    const device = await adapter.requestDevice({
+        requiredLimits: { ...requiredLimits(adapter), maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize },
+        requiredFeatures: features,
+    });
     releaseDeviceOnPageHide(device);
     deviceErrors = watchDevice(device);
     if (!device.features.has('timestamp-query')) throw new Error('this page needs timestamp-query');
