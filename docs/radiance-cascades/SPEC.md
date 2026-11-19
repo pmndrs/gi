@@ -71,13 +71,13 @@ Capacity grows to `ceil(1.25 × requiredRayLanes)` when needed. Probe tables, G-
 
 The [interval experiment](../../experiments/rc-intervals/) checks the low-level tracer endpoint contract. The native depositor puts a hit exactly on an internal split into the next interval. The analytical GPU test covers an exact split, constant sky, a near occluder and a near/far directional mixture. [Core GPU test](../../tools/gpu/pages/rc-native-core/)
 
-The pathtracer's experimental neural radiance cache estimates outgoing radiance and adds training, history and memory costs. It is a candidate for secondary radiance once first-bounce transport agrees. A reduced G-buffer with depth and motion vectors can feed the upscaler. Report whether probe spacing uses display or render pixels. Consider the downsampler when a measured pass actually needs a depth pyramid.
+The pathtracer's experimental neural radiance cache estimates outgoing radiance and adds training, history and memory costs. Consider it for secondary radiance when a visible lighting deficit justifies the additional training and GPU budget. A reduced G-buffer with depth and motion vectors can feed the upscaler. Report whether probe spacing uses display or render pixels. Consider the downsampler when a measured pass actually needs a depth pyramid.
 
 ## Acceptance
 
 - A locked install serves the demo without downloading a model. Direct, indirect and composite views show the same pose and lighting event. A real WebGPU run verifies indirect light on a receiver and response to changed emission.
 - Record GPU, browser, drawing size, stride, probe budget, history state and timing scope. Separate cascade compute from full frame time. A speedup requires paired runs with corresponding image evidence.
-- Check an interval seam, a miss, and the distinction between transparent and unobserved intervals on the GPU. Require equivalent hits and lighting on the rail before comparing the shared-tracer solver's speed.
+- Check an interval seam, a miss, and the distinction between transparent and unobserved intervals on the GPU. Verify hit distance and lighting on known geometry. Judge changes to the web renderer by measured frame cost, retained detail, leakage and settling on the moving rail and shutter. Differences from Chandra or S5 can help locate an artifact.
 - The moving-geometry gate is the sliding-shutter chamber. Every ray and raster pass must see the same transform. Both solvers must attenuate indirect light on closure and restore it after reopening.
 
 See [the plan](PLAN.md) for implementation order and [PROGRESS](../../PROGRESS.md) for verified results.

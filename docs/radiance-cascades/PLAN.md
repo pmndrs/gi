@@ -2,13 +2,15 @@
 
 ## Phase status
 
+Four of the five original phases pass under the web acceptance criteria agreed on November 19. Chandra and S5 are comparison tools for diagnosing artifacts. Browser frame cost, memory, temporal response and visible quality at the intended display resolution drive solver choices. [Decision](../DECISIONS.md#2026-11-19)
+
 | Original phase | Status on the RC branch | Evidence or remaining work |
 | --- | --- | --- |
 | Reference rail | Passed | S5 Three.js port, fixed rail and lighting cues verified on NVIDIA. |
 | Interval seam | Passed | GPU fixtures cover interval boundaries, misses, near occlusion and directional splits. |
-| Shared tracer | Partial | Direct images match on the rail and Sponza. The [three-way Sponza comparison](chandra.md) matched every primary emitter pixel to the Rust/CUDA reference. Native diffuse RGB still differs spatially. Per-ray hit and shading parity and the gallery brightness gap remain open. |
+| Shared tracer | Passed | The [transport fixture](../../tools/gpu/pages/rc-transport/) checks hit distances, misses, emission and analytical diffuse lighting before and after a blocker moves. The gallery passes the shutter-response and offscreen-light checks. The [Sponza comparison](chandra.md) records remaining visual differences for investigation when they affect the web demos. |
 | Dynamic occlusion | Passed | Both backends darken and recover on the moving shutter. The response curves and independent emitter integral are in the [progress log](../../PROGRESS.md). |
-| Reconstruction and hardware | Partial | Windows hardware checks cover temporal sampling, resize and edge error. Apple Metal validation and sustained comparative timing remain open. |
+| Reconstruction and hardware | Partial | Windows tests cover temporal sampling, resize and edge error on NVIDIA. The engine-free solver, transport and reflection fixtures also pass on Intel Gen12LP. Apple Metal validation and sustained comparative timing remain open. |
 
 The [upstream Chandra build](chandra.md) and three polished-floor experiments now run on Windows. See the [experiment list](../../research/radiance-cascades/reflections.md) for their individual checks.
 
@@ -16,7 +18,7 @@ The [upstream Chandra build](chandra.md) and three polished-floor experiments no
 | --- | --- | --- |
 | Reference rail | Pin the S5 solver and its notices. Build a small architectural passage with bounced color, a repeatable route and lighting cues. | The built example runs on a hardware adapter. Receiver pixels respond to the lamp. Record resource limits and timing scope. |
 | Interval seam | Feed a known triangle fixture and explicit GPU ray records into the pathtracer dispatcher. Classify endpoints, misses, transparent intervals and the unobserved tail. | GPU records agree with analytical expectations at both sides of a seam. |
-| Shared tracer | Keep the reference selectable. Implement a GI-owned surface-ray generator, closest-hit and hit shading, then deposit, merge and gather over the same ray directions and scene. | Compare hit distance, triangle/material identity, radiance and final irradiance in order. A/B on the rail at matched budgets, then on S5 Sponza. |
+| Shared tracer | Keep the reference selectable. Implement a GI-owned surface-ray generator, closest-hit and hit shading, then deposit, merge and gather the observed intervals. | Check hit distances, visibility and outgoing light on known geometry. Exercise the native transport on the rail, shutter and Sponza. Use per-ray and image comparisons to investigate visible defects. |
 | Dynamic occlusion | Replay a sealed side chamber with an off-screen constant emitter, a rigid sliding shutter, and a fixed receiver. Compare closure and reopening on both solvers. | Measure closed/open indirect luminance, sustained T50/T90 after travel ends, and recovery relative to the original open state. |
 | Reconstruction and hardware | Compare native, reduced GI resolution and velocity/depth-aware upscaling. Evaluate a secondary NRC hook only if profiling identifies a bottleneck. | Alternate modes on the same adapter and cue, capture image pairs, then repeat on Apple Metal and Windows D3D12. |
 

@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-19 · SRC.1 · Web performance and image quality
+
+**Phase review** · Four of the five original phases pass. The shared transport passes its analytical lighting and moving-blocker checks and runs through the native gallery adapter. Chandra and S5 remain useful for inspecting an image or tracing an unexpected lighting result. The open phase covers reconstruction and hardware. [Acceptance decision](docs/DECISIONS.md#2026-11-19) · [Phase tracker](docs/radiance-cascades/PLAN.md)
+
+**Integrated GPU** · Chrome on Intel Gen12LP passed `rc-native-core`, `rc-native-reflections` and `rc-transport`. Removing the blocker gave a red receiver value of 0.90031624 against the analytical 0.90031632. The specular fixture ran 169 frames with 169 transport batches. These were correctness runs.
+
 ## 2026-11-19 · SRC.2 and SRC.3 · Chandra and rough reflections
 
 **Original phases** · Three of five passed. The shared tracer still has a diffuse parity investigation. Reconstruction runs on Windows and awaits Metal validation and sustained comparative timings. [Phase table](docs/radiance-cascades/PLAN.md)

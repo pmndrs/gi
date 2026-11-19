@@ -2,6 +2,10 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-19
+
+- **Split RC targets interactive web rendering.** Dennis clarified that Chandra is a guide and the WebGPU solver can use different sources of radiance. Select changes using paired browser timings, memory use, and image quality in motion at the target output size. Keep analytical checks for interval ownership, visibility and lighting units. Use the Chandra and Three.js captures to investigate specific artifacts. [RC phase tracker](radiance-cascades/PLAN.md)
+
 ## 2026-11-18
 
 - **M3, M4 and M5 are signed off** (Dennis, 2026-11-18). His words, after the lead asked to merge his answers and the Mac asset fix: "yes get us closed please do whatever we need to close this up to pushing on npm defer timing runs for another time. I want closure of the phases". Earlier the same day: "what I want is to get through these phases so I can unify things. I dont care about the other branches, I dont care about timing." T3.10, T4.5 and T5.4–T5.7 are done. *What the sign-off covers:* the M3-M4 and M5 notes as they stand, with their known misses accepted. The items the notes had waiting on him (his look at the viewer's scenarios and scenes, Bistro's dark side street, the README and docs/releasing.md, the examples site) are folded into this sign-off: the viewer opened every scenario and textured scene on the M5 Pro with no errors in his Chrome that day, but he named no findings, so anything he sees later goes to the tuning pass. *Not covered:* publishing. The one-time steps in docs/releasing.md and cutting 0.1.0 stay his.
