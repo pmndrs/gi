@@ -76,7 +76,7 @@ export interface RadianceCacheSettings {
      */
     interpolationJitter: boolean;
     /**
-     * How the world cache lights its cells (lever L1, TASKS P6.2; id Tech 8's
+     * How the world cache lights its cells (lever E8, TASKS P6.2; id Tech 8's
      * "shade cells, not hits"). `'per-hit'` (default) is GI-1.2's: every probe
      * and second-bounce hit draws a light and traces a shadow ray into its
      * cell. `'budgeted'`: hits only find their cells, and at most
@@ -84,7 +84,7 @@ export interface RadianceCacheSettings {
      * priority (new or changed cells, then cells still converging, then each
      * cell's turn, then the rest at random); a cell not lit this frame keeps
      * its value. Rays shorter than their cell are still lit per hit (they read
-     * no cell). Read every frame (docs/design/radiance-cache.md, "Lever L1").
+     * no cell). Read every frame (docs/design/radiance-cache.md, "Lever E8").
      */
     cellShading: 'per-hit' | 'budgeted';
     /** Cells lit a frame with `cellShading: 'budgeted'` (id Tech 8 lights about 20,000). A whole number, 0 or more. Read every frame. */

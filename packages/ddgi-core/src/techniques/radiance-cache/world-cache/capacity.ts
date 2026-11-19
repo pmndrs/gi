@@ -53,7 +53,7 @@ export interface HashGridCacheOptions {
     /** `gi1_hash_grid_cache_max_sample_count` (gi1.h:63, default 16): a cell's temporal sample cap; below it the resolve reads a coarser level. */
     hashGridCacheMaxSampleCount: number;
     /**
-     * Lever L1 (TASKS P6.2, id Tech 8's "shade cells, not hits"): `'per-hit'`
+     * Lever E8 (TASKS P6.2, id Tech 8's "shade cells, not hits"): `'per-hit'`
      * lights every hit (GI-1.2, the default); `'budgeted'` lights at most
      * `cellShadingBudget` cells a frame, one light sample each, chosen by
      * priority (`cell-shading-wgsl.ts`). Read every frame; switching doesn't
@@ -199,22 +199,22 @@ export const HASH_GRID_COUNTER = {
      */
     probeRayCount: 8,
     /**
-     * Lever L1 (`cellShading: 'budgeted'`, cell-shading-wgsl.ts): the cells
+     * Lever E8 (`cellShading: 'budgeted'`, cell-shading-wgsl.ts): the cells
      * hit this frame, each listed once as a candidate for lighting. Cleared
      * by the cache's encoder at the start of a budgeted frame.
      */
     cellCandidateCount: 9,
-    /** Lever L1: the candidates lit this frame, min(candidates, budget), written by `PrioritizeCells`. */
+    /** Lever E8: the candidates lit this frame, min(candidates, budget), written by `PrioritizeCells`. */
     cellShadedCount: 10,
     /**
-     * Lever L1: frames between a settled cell's turns, for the next frame
+     * Lever E8: frames between a settled cell's turns, for the next frame
      * (`PrioritizeCells` writes it from this frame's counts). Kept across
      * frames; 0 (an empty cache) reads as 1.
      */
     cellSchedulePeriod: 11,
 } as const;
 
-/** Lever L1's priority classes: new or changed, still converging, its turn, the rest (cell-shading-wgsl.ts). */
+/** Lever E8's priority classes: new or changed, still converging, its turn, the rest (cell-shading-wgsl.ts). */
 export const CELL_SHADING_CLASSES = 4;
 /**
  * Random sub-bins per class, so the class the budget cuts through is cut at

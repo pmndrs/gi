@@ -1,4 +1,4 @@
 {
-    "description": "P6.2 lever L1: world-cache cells lit on a budget (cellShading 'budgeted') against per-hit lighting at 1280x720. The lit plane converges (frames recorded per budget 5k/20k/80k and per hit), the queue's claim, counting sort and uniform draw, the furnace and strips read the analytic second bounce, and the lag after a sun or point-light change. Correctness and measurement, no timing.",
+    "description": "P6.2 lever E8: world-cache cells lit on a budget (cellShading 'budgeted') against per-hit lighting at 1280x720. The lit plane converges (frames recorded per budget 5k/20k/80k and per hit), the queue's claim, counting sort and uniform draw, the furnace and strips read the analytic second bounce, and the lag after a sun or point-light change. Correctness and measurement, no timing.",
     "timeoutMs": 1200000
 }

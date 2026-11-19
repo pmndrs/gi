@@ -358,7 +358,7 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         expect(layout.reservoirBuffer).toBe(9 * maxRayCount);
         // Then GI-1.2's second-bounce lists (RC3.3): the BRDF and pdf, and the ray (register D36).
         expect(layout.multibounceInfoBuffer).toBe(9 * maxRayCount + RESERVOIR_WORDS * 2 * maxRayCount);
-        // Then lever L1's candidate and lit lists, one word per entry each (2 × max_ray_count entries).
+        // Then lever E8's candidate and lit lists, one word per entry each (2 × max_ray_count entries).
         expect(layout.bytes).toBe((layout.multibounceInfoBuffer + (2 + 12 + 1 + 2 + 4) * maxRayCount + CELL_SHADING_BINS) * 4);
     });
 

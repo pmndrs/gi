@@ -251,7 +251,7 @@ describe('the multibounce kernels and lists', () => {
         expect(lists.multibounceRayBuffer).toBe(lists.multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount);
         expect(lists.firstBounceBypassBuffer).toBe(lists.multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount);
         expect(lists.multibounceDirectBuffer).toBe(lists.firstBounceBypassBuffer + maxRayCount);
-        // Lever L1's candidate and shade lists (one word an entry each) follow.
+        // Lever E8's candidate and shade lists (one word an entry each) follow.
         expect(lists.cellCandidateBuffer).toBe(lists.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount);
         expect(lists.bytes).toBe((lists.cellCandidateBuffer + 2 * 2 * maxRayCount + CELL_SHADING_BINS) * 4);
         // 36 words a probe ray and the priority bins: 33,178,624 bytes at 1280 x 720.

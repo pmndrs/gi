@@ -1,5 +1,5 @@
 /**
- * P6.2, lever L1: the GPU time of the radiance cache's world-cache passes per
+ * P6.2, lever E8: the GPU time of the radiance cache's world-cache passes per
  * frame, cells lit per hit (GI-1.2) against on a budget (`cellShading:
  * 'budgeted'`, 5k, 20k, 80k cells), on Sponza (with curtains) and Bistro
  * exterior at 1280 × 720 from each scene's first bookmark, the camera still.

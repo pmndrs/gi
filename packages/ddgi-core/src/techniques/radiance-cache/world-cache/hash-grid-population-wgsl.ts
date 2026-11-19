@@ -123,7 +123,7 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
 /** Bytes of `HashGridCacheRayLists`: fifteen words, padded to 16 bytes. */
 export const RAY_LISTS_UNIFORM_BYTES = 64;
 
-/** Word of `HashGridCacheRayLists` that says how cells are lit (lever L1): 0 per hit, 1 budgeted. Written every frame. */
+/** Word of `HashGridCacheRayLists` that says how cells are lit (lever E8): 0 per hit, 1 budgeted. Written every frame. */
 export const RAY_LISTS_CELL_SHADING_WORD = 14;
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
@@ -200,11 +200,11 @@ export interface HashGridCacheRayListLayout {
     readonly firstBounceBypassBuffer: number;
     /** Ours (register D38): per second-bounce entry, its own direct light where its segment bypasses the cache. */
     readonly multibounceDirectBuffer: number;
-    /** Lever L1: one word per cell hit this frame (`max_combined_ray_count`): its representative entry, a changed bit and its priority bin. */
+    /** Lever E8: one word per cell hit this frame (`max_combined_ray_count`): its representative entry, a changed bit and its priority bin. */
     readonly cellCandidateBuffer: number;
-    /** Lever L1: the candidates lit this frame, in priority order (`max_combined_ray_count` at most): the entry and the changed bit. */
+    /** Lever E8: the candidates lit this frame, in priority order (`max_combined_ray_count` at most): the entry and the changed bit. */
     readonly cellShadeBuffer: number;
-    /** Lever L1: `CELL_SHADING_BINS` words, the candidates per priority bin, then each bin's next slot. */
+    /** Lever E8: `CELL_SHADING_BINS` words, the candidates per priority bin, then each bin's next slot. */
     readonly cellPriorityBins: number;
     readonly bytes: number;
 }
@@ -231,7 +231,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount;
     const firstBounceBypassBuffer = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount;
     const multibounceDirectBuffer = firstBounceBypassBuffer + maxRayCount;
-    // Lever L1's lists: a cell has at least one entry, so there are at most as many candidates as entries.
+    // Lever E8's lists: a cell has at least one entry, so there are at most as many candidates as entries.
     const cellCandidateBuffer = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
     const cellShadeBuffer = cellCandidateBuffer + maxCombinedRayCount;
     const cellPriorityBins = cellShadeBuffer + maxCombinedRayCount;
@@ -260,7 +260,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
  * Throws `GILimitError` naming the limit the per-ray lists pass. They are one
  * buffer bound whole as one storage binding, so it must fit both the binding
  * limit and the buffer limit. It grows with the screen (36 words per probe
- * ray, lever L1's two lists included: 33 MB at 1280 × 720, 298 MB at
+ * ray, lever E8's two lists included: 33 MB at 1280 × 720, 298 MB at
  * 3840 × 2160, past WebGPU's default 128 MiB binding), so a larger screen or
  * a device with smaller limits can't
  * bind it where the cache itself fits (register D14's rule: name the limit,
@@ -289,13 +289,13 @@ struct HashGridCacheRayLists {
     multibounce_ray_buffer: u32,    // ours (register D36): each second-bounce entry's ray, a WorldCacheProbeRay in 12 words
     first_bounce_bypass_buffer: u32,  // ours (register D38): 1 where a first-bounce entry's probe ray bypasses the cache
     multibounce_direct_buffer: u32,   // ours (register D38): a bypassing second-bounce entry's own direct light, 2 words
-    cell_candidate_buffer: u32,     // lever L1: the cells hit this frame, one word each (cell-shading-wgsl.ts)
-    cell_shade_buffer: u32,         // lever L1: the cells lit this frame, in priority order
-    cell_shading: u32,              // lever L1: 0 per hit (GI-1.2), 1 budgeted; written every frame
-    cell_priority_bins: u32,        // lever L1: the candidates per priority bin, then each bin's next slot
+    cell_candidate_buffer: u32,     // lever E8: the cells hit this frame, one word each (cell-shading-wgsl.ts)
+    cell_shade_buffer: u32,         // lever E8: the cells lit this frame, in priority order
+    cell_shading: u32,              // lever E8: 0 per hit (GI-1.2), 1 budgeted; written every frame
+    cell_priority_bins: u32,        // lever E8: the candidates per priority bin, then each bin's next slot
 }
 
-// Lever L1: hits only find their cells, and the cells are lit on a budget (cell-shading-wgsl.ts).
+// Lever E8: hits only find their cells, and the cells are lit on a budget (cell-shading-wgsl.ts).
 fn HashGridCache_CellShadingBudgeted() -> bool {
     return g_HashGridCache_RayLists.cell_shading != 0u;
 }
@@ -561,7 +561,7 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
         return; // do not continue past an emissive surface
     }
 
-    // Lever L1 (cells lit on a budget): the hit offers itself as its cell's sample and, if its ray
+    // Lever E8 (cells lit on a budget): the hit offers itself as its cell's sample and, if its ray
     // is at least a cell long, joins the resolve list with no light of its own; its cell is lit by
     // ClaimCells-ShadeCells. A shorter ray reads no cell, so it is still lit per hit below.
     // Unlike per hit with multibounce off, a hit is resolved without knowing whether it has a light.
@@ -693,7 +693,7 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     let quantized_radiance = HashGridCache_QuantizeRadiance(lighting);
     let scratch            = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
 
-    // Lever L1 (cells lit on a budget): only rays shorter than their cell have shadow rays here, and
+    // Lever E8 (cells lit on a budget): only rays shorter than their cell have shadow rays here, and
     // their samples stay with their rays; the cell's sample is ShadeCells', and until ClaimCells the
     // scratch's first words hold the entries' keys.
     if (!HashGridCache_CellShadingBudgeted()) {
@@ -866,7 +866,7 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         tile_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.update_tile_buffer, update_tile_index);
         let cell_index = HashGridCache_CellIndex(tile_cell_offset, tile_index, 0u);
 
-        // Temporal accumulation. Lever L1 (cells lit on a budget): a cell not lit this frame keeps its
+        // Temporal accumulation. Lever E8 (cells lit on a budget): a cell not lit this frame keeps its
         // value and count, as the indirect values do (register D37); Capsaicin's blend would step the
         // count down each such frame and read 0 after 16, though nothing was learned about the cell.
         let previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
@@ -1238,7 +1238,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     let ray = HashGridCache_LoadMultibounceRay(did - first_bounce_count);
     let surface = HashGridCache_ProbeSurface(ray);
 
-    // Lever L1 (cells lit on a budget): the second hit offers itself as its cell's sample. A segment
+    // Lever E8 (cells lit on a budget): the second hit offers itself as its cell's sample. A segment
     // at least a cell long reads its cell (UpdateMultibounceCells), which ShadeCells lights, so it
     // draws no light here; its entry's flags are written as below. A shorter segment keeps its own
     // light, so it goes on as per hit.
@@ -1341,7 +1341,7 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
 
     // The light arriving from the second hit, as BRDF / pdf weighs it (no light for a miss).
     var radiance = vec3f(0.0);
-    // Lever L1 (cells lit on a budget): a second-hit cell no level of which has been lit yet holds
+    // Lever E8 (cells lit on a budget): a second-hit cell no level of which has been lit yet holds
     // no estimate, not darkness, so it adds no sample (counting it as 0 would pull the first-bounce
     // cell's mean down until 16 later samples wash it out).
     var adds_sample = true;

@@ -1,8 +1,8 @@
 /**
- * Lever L1 (TASKS P6.2): id Tech 8's "shade cells, not hits" (Sousa,
+ * Lever E8 (TASKS P6.2): id Tech 8's "shade cells, not hits" (Sousa,
  * SIGGRAPH 2025, slides 17-20; research/gi-1.0/idtech8-performance.md, T1-T3)
  * on GI-1.2's hash grid, behind `cellShading: 'budgeted'`
- * (docs/design/radiance-cache.md, "Lever L1").
+ * (docs/design/radiance-cache.md, "Lever E8").
  *
  * Per hit (GI-1.2, the default), `GenerateReservoirs` and
  * `GenerateMultibounceReservoirs` draw a light for every probe-ray and
@@ -123,7 +123,7 @@ struct HashGridCacheChangeBox {
     padding1: f32,
 }
 
-// Lever L1's per-frame values (hash-grid-cache.ts writes them).
+// Lever E8's per-frame values (hash-grid-cache.ts writes them).
 struct HashGridCacheCellShading {
     budget: u32,                    // cells lit this frame at most
     change_everything: u32,         // 1: a change with no bounds (the sun, the sky) or too many boxes

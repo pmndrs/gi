@@ -124,7 +124,7 @@ export interface WorldCacheFrame {
      * Where the scene changed since the last frame (the platform's
      * `SceneChanges`, as boxes, or everywhere for a change with no bounds).
      * Optional: a cache that reacts to changes reads it (the hash grid's
-     * lever L1 lights changed cells first); none means no change.
+     * lever E8 lights changed cells first); none means no change.
      */
     readonly changes?: WorldCacheChanges;
 }

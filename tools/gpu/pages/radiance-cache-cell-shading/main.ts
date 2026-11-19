@@ -1,5 +1,5 @@
 /**
- * P6.2, lever L1: the world cache's cells lit on a budget (`cellShading:
+ * P6.2, lever E8: the world cache's cells lit on a budget (`cellShading:
  * 'budgeted'`, cell-shading-wgsl.ts) against GI-1.2's per-hit lighting, on
  * the world-cache page's analytic scenes (radiance-cache-world-cache), at
  * 1280 × 720, through the technique.
@@ -205,7 +205,7 @@ async function startScenario(device: GPUDevice, name: string, kind: SceneKind, l
     };
     frame();
     await platform.rays.whenBuilt();
-    // Past the window lever L1 remembers scene changes for (the scene's creation is one), so the
+    // Past the window lever E8 remembers scene changes for (the scene's creation is one), so the
     // checks start from an empty cache with no change pending.
     for (let index = 0; index <= CELL_SHADING_CHANGE_FRAMES; index++) frame();
     await device.queue.onSubmittedWorkDone();

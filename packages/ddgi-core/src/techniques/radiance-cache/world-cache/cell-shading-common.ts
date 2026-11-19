@@ -1,5 +1,5 @@
 /**
- * Lever L1's pieces that the GI-1.2 population passes share with its own
+ * Lever E8's pieces that the GI-1.2 population passes share with its own
  * kernels (`cell-shading-wgsl.ts`): where its counters are, and how a hit
  * offers itself as its cell's one sample this frame. Kept apart so the
  * population passes (`hash-grid-population-wgsl.ts`) and the lever's kernels
@@ -12,7 +12,7 @@
 import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, HASH_GRID_COUNTER } from './capacity.ts';
 
 /**
- * Salts for lever L1's random streams, so none of them shares its numbers
+ * Salts for lever E8's random streams, so none of them shares its numbers
  * with `GenerateReservoirs`' stream (seeded with the visibility index) or with
  * each other. Each is above any visibility index (fewer than 2^23) and any
  * cell index, so a salted seed never equals another stream's plain seed.
@@ -32,7 +32,7 @@ export const CELL_CHANGED_COUNT = 1 + 2 ** -10;
 export const CELL_DARK_COUNT = 2 ** -14;
 
 export const CELL_SHADING_COMMON_WGSL = /* wgsl */ `
-// ---- Lever L1: cells lit on a budget (cell-shading-wgsl.ts) ----
+// ---- Lever E8: cells lit on a budget (cell-shading-wgsl.ts) ----
 const HASHGRIDCACHE_CELLCANDIDATECOUNT: u32 = ${HASH_GRID_COUNTER.cellCandidateCount}u;
 const HASHGRIDCACHE_CELLSHADEDCOUNT: u32 = ${HASH_GRID_COUNTER.cellShadedCount}u;
 const HASHGRIDCACHE_CELLSCHEDULEPERIOD: u32 = ${HASH_GRID_COUNTER.cellSchedulePeriod}u;

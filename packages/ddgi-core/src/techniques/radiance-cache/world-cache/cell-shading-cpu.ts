@@ -1,5 +1,5 @@
 /**
- * CPU twins of lever L1's bookkeeping (`cell-shading-wgsl.ts`, cells lit on a
+ * CPU twins of lever E8's bookkeeping (`cell-shading-wgsl.ts`, cells lit on a
  * budget), for the unit tests and the GPU page's predictions: the priority
  * class a claim gives a cell, `PrioritizeCells`' counting sort and turn
  * period, `ScatterCells`' slots, and a model of one cell's value over frames,

@@ -8,7 +8,7 @@ import { makeRandom, rand } from './multibounce-cpu.ts';
 
 const MAX_SAMPLE_COUNT = DEFAULT_HASH_GRID_CACHE_OPTIONS.hashGridCacheMaxSampleCount;
 
-describe("lever L1's priority (cells lit on a budget)", () => {
+describe("lever E8's priority (cells lit on a budget)", () => {
     it('puts new and changed cells first, then converging ones, then those whose turn it is', () => {
         expect(cellPriorityClass({ count: 0, changed: false, turn: false }, MAX_SAMPLE_COUNT)).toBe(CELL_PRIORITY_CLASS.newOrChanged);
         expect(cellPriorityClass({ count: 16, changed: true, turn: false }, MAX_SAMPLE_COUNT)).toBe(CELL_PRIORITY_CLASS.newOrChanged);
@@ -64,7 +64,7 @@ describe("lever L1's priority (cells lit on a budget)", () => {
     });
 });
 
-describe("lever L1's estimate (a CPU model of one cell)", () => {
+describe("lever E8's estimate (a CPU model of one cell)", () => {
     // A cell across a shadow's edge: 6 hits a frame, each lit (light 1, exponential noise of mean 1)
     // with probability 0.4, so a hit's expected light is 0.4.
     const hitsAtEdge = (seed: number) => {
@@ -97,7 +97,7 @@ describe("lever L1's estimate (a CPU model of one cell)", () => {
     });
 });
 
-describe("lever L1's kernels and lists", () => {
+describe("lever E8's kernels and lists", () => {
     const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
 
     it('declare their entry points, and the population passes branch on the setting', () => {

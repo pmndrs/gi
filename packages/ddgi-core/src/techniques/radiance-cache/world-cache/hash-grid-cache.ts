@@ -25,7 +25,7 @@
  * indirect-dispatch arguments, where Capsaicin dispatches indirectly
  * (`generateDispatch`).
  *
- * Lever L1 (`cellShading: 'budgeted'`, TASKS P6.2): the hits only find their
+ * Lever E8 (`cellShading: 'budgeted'`, TASKS P6.2): the hits only find their
  * cells, and `ClaimCells`, `PrioritizeCells` and `ShadeCells`
  * (`cell-shading-wgsl.ts`) light a budget of cells between `PopulateCells`
  * and `UpdateTiles`.
@@ -137,7 +137,7 @@ interface PopulationPasses {
     readonly resolveCells: PopulationPass;
 }
 
-/** Lever L1's passes (cell-shading-wgsl.ts): kernels with their indirect arguments (none for the one-thread `PrioritizeCells`). */
+/** Lever E8's passes (cell-shading-wgsl.ts): kernels with their indirect arguments (none for the one-thread `PrioritizeCells`). */
 interface CellShadingPasses {
     readonly claimFirstBounceCells: PopulationPass;
     readonly claimSecondBounceCells: PopulationPass;
@@ -195,7 +195,7 @@ export class HashGridCache implements WorldCache {
     private lastFramePingPong: number | null = null;
     /** The options whose change empties the cache, as the last `encodeFrame` read them; null before the first. */
     private lastClearOptions: HashGridCacheClearOptions | null = null;
-    /** Lever L1: the scene changes of the last `CELL_SHADING_CHANGE_FRAMES` frames, kept so cells hit only now and then are caught too. */
+    /** Lever E8: the scene changes of the last `CELL_SHADING_CHANGE_FRAMES` frames, kept so cells hit only now and then are caught too. */
     private recentChanges: RecentCellChanges = [];
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
@@ -315,7 +315,7 @@ export class HashGridCache implements WorldCache {
         /** A population kernel: the hash grid in group 1, the ray data in group 2, the platform's hit shading in group 0 when it shades. */
         const populationKernel = (label: string, code: string, entryPoint: string, shades: boolean): Promise<ComputeKernel> =>
             kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup] });
-        // Lever L1's kernels add its uniform in group 3.
+        // Lever E8's kernels add its uniform in group 3.
         const cellShadingGroup = { label: 'radiance-cache/cell shading', entries: CELL_SHADING_GROUP_ENTRIES };
         const cellShadingKernel = (label: string, code: string, entryPoint: string, shades: boolean): Promise<ComputeKernel> =>
             kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup, cellShadingGroup] });
@@ -367,7 +367,7 @@ export class HashGridCache implements WorldCache {
             indirectArgs('GenerateMultibounceReservoirs args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs),
             indirectArgs('UpdateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.updateMultibounceCells),
         ]);
-        // Lever L1 (compiled always, run only with cellShading 'budgeted').
+        // Lever E8 (compiled always, run only with cellShading 'budgeted').
         const claimCode = claimCellsWgsl(layout);
         const [claimFirstKernel, claimSecondKernel, prioritizeKernel, scatterKernel, shadeKernel, claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs] = await Promise.all([
             cellShadingKernel('ClaimCells (first bounce)', claimCode, CELL_SHADING_ENTRY_POINT.claimFirstBounceCells, false),
@@ -541,7 +541,7 @@ export class HashGridCache implements WorldCache {
     }
 
     /**
-     * Lever L1: writes this frame's way of lighting cells into the ray lists'
+     * Lever E8: writes this frame's way of lighting cells into the ray lists'
      * uniform (every population pass reads it) and, when budgeted, the budget
      * and the changes into the lever's uniform, and records clearing its
      * per-frame counters. Returns whether the cells are lit on the budget.
@@ -569,7 +569,7 @@ export class HashGridCache implements WorldCache {
         return true;
     }
 
-    /** Lever L1's passes (cell-shading-wgsl.ts): claim, prioritise and scatter, light. */
+    /** Lever E8's passes (cell-shading-wgsl.ts): claim, prioritise and scatter, light. */
     private encodeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, useMultibounce: boolean): void {
         const cellShading = prepared.cellShading;
         const indirect = (pass: GPUComputePassEncoder, name: Exclude<CellShadingPassName, 'prioritizeCells'>): void => {
@@ -748,11 +748,11 @@ export function sameClearOptions(a: HashGridCacheClearOptions, b: HashGridCacheC
     return a.cellSize === b.cellSize && a.minCellSize === b.minCellSize && a.useMultibounce === b.useMultibounce;
 }
 
-/** Lever L1: a frame's changes and its number, newest last. */
+/** Lever E8: a frame's changes and its number, newest last. */
 export type RecentCellChanges = readonly { readonly frame: number; readonly changes: WorldCacheChanges }[];
 
 /**
- * Lever L1: the changes of the frames in the window ending at `frame`
+ * Lever E8: the changes of the frames in the window ending at `frame`
  * (`CELL_SHADING_CHANGE_FRAMES`), with this frame's added. A cell is marked
  * changed only on a frame it is hit, and on a still camera the jittered
  * probes reach some cells only now and then; a change remembered for a few
@@ -771,7 +771,7 @@ export function recentChangesUnion(recent: RecentCellChanges): WorldCacheChanges
     return { everything: false, boxes: recent.flatMap((entry) => entry.changes.boxes) };
 }
 
-/** The group lever L1's kernels put their uniform in (cell-shading-wgsl.ts's `CELL_SHADING_GROUP`). */
+/** The group lever E8's kernels put their uniform in (cell-shading-wgsl.ts's `CELL_SHADING_GROUP`). */
 const CELL_SHADING_GROUP_INDEX = 3;
 
 /**
