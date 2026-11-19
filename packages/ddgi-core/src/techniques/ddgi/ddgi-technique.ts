@@ -138,6 +138,7 @@ import {
     AUTO_NORMAL_BIAS_SHARE,
     AUTO_VIEW_BIAS_SHARE,
     blendSettings,
+    blendedRaysPerProbe,
     clockStep,
     CLOCK_WRAP_SECONDS,
     FIXED_RAYS,
@@ -1651,8 +1652,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         const rays = resources.rays;
         const roundProbes = Math.min(count, DIRECT_ROUND_PROBES);
-        // raysPerProbe is a live setting, so the work list is checked against this frame's blended rays.
-        const listOutgrown = resources.directWorkList !== null && roundProbes * Math.max(0, raysPerProbe - FIXED_RAYS) > rays.scratch.itemCapacity;
+        // raysPerProbe, relocation and classification are live settings, so the work list is checked against this frame's blended rays.
+        const listOutgrown = resources.directWorkList !== null && roundProbes * blendedRaysPerProbe(raysPerProbe, this.settings) > rays.scratch.itemCapacity;
         const outgrown = count * raysPerProbe > rays.capacity || listOutgrown;
         if (outgrown) {
             // Nothing recorded in this frame uses the old scratch yet, and earlier frames are submitted.
@@ -2426,7 +2427,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /**
      * The ray scratch for `capacity` ray results (`RAY_RECORD_BYTES` each, layout.ts)
      * and, with direct light deferred, a work list with room for every
-     * blended ray of one round at `raysPerProbe`; and the groups that bind it.
+     * blended ray of one round at `raysPerProbe` (every ray, with relocation
+     * and classification off); and the groups that bind it.
      */
     private createRayBuffer(context: TechniqueContext, resources: Omit<PreparedResources, 'rays' | 'mark'>, capacity: number, raysPerProbe: number): RayBuffers {
         const device = context.device;
@@ -2435,7 +2437,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const scratch = context.shade.direct.createScratch({
             label: 'ddgi rays',
             rays: capacity,
-            workItems: probesPerRound * Math.max(0, raysPerProbe - FIXED_RAYS),
+            workItems: probesPerRound * blendedRaysPerProbe(raysPerProbe, this.settings),
             // A result per irradiance layer (light groups).
             layers: resources.plan.layers.length,
         });

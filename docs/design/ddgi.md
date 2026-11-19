@@ -78,7 +78,7 @@ State 3 is the starting state, so the first frames show partial GI instead of bl
 ## Rays
 
 - **Count:** `raysPerProbe`, default 256, a multiple of 32, from 64 to 512. The first 32 are the **fixed rays**.
-- **Fixed rays:** 32 spherical-Fibonacci directions, never rotated. Used for relocation and classification only, never blended. That's what native does too, so ray counts match (NOTES "Native ray counts").
+- **Fixed rays:** 32 spherical-Fibonacci directions, never rotated. Used for relocation and classification only, never blended. That's what native does too, so ray counts match (NOTES "Native ray counts"). As in native, they are set aside only while `relocation` or `classification` is on; with both off there are no fixed rays and all `raysPerProbe` rays turn and are blended (DV-07, 2026-11-19; `ddgiSetAsideRays`).
 - **Blended rays:** `raysPerProbe − 32` spherical-Fibonacci directions, rotated by one random rotation per frame (shared by all probes that frame). The rotation comes from the CPU: a uniform random quaternion from a seeded generator, seeded by the frame number. Not byte-identical across runs, and nothing should require it.
 - **Range:** rays are traced to `maxRayDistance`, default unlimited (`tMax` = 1e27), so a miss sees the sky. Distances written to the distance atlas are clamped to `1.5 × length(spacing)`.
 

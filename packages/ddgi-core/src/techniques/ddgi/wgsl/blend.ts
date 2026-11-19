@@ -4,10 +4,11 @@
  * into workgroup memory, then
  *
  * - **phase B, classification and relocation**, over the 32 fixed rays
- *   (Majercik et al. 2021, section 5): a workgroup reduction finds how many
- *   fixed rays hit back faces, the closest back face, the closest and
- *   farthest front faces, and the front faces within the probe's reach, and
- *   thread 0 decides the probe's new offset and state;
+ *   (Majercik et al. 2021, section 5; with both off no rays are set aside as
+ *   fixed, DV-07, and phase B only brings an off probe back on): a workgroup
+ *   reduction finds how many fixed rays hit back faces, the closest back
+ *   face, the closest and farthest front faces, and the front faces within
+ *   the probe's reach, and thread 0 decides the probe's new offset and state;
  * - **phase C, blend**, for probes that traced all their rays and stay
  *   active: one thread per atlas texel loops over the blended rays and blends
  *   with the old value (hysteresis), writing the scratch buffer.
@@ -917,8 +918,9 @@ fn ddgiEstimateIrradianceTexel(slot: u32, layer: u32, texelIndex: u32, blendedRa
     let leaveOutBackFaces = ddgiBackFaceRuleOn();
     var radianceSum = vec3f(0.0);
     var weightSum = 0.0;
+    let firstBlended = ddgiSetAsideRays();
     for (var blended = 0u; blended < blendedRays; blended++) {
-        let ray = DDGI_FIXED_RAYS + blended;
+        let ray = firstBlended + blended;
         if (leaveOutBackFaces && ddgiRayDirectionDistance[ray].w < 0.0) {
             continue;
         }
@@ -983,8 +985,9 @@ fn ddgiBlendDistanceTexel(slot: u32, probeIndex: u32, probe: vec3i, texelIndex: 
     let normal = ddgiTexelDirection(texel, DDGI_DISTANCE_TEXELS);
     var moments = vec2f(0.0);
     var weightSum = 0.0;
+    let firstBlended = ddgiSetAsideRays();
     for (var blended = 0u; blended < blendedRays; blended++) {
-        let directionDistance = ddgiRayDirectionDistance[DDGI_FIXED_RAYS + blended];
+        let directionDistance = ddgiRayDirectionDistance[firstBlended + blended];
         // A sharp cosine power: distances are about one direction, not a hemisphere.
         let weight = pow(max(0.0, dot(normal, directionDistance.xyz)), ddgi.distanceSharpness);
         let distance = min(abs(directionDistance.w), ddgi.distanceClamp);
@@ -1159,7 +1162,9 @@ fn ddgiBlend(
     let probeData = ddgiReadProbeData(ddgiProbeData, ddgiUniformVolume(), probe);
     let state = probeData.state;
     let tracedRays = ddgiTracedRays(state);
-    let blendedRays = ddgi.raysPerProbe - DDGI_FIXED_RAYS;
+    // The rays after the fixed ones, or every ray with relocation and classification off (DV-07).
+    let setAsideRays = ddgiSetAsideRays();
+    let blendedRays = ddgi.raysPerProbe - setAsideRays;
 
     if (thread == 0u) {
         // Every reduction starts from its neutral value, set here rather
@@ -1185,7 +1190,7 @@ fn ddgiBlend(
         ddgiRayDirectionDistance[rayIndex] = directionDistance;
 ${layered ? '' : '        ddgiRayRadiance[rayIndex] = record;'}
         // Blended rays only: the mask says what the probe's light came from.
-        if (rayIndex >= DDGI_FIXED_RAYS) {
+        if (rayIndex >= setAsideRays) {
             moverBits |= ddgiMoverBits(origin, directionDistance);
             blendedBackFaces += select(0u, 1u, signedDistance < 0.0);
         }

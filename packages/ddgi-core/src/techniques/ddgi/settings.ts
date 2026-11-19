@@ -53,7 +53,11 @@ export interface DDGISettings {
      * them; when not, `volume` is the one volume. New `prepare` when changed.
      */
     volumes?: readonly DDGIVolumeSettings[];
-    /** Rays per probe and update: a multiple of 32, from 64 to 512. The first 32 are the fixed rays. */
+    /**
+     * Rays per probe and update: a multiple of 32, from 64 to 512. While
+     * `relocation` or `classification` is on, the first 32 are the fixed rays
+     * they read, and aren't blended; with both off every ray is blended (DV-07).
+     */
     raysPerProbe: number;
     /** Interior texels per side of a probe's irradiance tile. New `prepare` when changed. */
     irradianceTexels: number;
@@ -560,7 +564,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume' | 'volu
     minProbesPerFrame: 'auto',
 };
 
-/** The first rays of every probe point in fixed directions and are never blended (design: "Rays"). */
+/** The first rays of every probe point in fixed directions and are never blended (design: "Rays"), while relocation or classification is on. */
 export const FIXED_RAYS = 32;
 export const MIN_RAYS_PER_PROBE = 64;
 export const MAX_RAYS_PER_PROBE = 512;
@@ -666,6 +670,22 @@ export function probeGrid(volume: DDGIVolumeSettings): ProbeGrid {
 export function effectiveRaysPerProbe(raysPerProbe: number): number {
     const rounded = Math.round((Number.isFinite(raysPerProbe) ? raysPerProbe : DEFAULT_DDGI_SETTINGS.raysPerProbe) / FIXED_RAYS) * FIXED_RAYS;
     return Math.min(MAX_RAYS_PER_PROBE, Math.max(MIN_RAYS_PER_PROBE, rounded));
+}
+
+/**
+ * The rays of each probe set aside as fixed rays (DV-07, as RTXGI's
+ * `DDGIGetProbeRayDirection`): {@link FIXED_RAYS} while relocation or
+ * classification is on, since they are what those two read; none with both
+ * off, so every ray is blended. `ddgiSetAsideRays` in wgsl/common.ts is the
+ * kernels' side.
+ */
+export function setAsideRays(settings: Pick<DDGISettings, 'relocation' | 'classification'>): number {
+    return settings.relocation || settings.classification ? FIXED_RAYS : 0;
+}
+
+/** The rays of each probe that are blended (and shaded): those after the set-aside fixed ones. */
+export function blendedRaysPerProbe(raysPerProbe: number, settings: Pick<DDGISettings, 'relocation' | 'classification'>): number {
+    return Math.max(0, raysPerProbe - setAsideRays(settings));
 }
 
 /** A distance setting in metres, resolving `auto` to `autoShare` of the smallest spacing. */

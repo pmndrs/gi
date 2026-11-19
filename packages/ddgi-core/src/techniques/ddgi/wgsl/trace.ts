@@ -8,8 +8,9 @@
  * workgroup was register-bound (RTX 3060 2.48 ms against 1.22 ms split, at
  * 512 probes × 256 rays; DECISIONS 2026-11-05).
  *
- * - Fixed rays (the first 32) need only the hit distance and whether it was a
- *   front face (for phase B); they are not shaded.
+ * - Fixed rays (the first 32, while relocation or classification is on;
+ *   none with both off, DV-07) need only the hit distance and whether it was
+ *   a front face (for phase B); they are not shaded.
  * - Blended rays: a miss sees the sky; a back face is black with a shortened
  *   distance; a front face gets emission plus albedo / π × (direct light +
  *   bounce light from the current field).
@@ -159,7 +160,7 @@ fn ddgiTrace(
     }
     let rayRecord = slot * ddgi.raysPerProbe + rayIndex;
 
-    let isFixed = rayIndex < DDGI_FIXED_RAYS;
+    let isFixed = rayIndex < ddgiSetAsideRays();
     let direction = ddgiRayDirection(rayIndex);
     let ray = GiRay(ddgiProbePosition(probe, probeData.offset), 0.0, direction, ddgi.maxRayDistance);
     let hit = giTraceClosest(ray);
@@ -462,7 +463,7 @@ fn ddgiTrace(
     var deferred = false;
     var record = GiSurfaceRecord();
     if (rayIndex < ddgiTracedRays(probeData.state)) {
-        let isFixed = rayIndex < DDGI_FIXED_RAYS;
+        let isFixed = rayIndex < ddgiSetAsideRays();
         let direction = ddgiRayDirection(rayIndex);
         let ray = GiRay(ddgiProbePosition(probe, probeData.offset), 0.0, direction, ddgi.maxRayDistance);
         let hit = giTraceClosest(ray);
