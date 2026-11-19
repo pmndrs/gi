@@ -1,5 +1,17 @@
 # Implementation and measurement plan
 
+## Phase status
+
+| Original phase | Status on the RC branch | Evidence or remaining work |
+| --- | --- | --- |
+| Reference rail | Passed | S5 Three.js port, fixed rail and lighting cues verified on NVIDIA. |
+| Interval seam | Passed | GPU fixtures cover interval boundaries, misses, near occlusion and directional splits. |
+| Shared tracer | Partial | The gallery runs both solvers with identical direct images. Sponza and the upstream Chandra renderer are separate comparisons. Equivalent indirect brightness remains open. |
+| Dynamic occlusion | Passed | Both backends darken and recover on the moving shutter. The response curves and independent emitter integral are in the [progress log](../../PROGRESS.md). |
+| Reconstruction and hardware | Partial | Windows hardware checks cover temporal sampling, resize and edge error. Apple Metal validation and sustained comparative timing remain open. |
+
+The upstream Chandra build and polished-floor experiments extend the diffuse project. See the [experiment list](../../research/radiance-cascades/reflections.md) for their individual checks.
+
 | Stage | Work | Evidence to advance |
 | --- | --- | --- |
 | Reference rail | Pin the S5 solver and its notices. Build a small architectural passage with bounced color, a repeatable route and lighting cues. | The built example runs on a hardware adapter. Receiver pixels respond to the lamp. Record resource limits and timing scope. |
@@ -18,6 +30,8 @@
 6. Keep startup, steady motion, a newly visible room and post-cue settling separate. Include indirect-only captures. For the shutter, normalize the fixed receiver to its measured open and closed states. A pass needs both light transfer through the open doorway and attenuation after closure.
 
 The interactive gallery starts with the native solver and 1.5× temporal upscaling. For the native backend use `?backend=interval`. Select `?backend=three` for the port. Both support `scene=gallery|door`, `resolve=native|taa|upscale`, `ratio=1.5|2|3`, `sharpness=0..1` and `outputSize=preview|full`. The ratio is display width divided by render width. For a fixed receiver use `camera=receiver&view=indirect`. Use the manual GPU pages `rc-backends`, `rc-door-response` and `rc-reconstruction` for the controlled comparisons. `rc-native-core` verifies the solver contract on raw WebGPU.
+
+For the glossy experiments, open the gallery with `scene=polished`, `scene=roughness` or `scene=reflection-motion`. Select the native interval backend and use `view=specular` to see the reflected contribution alone. Use `specular=off` for a matched composite, or `roughness=0.15` and `roughness=0.85` on a single-finish floor. The reflection-motion preset accepts `motion=left|right|still|sequence`. The GPU fixtures are `rc-native-reflections` and `rc-rough-motion`.
 
 Set `VITE_RC_AB_SIZE=960x540` to repeat the backend A/B at the capped preview size. The default is 640 × 360.
 

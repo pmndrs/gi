@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-19 · SRC.2 and SRC.3 · Chandra and rough reflections
+
+- **Status** · Three of five original phases have passed. The [phase table](docs/radiance-cascades/PLAN.md) links the evidence and lists the remaining comparisons.
+- **Did** · Located Chandra's optional directional specular query and its interactive render loop. Added a matched Sponza fixture, a roughness-dependent gather in the vanilla WebGPU core, and three gallery presets. [Experiments and sources](research/radiance-cascades/reflections.md)
+- **Verified so far** · The gallery and core pass static type checking. The local upstream build and hardware image comparisons are in progress.
+- **Next** · Record the matched Sponza radiance and primary-hit checks, the polished-floor motion test, and the distinction between diffuse parity and rough specular quality.
+
 ## 2026-11-19 · Native Split RC, gallery A/B and shutter response
 
 The public `@pmndrs/gi/radiance-cascades` entry runs on a bare GPUDevice. The interval transport uses the pathtracer for closest hits and shadow visibility. The gallery offers the native solver, the S5 Three.js reference, a moving shutter and native, TAA or reduced-resolution temporal presentation. [Spec and API](docs/radiance-cascades/SPEC.md) · [Reproduction](docs/radiance-cascades/PLAN.md)
