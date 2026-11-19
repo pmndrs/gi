@@ -1992,7 +1992,8 @@ async function checkStrips(device: GPUDevice, scenario: Scenario): Promise<Check
     const nearHitShare = nearHits / Math.max(nearEntries, 1);
     if (Math.abs(nearHitShare - STRIPS.fill) > 0.02) fail(`${(nearHitShare * 100).toFixed(2)}% of the near ceiling cells' kept second-bounce rays hit, expected ${STRIPS.fill * 100}%`);
     if (disagreements > Math.ceil(0.005 * cpuJudged)) fail(`the GPU and the CPU disagree on ${disagreements} of ${cpuJudged} landings`);
-    if (relativeError(rays.nearMeanWithZeros, throughCache.mean) > 0.01) fail(`the near ceiling rays, those reading no indirect value as 0, average ${rays.nearMeanWithZeros.toFixed(4)}, expected ${throughCache.mean.toFixed(4)}`);
+    // 2%: half the kept rays miss, so this frame's mean of about 20,000 samples is itself known to 0.7%.
+    if (relativeError(rays.nearMeanWithZeros, throughCache.mean) > TOLERANCE) fail(`the near ceiling rays, those reading no indirect value as 0, average ${rays.nearMeanWithZeros.toFixed(4)}, expected ${throughCache.mean.toFixed(4)}`);
     if (relativeError(nearCellMean, throughCache.mean) > TOLERANCE) fail(`the near ceiling cells' indirect means average ${nearCellMean.toFixed(4)}, expected ${throughCache.mean.toFixed(4)} (a hit-only mean would read about ${(STRIPS_INDIRECT / STRIPS.fill).toFixed(4)})`);
     return { failures, data: { expectedIndirect: STRIPS_INDIRECT, nearSecondBounceThroughCache: throughCache, hitOnlyMeanWouldRead: STRIPS_INDIRECT / STRIPS.fill, entries, hitShare, nearCells: cells, nearCellsWithoutSamples: cellsWithoutSamples, nearCellMean, nearCellMeanOverExpected: nearCellMean / STRIPS_INDIRECT, byCountMean, nearEntries, nearHitShare, cpuHitShare: cpuHits / Math.max(cpuJudged, 1), cpuJudged, disagreements, firstHitsOnTheFloor, rays } };
 }
