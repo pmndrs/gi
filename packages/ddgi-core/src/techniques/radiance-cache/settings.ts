@@ -81,6 +81,18 @@ export interface RadianceCacheSettings {
      * always runs it (gi1.cpp:2881-2926). Off shows the raw interpolation. Read every frame.
      */
     denoiser: boolean;
+    /**
+     * The denoiser's history clamp (register D50): `'neighbourhood'` clips the reprojected
+     * history to this frame's irradiance around the pixel, so a lighting change is followed
+     * within a few frames; `'none'` is Capsaicin's unclipped history (45-160 frames to follow
+     * a step change). Default `'neighbourhood'`. Read every frame.
+     */
+    denoiserHistoryClamp: 'neighbourhood' | 'none';
+    /**
+     * The denoiser drops its history where the frame's scene changes are (`SceneChanges`, the
+     * boxes D46 uses; register D50). Default true. Read every frame.
+     */
+    denoiserChangeReset: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -101,6 +113,8 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
     denoiser: true,
+    denoiserHistoryClamp: 'neighbourhood',
+    denoiserChangeReset: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

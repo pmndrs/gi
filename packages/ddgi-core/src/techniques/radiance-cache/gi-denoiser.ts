@@ -12,12 +12,15 @@
  *
  * What it reads: the irradiance with Capsaicin's denoiser hint in alpha (screen-irradiance.ts),
  * `FrameScreen`'s depth, normal and velocity, and the platform's screen history for the
- * previous depth and normals (`GpuScreenHistory`, the copy `ReprojectScreenProbes` reads too).
+ * previous depth and normals (`GpuScreenHistory`, the copy `ReprojectScreenProbes` reads too),
+ * and the frame's scene changes (`SceneChanges`, as the probes' running means take them, D46):
+ * no history is reprojected inside a changed region (register D50).
  */
 
 import { Gi1Denoiser } from '@pmndrs/denoiser-ffx';
 import type { ScreenHistoryTextures } from '../../platform/contract/compute.ts';
 import type { FrameCamera, FrameScreen } from '../../platform/contract/frame.ts';
+import type { HistoryChanges } from './screen-probe-history.ts';
 
 /** Bytes per pixel the denoiser allocates: two r32f depths, two rgba16f normals, two rgba32f sums, two r32f deltas, the r32f mask, the rgba16f output. */
 const DENOISER_BYTES_PER_PIXEL = 2 * 4 + 2 * 8 + 2 * 16 + 2 * 4 + 4 + 8;
@@ -59,7 +62,17 @@ export class RadianceCacheDenoiser {
      * Records the denoiser's passes into `encoder`, after `InterpolateScreenProbes` and before
      * the screen history copies this frame's depth and normals (it reads last frame's).
      */
-    encode(encoder: GPUCommandEncoder, irradiance: GPUTexture, screen: FrameScreen, history: ScreenHistoryTextures, camera: FrameCamera): GPUTexture {
+    encode(
+        encoder: GPUCommandEncoder,
+        irradiance: GPUTexture,
+        screen: FrameScreen,
+        history: ScreenHistoryTextures,
+        camera: FrameCamera,
+        changes: HistoryChanges,
+        options: { readonly historyClamp: 'neighbourhood' | 'none'; readonly changeReset: boolean },
+    ): GPUTexture {
+        this.denoiser.historyClamp = options.historyClamp;
+        this.denoiser.changeReset = options.changeReset;
         if (!screen.velocity) throw new Error('@pmndrs/gi: the GI denoiser reads FrameScreen.velocity');
         if (screen.width !== this.width || screen.height !== this.height) {
             this.denoiser.configure({ width: screen.width, height: screen.height });
@@ -76,7 +89,10 @@ export class RadianceCacheDenoiser {
         const jitter = camera.jitter ?? [0, 0];
         const output = this.denoiser.encode(
             encoder,
-            { radiance: irradiance },
+            {
+                radiance: irradiance,
+                changedRegions: changes.everything ? 'everything' : changes.boxes.length > 0 ? changes.boxes.map((box) => ({ min: box.min, max: box.max })) : undefined,
+            },
             { depth: screen.depth, normal: screen.normal, motion: screen.velocity, previousDepth: history.depth, previousNormal: history.normal },
             {
                 view: camera.view,

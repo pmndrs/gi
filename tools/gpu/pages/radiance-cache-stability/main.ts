@@ -51,7 +51,7 @@ import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-prob
 const WIDTH = 1280;
 const HEIGHT = 720;
 /** Frames before the warm world cache is measured on, then frames per configuration to settle, then to measure. */
-const WARM_FRAMES = 60;
+const WARM_FRAMES = Number(new URLSearchParams(location.search).get('warm') ?? 60);
 const CONVERGE_FRAMES = 30;
 const DENOISED_CONVERGE_FRAMES = 90;
 const MEASURE_FRAMES = 40;
@@ -66,6 +66,8 @@ const CONFIGURATIONS = [
     ['moving', 'off', 'raw'],
     ['still', 'on', 'denoised'],
     ['moving', 'on', 'denoised'],
+    ['still', 'on', 'denoised, no clamp'],
+    ['moving', 'on', 'denoised, no clamp'],
 ] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
@@ -143,8 +145,21 @@ interface Measurement {
     readonly p95Change: number;
     readonly meanE: number;
     readonly pixels: number;
+    readonly driftPerFrame: number;
     readonly leftOut: number;
     readonly bad: number;
+}
+
+/** The mean E over surface pixels. */
+function frameMean(image: FrameImage): number {
+    let sum = 0;
+    let count = 0;
+    for (let pixel = 0; pixel < image.e.length; pixel++) {
+        if (image.depth[pixel] === 1) continue;
+        sum += image.e[pixel];
+        count++;
+    }
+    return sum / Math.max(count, 1);
 }
 
 /** World position of a pixel from a depth readback and the camera it was drawn with. */
@@ -249,9 +264,10 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         const results: Record<string, Measurement> = {};
         for (const jitter of [true, false]) {
             for (const [motion, history, term] of CONFIGURATIONS) {
-                const denoised = term === 'denoised';
+                const denoised = term !== 'raw';
                 technique.settings.interpolationJitter = jitter;
                 technique.settings.denoiser = denoised;
+                technique.settings.denoiserHistoryClamp = term === 'denoised, no clamp' ? 'none' : 'neighbourhood';
                 technique.resetScreenHistory();
                 let step = 0;
                 let stillLeadIn = denoised ? DENOISED_CONVERGE_FRAMES - CONVERGE_FRAMES : 0;
@@ -272,6 +288,8 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 let eSum = 0;
                 let eCount = 0;
                 let bad = 0;
+                let firstMeanE = 0;
+                let lastMeanE = 0;
                 for (let index = 0; index < MEASURE_FRAMES; index++) {
                     advance();
                     await device.queue.onSubmittedWorkDone();
@@ -286,13 +304,17 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                         }
                     }
                     leftOut += changes(previous, current, tally).leftOut;
+                    if (index === 0) firstMeanE = frameMean(current);
+                    if (index === MEASURE_FRAMES - 1) lastMeanE = frameMean(current);
                     previous = current;
                 }
-                results[`${denoised ? 'denoised, ' : ''}${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
+                results[`${denoised ? `${term}, ` : ''}${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
                     meanChange: Number((tally.sum / Math.max(tally.count, 1)).toFixed(5)),
                     p95Change: Number(tally.percentile(0.95).toFixed(4)),
                     meanE: Number((eSum / Math.max(eCount, 1)).toPrecision(5)),
                     pixels: tally.count,
+                    // The whole image's mean E from the first to the last measured frame, per frame: a drift, not noise.
+                    driftPerFrame: Number(((lastMeanE / Math.max(firstMeanE, 1e-30)) ** (1 / (MEASURE_FRAMES - 1)) - 1).toExponential(2)),
                     leftOut,
                     bad,
                 };
@@ -300,6 +322,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         }
         technique.settings.interpolationJitter = true;
         technique.settings.denoiser = true;
+        technique.settings.denoiserHistoryClamp = 'neighbourhood';
         return results;
     } finally {
         screen.dispose();

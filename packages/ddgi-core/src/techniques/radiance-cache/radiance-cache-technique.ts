@@ -355,6 +355,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.latestFrameIndex = frame.frame >>> 0;
         this.writeFrameUniforms(context.device, prepared, layout, frame);
         context.device.queue.writeBuffer(prepared.historyChanges, 0, historyChangesWords(this.pendingChanges));
+        const changes = this.pendingChanges;
         this.pendingChanges = NO_HISTORY_CHANGES;
         const { kernels, history } = prepared;
         const timer = context.timer;
@@ -416,7 +417,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // 7: the mask's mips, the SH and the irradiance per pixel (RC2.2), then the GI denoiser (RC4.3),
         // before step 8 copies this frame's depth and normals over the previous ones it reads.
         this.encodeIrradiance(encoder, frame, prepared, resources);
-        this.encodeDenoiser(encoder, frame, prepared, resources);
+        this.encodeDenoiser(encoder, frame, prepared, resources, changes);
 
         // 6 and 8: the cache's LRU order for the next frame, and this frame's depth and normals kept.
         history.encodeReorder(encoder, screen);
@@ -447,7 +448,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * `ReprojectGI` and `FilterGI` × 2 on this frame's irradiance (gi-denoiser.ts). Off, the
      * denoiser forgets its history, so turning it on again starts clean.
      */
-    private encodeDenoiser(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): void {
+    private encodeDenoiser(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources, changes: HistoryChanges): void {
         const denoiser = this.denoiser;
         const irradiance = this.irradiance?.irradiance;
         if (!denoiser || !irradiance) return;
@@ -455,7 +456,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             denoiser.reset();
             return;
         }
-        denoiser.encode(encoder, irradiance, frame.screen, prepared.history.screenTexturesFor(resources.layout), frame.camera);
+        denoiser.encode(encoder, irradiance, frame.screen, prepared.history.screenTexturesFor(resources.layout), frame.camera, changes, {
+            historyClamp: this.settings.denoiserHistoryClamp,
+            changeReset: this.settings.denoiserChangeReset,
+        });
     }
 
     /** What the shading module binds: the latest frame's textures, or 1 × 1 placeholders before the first. */
