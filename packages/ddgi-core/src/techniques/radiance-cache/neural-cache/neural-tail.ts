@@ -29,7 +29,7 @@
  * grid runs as GI-1.2, and the network trains at `warmupStepsPerFrame`.
  */
 
-import { DEFAULT_TRAIN, initWeights, layerOffset, MLP_SHAPES, MlpEngine, type MlpShape } from '@pathtracer/mlp';
+import { DEFAULT_TRAIN, defaultForwardRecords, forwardWorkgroupBytes, inferTiledWorkgroupBytes, initWeights, layerOffset, MLP_SHAPES, MlpEngine, type MlpShape } from '@pathtracer/mlp';
 import type { GpuIndirectArgs } from '../../../platform/contract/compute.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
@@ -75,6 +75,20 @@ const INFER_CAPACITY = 1 << 26;
 function setCapacity(settings: NeuralTailSettings): number {
     const screen = settings.screenStride > 0 ? Math.ceil(3840 / settings.screenStride) * Math.ceil(2160 / settings.screenStride) : 0;
     return Math.max(1024, Math.ceil((settings.cellRecords * 1.25 + Math.min(screen, 65536)) / 64) * 64);
+}
+
+/**
+ * Records per workgroup of the tiled kernels: the pathtracer's default (64 at
+ * f16, 48 at f32) or the largest multiple of 16 below it that fits the
+ * device's workgroup memory. The platform's device keeps WebGPU's default
+ * 16 KiB (`requiredLimits` asks for no more), where the compact network's
+ * 64-record inference needs 20 KiB.
+ */
+function tiledRecords(shape: MlpShape, precision: 'f16' | 'f32', limit: number, bytes: (records: number) => number): number {
+    for (let records = defaultForwardRecords(precision); records >= 16; records -= 16) {
+        if (bytes(records) <= limit) return records;
+    }
+    throw new Error(`@pmndrs/gi: the neural tail's ${shape.hidden} × ${shape.width} network needs more workgroup memory than the device's ${limit} bytes`);
 }
 
 /** The screen the training reads: the irradiance the screen probes made this frame. */
@@ -184,6 +198,12 @@ export class NeuralTail implements HashGridTail {
         const capacity = setCapacity(settings);
         const layout = grid.layout;
         const tileWords = grid.buffers.tileWords;
+        const limit = device.limits.maxComputeWorkgroupStorageSize;
+        const inferRecords = tiledRecords(shape, precision, limit, (records) => inferTiledWorkgroupBytes({ shape, precision }, { records }));
+        const forwardRecords = tiledRecords(shape, precision, limit, (records) => forwardWorkgroupBytes({ shape, precision }, { records }));
+        // The tiled weight gradient stages `chunk` records of deltas and activations (f32 vec4 rows each).
+        const rowBytes = Math.max(shape.inputs, shape.width) * 4;
+        const gradientChunk = 2 * 32 * rowBytes + 16 <= limit ? 32 : 16;
         const word = (counter: number) => ({ buffer: tileWords, offset: counter * WORD_BYTES });
         const ownGroups = [
             { label: 'radiance-cache/hash-grid group', entries: HASH_GRID_CACHE_GROUP_ENTRIES },
@@ -197,6 +217,9 @@ export class NeuralTail implements HashGridTail {
                 capacity: settings.batch,
                 inferCapacity: INFER_CAPACITY,
                 infer: 'tiled',
+                inferOptions: { records: inferRecords },
+                forwardOptions: { records: forwardRecords },
+                gradientOptions: { chunk: gradientChunk },
                 useEma: settings.ema !== 'off',
                 train: { ...DEFAULT_TRAIN, learningRate: settings.learningRate, emaDecay: settings.ema === 'off' ? 0 : DEFAULT_TRAIN.emaDecay, emaWarmup: settings.ema === 'warmup' },
                 trainHooks: neuralTailTrainHooks(settings.positionBands),

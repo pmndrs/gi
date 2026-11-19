@@ -87,7 +87,7 @@ const HEIGHT = 720;
 const TOLERANCE = 0.02;
 const ALBEDO = 0.5;
 /** Frames of each analytic check: the gate opens at frame 17, the fixed point needs a few hundred more. */
-const CHECK_FRAMES = 300;
+const CHECK_FRAMES = Number((import.meta.env as Record<string, unknown>).VITE_NEURAL_TAIL_FRAMES ?? 300);
 
 const CORNER_CAMERA: PageCamera = { position: [0, 2, 6], target: [0, 1, 0], fovYDeg: 60, near: 0.05, far: 1000 };
 const SUN_INTENSITY = 8;
@@ -232,6 +232,42 @@ interface Run {
     readonly judged: number;
     readonly tailSteps: number;
     readonly tailGateOpen: boolean;
+    /** The tail's state after the last frame, by surface: its answers' mean (the second hits') and its training targets' mean. */
+    readonly tailBySurface: Record<string, { answers: number; meanAnswer: number; records: number; meanTarget: number }> | null;
+}
+
+/** The tail's last answers and training records, grouped by the surface their hit is on. */
+async function tailBySurface(device: GPUDevice, technique: RadianceCacheTechnique, kind: SceneKind): Promise<Run['tailBySurface']> {
+    const tail = technique.neuralTail;
+    const cache = technique.worldCache;
+    const lists = cache?.rayLists;
+    const buffers = tail?.buffers;
+    if (!tail || !cache || !lists || !buffers?.queries || !tail.active) return null;
+    const groups: Record<string, { answers: number; answerSum: number; records: number; targetSum: number }> = {};
+    const group = (surface: string) => (groups[surface] ??= { answers: 0, answerSum: 0, records: 0, targetSum: 0 });
+    const secondBounce = new Uint32Array(await readRange(device, cache.buffers.tileWords, HASH_GRID_COUNTER.visibilityCount1 * 4, 4))[0];
+    if (secondBounce > 0) {
+        const answers = new Uint32Array(await readRange(device, lists.buffer, lists.layout.neuralTailBuffer * 4, secondBounce * NEURAL_TAIL_WORDS * 4));
+        const queries = new Float32Array(await readRange(device, buffers.queries, 0, secondBounce * 3 * 16));
+        for (let entry = 0; entry < secondBounce; entry++) {
+            if (queries[entry * 12 + 3] === 0) continue;
+            const value = (halfBitsToFloat(answers[entry * 2] & 0xffff) + halfBitsToFloat(answers[entry * 2] >>> 16) + halfBitsToFloat(answers[entry * 2 + 1] & 0xffff)) / 3;
+            const entryGroup = group(classify([queries[entry * 12], queries[entry * 12 + 1], queries[entry * 12 + 2]], kind));
+            entryGroup.answers++;
+            entryGroup.answerSum += value;
+        }
+    }
+    const records = Math.min(new Uint32Array(await readRange(device, buffers.counts, NEURAL_TAIL_COUNT_WORD.records * 4, 4))[0], buffers.setCapacity);
+    const set = new Float32Array(await readRange(device, buffers.set, 0, records * NEURAL_TAIL_RECORD_VEC4 * 16));
+    for (let record = 0; record < records; record++) {
+        const base = record * NEURAL_TAIL_RECORD_VEC4 * 4;
+        const recordGroup = group(classify([set[base], set[base + 1], set[base + 2]], kind));
+        recordGroup.records++;
+        recordGroup.targetSum += (set[base + 12] + set[base + 13] + set[base + 14]) / 3;
+    }
+    return Object.fromEntries(
+        Object.entries(groups).map(([surface, g]) => [surface, { answers: g.answers, meanAnswer: Number((g.answerSum / Math.max(g.answers, 1)).toPrecision(5)), records: g.records, meanTarget: Number((g.targetSum / Math.max(g.records, 1)).toPrecision(5)) }]),
+    );
 }
 
 /** The first frame (1-based) from which every later frame's value passes; null if the last doesn't. */
@@ -297,7 +333,8 @@ async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial
             });
         }
         const tail = technique.neuralTail;
-        return judges.map((_, judgeIndex) => ({ meanError: meanError[judgeIndex], withinShare: withinShare[judgeIndex], judged: judged[judgeIndex], tailSteps: tail?.steps ?? 0, tailGateOpen: tail?.active ?? false }));
+        const bySurface = await tailBySurface(device, technique, kind);
+        return judges.map((_, judgeIndex) => ({ meanError: meanError[judgeIndex], withinShare: withinShare[judgeIndex], judged: judged[judgeIndex], tailSteps: tail?.steps ?? 0, tailGateOpen: tail?.active ?? false, tailBySurface: bySurface }));
     } finally {
         screen.dispose();
         platform.dispose();
@@ -315,6 +352,8 @@ function summary(run: Run): Record<string, unknown> {
         raysWarmFrames: warmFrame(run.withinShare.map((share) => share >= 0.95)),
         tailSteps: run.tailSteps,
         tailGateOpen: run.tailGateOpen,
+        meanErrorAtFrames: Object.fromEntries([25, 50, 100, 150, 200, 250, 300].filter((frame) => frame <= run.meanError.length).map((frame) => [frame, Number(run.meanError[frame - 1].toFixed(4))])),
+        tailBySurface: run.tailBySurface,
     };
 }
 
@@ -644,12 +683,14 @@ try {
         const [gi1] = await runScenario(device, 'furnace', GI1, CHECK_FRAMES, [ceilingJudge(SECOND_BOUNCE)]);
         const [tail] = await runScenario(device, 'furnace', TAIL, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
         const [noScreen] = await runScenario(device, 'furnace', TAIL_NO_SCREEN, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
+        const [fineCells] = await runScenario(device, 'furnace', { ...TAIL, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(EVERY_BOUNCE)]);
         data.furnace = {
             secondBounce: SECOND_BOUNCE,
             everyBounce: EVERY_BOUNCE,
             gi1: { ...summary(gi1), meanErrorAgainstEveryBounce: Number(((1 + final(gi1)) * (SECOND_BOUNCE / EVERY_BOUNCE) - 1).toFixed(5)) },
             tail: summary(tail),
             tailWithoutScreenRecords: summary(noScreen),
+            tailWithCellsOf8Pixels: summary(fineCells),
         };
         if (Math.abs(final(tail)) > TOLERANCE) fail(`furnace, every bounce: the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames`);
         if (tail.judged < 1000) fail(`furnace: only ${tail.judged} judged ceiling rays`);
