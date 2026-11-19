@@ -47,7 +47,7 @@ export class RealtimeRadianceCascades implements RadianceCascadesOptions {
     readonly lodBias: number;
     readonly newProbes: number;
     readonly activeTargetFrameTime: number;
-    setScene(renderer: THREE.WebGPURenderer, scene: THREE.Scene): void;
+    setScene(renderer: THREE.WebGPURenderer, scene: THREE.Scene, movingMeshes?: THREE.Mesh[]): void;
     getCompositeNode(): Node;
     getTextureNode(name: 'output' | 'albedo' | 'normal' | 'depth' | 'velocity'): TextureNode;
     update(renderer: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.Camera): void;

@@ -1,0 +1,5 @@
+{
+    "description": "Matched rail on the Three reference and interval backends. Compare direct, indirect and composited pixels and whole GPU frame timings at identical poses.",
+    "manual": true,
+    "timeoutMs": 300000
+}

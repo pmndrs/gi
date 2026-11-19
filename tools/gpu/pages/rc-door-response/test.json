@@ -1,0 +1,5 @@
+{
+    "description": "A constant offscreen emitter, rigid sliding occluder, and fixed receiver. Measures per-frame scene-linear indirect luminance, closed/open leakage, and time to 50% and 90% response on the reference and interval backends.",
+    "timeoutMs": 600000,
+    "manual": true
+}

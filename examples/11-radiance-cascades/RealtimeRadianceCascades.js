@@ -615,15 +615,17 @@ class RealtimeRadianceCascades {
 	 * @param {WebGPURenderer} renderer - The renderer.
 	 * @param {Scene} scene - The scene.
 	 */
-	setScene( renderer, scene ) {
+	setScene( renderer, scene, movingMeshes = [] ) {
 
-		const data = this._collect( scene );
+		const moving = [];
+		const data = this._collect( scene, new Set( movingMeshes ), moving );
 
 		this.setSceneData( renderer, data, scene );
 
 		// the geometry is the cascades', disposed with the scene
 
 		this._collectedGeometry = data.geometry;
+		this._moving = moving;
 
 	}
 
@@ -882,6 +884,40 @@ class RealtimeRadianceCascades {
 	 */
 	update( renderer, scene, camera ) {
 
+		// The gallery shutter moves within the original chamber bounds. Keep
+		// the reference cache and its compiled bindings alive during refits.
+		let refit = false;
+		for ( const { object, local, first, matrix } of this._moving ?? [] ) {
+
+			object.updateWorldMatrix( true, false );
+			if ( matrix.equals( object.matrixWorld ) ) continue;
+			matrix.copy( object.matrixWorld );
+			const position = this._collectedGeometry.attributes.position;
+			for ( let i = 0; i < local.length; i += 3 ) {
+
+				_position.fromArray( local, i ).applyMatrix4( matrix );
+				position.setXYZ( first + i / 3, _position.x, _position.y, _position.z );
+
+			}
+			refit = true;
+
+		}
+		if ( refit ) {
+
+			const geometry = this._collectedGeometry;
+			geometry.boundsTree.refit();
+			const packed = new BVHComputeData( geometry, { attributes: { position: 'vec4f' } } );
+			packed.update();
+			for ( const name of [ 'nodes', 'attributes' ] ) {
+
+				const attribute = this._bvh.storage[ name ].proxyNode.value;
+				attribute.array.set( packed.storage[ name ].proxyNode.value.array );
+				attribute.needsUpdate = true;
+
+			}
+			packed.dispose();
+
+		}
 		this._applyChanges();
 		this._adaptQuality();
 
@@ -1980,6 +2016,7 @@ class RealtimeRadianceCascades {
 
 		this._bvh = this._sceneData = this._materialData = this._collectedGeometry = null;
 		this._materials = [];
+		this._moving = [];
 
 	}
 
@@ -2016,7 +2053,7 @@ class RealtimeRadianceCascades {
 	 * @param {Scene} scene - The scene.
 	 * @return {{geometry: BufferGeometry, materials: Array<Material>, materialIndices: Uint32Array}} The triangles.
 	 */
-	_collect( scene ) {
+	_collect( scene, movable, moving ) {
 
 		scene.updateMatrixWorld();
 
@@ -2034,6 +2071,8 @@ class RealtimeRadianceCascades {
 			for ( let parent = object.parent; parent !== null; parent = parent.parent ) if ( parent.isLight === true ) return;
 
 			const geometry = object.geometry;
+			const local = movable.has( object ) ? [] : null;
+			const first = positions.length / 3;
 			const position = geometry.getAttribute( 'position' );
 			const index = geometry.getIndex();
 
@@ -2070,7 +2109,9 @@ class RealtimeRadianceCascades {
 
 					for ( const v of order ) {
 
-						_position.fromBufferAttribute( position, index !== null ? index.getX( i + v ) : i + v ).applyMatrix4( object.matrixWorld );
+						_position.fromBufferAttribute( position, index !== null ? index.getX( i + v ) : i + v );
+						if ( local ) local.push( _position.x, _position.y, _position.z );
+						_position.applyMatrix4( object.matrixWorld );
 						positions.push( _position.x, _position.y, _position.z );
 
 					}
@@ -2080,6 +2121,8 @@ class RealtimeRadianceCascades {
 				}
 
 			}
+
+			if ( local ) moving.push( { object, first, local, matrix: object.matrixWorld.clone() } );
 
 		} );
 

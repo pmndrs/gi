@@ -1,15 +1,31 @@
 /** The built demo exposes this interface only when opened with ?verify=1. */
+export interface ReconstructionState {
+    mode: 'native' | 'taa' | 'upscale';
+    ready: boolean;
+    displayWidth: number;
+    displayHeight: number;
+    renderWidth: number;
+    renderHeight: number;
+    updates: number;
+    historyResets: number;
+    jitterX: number;
+    jitterY: number;
+}
+
 export interface RailCapture {
     width: number;
     height: number;
     pixels: Uint8ClampedArray;
     frame: number;
     renderedFrames: number;
+    backend: 'three' | 'interval';
     computeMs: number | null;
+    reconstruction: ReconstructionState;
     occupancy?: { peakProbes: number[]; capacities: number[]; probeBytes: number };
     measurement?: {
         frameIntervalsMs: number[];
         gpuComputeMs: number[];
+        gpuFrameMs: number[];
         timestampSupported: boolean;
         renderWidth: number;
         renderHeight: number;
@@ -29,6 +45,7 @@ export interface RailControl {
         advance?: boolean;
         measure?: boolean;
         occupancy?: boolean;
+        captureSize?: 'display';
     }): Promise<RailCapture>;
 }
 

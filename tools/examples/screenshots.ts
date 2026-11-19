@@ -11,6 +11,7 @@
  *   PAGES_BASE=/gi/ pnpm examples:build
  *   node tools/examples/screenshots.ts [--out <dir>] [--filter <path substring>]
  *   node tools/examples/screenshots.ts --filter 11-radiance-cascades
+ *   node tools/examples/screenshots.ts --compare-backends --out docs/radiance-cascades/images
  *   Default output: bench/screenshots/t5.6 (gitignored).
  *
  * The GPU page is the check; this is for eyes. Run it under the bench lock.
@@ -47,12 +48,50 @@ async function saveScreenshot(cdp: CdpClient, file: string): Promise<void> {
     await writeFile(file, Buffer.from(data, 'base64'));
 }
 
-async function captureRail(cdp: CdpClient, out: string): Promise<void> {
+async function waitForRail(cdp: CdpClient): Promise<void> {
     const deadline = Date.now() + READY_TIMEOUT_MS;
     while (!(await cdp.evaluate<boolean>('Boolean(window.__rcRailVerify)'))) {
         if (Date.now() > deadline) throw new Error(`Split RC capture unavailable: ${await cdp.evaluate("document.getElementById('status')?.textContent")}`);
         await new Promise((wait) => setTimeout(wait, 250));
     }
+}
+
+/** Same 640×360 rail poses and frame progression as tools/gpu/pages/rc-backends. */
+async function captureComparison(cdp: CdpClient, out: string, backend: string): Promise<void> {
+    await waitForRail(cdp);
+    for (const frame of [112, 288]) {
+        const options = JSON.stringify({ frame, frames: 48, advance: true, camera: 'rail', cue: 'sequence', view: 'lit' });
+        const result = await cdp.send<{
+            result: { value: { frame: number; backend: string; png: string } };
+            exceptionDetails?: { text: string; exception?: { description?: string } };
+        }>('Runtime.evaluate', {
+            expression: `(async () => {
+                const control = window.__rcRailVerify;
+                await control.render(${options});
+                const shot = await control.render({ frames: 24, advance: true, captureSize: 'display' });
+                if (shot.width !== 640 || shot.height !== 360) throw Error('expected 640×360 presented pixels');
+                const canvas = document.createElement('canvas');
+                canvas.width = shot.width;
+                canvas.height = shot.height;
+                canvas.getContext('2d').putImageData(new ImageData(shot.pixels, shot.width, shot.height), 0, 0);
+                await control.render({ frames: 1, advance: false, view: 'direct' });
+                await control.render({ frames: 1, advance: false, view: 'indirect' });
+                return { frame: shot.frame, backend: shot.backend, png: canvas.toDataURL('image/png') };
+            })()`,
+            awaitPromise: true,
+            returnByValue: true,
+        }, READY_TIMEOUT_MS);
+        if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
+        const shot = result.result.value;
+        if (shot.backend !== backend || shot.frame !== frame + 71) throw new Error('matched capture used the wrong backend or pose');
+        const file = join(out, `rail-${shot.frame}-${backend}.png`);
+        await writeFile(file, Buffer.from(shot.png.slice('data:image/png;base64,'.length), 'base64'));
+        console.log(`Split RC: ${backend}, tick ${shot.frame} -> ${file}`);
+    }
+}
+
+async function captureRail(cdp: CdpClient, out: string): Promise<void> {
+    await waitForRail(cdp);
     await cdp.evaluate("document.getElementById('panel').open = false");
     const shots = [
         { camera: 'rail', cue: 'amber', view: 'lit', frame: 100, frames: 64 },
@@ -84,6 +123,7 @@ async function main(): Promise<number> {
     const { values } = parseArgs({ args: process.argv.slice(2), options: {
         out: { type: 'string', default: join(repoRoot, 'bench', 'screenshots', 't5.6') },
         filter: { type: 'string', default: '' },
+        'compare-backends': { type: 'boolean', default: false },
     } });
     const out = resolve(values.out);
 
@@ -96,7 +136,10 @@ async function main(): Promise<number> {
         .map((path) => path.replace(/index\.html$/, ''))
         .sort();
     if (pages.length === 0) throw new Error(`examples/dist is empty: run PAGES_BASE=${EXAMPLES_SITE_BASE} pnpm examples:build first.`);
-    const selected = [...pages, ...EXTRA_PAGES].filter((page) => page.includes(values.filter));
+    const compare = values['compare-backends'];
+    const selected = compare
+        ? ['three', 'interval'].map(backend => `11-radiance-cascades/?scene=gallery&resolve=native&stride=2&backend=${backend}`)
+        : [...pages, ...EXTRA_PAGES].filter((page) => page.includes(values.filter));
     if (selected.length === 0) throw new Error(`No example matched --filter "${values.filter}".`);
 
     const profileDir = mkdtempSync(join(tmpdir(), 'ddgi-examples-chrome-'));
@@ -116,7 +159,7 @@ async function main(): Promise<number> {
         if (!target) throw new Error('Chrome started without a page target.');
         cdp = await CdpClient.connect(target.webSocketDebuggerUrl);
         await Promise.all([cdp.send('Page.enable'), cdp.send('Runtime.enable'), cdp.send('Log.enable')]);
-        await cdp.send('Emulation.setDeviceMetricsOverride', { ...VIEWPORT, deviceScaleFactor: 1, mobile: false });
+        await cdp.send('Emulation.setDeviceMetricsOverride', { ...(compare ? { width: 640, height: 360 } : VIEWPORT), deviceScaleFactor: 1, mobile: false });
 
         let browserErrors: string[] = [];
         cdp.on('Log.entryAdded', (params) => {
@@ -138,11 +181,12 @@ async function main(): Promise<number> {
             browserErrors = [];
             await cdp.send('Page.navigate', { url: 'about:blank' });
             const url = new URL(page, `${site.origin}${EXAMPLES_SITE_BASE}`);
-            const isRail = page === '11-radiance-cascades/';
+            const isRail = page.startsWith('11-radiance-cascades/');
             if (isRail) url.searchParams.set('verify', '1');
             await cdp.send('Page.navigate', { url: url.href });
             if (isRail) {
-                await captureRail(cdp, out);
+                if (compare) await captureComparison(cdp, out, url.searchParams.get('backend')!);
+                else await captureRail(cdp, out);
                 for (const problem of browserErrors) console.log(`    ERROR: ${problem}`);
                 if (browserErrors.length > 0) failures++;
                 continue;
