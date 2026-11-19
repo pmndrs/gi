@@ -1,6 +1,6 @@
 /**
  * A SHaRC-style spatial hash cache behind the radiance cache's world-cache
- * slot (`worldCache: 'sharc'`; phase 6 experiment P6.1, register D49-D54).
+ * slot (`worldCache: 'sharc'`; phase 6 experiment P6.1, register D49-D55).
  * Capsaicin's hash grid (`HashGridCache`) stays the default.
  *
  * Ported from the pmndrs/pathtracer project's hash-grid radiance cache

@@ -21,6 +21,30 @@ Rules:
 
 ---
 
+## 2026-11-19 · P6.1 SHaRC-style world cache (experiment A) · implementer (opus)
+Did: branch `p6-sharc` (from `radiance-cache` 7c80225). The pmndrs/pathtracer hash cache (`bench/nrc/hash-grid.ts` at dd771c8, MIT, THIRD_PARTY row) ported as a second world-cache backend, `packages/ddgi-core/src/techniques/radiance-cache/world-cache/sharc/` (settings, WGSL, CPU twins, `SharcCache`); slot wiring only: settings `worldCache: 'gi1-hash-grid' | 'sharc'` (default GI-1.2) and `sharc` overrides, the technique's cache typed `WorldCache`, `worldCache` getter kept (the hash grid or null), new `worldCacheBackend`. Slot interface unchanged (backward compatible); `lookup` implemented. Probe rays end in it; every bounce through the cache tail (2 bounce rays, a quarter of the probes updating each frame). Register D49-D55 (kind E). Pages: `radiance-cache-world-cache-sharc` (analytic A/B + NaN scan), `radiance-cache-sharc-timing` (manual), `radiance-cache-stability-sharc` (the stability page with `data-world-cache`). NOTES: 4 facts (the platform timer misses the screen stage; bucket refusals; tail convergence; megakernel cost).
+Verified (RTX 3060 Laptop nvidia/ampere, Chrome 157, bench lock): `radiance-cache-world-cache-sharc` PASS (defaults, 160 s); five mutations each fail it (run before `updateFraction`, every probe updating: bounce weight without albedo, misses not counted, no shadow ray, resolve dividing by the count, tail never from the cache); stability pages PASS; lint, typecheck, 1,791 unit tests pass.
+Numbers (A/B; error = judged rays' mean at the end, warm = first frame from which the mean stays within 2%):
+
+| Check | GI-1.2 grid | SHaRC |
+| --- | --- | --- |
+| Lit plane ρE/π (single bounce) | −0.05%, warm 1 | +0.004%, warm 1, every ray within 2% |
+| Slab shadow | not judgeable (tiles wider than the shadow; its own page gates it) | lit +0.003%, shadowed 0.000 |
+| Furnace 2nd bounce ρ²E/π | +0.19%, warm 1 | (1 bounce ray, no tail) −0.02%, warm 1 |
+| Furnace, every bounce 0.4244 | −24.9% (two bounces only) | −0.12%, warm 45 (rays: 55) |
+| Strips ½ misses, 2nd bounce 0.1592 | +0.06%, warm 2 | +0.002%, warm 1 |
+| Strips, every bounce 0.1819 | n/a | −0.11%, warm 33 |
+| NaN scan cornell / two-room / sponza | (radiance-cache-scenes) | 0 bad rays and cells; 20k / 70k / 265k cells |
+| Stability still, history on, jitter on / off (mean / p95) | Cornell 29.6/80, 8.0/28; two-room 4.6/13, 1.7/5; Sponza 13.4/46, 5.5/19 % | Cornell 16.4/44, 5.1/17; two-room 3.4/9, 1.2/3; Sponza 14.5/50, 5.9/20 % |
+| Stability moving, history on, jitter on | two-room 6.8/24, Sponza 14.2/49 % | two-room 5.2/21, Sponza 15.3/52 % |
+| Mean E (still) | Cornell 0.180, two-room 1.97, Sponza 0.038 | 0.322, 3.20, 0.037 (every bounce) |
+| Memory | cache 1,053 MiB, technique 1,124 MiB | cache 47 MiB, technique 117 MiB |
+| Cache GPU ms, Sponza / Bistro ext. (median, 1280x720) | 12.3 / 15.7 | 26.1 / 35.0; 1 bounce ray 14.8 / 17.6; every probe updating 89.7 / 106 |
+
+Timing runs are INVALID by the runner (thermal throttling in 82% of loaded samples, started at 57 C; `--no-cool-wait`): relative only. Bistro with `VITE_DDGI_MAX_TEXTURE_SIZE=1024`. Refused inserts (full buckets): Sponza ~2-15 a frame, Bistro 23-120, furnace up to 600 (0.26% of rays).
+Not verified: Intel UHD; the Mac; by eye in the viewer (no viewer switch added); against the path tracer on real scenes (the analytic scenes only; Cornell and two-room read 1.6-1.8x GI-1.2's E, which every bounce should, but unmeasured against a reference).
+Next: lead review. Levers in order: split `SharcUpdate` into wavefront passes (one kernel per ray type, as GI-1.2's) or default `bounceRays: 1` (14.8 ms, near GI-1.2's 12.3, but surfaces no probe ray sees fill only through cells); turn `skyOnMiss` off or MIS when RC3.4 lands (sky counted twice otherwise, D52); a path-tracer accuracy pass on Cornell/two-room/Sponza; `log2Entries: 21` if refusals matter. Register numbers D49-D55 may collide with rc3-4 / rc4-2 / p6-idcells at merge.
+
 ## 2026-11-19 · RC4.1 merged into radiance-cache · lead (opus)
 Did: independent Opus review of `rc4-1` (pass with notes; port matches Capsaicin line by line; the darkening diagnosis D41 confirmed by rerunning the CPU model). Lead decision on the review's main finding: Capsaicin's biased hysteresis (darker samples taken at once, brighter ones damped; 0.94 of the mean under per-ray noise, 0.46 under sparse rays in the reviewer's model) replaced by a per-cell running mean, n capped at 8, reset by `SceneChanges.regions` (D46). Trade: a new shadow settles over several frames instead of at once; responsiveness comes from the reset and later RC4.3. The implementer also stopped backup fills becoming history (D47), rounds atlas stores to nearest (D48), sized the scan buffers to the screen via `GpuPrefixScan.rebind`, tested the probe cache's contents with a passing occluder, and merged `radiance-cache` in. Fast-forwarded `radiance-cache`. RC4.1 done.
 Verified (RTX 3060 nvidia/ampere and Intel UHD gen-12lp, bench lock; implementer's runs on b687c7e): every RC page, three-composite, three-neutrality pass; constant sky 1.0005 then 0.9997 through 440 frames; noisy sky 0.9954 (gate 1%). Stability, per-pixel change mean/p95 with the interpolation jitter on (off): two-room still 4.6%/13% (1.7%/5.1%), Sponza still 13%/46% (5.6%/19%). The DDGI 0.1% bar applies to the denoised term after RC4.3.

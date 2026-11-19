@@ -692,6 +692,14 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
   - **Phase 4's by-eye check is Dennis's** (the plan's done-when: steady by eye on Cornell and Sponza, no popping on a fly-through). The viewer is made ready for it and the check is listed in PROGRESS "Next"; it doesn't block the track.
   - Moving the module into `pmndrs/denoiser` (a PR there) needs Dennis's go-ahead: listed in PROGRESS "Next".
 
+### radiance-cache phase 6: levers, experiments and dynamic scenes
+
+Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experiments are first-class alternatives behind a setting, judged by accuracy against analytic answers and the path tracer, temporal stability, memory and GPU time (timing recorded under the bench lock, not gated); the GI-1.2 baseline stays the default. Register rows from the next free number, kind E.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| P6.1 | Experiment A: the pmndrs/pathtracer SHaRC-style hash cache as a second backend of the world-cache slot (`worldCache: 'gi1-hash-grid' \| 'sharc'`), with the GI-1.2 grid's analytic checks, an A/B table (accuracy, warm-up, stability, memory, GPU time on Sponza and Bistro exterior) and mutation checks | implementer | M | RC3.5, RC4.1 | review (2026-11-19; branch `p6-sharc`; RTX 3060; register D49-D55; pages `radiance-cache-world-cache-sharc`, `radiance-cache-sharc-timing`, `radiance-cache-stability-sharc`; see PROGRESS) |
+
 ## Carried to M2 (collected during M1)
 
 - `sponza-candles`: an opt-in scene with a stated subset of Intel's 10,000 candle lights, for the many-lights stress test (DECISIONS 2026-11-05).
