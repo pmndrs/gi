@@ -29,6 +29,12 @@ Rules:
 
 **Reconstruction on the moving polished rail** · At 960 × 540 display, roughness 0.24 and sharpness 0.3, a repeat full-resolution TRAA run reproduced every captured RGB value across all 24 sampled poses on the RTX 3060 Laptop. Against that baseline, 1.5× (640 × 360) and 2× (480 × 270) respectively gave mean display RGB errors of 2.18 and 2.64 out of 255 overall, 6.90 and 8.20 at reference edges, and 1.99 and 2.66 on the floor. The mean error in consecutive frame changes on the floor was 1.30 and 1.64 over 20 frame pairs. Scaling changes the primary ray count, raster resolution and temporal resolve together. The 1.5× default retains finer detail in this sequence. [Matched crop](docs/radiance-cascades/images/polished-resolution-crop.png) · [Reproduction](docs/radiance-cascades/PLAN.md#reproduction)
 
+**Reflections in motion** · Three alternating on/off pairs, each with 48 warmup frames and 60 measured rail frames, gave 180 GPU timestamps per mode. At the final pose, enabling rough reflections changed the lit floor by 22.85–22.86 RGB levels out of 255. The pooled whole-frame GPU median and p95 were 10.44 / 13.51 ms on and 9.64 / 13.27 ms off. Paired median differences were −1.43, +1.64 and +2.55 ms. The RTX started at 86–87°C with 70–100% utilization before Chrome launched. Sustained reflection cost remains open. [Measurements](bench/results/radiance-cascades.csv)
+
+**Instrumentation and checks** · The native gallery skips Three’s per-pass timestamp queries. All six native arms recorded one transport update and one whole-frame GPU timestamp per measured draw, with zero Three query pools. The S5 regression retained all 60 compute timestamps at each stride. Lint, typecheck and the examples build passed. The unit suite passed 1,620 tests and skipped 13.
+
+**Skill feedback** · For mixed Three/WebGPU renderers, verify one transport update per animation frame and await the temporal upscaler’s preparation before collecting GPU timestamps.
+
 ## 2026-11-19 · SRC.2 and SRC.3 · Chandra and rough reflections
 
 **Original phases** · Three of five passed. The shared tracer still has a diffuse parity investigation. Reconstruction runs on Windows and awaits Metal validation and sustained comparative timings. [Phase table](docs/radiance-cascades/PLAN.md)

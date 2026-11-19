@@ -10,7 +10,7 @@ Four of the five original phases pass under the web acceptance criteria agreed o
 | Interval seam | Passed | GPU fixtures cover interval boundaries, misses, near occlusion and directional splits. |
 | Shared tracer | Passed | The [transport fixture](../../tools/gpu/pages/rc-transport/) checks hit distances, misses, emission and analytical diffuse lighting before and after a blocker moves. The gallery passes the shutter-response and offscreen-light checks. The [Sponza comparison](chandra.md) records remaining visual differences for investigation when they affect the web demos. |
 | Dynamic occlusion | Passed | Both backends darken and recover on the moving shutter. The response curves and independent emitter integral are in the [progress log](../../PROGRESS.md). |
-| Reconstruction and hardware | Partial | Windows tests cover temporal sampling, resize and edge error on NVIDIA. The engine-free solver, transport and reflection fixtures also pass on Intel Gen12LP. Apple Metal validation and sustained comparative timing remain open. |
+| Reconstruction and hardware | Partial | The RTX 3060 Laptop passed the matched 24-frame polished-rail reconstruction test. The reflection A/B confirmed the lit-floor signal and recorded GPU work for every frame. All three timing pairs began thermally throttled. The engine-free solver, transport and reflection fixtures also pass on Intel Gen12LP. Apple Metal validation and sustained comparative timing remain open. |
 
 The [upstream Chandra build](chandra.md) and three polished-floor experiments now run on Windows. See the [experiment list](../../research/radiance-cascades/reflections.md) for their individual checks.
 
