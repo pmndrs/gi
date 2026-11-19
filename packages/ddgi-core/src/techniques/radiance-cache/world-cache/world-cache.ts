@@ -18,6 +18,7 @@
 
 import type { GpuWord } from '../../../platform/contract/compute.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
+import type { ChangeEvent } from '../../../platform/contract/change-events.ts';
 import type { Aabb } from '../../../platform/contract/math.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 
@@ -123,16 +124,20 @@ export interface WorldCacheFrame {
     readonly width: number;
     readonly height: number;
     /**
-     * Optional (P6.1): where the scene changed since the last screen stage,
-     * as the screen probes' running means get it (D46): every changed box, or
-     * `everything` for a change with no bounds (the sun, the sky, too many
-     * boxes). A cache may let go of its history there. Absent: no change.
+     * Optional: the scene's changes. `events` (P6.2): the change events at
+     * this frame (the platform's `ChangeEventTracker` over `SceneChanges`),
+     * each with its box and the start of its current epoch, for a cache that
+     * forgets history once per epoch (the hash grid's E8 and E9).
+     * `everything` / `boxes` (P6.1): the events armed this frame, as the screen
+     * probes' running means get them (D46): their boxes, or `everything` for
+     * a change with no bounds. Absent: no change.
      */
     readonly changes?: WorldCacheChanges;
 }
 
-/** The scene's changes for a world cache (the radiance cache's `HistoryChanges`). */
+/** The scene's changes for a world cache: the change events, and those armed this frame as boxes (the radiance cache's `HistoryChanges`). */
 export interface WorldCacheChanges {
+    readonly events: readonly Pick<ChangeEvent, 'box' | 'epoch'>[];
     readonly everything: boolean;
     readonly boxes: readonly Aabb[];
 }
