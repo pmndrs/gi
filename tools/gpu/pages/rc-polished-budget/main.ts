@@ -5,7 +5,7 @@ import { waitForRailControl, type RailCapture, type RailControl } from '../rc-ra
 type State = 'on' | 'off';
 type Capture = RailCapture & { reflection: { gathered: boolean; enabled: boolean; cameraPosition: number[] };
     measurement?: NonNullable<RailCapture['measurement']> & { threeTimestampPools: number } };
-type Control = { render(options: Parameters<RailControl['render']>[0]): Promise<Capture> };
+type Control = { prepare(): Promise<void>; render(options: Parameters<RailControl['render']>[0]): Promise<Capture> };
 const width = 960, height = 540, startingTick = 80, warmFrames = 48, measuredFrames = 60;
 const pair = Number(import.meta.env.VITE_RC_REFLECTION_PAIR ?? 1);
 const order: State[] = pair === 2 ? ['off', 'on'] : ['on', 'off'];
@@ -44,6 +44,7 @@ async function arm(state: State) {
     document.body.append(iframe);
     try {
         const control = await waitForRailControl(iframe) as Control;
+        await control.prepare();
         const warm = await control.render({ frame: startingTick, frames: warmFrames, advance: true });
         assert(warm.reconstruction.ready && warm.reconstruction.mode === 'upscale', 'temporal reconstruction did not warm up');
         const end = await control.render({ frames: measuredFrames, advance: true, measure: true, captureSize: 'display' });
@@ -73,7 +74,7 @@ const startTime = performance.now();
 let adapter: AdapterSummary | null = null;
 const data: Record<string, unknown> = { pair, order, resolution: [width,height], internal: [640,360], ratio: 1.5,
     warmFrames, measuredFrames, measuredTicks: [startingTick + warmFrames, startingTick + warmFrames + measuredFrames - 1],
-    pacing: 'one draw per requestAnimationFrame; runner requests uncapped Chrome scheduling', scope: 'GPU queue span from before G-buffer to after temporal resolve and canvas blit' };
+    pacing: 'one complete gallery draw per normal browser animation frame', scope: 'GPU queue span from before G-buffer to after temporal resolve and canvas blit' };
 try {
     assert(Number.isInteger(pair) && pair >= 1 && pair <= 3, 'VITE_RC_REFLECTION_PAIR must be 1, 2 or 3');
     const gpu = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });

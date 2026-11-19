@@ -238,6 +238,7 @@ async function start() {
             if (referenceTiming) await Promise.all([renderer.resolveTimestampsAsync('compute'), renderer.resolveTimestampsAsync('render')]);
         }
         Object.assign(window, { __rcRailVerify: {
+            prepare: reconstruction.prepare,
             async render(request: VerifyOptions) {
                 stopClock();
                 if (!Number.isInteger(request.frames) || request.frames < 1) throw new RangeError('frames must be a positive integer');

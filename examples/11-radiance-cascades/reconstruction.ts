@@ -129,6 +129,11 @@ export function createReconstruction(renderer: WebGPURenderer, scene: Scene, cam
             if (taa || fsr?.upscaler) historyResets++;
         },
         get ready() { return mode !== 'upscale' || (fsr?.upscaler?.isReady ?? false); },
+        async prepare() {
+            if (mode !== 'upscale') return;
+            if (!fsr?.upscaler) throw new Error('Render the first gallery frame before preparing temporal reconstruction');
+            await fsr.upscaler.prepare();
+        },
         get renderWidth() { return renderWidth; },
         get renderHeight() { return renderHeight; },
         get updates() { return updates; },

@@ -84,9 +84,6 @@ export function buildChromeArgs(options: ChromeLaunchOptions): string[] {
         '--window-size=1280,720',
         '--force-device-scale-factor=1',
     ];
-    // The polished-rail manual harness preserves a genuine animation tick but
-    // asks Chrome to omit the display's frame cap for its timing windows.
-    if (process.env.DDGI_POLISHED_BENCH_UNCAPPED === '1') args.push('--disable-frame-rate-limit', '--disable-gpu-vsync');
     if (options.luid) args.push(`--use-adapter-luid=${options.luid.high},${options.luid.low}`);
     if (options.withoutGpu) args.push('--disable-gpu');
     args.push('about:blank');
