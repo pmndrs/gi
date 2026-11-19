@@ -1,0 +1,5 @@
+{
+    "manual": true,
+    "description": "Compare 128 updates on Chandra Sponza in Rust/CUDA, WebGPU and the S5 port. Requires the outputs and environment from tools/reference/chandra/run.ps1.",
+    "timeoutMs": 480000
+}

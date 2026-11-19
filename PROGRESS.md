@@ -31,9 +31,19 @@ Rules:
 
 **Core checks** · The NVIDIA analytical fixture found a 0.00073 change in red radiance across a far-cascade angular-bin boundary. Two directions inside the same coarse near bin remained distinguishable at 0.0230 and 0.9063 red. An opaque near blocker suppressed the distant signal. The solver issued 169 transport batches in 169 frames with specular enabled. The integrated demo's 1.5× temporal rail stayed ready through 751 updates at 320 × 180 internal and 480 × 270 display. The recording's final specular-only frame reached 238/255. Some rectangular probe-cell boundaries remain visible at roughness 0.15. [Analytical fixture](tools/gpu/pages/rc-native-reflections/)
 
-**Matched Sponza** · The two browser arms agree on the directly visible emitters. Both use the upstream OBJ, a fixed camera, a black environment, zero sun and two constant emitters. The original Rust/CUDA build and capture are in progress. [Upstream recipe and scene setup](docs/radiance-cascades/chandra.md)
+**Matched Sponza** · Built the authors' interactive Rust/CUDA executable at `9af00e8`. A local headless driver ran the upstream single-bounce kernels for 128 updates on the RTX 3060 Laptop. The two browser arms used the same 262,267-triangle OBJ, material IDs, camera, black environment, disabled sun and constant red/cyan emitters. The directly visible emitters matched on all 4,071 pixels. Both browser direct images matched exactly. [Build, local launcher and fixture](docs/radiance-cascades/chandra.md) · [Capture comparison](docs/radiance-cascades/images/chandra-sponza-comparison.png)
 
-**Verification** · Package build, TypeScript checks and all 1,620 active unit tests passed. The suite skipped 13 tests. The unit suite ran with two workers after the default parallel run hit timer and I/O timeouts on the compiling host.
+| Solver | Mean scene-linear diffuse RGB | RGB RMSE vs Chandra | Relative RMS vs Chandra |
+| --- | --- | ---: | ---: |
+| Chandra | 0.02030, 0.05170, 0.05170 | 0 | 0 |
+| Vanilla WebGPU | 0.02054, 0.04973, 0.04973 | 0.04597 | 38.8% |
+| Three.js S5 | 0.02182, 0.05117, 0.05117 | 0.04424 | 37.4% |
+
+Mean linear diffuse luminance was 0.04353 for WebGPU, 0.04493 for Three.js and 0.04503 for Chandra. WebGPU was 3.3% dimmer on average. Local brightness differences remain visible in the central passage. Relative RMS divides RGB error energy by Chandra's image energy and takes the square root. The three solvers use different cache layouts and ray budgets. The polished WebGPU cone at roughness 0.15 produces a broader distribution than Chandra's directional specular query (pre-Fresnel RGB RMSE 0.20151). A converged path-traced image would be needed to assign absolute lighting error. The run did not qualify for a sustained speed comparison.
+
+**Verification** · Full lint, package build, TypeScript checks and all 1,620 active unit tests passed. The suite skipped 13 tests. The unit suite ran with two workers after the default parallel run hit timer and I/O timeouts on the compiling host.
+
+**Shader-compile skill feedback** · None.
 
 ## 2026-11-19 · Native Split RC, gallery A/B and shutter response
 

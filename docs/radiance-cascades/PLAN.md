@@ -6,11 +6,11 @@
 | --- | --- | --- |
 | Reference rail | Passed | S5 Three.js port, fixed rail and lighting cues verified on NVIDIA. |
 | Interval seam | Passed | GPU fixtures cover interval boundaries, misses, near occlusion and directional splits. |
-| Shared tracer | Partial | The gallery runs both solvers with identical direct images. Sponza and the upstream Chandra renderer are separate comparisons. Equivalent indirect brightness remains open. |
+| Shared tracer | Partial | Direct images match on the rail and Sponza. The [three-way Sponza comparison](chandra.md) matched every primary emitter pixel to the Rust/CUDA reference. Native diffuse RGB still differs spatially. Per-ray hit and shading parity and the gallery brightness gap remain open. |
 | Dynamic occlusion | Passed | Both backends darken and recover on the moving shutter. The response curves and independent emitter integral are in the [progress log](../../PROGRESS.md). |
 | Reconstruction and hardware | Partial | Windows hardware checks cover temporal sampling, resize and edge error. Apple Metal validation and sustained comparative timing remain open. |
 
-The upstream Chandra build and polished-floor experiments extend the diffuse project. See the [experiment list](../../research/radiance-cascades/reflections.md) for their individual checks.
+The [upstream Chandra build](chandra.md) and three polished-floor experiments now run on Windows. See the [experiment list](../../research/radiance-cascades/reflections.md) for their individual checks.
 
 | Stage | Work | Evidence to advance |
 | --- | --- | --- |

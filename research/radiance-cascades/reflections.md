@@ -8,6 +8,8 @@
 | Upstream diffuse comparison | Use Chandra's Sponza geometry and camera, hold emission constant and compare linear indirect radiance. | A shared scene exposes brightness and spatial interpolation differences. Sun, sky, frame count and capture units must match. |
 | Sharp reflection rays | Future experiment. Trace a specular BVH ray for smooth surfaces and sample RC lighting at the hit. Sweep the transition to the rough gather. | Check narrow features and motion stability, and measure the extra rays and GPU time. |
 
+The first four experiments have hardware captures in the [progress log](../../PROGRESS.md). The sharp-reflection BVH ray is still an unbuilt experiment. The current cache-only gather loses narrow detail on polished surfaces and can show rectangular probe-cell boundaries.
+
 ## Gallery
 
 The recording follows the original gallery rail. The lit and reflection-only views each accumulate their own temporal history at 1.5× reconstruction.

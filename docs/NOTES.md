@@ -600,6 +600,10 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Split Radiance Cascades
 
+- Chandra at `9af00e8` includes a directional specular query in the interactive renderer. Its separate `render` CLI stops after loading the scene. The [headless capture](../tools/reference/chandra/capture.rs) uses upstream kernels for a repeatable Sponza comparison.
+- The native WebGPU rough-specular output is incident radiance and observed support. The material adapter applies Fresnel. Opaque near hits retain the broad near-bin lobe. Sparse observations can also cause a fallback to that lobe. The narrower query can recover angular detail from distant intervals when the near interval transmits. [Implementation](../packages/ddgi-core/src/techniques/radiance-cascades/specular.ts)
+
+
 The native solver accepts world-position and signed normal textures. Its output is linear diffuse irradiance; multiply by albedo / π before display. The gallery can render reduced-resolution inputs and reconstruct from color, depth and motion.
 
 The S5 solver snapshots opaque triangles in world space at `setScene`. Camera motion and changes to existing lights or materials can share that snapshot. Rigid motion requires updating the geometry seen by both the closest-hit and shadow paths. The [project spec](radiance-cascades/SPEC.md) describes the interval-tracer boundary.

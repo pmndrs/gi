@@ -3,7 +3,7 @@
  * TypeScript (including the shared client helper) with no build step.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join, relative, resolve, sep } from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { createServer, type Connect, type ViteDevServer } from 'vite';
@@ -79,7 +79,7 @@ export async function startTestSite(): Promise<TestSiteServer> {
         resolve: {
             alias: [
                 { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
-                { find: /^@pmndrs\/gi\/(core|ddgi|three)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+                { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
             ],
         },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.
@@ -98,6 +98,29 @@ export async function startTestSite(): Promise<TestSiteServer> {
                 // The built examples site, as a static subdirectory (contract.ts, EXAMPLES_SITE_BASE).
                 name: 'examples-site',
                 configureServer(devServer) {
+                    // Only these explicitly selected inputs are exposed to the local comparison page.
+                    const upstream = process.env.GI_CHANDRA_ROOT;
+                    const inputs = new Map<string, string | undefined>([
+                        ['/sponza.obj', upstream && join(upstream, 'assets/sponza.obj')],
+                        ['/diffuse.f32', process.env.GI_CHANDRA_LINEAR],
+                        ['/primary.u8', process.env.GI_CHANDRA_PRIMARY],
+                        ['/specular.f32', process.env.GI_CHANDRA_SPECULAR],
+                    ]);
+                    devServer.middlewares.use('/rc-chandra-input', (request, response) => {
+                        if (request.url === '/inputs.json') {
+                            response.setHeader('Content-Type', 'application/json');
+                            response.end(JSON.stringify([...inputs].filter(([, file]) => file && existsSync(file)).map(([url]) => url)));
+                            return;
+                        }
+                        const file = inputs.get(request.url ?? '');
+                        if (!file || !existsSync(file)) {
+                            response.statusCode = 404;
+                            response.end();
+                            return;
+                        }
+                        response.setHeader('Content-Type', 'application/octet-stream');
+                        createReadStream(file).on('error', error => response.destroy(error)).pipe(response);
+                    });
                     devServer.middlewares.use(EXAMPLES_SITE_FILES, (_request, response) => {
                         response.setHeader('Content-Type', 'application/json');
                         response.end(JSON.stringify(listFiles(EXAMPLES_DIST)));
