@@ -71,6 +71,7 @@ import {
     RAY_DATA_BINDING,
     RAY_DATA_GROUP,
     RAY_DATA_GROUP_ENTRIES,
+    CELL_SHADING_FLAG,
     RAY_LISTS_CELL_SHADING_WORD,
     RAY_LISTS_UNIFORM_BYTES,
     resolveCellsWgsl,
@@ -148,6 +149,8 @@ interface CellShadingPasses {
     readonly uniform: GPUBuffer;
     /** Group 3 of each kernel: the uniform. */
     readonly groups: Readonly<Record<CellShadingPassName, GPUBindGroup>>;
+    /** Group 3 of `PopulateCells`, which reads the changes for E9. */
+    readonly populateCellsGroup: GPUBindGroup;
 }
 
 type PopulationPassName = keyof PopulationPasses;
@@ -343,7 +346,8 @@ export class HashGridCache implements WorldCache {
             indirectArgs('PurgeTiles (ping-pong 1)', HASH_GRID_COUNTER.packedTileCount0, PURGE_TILES_WORKGROUP_SIZE),
             populationKernel('PopulateScreenProbes (cache half)', populateScreenProbesWgsl(layout), POPULATION_ENTRY_POINT.populateScreenProbes, false),
             populationKernel('GenerateReservoirs', generateReservoirsWgsl(layout), POPULATION_ENTRY_POINT.generateReservoirs, true),
-            populationKernel('PopulateCells', populateCellsWgsl(layout), POPULATION_ENTRY_POINT.populateCells, true),
+            // With the changes' uniform in group 3 (experiment E9).
+            cellShadingKernel('PopulateCells', populateCellsWgsl(layout), POPULATION_ENTRY_POINT.populateCells, true),
             populationKernel('UpdateTiles', updateTilesWgsl(layout), POPULATION_ENTRY_POINT.updateTiles, false),
             populationKernel('ResolveCells', resolveCellsWgsl(layout), POPULATION_ENTRY_POINT.resolveCells, false),
             // GI-1.2's multibounce (compiled always; run only with useMultibounce).
@@ -419,6 +423,7 @@ export class HashGridCache implements WorldCache {
                 scatterCells: cellShadingGroupFor(scatterKernel),
                 shadeCells: cellShadingGroupFor(shadeKernel),
             },
+            populateCellsGroup: cellShadingGroupFor(populateCells),
         };
 
         const purgeArgs = [purgeArgs0, purgeArgs1] as const;
@@ -553,7 +558,10 @@ export class HashGridCache implements WorldCache {
         const options = this.options;
         const budgeted = options.cellShading === 'budgeted';
         if (!budgeted && options.cellShading !== 'per-hit') throw new RangeError(`@pmndrs/gi: cellShading is 'per-hit' or 'budgeted', got ${String(options.cellShading)}`);
-        device.queue.writeBuffer(prepared.rayListsUniform, RAY_LISTS_CELL_SHADING_WORD * WORD_BYTES, new Uint32Array([budgeted ? 1 : 0]));
+        const changeReset = !budgeted && options.cellChangeReset === true;
+        const flags = (budgeted ? CELL_SHADING_FLAG.budgeted : 0) | (changeReset ? CELL_SHADING_FLAG.changeReset : 0);
+        device.queue.writeBuffer(prepared.rayListsUniform, RAY_LISTS_CELL_SHADING_WORD * WORD_BYTES, new Uint32Array([flags]));
+        if (changeReset) device.queue.writeBuffer(prepared.cellShading.uniform, 0, cellShadingWords(0, recentChangesUnion(this.recentChanges)));
         if (!budgeted) return false;
 
         const budget = options.cellShadingBudget;
@@ -609,6 +617,7 @@ export class HashGridCache implements WorldCache {
         populationPass.kernel.bind(pass);
         pass.setBindGroup(HASH_GRID_KERNEL_GROUP, populationPass.cacheGroup);
         pass.setBindGroup(RAY_DATA_GROUP, rayData.groups[name]);
+        if (name === 'populateCells') pass.setBindGroup(CELL_SHADING_GROUP_INDEX, prepared.cellShading.populateCellsGroup);
         pass.dispatchWorkgroupsIndirect(populationPass.args.buffer, 0);
         pass.end();
     }

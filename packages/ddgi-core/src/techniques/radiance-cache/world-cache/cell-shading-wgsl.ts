@@ -64,14 +64,13 @@
 
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
-import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_SALT } from './cell-shading-common.ts';
+import { CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_BOXES, CELL_SHADING_SALT } from './cell-shading-common.ts';
 import { ALL_LIGHT_GROUPS, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
 
 /** `GPUShaderStage.COMPUTE` (the global doesn't exist in Node, where the tests import this file). */
 const SHADER_STAGE_COMPUTE = 0x4;
 
-/** The group the lever's kernels put their uniform in (the hash grid is group 1, the ray data group 2). */
-export const CELL_SHADING_GROUP = 3;
+export { CELL_SHADING_GROUP, CELL_SHADING_MAX_CHANGE_BOXES } from './cell-shading-common.ts';
 
 export const CELL_SHADING_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [{ binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } }];
 
@@ -83,8 +82,6 @@ export const CELL_SHADING_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [{
  */
 export const CELL_SHADING_CHANGE_FRAMES = 16;
 
-/** The most change boxes passed (over the window); more count as a change everywhere (as the screen probes' history counts them, D46). */
-export const CELL_SHADING_MAX_CHANGE_BOXES = 16;
 
 /** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes a box. */
 export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_BOXES;
@@ -116,24 +113,7 @@ export const CELL_SHADING_ENTRY_POINT = {
 export const CELL_PRIORITY_CLASS = { newOrChanged: 0, converging: 1, turn: 2, rest: 3 } as const;
 
 const CELL_SHADING_UNIFORM_WGSL = /* wgsl */ `
-struct HashGridCacheChangeBox {
-    lower: vec3f,
-    padding0: f32,
-    upper: vec3f,
-    padding1: f32,
-}
-
-// Lever E8's per-frame values (hash-grid-cache.ts writes them).
-struct HashGridCacheCellShading {
-    budget: u32,                    // cells lit this frame at most
-    change_everything: u32,         // 1: a change with no bounds (the sun, the sky) or too many boxes
-    change_box_count: u32,
-    padding0: u32,
-    change_boxes: array<HashGridCacheChangeBox, ${CELL_SHADING_MAX_CHANGE_BOXES}>,
-}
-
-@group(${CELL_SHADING_GROUP}) @binding(0) var<uniform> g_HashGridCache_CellShading: HashGridCacheCellShading;
-
+${CELL_CHANGES_WGSL}
 const HASHGRIDCACHE_CELL_ENTRY_MASK: u32 = ${CELL_SHADING_MAX_ENTRIES - 1}u;
 const HASHGRIDCACHE_CELL_CHANGED_BIT: u32 = ${CELL_CANDIDATE_CHANGED_BIT}u;
 const HASHGRIDCACHE_CELL_BIN_SHIFT: u32 = ${CELL_CANDIDATE_BIN_SHIFT}u;
@@ -155,22 +135,6 @@ export function claimCellsWgsl(layout: HashGridCacheBufferLayout): string {
 ${cellShadingHeadWgsl(layout)}
 
 const HASHGRIDCACHE_CELL_SUB_BIN_SALT: u32 = ${CELL_SHADING_SALT.subBin}u;
-
-// Near one of this frame's scene changes: inside a change box grown by the cell's size (the hit
-// stands for its cell), or anywhere for a change with no bounds.
-fn HashGridCache_NearChange(position: vec3f, margin: f32) -> bool {
-    if (g_HashGridCache_CellShading.change_everything != 0u) {
-        return true;
-    }
-    let count = min(g_HashGridCache_CellShading.change_box_count, ${CELL_SHADING_MAX_CHANGE_BOXES}u);
-    for (var box_index = 0u; box_index < count; box_index++) {
-        let change = g_HashGridCache_CellShading.change_boxes[box_index];
-        if (all(position >= change.lower - vec3f(margin)) && all(position <= change.upper + vec3f(margin))) {
-            return true;
-        }
-    }
-    return false;
-}
 
 // An indirect value whose history is cut to one sample: its mean kept, its count 1 (a value with at
 // most one sample is left as it is). The next sample then weighs as much as all the history.
@@ -425,6 +389,8 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
 
     // One light, as GenerateReservoirs draws it, and its shadow ray, as PopulateCells traces it.
     var random = rcMakeRandom(visibility_index ^ HASHGRIDCACHE_CELL_SHADE_SALT, g_HashGridCacheConstants.frame_index);
+    // TODO(RC3.4): once rc3-4 merges, draw from HashGridCache_LightMask() as GenerateReservoirs does
+    // (the sky as a light); with ALL_LIGHT_GROUPS budgeted cells get no sky light on the cache's hits.
     let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_SHADE_LIGHT_GROUPS, rcRand(&random));
     let sample_params = rcRand2(&random);
     // A changed cell, or one with no whole sample (new, or dark), starts again from this sample

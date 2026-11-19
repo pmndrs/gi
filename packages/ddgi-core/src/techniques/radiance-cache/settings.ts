@@ -89,6 +89,15 @@ export interface RadianceCacheSettings {
     cellShading: 'per-hit' | 'budgeted';
     /** Cells lit a frame with `cellShading: 'budgeted'` (id Tech 8 lights about 20,000). A whole number, 0 or more. Read every frame. */
     cellShadingBudget: number;
+    /**
+     * Experiment E9 (TASKS P6.3): with cells lit per hit, a cell hit near a
+     * scene change of the last 16 frames (`SceneChanges.regions`, or anywhere
+     * for a change with no bounds) takes that frame's samples whole instead of
+     * blending them into its 16-sample history, and its second-bounce history
+     * is cut to one sample. E8's change marking on its own. Default off. Read
+     * every frame.
+     */
+    cellChangeReset: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -110,6 +119,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     interpolationJitter: true,
     cellShading: 'per-hit',
     cellShadingBudget: 20000,
+    cellChangeReset: false,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

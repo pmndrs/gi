@@ -43,6 +43,10 @@
  *    follow the sun no slower than per hit (their changed cells start over).
  *    Recorded: every lag.
  *
+ * P6.3 (experiment E9, `cellChangeReset`): every section also runs per hit
+ * with E9 on, which must converge as per hit does and follow both changes
+ * in fewer frames than per hit without it.
+ *
  * Correctness and measurement, no timing (the cost is
  * radiance-cache-cell-shading-cost). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-cell-shading --gpu nvidia`.
@@ -112,14 +116,17 @@ const LAG_WITHIN = 0.05;
  */
 const BUDGETED_RAYS_OFF = 0.02;
 
-type Mode = 'per-hit' | number;
+/** Per hit (GI-1.2), per hit with experiment E9's change reset, or budgeted at that many cells (E8). */
+type Mode = 'per-hit' | 'per-hit+E9' | number;
 
 function settingsFor(mode: Mode, multibounce: boolean): Partial<RadianceCacheSettings> {
-    return mode === 'per-hit' ? { useMultibounce: multibounce, cellShading: 'per-hit' } : { useMultibounce: multibounce, cellShading: 'budgeted', cellShadingBudget: mode };
+    if (mode === 'per-hit') return { useMultibounce: multibounce, cellShading: 'per-hit', cellChangeReset: false };
+    if (mode === 'per-hit+E9') return { useMultibounce: multibounce, cellShading: 'per-hit', cellChangeReset: true };
+    return { useMultibounce: multibounce, cellShading: 'budgeted', cellShadingBudget: mode };
 }
 
 function modeName(mode: Mode): string {
-    return mode === 'per-hit' ? 'per-hit' : `budgeted ${mode / 1000}k`;
+    return typeof mode === 'number' ? `budgeted ${mode / 1000}k` : mode;
 }
 
 // ---- Scenes (as radiance-cache-world-cache builds them) ----------------------------------------
@@ -308,7 +315,7 @@ async function litPlane(device: GPUDevice, mode: Mode, fail: (message: string) =
             const state = await readRays(device, scenario);
             const stats = hitRayStats(state, LIT_RADIANCE);
             shadowRaysMean += counters[HASH_GRID_COUNTER.visibilityRayCount] / LIT_PLANE_FRAMES;
-            if (mode !== 'per-hit') {
+            if (typeof mode === 'number') {
                 const candidates = counters[HASH_GRID_COUNTER.cellCandidateCount];
                 candidatesMax = Math.max(candidatesMax, candidates);
                 if (counters[HASH_GRID_COUNTER.cellShadedCount] !== Math.min(candidates, mode)) fail(`lit plane ${modeName(mode)} frame ${frame}: ${counters[HASH_GRID_COUNTER.cellShadedCount]} cells lit of ${candidates} candidates`);
@@ -448,7 +455,7 @@ async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips'
         if (final.rays === 0) fail(`${name}: no near ceiling ray`);
         if (kind === 'furnace') {
             if (convergedAt < 0) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, not ${expected.toFixed(4)} within 1%, after ${FURNACE_FRAMES} frames`);
-            if (final.off > Math.ceil((mode === 'per-hit' ? 0.005 : BUDGETED_RAYS_OFF) * final.rays)) fail(`${name}: ${final.off} of ${final.rays} near ceiling rays off ${expected.toFixed(4)} by more than 2%`);
+            if (final.off > Math.ceil((typeof mode === 'number' ? BUDGETED_RAYS_OFF : 0.005) * final.rays)) fail(`${name}: ${final.off} of ${final.rays} near ceiling rays off ${expected.toFixed(4)} by more than 2%`);
         } else if (Math.abs(final.mean / expected - 1) > TOLERANCE) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, expected ${expected.toFixed(4)} within 2%`);
         return { convergedWithin1PercentAtFrame: convergedAt, meanOverExpected: Number((final.mean / expected).toFixed(5)), nearRays: final.rays, nearRaysOff: final.off };
     } finally {
@@ -504,7 +511,7 @@ try {
     const fail = (message: string): void => {
         if (failures.length < 24) failures.push(message);
     };
-    const modes: Mode[] = ['per-hit', ...BUDGETS];
+    const modes: Mode[] = ['per-hit', 'per-hit+E9', ...BUDGETS];
     const data: Record<string, unknown> = { litRadiance: LIT_RADIANCE, ceilingIndirect: CEILING_INDIRECT, stripsIndirect: STRIPS_INDIRECT };
 
     const lit: Record<string, unknown> = {};
@@ -514,7 +521,7 @@ try {
     data.queue = await queue(device, fail);
 
     const furnaces: Record<string, unknown> = {};
-    for (const mode of ['per-hit', 20000] as const) furnaces[modeName(mode)] = await furnace(device, mode, 'furnace', fail);
+    for (const mode of ['per-hit', 'per-hit+E9', 20000] as const) furnaces[modeName(mode)] = await furnace(device, mode, 'furnace', fail);
     furnaces[`strips ${modeName(20000)}`] = await furnace(device, 20000, 'strips', fail);
     data.furnace = furnaces;
 
@@ -522,6 +529,11 @@ try {
     for (const light of ['sun', 'point'] as const) for (const mode of modes) lags[light][modeName(mode)] = await lag(device, mode, light);
     data.lag = lags;
     const perHitSunLag = lags.sun['per-hit'].framesToWithin5Percent;
+    // E9 (the change reset alone, per hit) must follow a change faster than per hit without it.
+    for (const light of ['sun', 'point'] as const) {
+        const resetLag = lags[light]['per-hit+E9'].framesToWithin5Percent;
+        if (resetLag >= lags[light]['per-hit'].framesToWithin5Percent) fail(`lag: per hit with E9 follows the ${light} in ${resetLag} frames, per hit without it in ${lags[light]['per-hit'].framesToWithin5Percent}`);
+    }
     for (const budget of [20000, 80000]) {
         const budgetedLag = lags.sun[modeName(budget)].framesToWithin5Percent;
         if (budgetedLag > perHitSunLag) fail(`lag: ${modeName(budget)} follows the sun in ${budgetedLag} frames, per hit in ${perHitSunLag}`);

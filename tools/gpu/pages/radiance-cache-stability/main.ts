@@ -26,7 +26,8 @@
  *
  * P6.2: the world cache lights its cells per hit unless the run sets
  * `VITE_RC_CELL_SHADING=budgeted` (and `VITE_RC_CELL_BUDGET`, default 20000),
- * for lever E8's stability against per hit.
+ * for lever E8's stability against per hit; `VITE_RC_CHANGE_RESET=1` turns
+ * on experiment E9 (per-hit change reset).
  *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
@@ -68,8 +69,11 @@ const CONFIGURATIONS = [
 const DARK_FLOOR = 0.05;
 /** P6.2: how the world cache lights its cells in this run (lever E8), from the environment. */
 const env = import.meta.env as Record<string, unknown>;
-const CELL_SHADING: Partial<RadianceCacheSettings> =
-    env.VITE_RC_CELL_SHADING === 'budgeted' ? { cellShading: 'budgeted', cellShadingBudget: Number(env.VITE_RC_CELL_BUDGET ?? 20000) } : { cellShading: 'per-hit' };
+const CELL_SHADING: Partial<RadianceCacheSettings> = {
+    ...(env.VITE_RC_CELL_SHADING === 'budgeted' ? { cellShading: 'budgeted', cellShadingBudget: Number(env.VITE_RC_CELL_BUDGET ?? 20000) } : { cellShading: 'per-hit' }),
+    // P6.3: experiment E9, per-hit change reset.
+    cellChangeReset: env.VITE_RC_CHANGE_RESET === '1',
+};
 
 type Vector = [number, number, number];
 

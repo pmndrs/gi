@@ -26,6 +26,61 @@ export const CELL_SHADING_SALT = {
     subBin: 0x68e31da4,
 } as const;
 
+/** The group the changes' uniform is in, for the kernels that read it (the hash grid is group 1, the ray data group 2). */
+export const CELL_SHADING_GROUP = 3;
+
+/** The most change boxes passed (over the window); more count as a change everywhere (as the screen probes' history counts them, D46). */
+export const CELL_SHADING_MAX_CHANGE_BOXES = 16;
+
+/**
+ * Experiment E9: the top bit of a cell's direct scratch count, set by
+ * `PopulateCells` when a sample's hit is near a recent change; `UpdateTiles`
+ * then takes the frame's samples whole. Per-hit counts never reach it.
+ */
+export const CELL_CHANGE_RESET_BIT = 0x80000000;
+
+/**
+ * `HashGridCacheCellShading` (E8's budget and the changes E8 and E9 read)
+ * and `HashGridCache_NearChange`, for kernels that bind the uniform in
+ * `CELL_SHADING_GROUP`. Needs the hash grid before it.
+ */
+export const CELL_CHANGES_WGSL = /* wgsl */ `
+struct HashGridCacheChangeBox {
+    lower: vec3f,
+    padding0: f32,
+    upper: vec3f,
+    padding1: f32,
+}
+
+// The cache's per-frame cell values (hash-grid-cache.ts writes them): E8's budget, and the scene
+// changes of the last few frames, which E8 and E9 read.
+struct HashGridCacheCellShading {
+    budget: u32,                    // E8: cells lit this frame at most
+    change_everything: u32,         // 1: a change with no bounds (the sun, the sky) or too many boxes
+    change_box_count: u32,
+    padding0: u32,
+    change_boxes: array<HashGridCacheChangeBox, ${CELL_SHADING_MAX_CHANGE_BOXES}>,
+}
+
+@group(${CELL_SHADING_GROUP}) @binding(0) var<uniform> g_HashGridCache_CellShading: HashGridCacheCellShading;
+
+// Near one of the recent scene changes: inside a change box grown by the cell's size (the hit
+// stands for its cell), or anywhere for a change with no bounds.
+fn HashGridCache_NearChange(position: vec3f, margin: f32) -> bool {
+    if (g_HashGridCache_CellShading.change_everything != 0u) {
+        return true;
+    }
+    let count = min(g_HashGridCache_CellShading.change_box_count, ${CELL_SHADING_MAX_CHANGE_BOXES}u);
+    for (var box_index = 0u; box_index < count; box_index++) {
+        let change = g_HashGridCache_CellShading.change_boxes[box_index];
+        if (all(position >= change.lower - vec3f(margin)) && all(position <= change.upper + vec3f(margin))) {
+            return true;
+        }
+    }
+    return false;
+}
+`;
+
 /** A cell count that marks a changed cell (exact as a half; no sum of whole counts reaches it). */
 export const CELL_CHANGED_COUNT = 1 + 2 ** -10;
 /** A cell count for a cell lit with no light to draw: the smallest normal half. */

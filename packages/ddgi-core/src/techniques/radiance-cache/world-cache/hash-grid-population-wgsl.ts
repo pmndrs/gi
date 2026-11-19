@@ -91,7 +91,7 @@ THE SOFTWARE.
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
-import { CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
+import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
 
@@ -123,8 +123,10 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
 /** Bytes of `HashGridCacheRayLists`: fifteen words, padded to 16 bytes. */
 export const RAY_LISTS_UNIFORM_BYTES = 64;
 
-/** Word of `HashGridCacheRayLists` that says how cells are lit (lever E8): 0 per hit, 1 budgeted. Written every frame. */
+/** Word of `HashGridCacheRayLists` that says how cells are lit: bit 0 budgeted (lever E8), bit 1 per-hit change reset (E9). Written every frame. */
 export const RAY_LISTS_CELL_SHADING_WORD = 14;
+/** Bits of that word. */
+export const CELL_SHADING_FLAG = { budgeted: 1, changeReset: 2 } as const;
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
 export const RESERVOIR_WORDS = 3;
@@ -291,14 +293,22 @@ struct HashGridCacheRayLists {
     multibounce_direct_buffer: u32,   // ours (register D38): a bypassing second-bounce entry's own direct light, 2 words
     cell_candidate_buffer: u32,     // lever E8: the cells hit this frame, one word each (cell-shading-wgsl.ts)
     cell_shade_buffer: u32,         // lever E8: the cells lit this frame, in priority order
-    cell_shading: u32,              // lever E8: 0 per hit (GI-1.2), 1 budgeted; written every frame
+    cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset
     cell_priority_bins: u32,        // lever E8: the candidates per priority bin, then each bin's next slot
 }
 
 // Lever E8: hits only find their cells, and the cells are lit on a budget (cell-shading-wgsl.ts).
 fn HashGridCache_CellShadingBudgeted() -> bool {
-    return g_HashGridCache_RayLists.cell_shading != 0u;
+    return (g_HashGridCache_RayLists.cell_shading & ${CELL_SHADING_FLAG.budgeted}u) != 0u;
 }
+
+// Experiment E9: per hit, a cell hit near a recent scene change takes the frame's samples whole.
+fn HashGridCache_ChangeResetPerHit() -> bool {
+    return (g_HashGridCache_RayLists.cell_shading & ${CELL_SHADING_FLAG.changeReset}u) != 0u;
+}
+
+// E9's mark in a cell's direct scratch count (PopulateCells sets it, UpdateTiles takes it off).
+const HASHGRIDCACHE_CHANGE_RESET_BIT: u32 = ${CELL_CHANGE_RESET_BIT}u;
 
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.rayLists}) var<uniform> g_HashGridCache_RayLists: HashGridCacheRayLists;
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.probeRays}) var<storage, read> g_ProbeRays: WorldCacheProbeRays;
@@ -649,6 +659,7 @@ export function populateCellsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
+${CELL_CHANGES_WGSL}
 
 // INV_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
@@ -703,6 +714,11 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
             atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
         }
         atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+        // Experiment E9: a sample from near a recent scene change marks its cell, whose history
+        // UpdateTiles then drops for this frame's samples.
+        if (HashGridCache_ChangeResetPerHit() && HashGridCache_NearChange(surface.position, HashGridCache_GetCellSize(surface.position))) {
+            atomicOr(&g_HashGridCache_UpdateScratch[scratch + 3u], HASHGRIDCACHE_CHANGE_RESET_BIT);
+        }
     }
 
     // In some cases, we want to bypass the cache to avoid light leaks;
@@ -869,8 +885,14 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // Temporal accumulation. Lever E8 (cells lit on a budget): a cell not lit this frame keeps its
         // value and count, as the indirect values do (register D37); Capsaicin's blend would step the
         // count down each such frame and read 0 after 16, though nothing was learned about the cell.
-        let previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
-        let new_direct_samples = UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index);
+        // Experiment E9: a cell marked near a recent change takes this frame's samples whole.
+        let direct_scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
+        let change_reset = (atomicAnd(&g_HashGridCache_UpdateScratch[direct_scratch + 3u], ~HASHGRIDCACHE_CHANGE_RESET_BIT) & HASHGRIDCACHE_CHANGE_RESET_BIT) != 0u;
+        var previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
+        let new_direct_samples = UpdateTiles_TakeScratch(direct_scratch);
+        if (change_reset && new_direct_samples.w > 0.0) {
+            previous_direct_radiance = vec4f(0.0);
+        }
         var direct_radiance = previous_direct_radiance;
         if (!HashGridCache_CellShadingBudgeted() || new_direct_samples.w > 0.0) {
             direct_radiance = UpdateTiles_Accumulate(previous_direct_radiance, new_direct_samples, g_HashGridCacheConstants.max_sample_count);
@@ -888,7 +910,11 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // of its hits a frame) a sparse cell would spend many frames at 0. The direct values keep
         // Capsaicin's blend.
         if (g_HashGridCacheConstants.use_multibounce != 0u) {
-            let previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
+            var previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
+            // E9: the second bounce's history is cut to one sample (its mean kept), so it follows too.
+            if (change_reset && previous_indirect_radiance.w > 1.0) {
+                previous_indirect_radiance = vec4f(previous_indirect_radiance.rgb / previous_indirect_radiance.w, 1.0);
+            }
             let new_indirect_samples = UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index);
             var indirect_radiance = previous_indirect_radiance;
             if (new_indirect_samples.w > 0.0) {

@@ -63,6 +63,14 @@ export interface HashGridCacheOptions {
     /** Cells lit a frame when `cellShading` is `'budgeted'`: a whole number, 0 or more. Read every frame. */
     cellShadingBudget: number;
     /**
+     * Experiment E9 (TASKS P6.3): per hit, a cell hit near a scene change of
+     * the last `CELL_SHADING_CHANGE_FRAMES` frames takes that frame's samples
+     * whole (its history dropped) and its indirect history is cut to one
+     * sample. Default off; no effect with `cellShading: 'budgeted'`, which
+     * marks changed cells itself. Read every frame.
+     */
+    cellChangeReset: boolean;
+    /**
      * `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second bounce.
      * With it, `PopulateMultibounceCells`, `GenerateMultibounceReservoirs` and
      * `UpdateMultibounceCells` run and the indirect values are read; without
@@ -93,6 +101,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheMaxSampleCount: 16,
     cellShading: 'per-hit',
     cellShadingBudget: 20000,
+    cellChangeReset: false,
     useMultibounce: true,
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
