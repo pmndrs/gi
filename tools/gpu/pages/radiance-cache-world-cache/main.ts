@@ -1661,8 +1661,17 @@ async function checkCornerBypass(device: GPUDevice, scenario: Scenario): Promise
     };
     const state = await readFrameState(device, scenario);
     const firstCount = state.visibilityCell.length;
-    // Every front floor and wall hit is sunlit: a self-bypassed ray's own sample is albedo / pi x E.
-    const prediction = await predictProbeRays(device, scenario, state, (index) => (state.rays[index].surface === 'floor' || state.rays[index].surface === 'wall' ? LIT_RADIANCE : null));
+    // Section 6's slab shades part of the corner, so a cell near the shadow's edge holds lit and
+    // shadowed samples and a second hit's own light can differ from its cell's. A self-bypassed
+    // ray's own sample is albedo / pi x E where the sun reaches its hit and 0 in the slab's
+    // shadow (1 cm from the edge either way; the slab's own hits and the edge are left out).
+    const prediction = await predictProbeRays(device, scenario, state, (index) => {
+        const ray = state.rays[index];
+        if (ray.surface !== 'floor' && ray.surface !== 'wall') return null;
+        const margin = slabShadowMargin(ray.hit);
+        if (Math.abs(margin) < 0.01) return null;
+        return margin > 0 ? 0 : LIT_RADIANCE;
+    });
     const rays = judgePredictedRays(state, prediction, fail);
     const tally = prediction.tally;
     if (tally.firstBounceBypassFlagsOff > 0) fail(`${tally.firstBounceBypassFlagsOff} first-bounce bypass flags differ from their resolve entries`);
@@ -1686,6 +1695,7 @@ async function checkCornerBypass(device: GPUDevice, scenario: Scenario): Promise
         if ((entry & BYPASS_CACHE_BIT) !== 0 && visibility >= firstCount) capsaicinTargets.add(state.multibounceQuery[visibility - firstCount]);
     }
     if (rays.skipped > tally.selfBypassedRays) fail(`${rays.skipped} rays had no prediction`);
+    if (rays.skipped > 0.5 * tally.selfBypassedRays) fail(`${rays.skipped} of ${tally.selfBypassedRays} self-bypassed rays had no prediction: move the slab`);
     return { failures, data: { firstBounceEntries: firstCount, secondBounceEntries: state.multibounceCell.length, ...tally, segmentsWithOwnLight: ownLights, capsaicinMisdirectedTargets: capsaicinTargets.size, rays } };
 }
 
@@ -1860,7 +1870,7 @@ try {
     // Started with multibounce off; checkLag turns it on and runs its two frames.
     await run('multibounceLag', [FURNACE_SUN], { furnace: true }, 0, checkLag);
     await run('multibounceOff', [FURNACE_SUN], { furnace: true }, CONVERGENCE_FRAMES, checkMultibounceOff);
-    await run('cornerBypass', [sun(SUN_TRAVEL)], {}, CONVERGENCE_FRAMES, checkCornerBypass, MULTIBOUNCE);
+    await run('cornerBypass', [sun(SUN_TRAVEL)], { slab: true }, CONVERGENCE_FRAMES, checkCornerBypass, MULTIBOUNCE);
     await run('clearOnChange', [sun(SUN_TRAVEL)], {}, 10, checkClearOnChange);
     await run('strips', [FURNACE_SUN], { furnace: true, strips: true }, CONVERGENCE_FRAMES, checkStrips, MULTIBOUNCE);
 
