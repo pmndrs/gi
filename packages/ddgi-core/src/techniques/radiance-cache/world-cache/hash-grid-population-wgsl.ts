@@ -91,6 +91,7 @@ THE SOFTWARE.
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import type { HashGridCacheBufferLayout } from './capacity.ts';
+import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_BINDING, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
 
@@ -117,10 +118,19 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: RAY_DATA_BINDING.probeRays, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: RAY_DATA_BINDING.radiance, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     { binding: RAY_DATA_BINDING.listWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+    // Lever E8 and experiment E9 (cell-shading-common.ts): the change events, each cell's last reset, E8's lists.
+    { binding: CELL_CHANGES_BINDING.uniform, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+    { binding: CELL_CHANGES_BINDING.resetFrames, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+    { binding: CELL_CHANGES_BINDING.cellLists, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
-/** Bytes of `HashGridCacheRayLists`: ten words, padded to 16 bytes. */
-export const RAY_LISTS_UNIFORM_BYTES = 48;
+/** Bytes of `HashGridCacheRayLists`: fifteen words, padded to 16 bytes. */
+export const RAY_LISTS_UNIFORM_BYTES = 64;
+
+/** Word of `HashGridCacheRayLists` that says how cells are lit: bit 0 budgeted (lever E8), bit 1 per-hit change reset (E9). Written every frame. */
+export const RAY_LISTS_CELL_SHADING_WORD = 14;
+/** Bits of that word; bits 8-15 hold E9's history kept (`cellChangeResetHistory`). */
+export const CELL_SHADING_FLAG = { budgeted: 1, changeReset: 2, historyShift: 8 } as const;
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
 export const RESERVOIR_WORDS = 3;
@@ -248,7 +258,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
  * buffer bound whole as one storage binding, so it must fit both the binding
  * limit and the buffer limit. It grows with the screen (32 words per probe
  * ray: 29 MB at 1280 × 720, 265 MB at 3840 × 2160, past WebGPU's default
- * 128 MiB binding), so a larger screen or a device with smaller limits can't
+ * 128 MiB binding; lever E8's lists are a buffer of their own, made when it
+ * is used), so a larger screen or a device with smaller limits can't
  * bind it where the cache itself fits (register D14's rule: name the limit,
  * no fallback).
  */
@@ -275,7 +286,31 @@ struct HashGridCacheRayLists {
     multibounce_ray_buffer: u32,    // ours (register D36): each second-bounce entry's ray, a WorldCacheProbeRay in 12 words
     first_bounce_bypass_buffer: u32,  // ours (register D38): 1 where a first-bounce entry's probe ray bypasses the cache
     multibounce_direct_buffer: u32,   // ours (register D38): a bypassing second-bounce entry's own direct light, 2 words
+    cell_candidate_buffer: u32,     // lever E8, in g_HashGridCache_CellLists: the cells hit this frame, two words each
+    cell_shade_buffer: u32,         // lever E8, in g_HashGridCache_CellLists: the cells lit this frame
+    cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset; bits 8-15: E9's history kept
+    cell_priority_bins: u32,        // lever E8, in g_HashGridCache_CellLists: each bin's first slot, then its count
 }
+
+${CELL_CHANGES_WGSL}
+
+// Lever E8: hits only find their cells, and the cells are lit on a budget (cell-shading-wgsl.ts).
+fn HashGridCache_CellShadingBudgeted() -> bool {
+    return (g_HashGridCache_RayLists.cell_shading & ${CELL_SHADING_FLAG.budgeted}u) != 0u;
+}
+
+// Experiment E9: per hit, a cell hit near a recent scene change takes the frame's samples whole.
+fn HashGridCache_ChangeResetPerHit() -> bool {
+    return (g_HashGridCache_RayLists.cell_shading & ${CELL_SHADING_FLAG.changeReset}u) != 0u;
+}
+
+// E9: the samples of a marked cell's history it keeps (0: the frame's samples replace it).
+fn HashGridCache_ChangeResetHistory() -> f32 {
+    return f32((g_HashGridCache_RayLists.cell_shading >> ${CELL_SHADING_FLAG.historyShift}u) & 0xffu);
+}
+
+// E9's mark in a cell's direct scratch count (PopulateCells sets it, UpdateTiles takes it off).
+const HASHGRIDCACHE_CHANGE_RESET_BIT: u32 = ${CELL_CHANGE_RESET_BIT}u;
 
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.rayLists}) var<uniform> g_HashGridCache_RayLists: HashGridCacheRayLists;
 @group(${RAY_DATA_GROUP}) @binding(${RAY_DATA_BINDING.probeRays}) var<storage, read> g_ProbeRays: WorldCacheProbeRays;
@@ -504,6 +539,7 @@ export function generateReservoirsWgsl(layout: HashGridCacheBufferLayout): strin
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
+${CELL_SHADING_COMMON_WGSL}
 
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
 
@@ -536,6 +572,23 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
         ScreenProbes_AccumulateRadiance(query_index, surface.emission);
         return; // do not continue past an emissive surface
     }
+
+    // Lever E8 (cells lit on a budget): the hit offers itself as its cell's sample and, if its ray
+    // is at least a cell long, joins the resolve list with no light of its own; its cell is lit by
+    // ClaimCells-ShadeCells. A shorter ray reads no cell, so it is still lit per hit below.
+    // Unlike per hit with multibounce off, a hit is resolved without knowing whether it has a light.
+    if (HashGridCache_CellShadingBudgeted()) {
+        HashGridCache_OfferCellSample(did, HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did));
+        if (!HashGridCache_ShorterThanCell(probe_ray.origin, surface.position)) {
+            let budgeted_resolve_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 1u);
+            HashGridCache_SetRayListWord(g_HashGridCache_RayLists.resolve_buffer, budgeted_resolve_index, did);
+            return;
+        }
+    }
+
+    // Experiment E9: a hit near a change marks its cell here, where every hit passes (with a light or
+    // not, so a light switched off is followed too), not where samples are added.
+    HashGridCache_MarkChangeReset(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did), surface.position);
 
     // Temporal radiance feedback (gi1.comp:2454-2496) runs only with gi1_use_temporal_feedback,
     // off by default (gi1.h:54): not part of the baseline.
@@ -656,12 +709,17 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     let quantized_radiance = HashGridCache_QuantizeRadiance(lighting);
     let scratch            = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
 
-    if (dot(lighting, lighting) > 0.0) {
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+    // Lever E8 (cells lit on a budget): only rays shorter than their cell have shadow rays here, and
+    // their samples stay with their rays; the cell's sample is ShadeCells', and until ClaimCells the
+    // scratch's first words hold the entries' keys.
+    if (!HashGridCache_CellShadingBudgeted()) {
+        if (dot(lighting, lighting) > 0.0) {
+            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
+            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
+            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+        }
+        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
     }
-    atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
 
     // In some cases, we want to bypass the cache to avoid light leaks;
     // so we simply patch the screen probes directly and invalidate the
@@ -824,11 +882,28 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         tile_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.update_tile_buffer, update_tile_index);
         let cell_index = HashGridCache_CellIndex(tile_cell_offset, tile_index, 0u);
 
-        // Temporal accumulation
-        let direct_radiance = UpdateTiles_Accumulate(
-            HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]),
-            UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index),
-            g_HashGridCacheConstants.max_sample_count);
+        // Temporal accumulation. Lever E8 (cells lit on a budget): a cell not lit this frame keeps its
+        // value and count, as the indirect values do (register D37); Capsaicin's blend would step the
+        // count down each such frame and read 0 after 16, though nothing was learned about the cell.
+        // Experiment E9: a cell marked near a recent change takes this frame's samples whole.
+        let direct_scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
+        let change_reset = (atomicAnd(&g_HashGridCache_UpdateScratch[direct_scratch + 3u], ~HASHGRIDCACHE_CHANGE_RESET_BIT) & HASHGRIDCACHE_CHANGE_RESET_BIT) != 0u;
+        let previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
+        let new_direct_samples = UpdateTiles_TakeScratch(direct_scratch);
+        var direct_radiance = previous_direct_radiance;
+        if (change_reset && new_direct_samples.w <= 0.0) {
+            // Marked, and every hit in it had no light to draw (a light switched off): its light is none now.
+            direct_radiance = vec4f(0.0);
+        } else if (change_reset) {
+            // The history counts as at most cellChangeResetHistory samples beside the frame's (0: replaced).
+            let kept = min(HashGridCache_ChangeResetHistory(), previous_direct_radiance.w);
+            let total = kept + new_direct_samples.w;
+            let mean = (previous_direct_radiance.rgb / max(previous_direct_radiance.w, 1.0) * kept + new_direct_samples.rgb) / total;
+            let count = min(total, g_HashGridCacheConstants.max_sample_count);
+            direct_radiance = vec4f(mean * count, count);
+        } else if (!HashGridCache_CellShadingBudgeted() || new_direct_samples.w > 0.0) {
+            direct_radiance = UpdateTiles_Accumulate(previous_direct_radiance, new_direct_samples, g_HashGridCacheConstants.max_sample_count);
+        }
 
         // Pack
         let packed_direct_radiance = HashGridCache_PackRadiance(direct_radiance);
@@ -842,7 +917,13 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // of its hits a frame) a sparse cell would spend many frames at 0. The direct values keep
         // Capsaicin's blend.
         if (g_HashGridCacheConstants.use_multibounce != 0u) {
-            let previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
+            var previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
+            // E9: the second bounce's history is cut to one sample (its mean kept), so it follows too.
+            // One whatever the direct value keeps: its samples come at about 0.3 a frame per hit,
+            // and kept as 3 samples the furnace's second bounce followed no faster than per hit.
+            if (change_reset && previous_indirect_radiance.w > 1.0) {
+                previous_indirect_radiance = vec4f(previous_indirect_radiance.rgb / previous_indirect_radiance.w, 1.0);
+            }
             let new_indirect_samples = UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index);
             var indirect_radiance = previous_indirect_radiance;
             if (new_indirect_samples.w > 0.0) {
@@ -1164,6 +1245,7 @@ export function generateMultibounceReservoirsWgsl(layout: HashGridCacheBufferLay
 ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
+${CELL_SHADING_COMMON_WGSL}
 
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
 
@@ -1190,6 +1272,24 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     // world-space position and normal
     let ray = HashGridCache_LoadMultibounceRay(did - first_bounce_count);
     let surface = HashGridCache_ProbeSurface(ray);
+
+    // Lever E8 (cells lit on a budget): the second hit offers itself as its cell's sample. A segment
+    // at least a cell long reads its cell (UpdateMultibounceCells), which ShadeCells lights, so it
+    // draws no light here; its entry's flags are written as below. A shorter segment keeps its own
+    // light, so it goes on as per hit.
+    if (HashGridCache_CellShadingBudgeted()) {
+        HashGridCache_OfferCellSample(did, HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did));
+        if (!HashGridCache_ShorterThanCell(ray.origin, surface.position)) {
+            let budgeted_entry = did - first_bounce_count;
+            HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_ray_buffer + ${MULTIBOUNCE_RAY_WORDS}u * budgeted_entry, 3u, 0u);
+            HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_direct_buffer + ${MULTIBOUNCE_DIRECT_WORDS}u * budgeted_entry, 0u, 0u);
+            HashGridCache_SetRayListWord(g_HashGridCache_RayLists.multibounce_direct_buffer + ${MULTIBOUNCE_DIRECT_WORDS}u * budgeted_entry, 1u, 0u);
+            return;
+        }
+    }
+
+    // Experiment E9: a second hit near a change marks its cell (with a light or not).
+    HashGridCache_MarkChangeReset(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did), surface.position);
 
     // Recover the ray origin: the first-bounce hit. Capsaicin rebuilds that hit's point from its
     // visibility entry; the second-bounce ray starts there, pushed off by the platform's offset
@@ -1279,6 +1379,10 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
 
     // The light arriving from the second hit, as BRDF / pdf weighs it (no light for a miss).
     var radiance = vec3f(0.0);
+    // Lever E8 (cells lit on a budget): a second-hit cell no level of which has been lit yet holds
+    // no estimate, not darkness, so it adds no sample (counting it as 0 would pull the first-bounce
+    // cell's mean down until 16 later samples wash it out).
+    var adds_sample = true;
     if (cell_index != kGI1_InvalidId) {
         let packed_info = vec2u(HashGridCache_RayListWord(g_HashGridCache_RayLists.multibounce_info_buffer, ${MULTIBOUNCE_INFO_WORDS}u * did + 0u),
                                 HashGridCache_RayListWord(g_HashGridCache_RayLists.multibounce_info_buffer, ${MULTIBOUNCE_INFO_WORDS}u * did + 1u));
@@ -1295,6 +1399,7 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
         } else {
             let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
             second_radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
+            adds_sample = !HashGridCache_CellShadingBudgeted() || direct_radiance.w > 0.0;
         }
         radiance = (second_radiance * brdf) / pdf;
     }
@@ -1302,12 +1407,14 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
     let quantized_radiance = HashGridCache_QuantizeRadiance(radiance);
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index_base;
 
-    if (dot(radiance, radiance) > 0.0) {
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+    if (adds_sample) {
+        if (dot(radiance, radiance) > 0.0) {
+            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
+            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
+            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+        }
+        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
     }
-    atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
 
     // The first bounce's probe ray reads no cell when it is shorter than its cell (register D38):
     // its indirect light is this draw, weighted by 1 / (1 - p) for the draws discarded.

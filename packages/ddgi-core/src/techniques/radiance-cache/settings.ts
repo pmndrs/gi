@@ -87,6 +87,40 @@ export interface RadianceCacheSettings {
      */
     interpolationJitter: boolean;
     /**
+     * How the world cache lights its cells (lever E8, TASKS P6.2; id Tech 8's
+     * "shade cells, not hits"). `'per-hit'` (default) is GI-1.2's: every probe
+     * and second-bounce hit draws a light and traces a shadow ray into its
+     * cell. `'budgeted'`: hits only find their cells, and at most
+     * `cellShadingBudget` cells a frame are lit, one light sample each, by
+     * priority (new or changed cells, then cells still converging, then each
+     * cell's turn, then the rest at random); a cell not lit this frame keeps
+     * its value. Rays shorter than their cell are still lit per hit (they read
+     * no cell). Read every frame (docs/design/radiance-cache.md, "Lever E8").
+     */
+    cellShading: 'per-hit' | 'budgeted';
+    /** Cells lit a frame with `cellShading: 'budgeted'` (id Tech 8 lights about 20,000). A whole number, 0 or more. Read every frame. */
+    cellShadingBudget: number;
+    /**
+     * Experiment E9 (TASKS P6.2b): with cells lit per hit, a cell hit near a
+     * scene change (`SceneChanges.regions`, or anywhere for a change with no
+     * bounds) forgets its 16-sample history once per epoch of the change
+     * (`ChangeEventTracker`: its start, every 8 frames while it goes on, once
+     * when it stops), keeping `cellChangeResetHistory` samples of it beside
+     * that frame's, and its second-bounce history is cut to one sample. E8's
+     * change marking on its own. On by default, dropping the history (lead,
+     * 2026-11-20: fast reaction and no ghosting first). Read every frame.
+     */
+    cellChangeReset: boolean;
+    /**
+     * With `cellChangeReset`: how many samples of a marked cell's history it
+     * keeps (default 0: the frame's samples replace the
+     * value; 1 to 15 keep the mean as that many samples beside the frame's).
+     * A setting for tuning between following a change at once (a doubled sun
+     * in 2 frames at 0, 19 at 3) and the noise of one-frame means. Read every
+     * frame.
+     */
+    cellChangeResetHistory: number;
+    /**
      * Experiment E10 (P6.3; not Capsaicin's): where the world cache's second
      * bounce comes from with `useMultibounce` on. `'auto'` (default; lead
      * decision 2026-11-19): from the technique stacked under this one
@@ -187,6 +221,10 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    cellShading: 'per-hit',
+    cellShadingBudget: 20000,
+    cellChangeReset: true,
+    cellChangeResetHistory: 0,
     secondBounce: 'auto',
     fallbackIndirectSampleCount: 4,
     worldCache: 'gi1-hash-grid',
