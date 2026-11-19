@@ -1,6 +1,6 @@
 /**
  * The SHaRC-style spatial hash cache's WGSL (phase 6 experiment P6.1,
- * docs/design/radiance-cache.md register D49-D55): an alternative backend for
+ * docs/design/radiance-cache.md register E1-E7): an alternative backend for
  * the radiance cache's world-cache slot, beside Capsaicin's hash grid.
  *
  * Ported from the pmndrs/pathtracer project's hash-grid radiance cache
@@ -35,7 +35,7 @@
  * - **The lookup:** the finest of the cell and its coarser levels with at
  *   least `minSamples` of sample weight.
  *
- * What the slot changes (register D49-D55): the samples come from the probe
+ * What the slot changes (register E1-E7): the samples come from the probe
  * rays' hits, not from the pathtracer's training records. Each probe ray that
  * hit runs a short diffuse update path from its hit: one light sample there
  * (the platform's light choice and a shadow ray, as the hash grid lights its

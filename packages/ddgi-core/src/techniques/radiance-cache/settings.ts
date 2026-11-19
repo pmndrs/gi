@@ -21,7 +21,7 @@ import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
  * Which backend fills the world-cache slot (docs/design/radiance-cache.md,
  * "World cache as a slot"): Capsaicin's GI-1.2 hash grid (the default), or
  * the SHaRC-style hash cache ported from pmndrs/pathtracer (phase 6
- * experiment P6.1, register D49-D55).
+ * experiment P6.1, register E1-E7).
  */
 export type WorldCacheKind = 'gi1-hash-grid' | 'sharc';
 

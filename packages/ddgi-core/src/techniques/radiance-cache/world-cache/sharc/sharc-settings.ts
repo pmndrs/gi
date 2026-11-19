@@ -4,7 +4,7 @@
  * table defaults are the pmndrs/pathtracer project's tuned ones
  * (`bench/nrc/hash-grid.ts`, `DEFAULT_HASH_GRID`, at dd771c8: its M7 sweeps on
  * sponza-white, nrc-hash-cache.md §6); the update-path settings are this
- * slot's own (register D50, D51).
+ * slot's own (register E2, E3).
  */
 
 export interface SharcSettings {
@@ -27,7 +27,7 @@ export interface SharcSettings {
     /** A level with less sample weight than this is passed over by the lookup. */
     minSamples: number;
     /**
-     * Bounce rays per update path, 0 to 2 (register D50). 0: a probe ray's
+     * Bounce rays per update path, 0 to 2 (register E2). 0: a probe ray's
      * hit gets its direct light only (GI-1.0's single bounce). 1: plus one
      * cosine-weighted bounce whose hit is lit by the cache (or, without
      * `cacheTail`, by its own light sample: GI-1.2's two bounces). 2: the
@@ -55,7 +55,7 @@ export interface SharcSettings {
      * workgroup), at random each frame, so a probe's 64 rays update together
      * and the skipped ones cost no tracing. The other probes' rays only read
      * the cache: a ray shorter than its cell reads its cell too, and a cell
-     * with no samples yet reads black (register D55).
+     * with no samples yet reads black (register E7).
      */
     updateFraction: number;
 }
