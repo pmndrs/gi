@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RadianceCacheTechnique } from '../../radiance-cache-technique.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../settings.ts';
-import { SharcCache } from './sharc-cache.ts';
+import { SharcCache, sharcLightMask } from './sharc-cache.ts';
 import {
     sharcCellSize,
     sharcCellSizePerMetre,
@@ -16,7 +16,22 @@ import {
     sharcSettledWeight,
 } from './sharc-cpu.ts';
 import { DEFAULT_SHARC_SETTINGS, resolveSharcSettings } from './sharc-settings.ts';
-import { SHARC_BUCKET, SHARC_COUNTER, SHARC_COUNTER_WORDS, SHARC_ENTRY_POINT, sharcLookupFunctionWgsl, sharcLookupWgsl, sharcResolveWgsl, sharcUpdateWgsl } from './sharc-wgsl.ts';
+import {
+    SHARC_BUCKET,
+    SHARC_COUNTER,
+    SHARC_COUNTER_WORDS,
+    SHARC_ENTRY_POINT,
+    SHARC_LIGHT_GROUPS,
+    SHARC_SKY_LIGHT_BIT,
+    sharcBeginWgsl,
+    sharcBounce1Wgsl,
+    sharcBounce2Wgsl,
+    sharcCombineWgsl,
+    sharcLightWgsl,
+    sharcLookupFunctionWgsl,
+    sharcLookupWgsl,
+    sharcResolveWgsl,
+} from './sharc-wgsl.ts';
 
 // ---- Independent references: the hashes in BigInt arithmetic, mod 2^32 at every step ----
 
@@ -139,6 +154,7 @@ describe('SHaRC hash cache: settings', () => {
         expect(() => resolveSharcSettings({ log2Entries: 30 })).toThrow(/sharc.log2Entries/);
         expect(() => resolveSharcSettings({ minCell: 0 })).toThrow(/sharc.minCell/);
         expect(() => resolveSharcSettings({ updateFraction: 0 })).toThrow(/sharc.updateFraction/);
+        expect('skyOnMiss' in DEFAULT_SHARC_SETTINGS).toBe(false);
     });
 
     it('keeps the GI-1.2 hash grid the technique default, and copies the SHaRC overrides', () => {
@@ -156,9 +172,24 @@ describe('SHaRC hash cache: settings', () => {
 describe('SHaRC hash cache: WGSL', () => {
     const options = { fallbackLevels: 3, pyramid: true };
     it('generates balanced code with each entry point and the counters past the header', () => {
-        const kernels = { update: sharcUpdateWgsl(options), resolve: sharcResolveWgsl(options), lookup: sharcLookupWgsl(options), reader: sharcLookupFunctionWgsl(3, options) };
+        const kernels = {
+            begin: sharcBeginWgsl(options),
+            bounce1: sharcBounce1Wgsl(options),
+            bounce2: sharcBounce2Wgsl(options),
+            light: sharcLightWgsl(options),
+            combine: sharcCombineWgsl(options),
+            resolve: sharcResolveWgsl(options),
+            lookup: sharcLookupWgsl(options),
+            reader: sharcLookupFunctionWgsl(3, options),
+        };
         for (const [name, code] of Object.entries(kernels)) expect(balanced(code), name).toBe(true);
-        expect(kernels.update).toContain(`fn ${SHARC_ENTRY_POINT.update}(`);
+        for (const pass of ['begin', 'bounce1', 'bounce2', 'light', 'combine'] as const) expect(kernels[pass]).toContain(`fn ${SHARC_ENTRY_POINT[pass]}(`);
+        // One ray type per pass: only the bounce passes trace closest hits, only the light pass traces shadow rays.
+        for (const pass of ['begin', 'bounce1', 'bounce2', 'light', 'combine'] as const) {
+            const body = kernels[pass].slice(kernels[pass].indexOf(`fn ${SHARC_ENTRY_POINT[pass]}(`));
+            expect(body.includes('sharcBounce(') || body.includes('giTraceClosest('), pass).toBe(pass === 'bounce1' || pass === 'bounce2');
+            expect(body.includes('giTraceAny('), pass).toBe(pass === 'light');
+        }
         expect(kernels.resolve).toContain(`fn ${SHARC_ENTRY_POINT.resolve}(`);
         expect(kernels.lookup).toContain(`fn ${SHARC_ENTRY_POINT.lookup}(`);
         expect(kernels.reader).toContain('fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f');
@@ -168,9 +199,27 @@ describe('SHaRC hash cache: WGSL', () => {
     });
 
     it('bakes the fallback and pyramid levels and the bucket loops in as constants (Tint loop counters on D3D12)', () => {
-        expect(sharcUpdateWgsl(options)).toContain('const SHARC_FALLBACK_LEVELS: u32 = 3u;');
-        expect(sharcUpdateWgsl(options)).toContain('const SHARC_PYRAMID_LEVELS: u32 = 3u;');
-        expect(sharcUpdateWgsl({ fallbackLevels: 2, pyramid: false })).toContain('const SHARC_PYRAMID_LEVELS: u32 = 0u;');
-        expect(sharcUpdateWgsl(options)).toContain(`const SHARC_BUCKET: u32 = ${SHARC_BUCKET}u;`);
+        expect(sharcCombineWgsl(options)).toContain('const SHARC_FALLBACK_LEVELS: u32 = 3u;');
+        expect(sharcCombineWgsl(options)).toContain('const SHARC_PYRAMID_LEVELS: u32 = 3u;');
+        expect(sharcCombineWgsl({ fallbackLevels: 2, pyramid: false })).toContain('const SHARC_PYRAMID_LEVELS: u32 = 0u;');
+        expect(sharcCombineWgsl(options)).toContain(`const SHARC_BUCKET: u32 = ${SHARC_BUCKET}u;`);
+    });
+});
+
+describe('SHaRC hash cache: the sky is counted once (register E4)', () => {
+    it("puts RC3.4's sky light bit in the mask only with the environment light, above the four groups", () => {
+        // TODO(rc3-4 merge): compare with the platform's DIRECT_SKY_LIGHT_BIT (platform/shade/wgsl.ts), 0x10 on rc3-4.
+        expect(SHARC_SKY_LIGHT_BIT).toBe(0x10);
+        expect(SHARC_SKY_LIGHT_BIT & SHARC_LIGHT_GROUPS).toBe(0);
+        expect(sharcLightMask({})).toBe(SHARC_LIGHT_GROUPS);
+        expect(sharcLightMask({ environmentLightEnable: false })).toBe(SHARC_LIGHT_GROUPS);
+        expect(sharcLightMask({ environmentLightEnable: true })).toBe(SHARC_LIGHT_GROUPS | SHARC_SKY_LIGHT_BIT);
+    });
+
+    it('brings the sky on a miss exactly when the mask has no sky light', () => {
+        const code = sharcBounce1Wgsl({ fallbackLevels: 3, pyramid: true });
+        expect(code).toContain('return (g_Sharc.lightMask & SHARC_SKY_LIGHT_BIT) == 0u;');
+        expect(code).toContain('select(vec3f(0.0), giSkyRadiance(direction), sharcSkyOnMiss())');
+        expect(sharcLightWgsl({ fallbackLevels: 3, pyramid: true })).toContain('giDirectChooseLight(surface, g_Sharc.lightMask,');
     });
 });

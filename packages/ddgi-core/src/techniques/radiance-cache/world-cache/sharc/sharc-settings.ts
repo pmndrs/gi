@@ -42,13 +42,9 @@ export interface SharcSettings {
      * Off: the path stops at the tail hit's direct light.
      */
     cacheTail: boolean;
-    /**
-     * A bounce ray that misses brings the sky's radiance (giSkyRadiance). The
-     * platform's light choice has no sky light (register D33), so this is how
-     * the sky reaches cached surfaces. Turn it off when the sky becomes a
-     * light in `giDirectChooseLight` (RC3.4), or both would count it.
-     */
-    skyOnMiss: boolean;
+    // No sky switch: a bounce ray that misses brings the sky's radiance exactly when the sky is not
+    // one of the lights a hit draws from (the technique's `environmentLightEnable`, RC3.4's sky light),
+    // so the sky is counted once either way (register E4; SharcCacheOptions).
     /**
      * The share of probes whose rays run the update path this frame (SHaRC
      * updates from a few per cent of its paths). Chosen per probe (a
@@ -75,7 +71,6 @@ export const DEFAULT_SHARC_SETTINGS: Readonly<SharcSettings> = Object.freeze({
     minSamples: 64,
     bounceRays: 2,
     cacheTail: true,
-    skyOnMiss: true,
     // P6.1 timing (RTX 3060, Sponza 1280 x 720): every probe updating costs 92 ms with two bounce
     // rays, eight times GI-1.2's cache; a quarter keeps the accuracy checks and costs about a quarter.
     updateFraction: 0.25,

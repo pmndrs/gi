@@ -35,7 +35,8 @@
  * - **The lookup:** the finest of the cell and its coarser levels with at
  *   least `minSamples` of sample weight.
  *
- * What the slot changes (register E1-E7): the samples come from the probe
+ * What the slot changes (register E1-E7; the passes are listed at
+ * `PATH_WGSL`): the samples come from the probe
  * rays' hits, not from the pathtracer's training records. Each probe ray that
  * hit runs a short diffuse update path from its hit: one light sample there
  * (the platform's light choice and a shadow ray, as the hash grid lights its
@@ -73,9 +74,23 @@ export const SHARC_SLOT_WORDS = 5;
 /** Words before the first slot in the accumulator buffer: the counters. */
 export const SHARC_COUNTER_WORDS = 16;
 /** Bytes of `SharcParams`. */
-export const SHARC_PARAMS_BYTES = 64;
-/** Bytes a probe ray keeps between the update and the lookup: two vec4f. */
-export const SHARC_RAY_SAMPLE_BYTES = 32;
+export const SHARC_PARAMS_BYTES = 80;
+/** Words a probe ray keeps for the lookup: its own estimate and flag, where its cell is (two vec4 of words). */
+export const SHARC_RAY_SAMPLE_WORDS = 8;
+/** Words of a path record (`PATH_WGSL`). */
+export const SHARC_PATH_WORDS = 40;
+/** Light entries a path can append: its hit, the first bounce's hit as a vertex, the tail. */
+export const SHARC_LIGHTS_PER_PATH = 3;
+/** Words per probe ray of the per-ray buffer: its sample, a path record, a second-bounce entry and its light entries. */
+export const SHARC_WORDS_PER_RAY = SHARC_RAY_SAMPLE_WORDS + SHARC_PATH_WORDS + 1 + SHARC_LIGHTS_PER_PATH;
+/**
+ * RC3.4's `GI_DIRECT_SKY_LIGHT_BIT` (platform/shade/wgsl.ts on `rc3-4`): with it in the light mask,
+ * `giDirectChooseLight` draws the sky too. TODO(rc3-4 merge): import `DIRECT_SKY_LIGHT_BIT` instead
+ * and keep the unit test that checks they agree.
+ */
+export const SHARC_SKY_LIGHT_BIT = 0x10;
+/** The light groups a cache hit draws its light from: all four. */
+export const SHARC_LIGHT_GROUPS = 0xf;
 /** Threads per workgroup of the per-ray passes and of the resolve. */
 export const SHARC_WORKGROUP_SIZE = 64;
 export const SHARC_RESOLVE_WORKGROUP_SIZE = 256;
@@ -98,8 +113,14 @@ export const SHARC_COUNTER = {
     tailFromCache: 6,
     /** Update paths whose tail hit was lit by its own light sample instead (too few samples, or a short segment). */
     tailFromLight: 7,
-    /** Update paths whose last bounce missed (the sky, with `skyOnMiss`). */
+    /** Update paths whose last bounce missed (the sky, unless the sky is a light). */
     tailMisses: 8,
+    /** Path records this frame (updating probe rays): `SharcBounce1` and `SharcCombine` run on it. */
+    paths: 9,
+    /** Paths whose first bounce hit is a vertex: `SharcBounce2` runs on it. */
+    secondBounces: 10,
+    /** Light entries: `SharcLight` runs on it. */
+    lightEntries: 11,
 } as const;
 
 /** `w` of a probe ray's kept sample (`SharcRaySample.sample`): what the lookup does with the ray. */
@@ -114,7 +135,11 @@ export const SHARC_RAY = {
 
 /** Entry points. */
 export const SHARC_ENTRY_POINT = {
-    update: 'SharcUpdate',
+    begin: 'SharcBegin',
+    bounce1: 'SharcBounce1',
+    bounce2: 'SharcBounce2',
+    light: 'SharcLight',
+    combine: 'SharcCombine',
     resolve: 'SharcResolve',
     lookup: 'SharcLookup',
 } as const;
@@ -134,7 +159,8 @@ export const SHARC_CACHE_BINDING = {
 export const SHARC_RAY_BINDING = {
     probeRays: 0,
     radiance: 1,
-    raySamples: 2,
+    /** The per-ray words: samples, path records and the lists (`SHARC_WORDS_PER_RAY` a ray). */
+    rayWords: 2,
 } as const;
 
 export const SHARC_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
@@ -147,7 +173,7 @@ export const SHARC_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
 export const SHARC_RAY_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: SHARC_RAY_BINDING.probeRays, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: SHARC_RAY_BINDING.radiance, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    { binding: SHARC_RAY_BINDING.raySamples, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+    { binding: SHARC_RAY_BINDING.rayWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
 /** The read-only group `WorldCacheLookup` readers bind: the params, keys and resolved values. */
@@ -180,8 +206,11 @@ export const SHARC_PARAMS_WORD = {
     bounceRays: 11,
     cacheTail: 12,
     useDirectLighting: 13,
-    skyOnMiss: 14,
+    lightMask: 14,
     updateFraction: 15,
+    pathBase: 16,
+    bounceListBase: 17,
+    lightListBase: 18,
 } as const;
 
 /**
@@ -210,8 +239,12 @@ struct SharcParams {
     bounceRays: u32,          // bounce rays per update path (0-${SHARC_MAX_BOUNCE_RAYS})
     cacheTail: u32,           // 1: the path ends in a cache lookup; 0: in the tail hit's own light sample
     useDirectLighting: u32,   // RadianceCacheSettings.useDirectLighting: emissive hits add their emission
-    skyOnMiss: u32,           // 1: a bounce ray that misses brings the sky's radiance
+    lightMask: u32,           // the light groups a hit draws from, with the sky's bit when the sky is a light (then a miss brings nothing)
     updateFraction: f32,      // the share of probes (workgroups of 64 rays) that run the update path this frame
+    pathBase: u32,            // where the path records start in g_SharcRayWords
+    bounceListBase: u32,      // where the second-bounce list starts
+    lightListBase: u32,       // where the light-entry list starts
+    reserved: u32,
 }
 
 const SHARC_BUCKET: u32 = ${SHARC_BUCKET}u;
@@ -325,13 +358,37 @@ fn sharcRead(position: vec3f, normal: vec3f) -> SharcCellRead {
 const RAY_GROUP_WGSL = /* wgsl */ `
 ${WORLD_CACHE_PROBE_RAYS_WGSL}
 
-// What the update keeps per probe ray for the lookup: two vec4f.
-//   [2i]:     the ray's own estimate (rgb) and what the lookup does (w: SHARC_RAY_*), as f32 bits
-//   [2i + 1]: where the estimate was inserted (xyz, f32 bits) and the normal it was binned by (pack4x8snorm)
+// The per-ray words. First, what each probe ray keeps for the lookup (SHARC_RAY_SAMPLE_WORDS a ray):
+//   words 0-3: the ray's own estimate (rgb) and what the lookup does (SHARC_RAY_*), as f32 bits
+//   words 4-7: where its cell is (xyz, f32 bits) and the normal it is binned by (pack4x8snorm)
 // Kept as words, not floats: the packed normal's bits could read as a NaN, which a float store may not keep.
+// Then, from g_Sharc.pathBase, bounceListBase and lightListBase, the update path's records and lists.
 @group(${SHARC_RAY_GROUP}) @binding(${SHARC_RAY_BINDING.probeRays}) var<storage, read> g_SharcProbeRays: WorldCacheProbeRays;
 @group(${SHARC_RAY_GROUP}) @binding(${SHARC_RAY_BINDING.radiance}) var<storage, read_write> g_SharcProbeRadiance: array<vec2u>;
-@group(${SHARC_RAY_GROUP}) @binding(${SHARC_RAY_BINDING.raySamples}) var<storage, read_write> g_SharcRaySamples: array<vec4u>;
+@group(${SHARC_RAY_GROUP}) @binding(${SHARC_RAY_BINDING.rayWords}) var<storage, read_write> g_SharcRayWords: array<u32>;
+
+fn sharcSetRaySample(ray: u32, estimate: vec3f, flag: f32) {
+    let base = ray * ${SHARC_RAY_SAMPLE_WORDS}u;
+    let bits = bitcast<vec4u>(vec4f(estimate, flag));
+    g_SharcRayWords[base + 0u] = bits.x;
+    g_SharcRayWords[base + 1u] = bits.y;
+    g_SharcRayWords[base + 2u] = bits.z;
+    g_SharcRayWords[base + 3u] = bits.w;
+}
+
+fn sharcRaySample(ray: u32) -> vec4f {
+    let base = ray * ${SHARC_RAY_SAMPLE_WORDS}u;
+    return bitcast<vec4f>(vec4u(g_SharcRayWords[base], g_SharcRayWords[base + 1u], g_SharcRayWords[base + 2u], g_SharcRayWords[base + 3u]));
+}
+
+fn sharcSetRayWhere(ray: u32, position: vec3f, normal: vec3f) {
+    let base = ray * ${SHARC_RAY_SAMPLE_WORDS}u + 4u;
+    let bits = bitcast<vec3u>(position);
+    g_SharcRayWords[base + 0u] = bits.x;
+    g_SharcRayWords[base + 1u] = bits.y;
+    g_SharcRayWords[base + 2u] = bits.z;
+    g_SharcRayWords[base + 3u] = pack4x8snorm(vec4f(normal, 0.0));
+}
 
 const SHARC_RAY_NONE: f32 = ${SHARC_RAY.none}.0;
 const SHARC_RAY_LOOKUP: f32 = ${SHARC_RAY.lookup}.0;
@@ -370,49 +427,111 @@ fn sharcCount(counter: u32, amount: u32) {
 `;
 
 /**
- * `SharcUpdate`: one thread per probe ray. A ray that hit (and that the
- * screen cache didn't light itself) adds its hit's emission to its radiance
- * (front faces, `useDirectLighting`), runs the update path from its hit (see
- * the file's comment), inserts each vertex's estimate into its cell, and
- * keeps its own estimate and the cell it went into for `SharcLookup`.
+ * The update path's shared code: the path records, the surfaces they stand
+ * for, the light sample. The path is split into one pass per ray type
+ * (P6.1's split, as GI-1.2's world cache splits its population), so no kernel
+ * carries the whole path:
  *
- * Built with the platform's hit-shading module (group 0), which brings the
- * tracer (`giTraceClosest`, `giTraceAny`), the surface rebuild and the light
- * choice.
+ * 1. `SharcBegin`, per probe ray: the hit's emission into the ray; whether its
+ *    probe updates this frame; an updating hit gets a path record and a light
+ *    entry for itself.
+ * 2. `SharcBounce1`, per path: the first cosine-weighted bounce ray (closest
+ *    hit). Its hit is a vertex (a light entry, and a second-bounce entry) or
+ *    the tail (the cache's value, or a light entry).
+ * 3. `SharcBounce2`, per second-bounce entry: the second bounce ray; its hit
+ *    is the tail.
+ * 4. `SharcLight`, per light entry: one light sample and its shadow ray (any
+ *    hit).
+ * 5. `SharcCombine`, per path: the light carried back along the path, each
+ *    vertex's estimate into its cell, the ray's own estimate kept.
+ *
+ * Each list is appended through a counter (`SHARC_COUNTER`), and each pass is
+ * sized on the GPU from its count through the platform's indirect arguments.
  */
-export function sharcUpdateWgsl(options: SharcCompileOptions): string {
-    return /* wgsl */ `
-${CAPSAICIN_WGSL}
-${sharcCommonWgsl(SHARC_CACHE_GROUP, options, 'read_write')}
-${ACCUM_WGSL}
-${RAY_GROUP_WGSL}
-
+const PATH_WGSL = /* wgsl */ `
 const SHARC_LIGHT_GROUPS: u32 = 0xfu;
 const SHARC_INV_PI: f32 = 0.318309886183791;
 const SHARC_TWO_PI: f32 = 6.28318530717959;
-const SHARC_MAX_BOUNCE_RAYS: u32 = ${SHARC_MAX_BOUNCE_RAYS}u;
 const SHARC_CLAMP: f32 = ${SHARC_CLAMP}.0;
-// Keeps the update's random numbers apart from the screen cache's, which seeds by ray index too.
+// Keeps the update's random numbers apart from the screen cache's (which seeds by ray index too) and each pass's apart.
 const SHARC_SEED_SALT: u32 = 0xa511e9b3u;
+const SHARC_SALT_BOUNCE1: u32 = 0x3c6ef372u;
+const SHARC_SALT_BOUNCE2: u32 = 0xbb67ae85u;
+const SHARC_SALT_LIGHT: u32 = 0x510e527fu;
+const SHARC_SALT_INSERT: u32 = 0x9b05688cu;
+// RC3.4's GI_DIRECT_SKY_LIGHT_BIT: the sky as a light in giDirectChooseLight.
+const SHARC_SKY_LIGHT_BIT: u32 = ${SHARC_SKY_LIGHT_BIT}u;
+
+// A path record: SHARC_PATH_WORDS words at g_Sharc.pathBase + path * SHARC_PATH_WORDS.
+const SHARC_PATH_WORDS: u32 = ${SHARC_PATH_WORDS}u;
+const SHARC_PATH_RAY: u32 = 0u;             // the probe ray
+const SHARC_PATH_VERTICES: u32 = 1u;        // full vertices (1 or 2): the probe ray's hit, and the first bounce's hit with two bounce rays
+const SHARC_PATH_HIT1: u32 = 2u;            // the first bounce's hit record (12 words)
+const SHARC_PATH_HIT2: u32 = 14u;           // the second bounce's hit record (12 words)
+const SHARC_PATH_DIRECT0: u32 = 26u;        // the probe ray hit's light sample (rgb, f32 bits)
+const SHARC_PATH_DIRECT1: u32 = 29u;        // the first bounce hit's light sample, as a vertex
+const SHARC_PATH_TAIL: u32 = 32u;           // the light arriving at the last vertex along its bounce
+const SHARC_PATH_EMISSION1: u32 = 35u;      // the first bounce hit's emission (front faces)
+// A light entry: path * 4 + slot.
+const SHARC_SLOT_VERTEX0: u32 = 0u;          // the probe ray's hit, into DIRECT0
+const SHARC_SLOT_VERTEX1: u32 = 1u;          // the first bounce's hit as a vertex, into DIRECT1
+const SHARC_SLOT_TAIL1: u32 = 2u;            // the first bounce's hit as the tail, added to TAIL
+const SHARC_SLOT_TAIL2: u32 = 3u;            // the second bounce's hit as the tail, added to TAIL
+
+fn sharcPathWord(path: u32, word: u32) -> u32 {
+    return g_SharcRayWords[g_Sharc.pathBase + path * SHARC_PATH_WORDS + word];
+}
+
+fn sharcSetPathWord(path: u32, word: u32, value: u32) {
+    g_SharcRayWords[g_Sharc.pathBase + path * SHARC_PATH_WORDS + word] = value;
+}
+
+fn sharcPathVec3(path: u32, word: u32) -> vec3f {
+    return bitcast<vec3f>(vec3u(sharcPathWord(path, word), sharcPathWord(path, word + 1u), sharcPathWord(path, word + 2u)));
+}
+
+fn sharcSetPathVec3(path: u32, word: u32, value: vec3f) {
+    let bits = bitcast<vec3u>(value);
+    sharcSetPathWord(path, word, bits.x);
+    sharcSetPathWord(path, word + 1u, bits.y);
+    sharcSetPathWord(path, word + 2u, bits.z);
+}
+
+// A bounce ray and its hit, kept in a path record: origin, direction, t, instance, triangle, barycentrics, front face.
+fn sharcStoreHit(path: u32, word: u32, ray: GiRay, hit: GiHit) {
+    sharcSetPathVec3(path, word, ray.origin);
+    sharcSetPathVec3(path, word + 3u, ray.direction);
+    sharcSetPathWord(path, word + 6u, bitcast<u32>(hit.t));
+    sharcSetPathWord(path, word + 7u, hit.instance);
+    sharcSetPathWord(path, word + 8u, hit.triangle);
+    sharcSetPathWord(path, word + 9u, bitcast<u32>(hit.barycentrics.x));
+    sharcSetPathWord(path, word + 10u, bitcast<u32>(hit.barycentrics.y));
+    sharcSetPathWord(path, word + 11u, select(0u, 1u, hit.frontFace));
+}
+
+fn sharcStoredSurface(path: u32, word: u32) -> GiSurface {
+    let t = bitcast<f32>(sharcPathWord(path, word + 6u));
+    let ray = GiRay(sharcPathVec3(path, word), 0.0, sharcPathVec3(path, word + 3u), t);
+    let barycentrics = vec2f(bitcast<f32>(sharcPathWord(path, word + 9u)), bitcast<f32>(sharcPathWord(path, word + 10u)));
+    let hit = GiHit(t, sharcPathWord(path, word + 7u), sharcPathWord(path, word + 8u), barycentrics, sharcPathWord(path, word + 11u) != 0u);
+    return giSurfaceAt(ray, hit);
+}
+
+fn sharcProbeSurface(probeRay: WorldCacheProbeRay) -> GiSurface {
+    let ray = GiRay(probeRay.origin, 0.0, worldCacheProbeRayDirection(probeRay), max(probeRay.hitT, 0.0));
+    let hit = GiHit(probeRay.hitT, probeRay.hitInstance, probeRay.hitTriangle, probeRay.hitBarycentrics, probeRay.hitFrontFace != 0u);
+    return giSurfaceAt(ray, hit);
+}
 
 fn sharcFinite(value: vec3f) -> bool {
     return all((bitcast<vec3u>(value) & vec3u(0x7fffffffu)) < vec3u(0x7f800000u));
 }
 
-// One light sample at a Lambert surface, as the hash grid's GenerateReservoirs and PopulateCells
-// light a hit: the platform's one-light choice, its weight, and a shadow ray. The light reflected
-// toward the side the surface was reached from.
-fn sharcDirect(surface: GiSurface, random: ptr<function, RcRandom>) -> vec3f {
-    let choice = giDirectChooseLight(surface, SHARC_LIGHT_GROUPS, rcRand(random));
-    let sampleParams = rcRand2(random);
-    if (choice.light == GI_DIRECT_NO_LIGHT) {
-        return vec3f(0.0);
-    }
-    let lightRay = giDirectLightRay(surface, choice.light, sampleParams);
-    if (lightRay.castsShadows && giTraceAny(lightRay.shadowRay)) {
-        return vec3f(0.0);
-    }
-    return surface.albedo * SHARC_INV_PI * lightRay.irradiance * choice.weight;
+// With the sky in the light choice (RC3.4's sky light, register E4), a bounce ray that misses
+// brings nothing: the sky reaches the hits through their light samples, and counting it on the
+// miss too would count it twice.
+fn sharcSkyOnMiss() -> bool {
+    return (g_Sharc.lightMask & SHARC_SKY_LIGHT_BIT) == 0u;
 }
 
 // A cosine-weighted direction about 'normal' (Duff et al. 2017's orthonormal basis). For a Lambert
@@ -428,27 +547,48 @@ fn sharcCosineDirection(normal: vec3f, u: vec2f) -> vec3f {
     return normalize(tangent * (r * cos(phi)) + bitangent * (r * sin(phi)) + normal * sqrt(max(1.0 - u.x, 0.0)));
 }
 
-// The slot of the cell, claimed if absent; -1 when its bucket is full. atomicCompareExchangeWeak may
-// fail spuriously, so a failure that leaves the slot empty is tried once more (register D22's rule).
-fn sharcInsert(key: vec2u) -> i32 {
-    for (var i = 0u; i < SHARC_BUCKET; i++) {
-        if (atomicLoad(&g_SharcKeys[key.x + i]) == key.y) {
-            return i32(key.x + i);
+fn sharcAppendLight(path: u32, slot: u32) {
+    let entry = atomicAdd(&g_SharcAccum[${SHARC_COUNTER.lightEntries}u], 1u);
+    g_SharcRayWords[g_Sharc.lightListBase + entry] = path * 4u + slot;
+}
+
+// A bounce ray from 'start' in a cosine-weighted direction, its closest hit, and what becomes of
+// the hit: with 'asVertex', a vertex of the path (a light entry, and the next bounce); otherwise
+// the tail, read from the cache where its cell has minSamples and the segment is longer than the
+// cell (SHaRC's rule against reading a cell from too close), else lit by its own light entry.
+// A miss is the sky (sharcSkyOnMiss) or nothing.
+fn sharcBounce(path: u32, start: GiSurface, hitWord: u32, asVertex: bool, vertexSlot: u32, tailSlot: u32, u: vec2f) {
+    let direction = sharcCosineDirection(start.normal, u);
+    let ray = GiRay(giShadeOffsetRayOrigin(start.position, giShadeRaySide(start)), 0.0, direction, RC_MAX_HIT_DISTANCE);
+    let hit = giTraceClosest(ray);
+    if (hit.t < 0.0) {
+        sharcSetPathVec3(path, SHARC_PATH_TAIL, select(vec3f(0.0), giSkyRadiance(direction), sharcSkyOnMiss()));
+        sharcCount(${SHARC_COUNTER.tailMisses}u, 1u);
+        return;
+    }
+    sharcStoreHit(path, hitWord, ray, hit);
+    let next = giSurfaceAt(ray, hit);
+    let emission = select(vec3f(0.0), next.emission, next.frontFace);
+    if (asVertex) {
+        sharcSetPathWord(path, SHARC_PATH_VERTICES, 2u);
+        sharcSetPathVec3(path, SHARC_PATH_EMISSION1, emission);
+        sharcAppendLight(path, vertexSlot);
+        let entry = atomicAdd(&g_SharcAccum[${SHARC_COUNTER.secondBounces}u], 1u);
+        g_SharcRayWords[g_Sharc.bounceListBase + entry] = path;
+        return;
+    }
+    if (g_Sharc.cacheTail != 0u && hit.t >= sharcCellSize(sharcLevel(next.position))) {
+        let read = sharcRead(next.position, next.normal);
+        if (read.weight >= g_Sharc.minSamples) {
+            sharcSetPathVec3(path, SHARC_PATH_TAIL, emission + read.radiance);
+            sharcCount(${SHARC_COUNTER.tailFromCache}u, 1u);
+            return;
         }
     }
-    for (var i = 0u; i < SHARC_BUCKET; i++) {
-        let slot = key.x + i;
-        if (atomicLoad(&g_SharcKeys[slot]) == 0u) {
-            var result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
-            if (!result.exchanged && result.old_value == 0u) {
-                result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
-            }
-            if (result.exchanged || result.old_value == key.y) {
-                return i32(slot);
-            }
-        }
-    }
-    return -1;
+    // The light pass adds the tail hit's own light sample to its emission.
+    sharcSetPathVec3(path, SHARC_PATH_TAIL, emission);
+    sharcAppendLight(path, tailSlot);
+    sharcCount(${SHARC_COUNTER.tailFromLight}u, 1u);
 }
 
 // Adds one sample of radiance into the cell at 'position' (and, with the pyramid, its coarser cells):
@@ -475,140 +615,205 @@ fn sharcInsertSample(position: vec3f, normal: vec3f, radiance: vec3f, random: pt
     }
 }
 
-fn sharcProbeSurface(probeRay: WorldCacheProbeRay) -> GiSurface {
-    let ray = GiRay(probeRay.origin, 0.0, worldCacheProbeRayDirection(probeRay), max(probeRay.hitT, 0.0));
-    let hit = GiHit(probeRay.hitT, probeRay.hitInstance, probeRay.hitTriangle, probeRay.hitBarycentrics, probeRay.hitFrontFace != 0u);
-    return giSurfaceAt(ray, hit);
+// The slot of the cell, claimed if absent; -1 when its bucket is full. atomicCompareExchangeWeak may
+// fail spuriously, so a failure that leaves the slot empty is tried once more (register D22's rule).
+fn sharcInsert(key: vec2u) -> i32 {
+    for (var i = 0u; i < SHARC_BUCKET; i++) {
+        if (atomicLoad(&g_SharcKeys[key.x + i]) == key.y) {
+            return i32(key.x + i);
+        }
+    }
+    for (var i = 0u; i < SHARC_BUCKET; i++) {
+        let slot = key.x + i;
+        if (atomicLoad(&g_SharcKeys[slot]) == 0u) {
+            var result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
+            if (!result.exchanged && result.old_value == 0u) {
+                result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
+            }
+            if (result.exchanged || result.old_value == key.y) {
+                return i32(slot);
+            }
+        }
+    }
+    return -1;
+}
+`;
+
+/** The head of every update pass: Capsaicin's helpers, the cache, its accumulators, the rays and the path code. */
+function updateHeadWgsl(options: SharcCompileOptions): string {
+    return `${CAPSAICIN_WGSL}\n${sharcCommonWgsl(SHARC_CACHE_GROUP, options, 'read_write')}\n${ACCUM_WGSL}\n${RAY_GROUP_WGSL}\n${PATH_WGSL}`;
 }
 
+/** The entry point's header: one thread per item of a 2D-split indirect dispatch. */
+function perItemEntry(entryPoint: string): string {
+    return /* wgsl */ `
 @compute @workgroup_size(${SHARC_WORKGROUP_SIZE})
-fn ${SHARC_ENTRY_POINT.update}(
+fn ${entryPoint}(
     @builtin(workgroup_id) workgroup: vec3u,
     @builtin(num_workgroups) workgroups: vec3u,
     @builtin(local_invocation_index) localIndex: u32,
 ) {
-    let did = sharcWorkgroupIndex(workgroup, workgroups) * ${SHARC_WORKGROUP_SIZE}u + localIndex;
+    let did = sharcWorkgroupIndex(workgroup, workgroups) * ${SHARC_WORKGROUP_SIZE}u + localIndex;`;
+}
+
+/**
+ * `SharcBegin`: one thread per probe ray. A ray that hit (and that the screen
+ * cache didn't light itself) adds its hit's emission to its radiance (front
+ * faces, `useDirectLighting`) and keeps where its cell is for the lookup.
+ * Whole probes (a workgroup is one probe's 64 rays) update this frame with
+ * probability `updateFraction`; an updating ray gets a path record and a
+ * light entry for its hit. Emission goes straight to the ray, never into a
+ * cell (a cell would spread it over its size: Capsaicin's reason to bypass
+ * emissive hits); unlike Capsaicin's, the light the surface reflects is added
+ * too (register E5).
+ */
+export function sharcBeginWgsl(options: SharcCompileOptions): string {
+    return /* wgsl */ `
+${updateHeadWgsl(options)}
+${perItemEntry(SHARC_ENTRY_POINT.begin)}
     if (did >= g_SharcProbeRays.count) {
         return;
     }
-    g_SharcRaySamples[2u * did] = bitcast<vec4u>(vec4f(0.0, 0.0, 0.0, SHARC_RAY_NONE));
+    sharcSetRaySample(did, vec3f(0.0), SHARC_RAY_NONE);
     let probeRay = g_SharcProbeRays.rays[did];
     // A miss is the screen cache's (the sky), and so is a ray it lit itself.
     if (probeRay.hitT < 0.0 || (probeRay.flags & WORLD_CACHE_PROBE_RAY_BYPASS) != 0u) {
         return;
     }
     let surface = sharcProbeSurface(probeRay);
-    // Emission goes straight to the ray, never into a cell (a cell would spread it over its
-    // whole size, enlarging the light: the reason Capsaicin's GenerateReservoirs bypasses
-    // emissive hits). Unlike Capsaicin's, the light the surface reflects is added too.
     if (g_Sharc.useDirectLighting != 0u && surface.frontFace && dot(surface.emission, surface.emission) > 0.0) {
         sharcAddToProbeRay(did, surface.emission);
     }
-
-    // Whole probes (a workgroup holds one probe's 64 rays) update or don't, so the skipped ones trace
-    // nothing and the others keep their rays together.
+    // Until SharcCombine says otherwise (an updating ray shorter than its cell reads its own estimate),
+    // the ray reads its cell; a cell with no samples yet reads black.
+    sharcSetRaySample(did, vec3f(0.0), SHARC_RAY_LOOKUP);
+    sharcSetRayWhere(did, surface.position, surface.normal);
     let probe = did / ${SHARC_WORKGROUP_SIZE}u;
     let updates = f32(rcPcgHash(probe ^ rcPcgHash(g_Sharc.frame ^ SHARC_SEED_SALT)) >> 8u) * (1.0 / 16777216.0) < g_Sharc.updateFraction;
     if (!updates) {
-        // Read the cache only (a ray shorter than its cell too; a cell with no samples reads black).
-        g_SharcRaySamples[2u * did] = bitcast<vec4u>(vec4f(0.0, 0.0, 0.0, SHARC_RAY_LOOKUP));
-        g_SharcRaySamples[2u * did + 1u] = vec4u(bitcast<vec3u>(surface.position), pack4x8snorm(vec4f(surface.normal, 0.0)));
         return;
     }
+    let path = atomicAdd(&g_SharcAccum[${SHARC_COUNTER.paths}u], 1u);
+    sharcSetPathWord(path, SHARC_PATH_RAY, did);
+    sharcSetPathWord(path, SHARC_PATH_VERTICES, 1u);
+    sharcSetPathVec3(path, SHARC_PATH_TAIL, vec3f(0.0));
+    sharcAppendLight(path, SHARC_SLOT_VERTEX0);
+}
+`;
+}
 
-    var random = rcMakeRandom(did ^ SHARC_SEED_SALT, g_Sharc.frame);
-    let bounces = min(g_Sharc.bounceRays, SHARC_MAX_BOUNCE_RAYS);
-
-    // The update path. 'vertices' are the hits whose estimate goes into the cache (the probe ray's
-    // hit first); the last bounce's hit is the tail, whose light comes from the cache or its own
-    // light sample.
-    var vertices: array<GiSurface, ${SHARC_MAX_BOUNCE_RAYS}>;
-    var direct: array<vec3f, ${SHARC_MAX_BOUNCE_RAYS}>;
-    // The emission of vertex k + 1 seen from vertex k (front faces only).
-    var emissionAhead: array<vec3f, ${SHARC_MAX_BOUNCE_RAYS}>;
-    vertices[0] = surface;
-    direct[0] = sharcDirect(surface, &random);
-    var vertexCount = 1u;
-    // The radiance arriving at the last vertex along its bounce ray (0 without one).
-    var tail = vec3f(0.0);
-    for (var k = 0u; k < SHARC_MAX_BOUNCE_RAYS; k++) {
-        if (k >= bounces) {
-            break;
-        }
-        let start = vertices[k];
-        let direction = sharcCosineDirection(start.normal, rcRand2(&random));
-        let ray = GiRay(giShadeOffsetRayOrigin(start.position, giShadeRaySide(start)), 0.0, direction, RC_MAX_HIT_DISTANCE);
-        let hit = giTraceClosest(ray);
-        if (hit.t < 0.0) {
-            if (g_Sharc.skyOnMiss != 0u) {
-                tail = giSkyRadiance(direction);
-            }
-            sharcCount(${SHARC_COUNTER.tailMisses}u, 1u);
-            break;
-        }
-        let next = giSurfaceAt(ray, hit);
-        let emission = select(vec3f(0.0), next.emission, next.frontFace);
-        if (k + 1u < bounces) {
-            // Another vertex: its own light, and the path goes on from it.
-            vertices[k + 1u] = next;
-            direct[k + 1u] = sharcDirect(next, &random);
-            emissionAhead[k] = emission;
-            vertexCount = k + 2u;
-            continue;
-        }
-        // The tail: the cache's value where it has enough samples and the segment is longer than the
-        // cell (SHaRC's rule against reading a cell from too close), else the hit's own light sample.
-        var reflected = vec3f(0.0);
-        var fromCache = false;
-        if (g_Sharc.cacheTail != 0u && hit.t >= sharcCellSize(sharcLevel(next.position))) {
-            let read = sharcRead(next.position, next.normal);
-            if (read.weight >= g_Sharc.minSamples) {
-                reflected = read.radiance;
-                fromCache = true;
-            }
-        }
-        if (fromCache) {
-            sharcCount(${SHARC_COUNTER.tailFromCache}u, 1u);
-        } else {
-            reflected = sharcDirect(next, &random);
-            sharcCount(${SHARC_COUNTER.tailFromLight}u, 1u);
-        }
-        tail = emission + reflected;
+/** `SharcBounce1`: one thread per path, the first bounce ray (`bounceRays` ≥ 1). */
+export function sharcBounce1Wgsl(options: SharcCompileOptions): string {
+    return /* wgsl */ `
+${updateHeadWgsl(options)}
+${perItemEntry(SHARC_ENTRY_POINT.bounce1)}
+    if (did >= atomicLoad(&g_SharcAccum[${SHARC_COUNTER.paths}u]) || g_Sharc.bounceRays == 0u) {
+        return;
     }
+    let ray = sharcPathWord(did, SHARC_PATH_RAY);
+    var random = rcMakeRandom(ray ^ SHARC_SALT_BOUNCE1, g_Sharc.frame);
+    let surface = sharcProbeSurface(g_SharcProbeRays.rays[ray]);
+    sharcBounce(did, surface, SHARC_PATH_HIT1, g_Sharc.bounceRays >= 2u, SHARC_SLOT_VERTEX1, SHARC_SLOT_TAIL1, rcRand2(&random));
+}
+`;
+}
 
-    // Carry the light back along the path: S_k = direct_k + albedo_k x (what arrives at k).
-    var estimates: array<vec3f, ${SHARC_MAX_BOUNCE_RAYS}>;
-    var arriving = tail;
-    for (var j = 0u; j < SHARC_MAX_BOUNCE_RAYS; j++) {
-        if (j >= vertexCount) {
-            break;
-        }
-        let k = vertexCount - 1u - j;
-        let estimate = direct[k] + vertices[k].albedo * arriving;
-        estimates[k] = estimate;
-        if (k > 0u) {
-            arriving = emissionAhead[k - 1u] + estimate;
-        }
+/** `SharcBounce2`: one thread per second-bounce entry (paths whose first bounce hit is a vertex), the second bounce ray. */
+export function sharcBounce2Wgsl(options: SharcCompileOptions): string {
+    return /* wgsl */ `
+${updateHeadWgsl(options)}
+${perItemEntry(SHARC_ENTRY_POINT.bounce2)}
+    if (did >= atomicLoad(&g_SharcAccum[${SHARC_COUNTER.secondBounces}u])) {
+        return;
     }
+    let path = g_SharcRayWords[g_Sharc.bounceListBase + did];
+    let ray = sharcPathWord(path, SHARC_PATH_RAY);
+    var random = rcMakeRandom(ray ^ SHARC_SALT_BOUNCE2, g_Sharc.frame);
+    sharcBounce(path, sharcStoredSurface(path, SHARC_PATH_HIT1), SHARC_PATH_HIT2, false, 0u, SHARC_SLOT_TAIL2, rcRand2(&random));
+}
+`;
+}
 
-    // Each vertex's estimate into its cell. Past the first, only when the path ends in the cache:
-    // without it a later vertex's estimate has fewer bounces than its cell stands for.
-    for (var k = 0u; k < SHARC_MAX_BOUNCE_RAYS; k++) {
-        if (k >= vertexCount) {
-            break;
-        }
-        if (k == 0u || g_Sharc.cacheTail != 0u) {
-            sharcInsertSample(vertices[k].position, vertices[k].normal, estimates[k], &random);
+/**
+ * `SharcLight`: one thread per light entry, one light sample at a Lambert
+ * surface as the hash grid's `GenerateReservoirs` and `PopulateCells` light a
+ * hit: the platform's one-light choice over `lightMask`, its weight, and a
+ * shadow ray. The light reflected toward the side the surface was reached
+ * from, into the path's slot.
+ */
+export function sharcLightWgsl(options: SharcCompileOptions): string {
+    return /* wgsl */ `
+${updateHeadWgsl(options)}
+${perItemEntry(SHARC_ENTRY_POINT.light)}
+    if (did >= atomicLoad(&g_SharcAccum[${SHARC_COUNTER.lightEntries}u])) {
+        return;
+    }
+    let entry = g_SharcRayWords[g_Sharc.lightListBase + did];
+    let path = entry >> 2u;
+    let slot = entry & 3u;
+    let ray = sharcPathWord(path, SHARC_PATH_RAY);
+    var surface: GiSurface;
+    if (slot == SHARC_SLOT_VERTEX0) {
+        surface = sharcProbeSurface(g_SharcProbeRays.rays[ray]);
+    } else if (slot == SHARC_SLOT_TAIL2) {
+        surface = sharcStoredSurface(path, SHARC_PATH_HIT2);
+    } else {
+        surface = sharcStoredSurface(path, SHARC_PATH_HIT1);
+    }
+    var random = rcMakeRandom((ray * 4u + slot) ^ SHARC_SALT_LIGHT, g_Sharc.frame);
+    let choice = giDirectChooseLight(surface, g_Sharc.lightMask, rcRand(&random));
+    let sampleParams = rcRand2(&random);
+    var light = vec3f(0.0);
+    if (choice.light != GI_DIRECT_NO_LIGHT) {
+        let lightRay = giDirectLightRay(surface, choice.light, sampleParams);
+        if (!(lightRay.castsShadows && giTraceAny(lightRay.shadowRay))) {
+            light = surface.albedo * SHARC_INV_PI * lightRay.irradiance * choice.weight;
         }
     }
+    if (slot == SHARC_SLOT_VERTEX0) {
+        sharcSetPathVec3(path, SHARC_PATH_DIRECT0, light);
+    } else if (slot == SHARC_SLOT_VERTEX1) {
+        sharcSetPathVec3(path, SHARC_PATH_DIRECT1, light);
+    } else {
+        // One tail per path, so no other thread adds to it.
+        sharcSetPathVec3(path, SHARC_PATH_TAIL, sharcPathVec3(path, SHARC_PATH_TAIL) + light);
+    }
+}
+`;
+}
 
-    // What the lookup needs: the ray's own estimate, whether it reads it (a ray shorter than its cell
-    // would read light from beyond what it can see: SHaRC's segment rule, GI-1.2's bypass), and the
-    // cell it went into.
-    let own = probeRay.hitT < sharcCellSize(sharcLevel(surface.position));
-    let estimate = select(vec3f(0.0), estimates[0], sharcFinite(estimates[0]));
-    g_SharcRaySamples[2u * did] = bitcast<vec4u>(vec4f(estimate, select(SHARC_RAY_LOOKUP, SHARC_RAY_OWN, own)));
-    g_SharcRaySamples[2u * did + 1u] = vec4u(bitcast<vec3u>(surface.position), pack4x8snorm(vec4f(surface.normal, 0.0)));
+/**
+ * `SharcCombine`: one thread per path. The light carried back along the path,
+ * S_k = direct_k + albedo_k × (what arrives at k); each vertex's estimate into
+ * its cell (past the first only with the cache tail: without it a later
+ * vertex's estimate has fewer bounces than its cell stands for); and the
+ * probe ray's own estimate, which it reads instead of its cell when it is
+ * shorter than the cell (SHaRC's segment rule, GI-1.2's bypass; register E6).
+ */
+export function sharcCombineWgsl(options: SharcCompileOptions): string {
+    return /* wgsl */ `
+${updateHeadWgsl(options)}
+${perItemEntry(SHARC_ENTRY_POINT.combine)}
+    if (did >= atomicLoad(&g_SharcAccum[${SHARC_COUNTER.paths}u])) {
+        return;
+    }
+    let ray = sharcPathWord(did, SHARC_PATH_RAY);
+    let probeRay = g_SharcProbeRays.rays[ray];
+    let first = sharcProbeSurface(probeRay);
+    var random = rcMakeRandom(ray ^ SHARC_SALT_INSERT, g_Sharc.frame);
+    var arriving = sharcPathVec3(did, SHARC_PATH_TAIL);
+    if (sharcPathWord(did, SHARC_PATH_VERTICES) == 2u) {
+        let second = sharcStoredSurface(did, SHARC_PATH_HIT1);
+        let estimate = sharcPathVec3(did, SHARC_PATH_DIRECT1) + second.albedo * arriving;
+        if (g_Sharc.cacheTail != 0u) {
+            sharcInsertSample(second.position, second.normal, estimate, &random);
+        }
+        arriving = sharcPathVec3(did, SHARC_PATH_EMISSION1) + estimate;
+    }
+    let estimate = sharcPathVec3(did, SHARC_PATH_DIRECT0) + first.albedo * arriving;
+    sharcInsertSample(first.position, first.normal, estimate, &random);
+    let own = probeRay.hitT < sharcCellSize(sharcLevel(first.position));
+    sharcSetRaySample(ray, select(vec3f(0.0), estimate, sharcFinite(estimate)), select(SHARC_RAY_LOOKUP, SHARC_RAY_OWN, own));
 }
 `;
 }
@@ -689,14 +894,15 @@ fn ${SHARC_ENTRY_POINT.lookup}(
     workgroupBarrier();
     let did = sharcWorkgroupIndex(workgroup, workgroups) * ${SHARC_WORKGROUP_SIZE}u + localIndex;
     if (did < g_SharcProbeRays.count) {
-        let kept = bitcast<vec4f>(g_SharcRaySamples[2u * did]);
+        let kept = sharcRaySample(did);
         if (kept.w == SHARC_RAY_OWN) {
             sharcAddToProbeRay(did, kept.xyz);
             atomicAdd(&wg_SharcOwn, 1u);
         } else if (kept.w == SHARC_RAY_LOOKUP) {
-            let inserted = g_SharcRaySamples[2u * did + 1u];
-            let normal = unpack4x8snorm(inserted.w).xyz;
-            let read = sharcRead(bitcast<vec3f>(inserted.xyz), normal);
+            let base = did * ${SHARC_RAY_SAMPLE_WORDS}u + 4u;
+            let position = bitcast<vec3f>(vec3u(g_SharcRayWords[base], g_SharcRayWords[base + 1u], g_SharcRayWords[base + 2u]));
+            let normal = unpack4x8snorm(g_SharcRayWords[base + 3u]).xyz;
+            let read = sharcRead(position, normal);
             // The ray's own estimate went into its cell this frame, so a cell is always there unless
             // its bucket was full; then the ray reads its own estimate.
             sharcAddToProbeRay(did, select(kept.xyz, read.radiance, read.weight > 0.0));
