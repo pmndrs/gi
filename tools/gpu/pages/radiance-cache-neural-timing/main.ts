@@ -5,9 +5,8 @@
  * camera still: GI-1.2's multibounce (`neuralCache: 'off'`), the tail at its
  * defaults (the compact network, 64 → 3 × 32 → 3, f16, 2 steps a frame), the
  * tail in f32, and the tail with the pathtracer's default network (64 → 5 ×
- * 64 → 3). The device is the platform's plus `shader-f16` and the adapter's
- * workgroup memory (32 KiB on the RTX 3060), as a host using the tail would
- * ask; on the platform's own device the tail runs f32 with smaller tiles.
+ * 64 → 3). The device is the platform's, which asks for `shader-f16` and the
+ * adapter's workgroup memory (32 KiB on the RTX 3060; DECISIONS 2026-11-20).
  *
  * Each configuration warms for `WARM_FRAMES` frames from an empty cache and a
  * fresh network (the gate opens at frame 17), then times `TIMED_FRAMES`
@@ -217,13 +216,8 @@ let deviceErrors: string[] = [];
 try {
     const adapter = await navigator.gpu?.requestAdapter();
     if (!adapter) throw new Error('WebGPU is not available, or requestAdapter() returned null');
-    // The platform's device plus what the pathtracer's network runs best with, as a host using the tail would ask:
-    // shader-f16 and the adapter's workgroup memory (the platform's device has neither; NOTES, P6.4).
-    const features = [...optionalFeatures(adapter), ...(adapter.features.has('shader-f16') ? (['shader-f16'] as const) : [])];
-    const device = await adapter.requestDevice({
-        requiredLimits: { ...requiredLimits(adapter), maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize },
-        requiredFeatures: features,
-    });
+    // The platform's device: shader-f16 and the adapter's workgroup memory included (DECISIONS 2026-11-20).
+    const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter), requiredFeatures: optionalFeatures(adapter) });
     releaseDeviceOnPageHide(device);
     deviceErrors = watchDevice(device);
     if (!device.features.has('timestamp-query')) throw new Error('this page needs timestamp-query');

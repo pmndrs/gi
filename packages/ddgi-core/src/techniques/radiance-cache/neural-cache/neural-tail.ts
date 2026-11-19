@@ -80,9 +80,10 @@ function setCapacity(settings: NeuralTailSettings): number {
 /**
  * Records per workgroup of the tiled kernels: the pathtracer's default (64 at
  * f16, 48 at f32) or the largest multiple of 16 below it that fits the
- * device's workgroup memory. The platform's device keeps WebGPU's default
- * 16 KiB (`requiredLimits` asks for no more), where the compact network's
- * 64-record inference needs 20 KiB.
+ * device's workgroup memory. `requiredLimits` asks for the adapter's maximum
+ * (DECISIONS 2026-11-20; 32 KiB on the RTX 3060); a host device at WebGPU's
+ * default 16 KiB still runs, with smaller tiles (the compact network's
+ * 64-record inference needs 20 KiB).
  */
 function tiledRecords(shape: MlpShape, precision: 'f16' | 'f32', limit: number, bytes: (records: number) => number): number {
     for (let records = defaultForwardRecords(precision); records >= 16; records -= 16) {
