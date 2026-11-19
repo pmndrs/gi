@@ -391,6 +391,7 @@ Given a surface point `P`, its normal `N` and the direction `V` it's seen from:
      - HomeFig's trap: a crush threshold equal to the direction-weight floor (both 0.2) let fully back-facing exterior probes leak, because their weight sat exactly at the threshold and was never crushed.
      - Here a fully back-facing probe also carries the Chebyshev factor, which is at most 1 and drops to 0.05 when it's occluded, so its weight lands below 0.2 and gets crushed. The leak tests (two-room, thin wall, closed door) watch this.
    - multiply by the trilinear weight;
+   - with `samplingWeightFloors` (off by default; DV-06, DECISIONS 2026-11-19), RTXGI's floors: the weight before the crush is at least 1e-6, and each axis of the trilinear weight at least 0.001 (`Irradiance.hlsl`), so a point on a probe plane gives the far plane's probes a tiny weight;
    - sample irradiance bilinearly at `octahedral(N)` in the probe's tile.
 4. Return `Σ w·E / Σ w`, or 0 when `Σ w` is 0.
 
@@ -428,6 +429,7 @@ interface DDGISettings {
     warmUpMaxSeconds: number;        // 8
     warmUpMinPasses: number;         // 2
     maxBrightnessChange: number;     // 2.0
+    samplingWeightFloors: boolean;   // false (DV-06): RTXGI's floors on the sampling weights; live, through the volume table
     distanceSharpness: number;       // 50
     normalBias: number | 'auto';     // auto = 0.1 × min spacing
     viewBias: number | 'auto';

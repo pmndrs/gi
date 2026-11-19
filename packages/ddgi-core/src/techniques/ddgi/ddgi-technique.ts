@@ -2639,7 +2639,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * Writes the volume table's CPU part (a row per volume, priority order:
      * the sampling parameters and the window, VOLUME_TABLE_CPU_TEXELS) when a
      * row changed since it was last written: after `prepare`, when a bias
-     * setting changes, and when a camera-following volume's window moves.
+     * setting or `samplingWeightFloors` changes, and when a camera-following
+     * volume's window moves.
      * `whole` (after `prepare`) writes the valid extents too: a fixed
      * volume's every probe, a camera-following volume's starting extent;
      * after that only `ddgi/scroll` writes them. Lands before the host's next
@@ -2654,7 +2655,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             const offset = row * VOLUME_TABLE_ROW_FLOATS;
             rows.set(this.volumeParameters(volume), offset);
             const window = volume.scroll?.window;
-            writeVolumeWindow(rows, offset, window?.window ?? [0, 0, 0], window?.fadeSpacings ?? FIXED_VOLUME_FADE, window ? window.initialExtent() : wholeGridExtent(volume.grid));
+            writeVolumeWindow(
+                rows,
+                offset,
+                window?.window ?? [0, 0, 0],
+                window?.fadeSpacings ?? FIXED_VOLUME_FADE,
+                window ? window.initialExtent() : wholeGridExtent(volume.grid),
+                this.settings.samplingWeightFloors === true,
+            );
         });
         // Compare the CPU texels only: the extents in `rows` are the starting ones, not what the GPU holds.
         const cpuFloats = VOLUME_TABLE_CPU_TEXELS * 4;

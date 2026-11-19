@@ -227,6 +227,20 @@ export interface DDGISettings {
     maxBrightnessChange: number;
     /** Exponent of the cosine weight when blending distances. */
     distanceSharpness: number;
+    /**
+     * RTXGI's floors on the sampling weights (DV-06 in docs/divergence.md;
+     * `Irradiance.hlsl`, `DDGIGetVolumeIrradiance`): each corner probe's
+     * trilinear weight is at least 0.001 per axis, and its weight before the
+     * crush at least 1e-6. Where a point sits on a probe plane (or is clamped
+     * to the volume's edge) the far plane's probes keep a tiny weight instead
+     * of none, so a point whose near probes are all off still gets an answer.
+     * Off by default (DECISIONS 2026-11-19): on the RTX 3060 it moved
+     * two-room's leak from 0.8362% to 0.8368% and changed nothing else
+     * measurable, and our coverage fade already catches the black spots it
+     * is for. Kept for matching native RTXGI. Read every frame (it travels in
+     * the volume table); no recompile.
+     */
+    samplingWeightFloors: boolean;
     /** How far a sample point moves along its normal before probes are looked up, metres. `auto` = 0.1 × the smallest spacing. */
     normalBias: number | 'auto';
     /** How far a sample point moves back towards the viewer, metres. `auto` = 0.1 × the smallest spacing. */
@@ -532,6 +546,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume' | 'volu
     backFaceRayThreshold: null,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
+    samplingWeightFloors: false,
     normalBias: 'auto',
     viewBias: 'auto',
     maxRayDistance: Infinity,
