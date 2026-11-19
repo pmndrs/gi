@@ -653,6 +653,8 @@ Same rules as phase 2 (no timing; correctness gates; faithful port with Capsaici
   - The furnace room (white, closed, constant emitter or sky) moves toward the multi-bounce value against single bounce; the expected direction and size are stated before the run.
   - Cornell's indirect light against the Cycles reference is reported (single and multi-bounce), as information.
   *Amended (RC3.3, 2026-11-19):* the viewer's technique entry and the composite are on RC2.2's unmerged branch, so on `rc3-3` the two-room check is the mean probe-ray radiance after 60 frames, on and off (`radiance-cache-scenes`), and the furnace is a GPU page section (`radiance-cache-world-cache` 8-10, its expected values written in the page before the run). The two-room contact sheet and Cornell against Cycles come with RC2.2's merge; Cornell has no punctual light, so with register D21 its cache, multibounce included, holds no light yet.
+- **RC3.4 done-when** (added by RC3.5's review, 2026-11-19; the rest is the row's).
+  - Second-bounce misses stay 0, checked with a ceiling-only scene under a constant sky: the sky reaches a cache hit through its own light sample once the sky is in the light choice, so a second-bounce ray that misses must still add a sample of no light (register D37), or the sky would count twice.
 
 ### radiance-cache phase 4: temporal quality, faithful
 
