@@ -257,7 +257,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let sliceSin = sin(sliceAngle);
         let sliceUvDir = vec2f(sliceCos, -sliceSin) * sliceUvRadius;
 
-        let sliceViewDir = vec3f(sliceCos, sliceSin, 0.0);
+        // The view-space direction the uv step (cos, -sin) moves along on the image plane: the
+        // projection's scales turn it (register D58: Capsaicin takes (cos, sin, 0), which is that
+        // direction only for square pixels and equal scales, so its samples leave the slice).
+        let sliceViewDir = normalize(vec3f(sliceCos * giSsgi.inverseProjection[0][0], sliceSin * giSsgi.inverseProjection[1][1], 0.0));
         let orthoDir = sliceViewDir - dot(sliceViewDir, eyeDir) * eyeDir;
         let projAxisDir = normalize(cross(orthoDir, eyeDir));
         let projNormal = normal - dot(normal, projAxisDir) * projAxisDir;
@@ -278,13 +281,24 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                 let sampleStep = (f32(stepIndex) + noise.y) / f32(stepCount);
                 let sampleUvOffset = sampleStep * sliceUvDir;
 
-                // The sample is rebuilt at the centre of the texel whose depth it reads, where that
-                // depth was drawn (register D56: Capsaicin rebuilds it at the unsnapped uv, which puts
-                // it off the surface by up to half a texel's depth change, and a grazing floor then
-                // occludes itself).
-                let sampleUv = (vec2f(giSsgiTexel(uv + sideSign * sampleUvOffset)) + 0.5) / vec2f(giSsgi.size);
+                // The sample is where the view ray through its own uv meets the plane of the texel it
+                // reads (that texel's depth, at its centre, and its normal): on the surface and in the
+                // slice (register D56). Capsaicin puts the texel's depth at the unsnapped uv, off the
+                // surface by up to half a texel's depth change, which on a floor seen at a grazing
+                // angle raises the horizon; the texel's centre alone would leave the slice sideways.
+                let rawUv = uv + sideSign * sampleUvOffset;
+                let sampleUv = (vec2f(giSsgiTexel(rawUv)) + 0.5) / vec2f(giSsgi.size);
                 let sampleDepth = giSsgiDepthAt(sampleUv);
-                let samplePos = giSsgiViewPosition(sampleUv, sampleDepth);
+                let texelPos = giSsgiViewPosition(sampleUv, sampleDepth);
+                let texelNormal = giSsgiNormalAt(sampleUv);
+                let rayDir = normalize(giSsgiViewPosition(rawUv, sampleDepth));
+                let rayCos = dot(rayDir, texelNormal);
+                let texelDistance = length(texelPos);
+                var samplePos = texelPos;
+                if (abs(rayCos) > 1e-3) {
+                    // Kept within a factor of two of the texel's own distance, against normals that don't fit the depth.
+                    samplePos = rayDir * clamp(dot(texelPos, texelNormal) / rayCos, 0.5 * texelDistance, 2.0 * texelDistance);
+                }
 
                 let horizonLen = length(samplePos - position); // BE CAREFUL: main source of precision errors
                 // A sample at an infinite far plane (or on the pixel itself) is no occluder: no direction, no weight.
@@ -301,7 +315,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
                     if (giSsgi.hasLighting != 0u) {
                         sampleLighting = textureLoad(giSsgiLighting, giSsgiTexel(sampleUv), 0).rgb;
                     }
-                    let sampleNormal = giSsgiNormalAt(sampleUv);
+                    let sampleNormal = texelNormal;
 
                     if (stepIndex > 0u) {
                         let closestPos = prevSamplePos * min(
@@ -316,7 +330,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
                     let horizonAngle0 = projNormalAngle + max(sideSign * giSsgiAcos(prevHorizonCos) - projNormalAngle, -GI_SSGI_HALF_PI);
                     let horizonAngle1 = projNormalAngle + min(sideSign * giSsgiAcos(horizonCos) - projNormalAngle, GI_SSGI_HALF_PI);
-                    let sampleOcclusion = giSsgiIntegrateHalfArc(horizonAngle0, projNormalAngle) - giSsgiIntegrateHalfArc(horizonAngle1, projNormalAngle);
+                    // An arc is never negative; rounding and the thickness step can make it so (register D57).
+                    let sampleOcclusion = max(giSsgiIntegrateHalfArc(horizonAngle0, projNormalAngle) - giSsgiIntegrateHalfArc(horizonAngle1, projNormalAngle), 0.0);
 
                     sliceLighting += sampleLighting * sampleOcclusion * step(0.0, dot(-horizonDir, sampleNormal));
                 }

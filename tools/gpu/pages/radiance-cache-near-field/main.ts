@@ -64,9 +64,17 @@ const PLANE_MEAN_AO = 0.99;
 const PLANE_P5_AO = 0.97;
 const PLANE_BENT_DEGREES = 2;
 const PLANE_NEAR_FIELD = 0.005;
-/** Section 4: the visibility at the wall's foot (d < R / 10) against the analytic, and the bent normal's tilt there. */
-const CORNER_AO_TOLERANCE = 0.06;
-const CORNER_TILT_DEGREES: readonly [number, number] = [20, 45];
+/**
+ * Section 4, at the wall's foot (d < R / 10): with many slices and steps (`DENSE_SSGI`) the visibility
+ * against the analytic and the bent normal's tilt about the analytic 32.5 degrees; with Capsaicin's
+ * defaults (two steps a side, which can miss the wall's highest point within R) the visibility between
+ * the analytic and `CORNER_DEFAULT_MAX_AO`, and the bent normal leaning away from the wall.
+ */
+const CORNER_AO_TOLERANCE = 0.05;
+const CORNER_TILT_DEGREES: readonly [number, number] = [24, 41];
+const CORNER_DEFAULT_MAX_AO = 0.75;
+const CORNER_DEFAULT_MIN_TILT = 10;
+const DENSE_SSGI = { sliceCount: 4, stepCount: 16 } as const;
 /** Section 5: E / πL near the wall (d < R) and away from it (d > 2R). */
 const FURNACE_NEAR_TOLERANCE = 0.05;
 const FURNACE_FAR_TOLERANCE = 0.02;
@@ -193,15 +201,15 @@ function percentile(values: number[], fraction: number): number {
 
 const mean = (values: readonly number[]): number => values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
 
-/** Counts of NaN, infinite and negative values in rgba halves (alpha left out where it is a flag). */
-function badValues(values: Float32Array, channels = 3): { nonFinite: number; negative: number } {
+/** Counts of NaN or infinite values in the first `channels` of rgba halves, and of negative ones in the `nonNegative` channels. */
+function badValues(values: Float32Array, channels = 3, nonNegative: readonly number[] = [0, 1, 2]): { nonFinite: number; negative: number } {
     let nonFinite = 0;
     let negative = 0;
     for (let index = 0; index < values.length; index += 4) {
         for (let channel = 0; channel < channels; channel++) {
             const value = values[index + channel];
             if (!Number.isFinite(value)) nonFinite++;
-            else if (value < 0) negative++;
+            else if (value < 0 && nonNegative.includes(channel)) negative++;
         }
     }
     return { nonFinite, negative };
@@ -273,23 +281,35 @@ try {
         const aos: number[] = [];
         const tilts: number[] = [];
         const nears: number[] = [];
+        // The visibility by distance from the camera, and the five lowest pixels, to show where any loss is.
+        const bands = [0, 5, 10, 20, 50, 100, 1e9];
+        const bandSums = bands.slice(1).map(() => ({ sum: 0, low: 0, count: 0 }));
+        const lowest: Array<{ x: number; y: number; ao: number; distance: number }> = [];
         for (let y = 0; y < HEIGHT; y++) {
             for (let x = 0; x < WIDTH; x++) {
                 if (screen.isSky(x, y)) continue;
                 const index = (y * WIDTH + x) * 4;
                 aos.push(occlusion[index + 3]);
+                const distance = Math.hypot(...screen.worldPosition(x, y).map((value, axis) => value - screen.eye[axis]));
+                const band = bandSums[bands.findIndex((edge, at) => at < bands.length - 1 && distance >= edge && distance < bands[at + 1])];
+                band.sum += occlusion[index + 3];
+                band.count++;
+                if (occlusion[index + 3] < 0.97) band.low++;
+                lowest.push({ x, y, ao: occlusion[index + 3], distance });
+                if (lowest.length > 5) lowest.sort((a, b) => a.ao - b.ao).pop();
                 const length = Math.hypot(occlusion[index], occlusion[index + 1], occlusion[index + 2]);
                 tilts.push((Math.acos(Math.min(occlusion[index + 1] / length, 1)) * 180) / Math.PI);
                 nears.push((nearField[index] + nearField[index + 1] + nearField[index + 2]) / 3 / (Math.PI * SKY));
             }
         }
         const plane = { pixels: aos.length, meanAO: mean(aos), p5AO: percentile(aos, 0.05), minAO: percentile(aos, 0), meanBentTiltDegrees: mean(tilts), p99BentTiltDegrees: percentile(tilts, 0.99), meanNearFieldOverPiL: mean(nears), p99NearFieldOverPiL: percentile(nears, 0.99) };
-        data.openPlane = { ...plane, occlusion: badValues(occlusion, 4), nearField: badValues(nearField) };
+        const byDistance = bandSums.map((band, at) => ({ fromMetres: bands[at], meanAO: band.sum / Math.max(band.count, 1), below97: band.low, pixels: band.count }));
+        data.openPlane = { ...plane, byDistance, lowest, occlusion: badValues(occlusion, 4, [3]), nearField: badValues(nearField) };
         if (!(plane.meanAO >= PLANE_MEAN_AO)) fail(`open plane: mean visibility ${plane.meanAO.toFixed(4)}`);
         if (!(plane.p5AO >= PLANE_P5_AO)) fail(`open plane: 5th percentile visibility ${plane.p5AO.toFixed(4)}`);
         if (!(plane.meanBentTiltDegrees <= PLANE_BENT_DEGREES)) fail(`open plane: the bent normal tilts ${plane.meanBentTiltDegrees.toFixed(2)} degrees on average`);
         if (!(Math.abs(plane.meanNearFieldOverPiL) <= PLANE_NEAR_FIELD)) fail(`open plane: near-field light ${(plane.meanNearFieldOverPiL * 100).toFixed(3)}% of pi L`);
-        for (const [what, counts] of [['occlusion', badValues(occlusion, 4)], ['near field', badValues(nearField)]] as const) {
+        for (const [what, counts] of [['occlusion', badValues(occlusion, 4, [3])], ['near field', badValues(nearField)]] as const) {
             if (counts.nonFinite > 0 || counts.negative > 0) fail(`open plane ${what}: ${counts.nonFinite} not finite, ${counts.negative} negative`);
         }
     } finally {
@@ -389,39 +409,56 @@ try {
     try {
         const probes = corner.technique.probes;
         if (!probes?.occlusion) throw new Error('no SSGI after encodeScreen');
+        const occlusionTexture = probes.occlusion.occlusion;
         const pixels = cornerPixels(await readScreen(device, corner));
-        const sums = bins.slice(1).map(() => ({ ao: 0, bentX: 0, bentY: 0, count: 0 }));
-        let bad = { nonFinite: 0, negative: 0 };
-        for (let frame = 0; frame < AVERAGE_FRAMES; frame++) {
-            corner.frame();
-            const occlusion = halves(await readTexture(device, probes.occlusion.occlusion, 8, WIDTH, HEIGHT));
-            const counts = badValues(occlusion, 4);
-            bad = { nonFinite: bad.nonFinite + counts.nonFinite, negative: bad.negative + counts.negative };
-            for (const { index, d } of pixels) {
-                const sum = sums[binOf(d)];
-                sum.ao += occlusion[index * 4 + 3];
-                sum.bentX += occlusion[index * 4];
-                sum.bentY += occlusion[index * 4 + 1];
-                sum.count++;
+        // The visibility and bent normal per distance from the wall, averaged over frames.
+        const measure = async () => {
+            const sums = bins.slice(1).map(() => ({ ao: 0, bentX: 0, bentY: 0, count: 0 }));
+            let bad = { nonFinite: 0, negative: 0 };
+            for (let frame = 0; frame < AVERAGE_FRAMES; frame++) {
+                corner.frame();
+                const occlusion = halves(await readTexture(device, occlusionTexture, 8, WIDTH, HEIGHT));
+                const counts = badValues(occlusion, 4, [3]);
+                bad = { nonFinite: bad.nonFinite + counts.nonFinite, negative: bad.negative + counts.negative };
+                for (const { index, d } of pixels) {
+                    const sum = sums[binOf(d)];
+                    sum.ao += occlusion[index * 4 + 3];
+                    sum.bentX += occlusion[index * 4];
+                    sum.bentY += occlusion[index * 4 + 1];
+                    sum.count++;
+                }
             }
+            const table = sums.map((sum, bin) => {
+                const middle = (bins[bin] + bins[bin + 1]) / 2;
+                const tilt = (Math.atan2(sum.bentX, sum.bentY) * 180) / Math.PI;
+                return { dFrom: bins[bin], dTo: bins[bin + 1], samples: sum.count, meanAO: sum.ao / Math.max(sum.count, 1), analyticAO: analyticCornerVisibility(middle, RADIUS), bentTiltAwayDegrees: tilt };
+            });
+            return { table, bad };
+        };
+        // Capsaicin's defaults (one slice, two steps a side), then many slices and steps, which
+        // find the wall's true horizon: the integrals are checked on the second, and the first
+        // must occlude and lean away from the wall.
+        const defaults = await measure();
+        corner.technique.settings.ssgiSliceCount = DENSE_SSGI.sliceCount;
+        corner.technique.settings.ssgiStepCount = DENSE_SSGI.stepCount;
+        const dense = await measure();
+        data.corner = { radius: RADIUS, frames: AVERAGE_FRAMES, analyticTiltAtTheFootDegrees: (Math.atan(2 / Math.PI) * 180) / Math.PI, defaults, dense: { ...DENSE_SSGI, ...dense } };
+        const foot = (table: typeof defaults.table) => table.filter((row) => row.dTo <= RADIUS / 10 && row.samples > 0);
+        if (foot(dense.table).length === 0) fail('corner: no floor pixels within R / 10 of the wall');
+        for (const row of foot(dense.table)) {
+            if (!(Math.abs(row.meanAO - row.analyticAO) <= CORNER_AO_TOLERANCE)) fail(`corner (dense): visibility ${row.meanAO.toFixed(3)} at d ${row.dFrom}-${row.dTo} m, analytic ${row.analyticAO.toFixed(3)}`);
+            if (!(row.bentTiltAwayDegrees >= CORNER_TILT_DEGREES[0] && row.bentTiltAwayDegrees <= CORNER_TILT_DEGREES[1])) fail(`corner (dense): the bent normal tilts ${row.bentTiltAwayDegrees.toFixed(1)} degrees away from the wall at d ${row.dFrom}-${row.dTo} m`);
         }
-        const table = sums.map((sum, bin) => {
-            const middle = (bins[bin] + bins[bin + 1]) / 2;
-            const tilt = (Math.atan2(sum.bentX, sum.bentY) * 180) / Math.PI;
-            return { dFrom: bins[bin], dTo: bins[bin + 1], samples: sum.count, meanAO: sum.ao / Math.max(sum.count, 1), analyticAO: analyticCornerVisibility(middle, RADIUS), bentTiltAwayDegrees: tilt };
-        });
-        data.corner = { radius: RADIUS, frames: AVERAGE_FRAMES, bins: table, analyticTiltAtTheFootDegrees: (Math.atan(2 / Math.PI) * 180) / Math.PI, ...bad };
-        const foot = table.filter((row) => row.dTo <= RADIUS / 10 && row.samples > 0);
-        if (foot.length === 0) fail('corner: no floor pixels within R / 10 of the wall');
-        for (const row of foot) {
-            if (!(Math.abs(row.meanAO - row.analyticAO) <= CORNER_AO_TOLERANCE)) fail(`corner: visibility ${row.meanAO.toFixed(3)} at d ${row.dFrom}-${row.dTo} m, analytic ${row.analyticAO.toFixed(3)}`);
-            if (!(row.bentTiltAwayDegrees >= CORNER_TILT_DEGREES[0] && row.bentTiltAwayDegrees <= CORNER_TILT_DEGREES[1])) fail(`corner: the bent normal tilts ${row.bentTiltAwayDegrees.toFixed(1)} degrees away from the wall at d ${row.dFrom}-${row.dTo} m`);
+        for (const row of foot(defaults.table)) {
+            if (!(row.meanAO >= row.analyticAO - CORNER_AO_TOLERANCE && row.meanAO <= CORNER_DEFAULT_MAX_AO)) fail(`corner (defaults): visibility ${row.meanAO.toFixed(3)} at d ${row.dFrom}-${row.dTo} m, analytic ${row.analyticAO.toFixed(3)}`);
+            if (!(row.bentTiltAwayDegrees >= CORNER_DEFAULT_MIN_TILT)) fail(`corner (defaults): the bent normal tilts ${row.bentTiltAwayDegrees.toFixed(1)} degrees away from the wall at d ${row.dFrom}-${row.dTo} m`);
         }
-        const far = table.filter((row) => row.dFrom >= 1.5 * RADIUS && row.samples > 0);
-        for (const row of far) {
-            if (!(row.meanAO >= PLANE_MEAN_AO)) fail(`corner: visibility ${row.meanAO.toFixed(3)} beyond the radius (d ${row.dFrom}-${row.dTo} m)`);
+        for (const { table, bad } of [defaults, dense]) {
+            for (const row of table.filter((entry) => entry.dFrom >= 1.5 * RADIUS && entry.samples > 0)) {
+                if (!(row.meanAO >= PLANE_MEAN_AO)) fail(`corner: visibility ${row.meanAO.toFixed(3)} beyond the radius (d ${row.dFrom}-${row.dTo} m)`);
+            }
+            if (bad.nonFinite > 0 || bad.negative > 0) fail(`corner: occlusion has ${bad.nonFinite} non-finite and ${bad.negative} negative values`);
         }
-        if (bad.nonFinite > 0 || bad.negative > 0) fail(`corner: occlusion has ${bad.nonFinite} non-finite and ${bad.negative} negative values`);
     } finally {
         corner.dispose();
         await device.queue.onSubmittedWorkDone();
