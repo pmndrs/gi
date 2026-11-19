@@ -97,7 +97,8 @@ export class DDGIShadingModule implements ShadingModule {
     readonly techniqueId = 'ddgi';
     readonly code = DDGI_SHADING_WGSL;
     readonly parameters: readonly ShadingParameter[];
-    readonly provides = { radiance: false } as const;
+    /** Its field answers at any point in its volumes: another technique can read it as a bounce source (P6.3). */
+    readonly provides = { radiance: false, worldSpaceIrradiance: true } as const;
     /** See the file comment: 2 since the volume table replaced the volume's uniforms. */
     readonly version = 2;
 

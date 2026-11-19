@@ -70,9 +70,9 @@
  *    ceiling that misses through a gap brings the sky (no sky light in the
  *    light choice yet, register E4), one that hits a strip brings its light
  *    (none), so the ceiling reads ρ × 1/2 × 1 = 0.25 within 2%. A sky-on-miss
- *    rule turned the wrong way reads 0. TODO(rc3-4 merge): with
- *    `environmentLightEnable` on, misses bring nothing and the strips' sky
- *    light sample is blocked by the ceiling, so run this with it off.
+ *    rule turned the wrong way reads 0. Run with `environmentLightEnable`
+ *    off (RC3.4's sky light): with it on, misses bring nothing and the sky
+ *    reaches the ceiling through its own light sample instead.
  * 6. **NaN scan** (SHaRC's defaults on `cornell-box`, `two-room` and `sponza`
  *    with curtains, from the first bookmark, 60 frames): every probe ray's
  *    radiance and every resolved slot finite and at least 0 after frames 1,
@@ -792,7 +792,7 @@ try {
 
     // 9. A sky, not black.
     {
-        const run = await runScenario(device, 'skyStrips', SHARC_ONE_BOUNCE, 40, ceilingJudge(SKY_STRIPS_CEILING));
+        const run = await runScenario(device, 'skyStrips', { ...SHARC_ONE_BOUNCE, environmentLightEnable: false }, 40, ceilingJudge(SKY_STRIPS_CEILING));
         data.sky = { expected: SKY_STRIPS_CEILING, sharcOneBounce: summary(run) };
         const final = run.meanError[run.meanError.length - 1];
         if (!(Math.abs(final) <= TOLERANCE)) fail(`sky: SHaRC's ceiling rays average ${(final * 100).toFixed(2)}% off ${SKY_STRIPS_CEILING.toFixed(4)} (the sky through bounce rays that miss)`);

@@ -105,9 +105,11 @@ export interface WorldCacheProbeRays {
 /**
  * What a world cache uses from the technique's context. A `TechniqueContext`
  * is one: the hash grid lights its hits through the platform's hit shading
- * (`shade`) and times its passes (`timer`).
+ * (`shade`) and times its passes (`timer`). `fallback` and `warn` are optional
+ * (experiment E10): the technique stacked under this one, whose shading module
+ * the hash grid can read as its second bounce (`secondBounce: 'ddgi-volume'`).
  */
-export type WorldCacheContext = Pick<TechniqueContext, 'device' | 'kernels' | 'compute' | 'shade' | 'timer'>;
+export type WorldCacheContext = Pick<TechniqueContext, 'device' | 'kernels' | 'compute' | 'shade' | 'timer'> & Partial<Pick<TechniqueContext, 'fallback' | 'warn'>>;
 
 /** Per-frame inputs. */
 export interface WorldCacheFrame {

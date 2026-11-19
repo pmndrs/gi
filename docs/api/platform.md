@@ -551,6 +551,7 @@ The functions are:
 
 - `giIrradiance(position, normal, viewDirection, screenUV, ...)` returns irradiance E. The renderer applies albedo/π.
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
+- `provides.worldSpaceIrradiance` (P6.3) says `giIrradiance` answers at any world point from the position and normal alone, `screenUV` unused (DDGI: true; the radiance cache: false). A technique that reads another as its bounce source in compute (the radiance cache's `secondBounce`) requires it.
 - `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It is on SPEC's after-v1 list.
 - `giDebugColor(position, normal, view, screenUV, ...)` drives the debug views.
 
