@@ -202,7 +202,7 @@ import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelW
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';
 import { WRITE_ENTRY_POINTS, writeKernelWgsl } from './wgsl/write.ts';
-import { fingerprintDifferences } from '../../platform/scene/scene-fingerprint.ts';
+import { fingerprintDifferences } from '../../platform/contract/helpers.ts';
 import {
     alignUp,
     convertDistanceTexels,
