@@ -5,8 +5,8 @@
  * population passes (`hash-grid-population-wgsl.ts`) and the lever's kernels
  * (which include the population passes' head) don't import each other.
  *
- * Needs, before it: the hash grid (`hashGridCacheWgsl`) and Capsaicin's random
- * numbers (`CAPSAICIN_WGSL`: `rcMakeRandom`, `rcRandInt`).
+ * Needs, before it: the hash grid (`hashGridCacheWgsl`) and Capsaicin's hash
+ * (`CAPSAICIN_WGSL`: `rcPcgHash`).
  */
 
 import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, HASH_GRID_COUNTER } from './capacity.ts';
@@ -26,6 +26,11 @@ export const CELL_SHADING_SALT = {
     subBin: 0x68e31da4,
 } as const;
 
+/** A cell count that marks a changed cell (exact as a half; no sum of whole counts reaches it). */
+export const CELL_CHANGED_COUNT = 1 + 2 ** -10;
+/** A cell count for a cell lit with no light to draw: the smallest normal half. */
+export const CELL_DARK_COUNT = 2 ** -14;
+
 export const CELL_SHADING_COMMON_WGSL = /* wgsl */ `
 // ---- Lever L1: cells lit on a budget (cell-shading-wgsl.ts) ----
 const HASHGRIDCACHE_CELLCANDIDATECOUNT: u32 = ${HASH_GRID_COUNTER.cellCandidateCount}u;
@@ -35,12 +40,20 @@ const HASHGRIDCACHE_CELLPRIORITYBINS: u32 = ${HASH_GRID_COUNTER.cellPriorityBins
 const HASHGRIDCACHE_CELL_BINS: u32 = ${CELL_SHADING_BINS}u;
 const HASHGRIDCACHE_CELL_SUB_BINS: u32 = ${CELL_SHADING_SUB_BINS}u;
 const HASHGRIDCACHE_CELL_SELECT_SALT: u32 = ${CELL_SHADING_SALT.select}u;
+// A cell's sample count that marks it changed: its next sample replaces it (its mean is kept until
+// then). Not a whole number, so no count reaches it by adding samples; exact as a half.
+const HASHGRIDCACHE_CELL_CHANGED_COUNT: f32 = ${CELL_CHANGED_COUNT};
+// A cell's count when it was lit and had no light to draw (per hit, such a hit adds no sample): not
+// new, so not lit again first, yet light enough to leave its tile's coarser levels as they are.
+// The smallest normal half.
+const HASHGRIDCACHE_CELL_DARK_COUNT: f32 = ${CELL_DARK_COUNT};
 
 // The key a visibility entry offers for its cell this frame: random, never 0 (the scratch's empty
-// value). Recomputed by ClaimCells to find the entry that offered the largest.
+// value). Recomputed by ClaimCells to find the entry that offered the largest. Two rounds of PCG's
+// hash, the frame's hashed in between: a PCG stream's first number, seeded per entry, made the
+// largest key lean toward lower entries (0.486 of the way through a cell's entries on the GPU).
 fn HashGridCache_CellSampleKey(visibility_index: u32) -> u32 {
-    var random = rcMakeRandom(visibility_index ^ HASHGRIDCACHE_CELL_SELECT_SALT, g_HashGridCacheConstants.frame_index);
-    return rcRandInt(&random) | 1u;
+    return rcPcgHash(rcPcgHash(visibility_index ^ HASHGRIDCACHE_CELL_SELECT_SALT) + rcPcgHash(g_HashGridCacheConstants.frame_index)) | 1u;
 }
 
 // Offers this entry as its cell's sample this frame. The entry with the largest key wins, so the

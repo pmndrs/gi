@@ -61,9 +61,8 @@ import { CELL_SHADING_BINS, HASH_GRID_COUNTER } from '../../../../packages/ddgi-
 import { CELL_SHADING_SALT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-common.ts';
 import { CELL_CANDIDATE_BIN_SHIFT, CELL_CANDIDATE_CHANGED_BIT, CELL_PRIORITY_CLASS, CELL_SHADING_MAX_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-wgsl.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
-import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, pcgHash, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import { MULTIBOUNCE_MISS_CELL } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
-import { makeRandom, randInt } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/multibounce-cpu.ts';
 import { multibounceSettledIndirect } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/multibounce-cpu.ts';
 import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
@@ -321,7 +320,7 @@ async function litPlane(device: GPUDevice, mode: Mode, fail: (message: string) =
 
 /** `HashGridCache_CellSampleKey` on the CPU. */
 function sampleKey(visibilityIndex: number, frameIndex: number): number {
-    return (randInt(makeRandom((visibilityIndex ^ CELL_SHADING_SALT.select) >>> 0, frameIndex >>> 0)) | 1) >>> 0;
+    return (pcgHash((pcgHash((visibilityIndex ^ CELL_SHADING_SALT.select) >>> 0) + pcgHash(frameIndex >>> 0)) >>> 0) | 1) >>> 0;
 }
 
 async function queue(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, number>> {
@@ -403,7 +402,7 @@ async function queue(device: GPUDevice, fail: (message: string) => void): Promis
 
 // ---- 3 and 4. The furnace and the strips --------------------------------------------------------------
 
-function nearCeilingStats(state: RayState): { mean: number; rays: number; off: number } {
+function nearCeilingStats(state: RayState, expected: number): { mean: number; rays: number; off: number } {
     const cellSize = hashGridCacheCellSizeConstant(verticalFieldOfView(frameCamera(FURNACE.camera, WIDTH, HEIGHT).projection), WIDTH, HEIGHT, 32);
     let sum = 0;
     let rays = 0;
@@ -417,7 +416,7 @@ function nearCeilingStats(state: RayState): { mean: number; rays: number; off: n
         values.push(value);
     });
     const mean = sum / Math.max(rays, 1);
-    return { mean, rays, off: values.filter((value) => Math.abs(value / CEILING_INDIRECT - 1) > TOLERANCE).length };
+    return { mean, rays, off: values.filter((value) => Math.abs(value / expected - 1) > TOLERANCE).length };
 }
 
 async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips', fail: (message: string) => void): Promise<Record<string, number>> {
@@ -429,12 +428,12 @@ async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips'
             scenario.frame();
             // Read every 5th frame (and the last): the furnace converges over tens of frames.
             if (frame % 5 !== 0 && frame !== FURNACE_FRAMES) continue;
-            const stats = nearCeilingStats(await readRays(device, scenario));
+            const stats = nearCeilingStats(await readRays(device, scenario), expected);
             if (Math.abs(stats.mean / expected - 1) <= 0.01) {
                 if (convergedAt < 0) convergedAt = frame;
             } else convergedAt = -1;
         }
-        const final = nearCeilingStats(await readRays(device, scenario));
+        const final = nearCeilingStats(await readRays(device, scenario), expected);
         const name = `${kind} ${modeName(mode)}`;
         if (final.rays === 0) fail(`${name}: no near ceiling ray`);
         if (kind === 'furnace') {

@@ -33,9 +33,10 @@
  * The priority classes, highest first:
  * - **new or changed:** no sample yet, or the sample hit is near one of this
  *   frame's scene changes (`SceneChanges.regions`, or every cell for a change
- *   with no bounds). A changed cell's history is cut to one sample at once
- *   (its mean kept, so nothing goes dark), and if it is lit this frame its
- *   new sample replaces its value;
+ *   with no bounds). A changed cell keeps its mean (nothing goes dark) but is
+ *   marked by its count (`CELL_CHANGED_COUNT`), so whenever it is next lit,
+ *   this frame or later, its new sample replaces its value; it stays in this
+ *   class until then;
  * - **converging:** fewer samples than `max_sample_count`;
  * - **its turn:** settled cells, each once every `period` frames by a hash of
  *   the cell, the period being the settled cells over the budget they left
@@ -53,9 +54,11 @@
  * a sample's value, and the running mean of unbiased samples is unbiased. The
  * cell's mean converges to per-hit's; it gets one sample a lighting instead of
  * one per hit, so its value is noisier and older. Per hit, a hit with no light
- * to draw adds no sample; here the drawn cell then adds a sample of 0, which
- * is its light (the light choice finds no light only where every candidate's
- * irradiance is 0).
+ * to draw adds no sample; so here: a lit cell whose sample hit has no light
+ * adds none, and a cell with no estimate is marked dark (`CELL_DARK_COUNT`, a
+ * count too small to move its tile's coarser levels) so it isn't taken as
+ * new every frame. (A sample of 0 instead dimmed the coarser levels where
+ * floor and ceiling share a tile, and the furnace's second bounce read low.)
  */
 
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
@@ -160,13 +163,25 @@ fn HashGridCache_NearChange(position: vec3f, margin: f32) -> bool {
     return false;
 }
 
-// A value whose history is cut to one sample: its mean kept, its count 1 (a value with at most
-// one sample is left as it is). The next sample then weighs as much as all the history.
+// An indirect value whose history is cut to one sample: its mean kept, its count 1 (a value with at
+// most one sample is left as it is). The next sample then weighs as much as all the history.
 fn HashGridCache_KeepOneSample(value_index: u32) {
     let value = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[value_index]);
     if (value.w > 1.0) {
         g_HashGridCache_CellValues[value_index] = HashGridCache_PackRadiance(vec4f(value.rgb / value.w, 1.0));
     }
+}
+
+// A changed cell's direct value: its mean kept (so nothing goes dark) with the changed count, so that
+// whenever it is next lit its sample replaces it (ShadeCells). A cell with no samples (new, or lit
+// with no light) is emptied: it is lit again first.
+fn HashGridCache_MarkChanged(cell_index: u32) {
+    let value = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
+    var marked = vec4f(0.0);
+    if (value.w >= 1.0) {
+        marked = vec4f(value.rgb / value.w * HASHGRIDCACHE_CELL_CHANGED_COUNT, HASHGRIDCACHE_CELL_CHANGED_COUNT);
+    }
+    g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = HashGridCache_PackRadiance(marked);
 }
 
 fn HashGridCache_ClaimCell(visibility_index: u32) {
@@ -191,16 +206,18 @@ fn HashGridCache_ClaimCell(visibility_index: u32) {
     let direct = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
 
     if (changed) {
-        HashGridCache_KeepOneSample(HASHGRIDCACHE_VALUEBUFFER + cell_index);
+        HashGridCache_MarkChanged(cell_index);
         if (g_HashGridCacheConstants.use_multibounce != 0u) {
             HashGridCache_KeepOneSample(HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index);
         }
     }
 
+    // New (no count), changed (now or on an earlier frame, not lit since), converging (whole counts
+    // under the cap), settled (at the cap, or lit with no light: the dark count).
     var priority = ${CELL_PRIORITY_CLASS.rest}u;
-    if (changed || direct.w <= 0.0) {
+    if (changed || direct.w <= 0.0 || direct.w == HASHGRIDCACHE_CELL_CHANGED_COUNT) {
         priority = ${CELL_PRIORITY_CLASS.newOrChanged}u;
-    } else if (direct.w < g_HashGridCacheConstants.max_sample_count) {
+    } else if (direct.w >= 1.0 && direct.w < g_HashGridCacheConstants.max_sample_count) {
         priority = ${CELL_PRIORITY_CLASS.converging}u;
     } else {
         let period = max(atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSCHEDULEPERIOD]), 1u);
@@ -353,23 +370,35 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
     var random = rcMakeRandom(visibility_index ^ HASHGRIDCACHE_CELL_SHADE_SALT, g_HashGridCacheConstants.frame_index);
     let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_SHADE_LIGHT_GROUPS, rcRand(&random));
     let sample_params = rcRand2(&random);
-    var lighting = vec3f(0.0);
-    if (reservoir.light != GI_DIRECT_NO_LIGHT) {
-        let light_ray = giDirectLightRay(surface, reservoir.light, sample_params);
-        let occluded = light_ray.castsShadows && giTraceAny(light_ray.shadowRay);
-        if (!occluded) {
-            lighting = surface.albedo * HASHGRIDCACHE_SHADE_INV_PI * light_ray.irradiance * reservoir.weight;
-        }
-    }
+    // A changed cell, or one with no whole sample (new, or dark), starts again from this sample
+    // (UpdateTiles takes a sample whole into a value with no count).
+    let value = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
+    let replaces = (shaded & HASHGRIDCACHE_CELL_CHANGED_BIT) != 0u || value.w < 1.0 || value.w == HASHGRIDCACHE_CELL_CHANGED_COUNT;
+    let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
 
-    // A changed cell starts again from this sample (UpdateTiles takes a sample whole into a value with no count).
-    if ((shaded & HASHGRIDCACHE_CELL_CHANGED_BIT) != 0u) {
+    if (reservoir.light == GI_DIRECT_NO_LIGHT) {
+        // No light to draw: no sample, as per hit (GenerateReservoirs adds none for such a hit), so a
+        // cell's mean is over the same hits per hit's is. A cell with no estimate is marked dark (not
+        // new, so it doesn't take the budget every frame); one with samples keeps them.
+        if (replaces) {
+            g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = HashGridCache_PackRadiance(vec4f(0.0, 0.0, 0.0, HASHGRIDCACHE_CELL_DARK_COUNT));
+        }
+        atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], 0u);
+        atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], 0u);
+        return;
+    }
+    let light_ray = giDirectLightRay(surface, reservoir.light, sample_params);
+    let occluded = light_ray.castsShadows && giTraceAny(light_ray.shadowRay);
+    var lighting = vec3f(0.0);
+    if (!occluded) {
+        lighting = surface.albedo * HASHGRIDCACHE_SHADE_INV_PI * light_ray.irradiance * reservoir.weight;
+    }
+    if (replaces) {
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u);
     }
 
     // The cell's one sample, over the key and the claim.
     let quantized_radiance = HashGridCache_QuantizeRadiance(lighting);
-    let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
