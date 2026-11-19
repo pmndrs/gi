@@ -24,6 +24,9 @@
  * frame's E is read at the pixel the velocity points back to; a pixel whose
  * previous pixel shows another surface (a disocclusion) is left out.
  *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts),
+ * for example Capsaicin's empty-cell rule: `VITE_RC_COMPARE=emptyCellFill=capsaicin`.
+ *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
  */
@@ -33,13 +36,13 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -200,7 +203,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(pageRadianceCache());
     platform.setOutput(technique);
     await platform.prepare();
     let beforeFrame = (): void => {};
@@ -239,7 +242,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         const results: Record<string, Measurement> = {};
         for (const jitter of [true, false]) {
             for (const [motion, history] of CONFIGURATIONS) {
-                technique.settings.interpolationJitter = jitter;
+                technique.settings.interpolationJitter = PAGE_COMPARE_VALUES.interpolationJitter ?? jitter;
                 technique.resetScreenHistory();
                 let step = 0;
                 const advance = (): void => {
@@ -285,7 +288,6 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 };
             }
         }
-        technique.settings.interpolationJitter = true;
         return results;
     } finally {
         screen.dispose();
@@ -315,7 +317,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, scenes },
+        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, compare: PAGE_COMPARE_VALUES, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

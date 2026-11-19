@@ -27,7 +27,7 @@ import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type Load
 import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, layerKey, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
-import { DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS, RadianceCacheViewerTechnique, type RadianceCacheViewerSettings } from '../techniques/radiance-cache-technique';
+import { DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS, RadianceCacheViewerTechnique, type RadianceCacheChangeReadout, type RadianceCacheViewerSettings } from '../techniques/radiance-cache-technique';
 import { ReferenceImageTechnique } from '../techniques/reference-technique';
 import { TECHNIQUE_LABELS, type GiTechnique, type TechniqueContext, type TechniqueId, type UpscaleSettings } from '../techniques/types';
 import { DEFAULT_VXGI_SETTINGS, VxgiTechnique, type VxgiSettings } from '../techniques/vxgi-technique';
@@ -289,6 +289,11 @@ export class ViewerCore {
     configureRadianceCache(settings: RadianceCacheViewerSettings): void {
         this.radianceCacheSettings = { ...settings };
         (this.techniques.get('rc') as RadianceCacheViewerTechnique | undefined)?.configure(settings);
+    }
+
+    /** The radiance cache's change-per-frame readout (RC4.5) if it has been made and is ready, else null. */
+    radianceCacheReadout(): RadianceCacheChangeReadout | null {
+        return (this.techniques.get('rc') as RadianceCacheViewerTechnique | undefined)?.changeReadout ?? null;
     }
 
     /** Bakes the probe grid again with its current settings. */
