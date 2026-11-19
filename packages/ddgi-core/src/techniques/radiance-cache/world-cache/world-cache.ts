@@ -18,7 +18,7 @@
 
 import type { GpuWord } from '../../../platform/contract/compute.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
-import type { Aabb } from '../../../platform/contract/math.ts';
+import type { ChangeEvent } from '../../../platform/contract/change-events.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 
 // ---- The probe-ray buffer ------------------------------------------------------------------------
@@ -121,18 +121,18 @@ export interface WorldCacheFrame {
     readonly width: number;
     readonly height: number;
     /**
-     * Where the scene changed since the last frame (the platform's
-     * `SceneChanges`, as boxes, or everywhere for a change with no bounds).
-     * Optional: a cache that reacts to changes reads it (the hash grid's
-     * lever E8 lights changed cells first); none means no change.
+     * The scene's change events at this frame (the platform's
+     * `ChangeEventTracker` over `SceneChanges`), each with its box and the
+     * start of its current epoch. Optional: a cache that forgets history
+     * where the scene changed reads it (the hash grid's E8 and E9); none
+     * means no change.
      */
     readonly changes?: WorldCacheChanges;
 }
 
-/** A frame's scene changes for a world cache: the dirty regions' boxes, or everything. */
+/** A frame's change events for a world cache. */
 export interface WorldCacheChanges {
-    readonly everything: boolean;
-    readonly boxes: readonly Aabb[];
+    readonly events: readonly Pick<ChangeEvent, 'box' | 'epoch'>[];
 }
 
 /**

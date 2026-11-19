@@ -216,7 +216,7 @@ export const HASH_GRID_COUNTER = {
      * by the cache's encoder at the start of a budgeted frame.
      */
     cellCandidateCount: 9,
-    /** Lever E8: the candidates lit this frame, min(candidates, budget), written by `PrioritizeCells`. */
+    /** Lever E8: the candidates listed to be lit this frame, counted by `ScatterCells` (`ShadeCells` reads up to the target). */
     cellShadedCount: 10,
     /**
      * Lever E8: frames between a settled cell's turns, for the next frame
@@ -224,6 +224,8 @@ export const HASH_GRID_COUNTER = {
      * frames; 0 (an empty cache) reads as 1.
      */
     cellSchedulePeriod: 11,
+    /** Lever E8: the cells to light this frame, min(candidates, budget), written by `PrioritizeCells` (the lit count can fall a little short of it). */
+    cellShadedTarget: 12,
 } as const;
 
 /** Lever E8's priority classes: new or changed, still converging, its turn, the rest (cell-shading-wgsl.ts). */

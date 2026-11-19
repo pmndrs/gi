@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Vec3 } from '../../../platform/contract/math.ts';
-import { CELL_SHADING_BINS, DEFAULT_HASH_GRID_CACHE_OPTIONS } from './capacity.ts';
+import { DEFAULT_HASH_GRID_CACHE_OPTIONS } from './capacity.ts';
 import { HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
 import { pcgHash, updateTilesAccumulate, updateTilesAccumulateIndirect, type CellValue } from './hash-grid-cpu.ts';
@@ -251,11 +251,9 @@ describe('the multibounce kernels and lists', () => {
         expect(lists.multibounceRayBuffer).toBe(lists.multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount);
         expect(lists.firstBounceBypassBuffer).toBe(lists.multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount);
         expect(lists.multibounceDirectBuffer).toBe(lists.firstBounceBypassBuffer + maxRayCount);
-        // Lever E8's candidate and shade lists (one word an entry each) follow.
-        expect(lists.cellCandidateBuffer).toBe(lists.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount);
-        expect(lists.bytes).toBe((lists.cellCandidateBuffer + 2 * 2 * maxRayCount + CELL_SHADING_BINS) * 4);
-        // 36 words a probe ray and the priority bins: 33,178,624 bytes at 1280 x 720.
-        expect(lists.bytes).toBe((36 * maxRayCount + CELL_SHADING_BINS) * 4);
+        expect(lists.bytes).toBe((lists.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount) * 4);
+        // 32 words a probe ray: 29,491,200 bytes at 1280 x 720.
+        expect(lists.bytes).toBe(32 * maxRayCount * 4);
     });
 
     it('declare their entry points, read the multibounce constants and the counters Capsaicin dispatches on', () => {

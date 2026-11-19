@@ -1,4 +1,4 @@
 {
-    "description": "P6.2b experiment E9: noise of the radiance cache irradiance in the 16 frames after a light doubles (Sponza sun, Sponza point light, two-room lamp; still camera, jitter off), E9 off, on, and on keeping 1 or 3 samples of history. A measurement, not a gate: only NaN, infinite or negative values fail.",
+    "description": "P6.2b experiment E9: noise and lag of the radiance cache irradiance after a light doubles (Sponza sun, two-room lamp, two-room with multibounce off) and during a change that goes on (Sponza sun turning, a box crossing two-room), E9 off, on, and on keeping 3 samples; gates on noise and lag with E9 keeping 3 against E9 off.",
     "timeoutMs": 1200000
 }

@@ -1,8 +1,10 @@
 /**
- * The platform contract (T0.11 draft): types only, plus two error classes.
+ * The platform contract (T0.11 draft): types only, plus two error classes and
+ * the change-event tracker techniques share (`change-events.ts`).
  * Explained in plain language in docs/api/platform.md.
  */
 
+export * from './change-events';
 export * from './errors';
 export type * from './compute';
 export type * from './frame';

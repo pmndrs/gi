@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cameraRelativeViewProjection } from './camera.ts';
-import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES } from './screen-probe-history.ts';
+import { historyChangesFromEvents, historyChangesWords, NO_HISTORY_CHANGES } from './screen-probe-history.ts';
 import { PROBE_CELLS } from './settings.ts';
 import {
     blendProbeCells,
@@ -209,15 +209,12 @@ describe('noisy rays with history (register D46): the running mean against the h
 
 describe('scene changes for the running means (D46)', () => {
     const box = (x: number) => ({ min: [x, 0, 0] as const, max: [x + 1, 1, 1] as const });
-    const changes = (regions: number, global: ('sun' | 'environment' | 'lights')[] = []) =>
-        ({ regions: Array.from({ length: regions }, (_, index) => ({ bounds: box(index), reason: 'light' as const })), global, receivers: [], lights: [], lightsOverflowed: false }) as const;
 
-    it('collects the dirty regions as boxes, and a change with no bounds or too many boxes as everything', () => {
-        const two = mergeHistoryChanges(NO_HISTORY_CHANGES, changes(2));
-        expect(two).toEqual({ everything: false, boxes: [box(0), box(1)] });
-        expect(mergeHistoryChanges(two, changes(0, ['sun'])).everything).toBe(true);
-        expect(mergeHistoryChanges(NO_HISTORY_CHANGES, changes(MAX_HISTORY_CHANGE_BOXES + 1)).everything).toBe(true);
-        expect(mergeHistoryChanges(NO_HISTORY_CHANGES, changes(0))).toBe(NO_HISTORY_CHANGES);
+    it("forgets at the events armed this frame: their boxes, everything for one with no bounds or too many", () => {
+        expect(historyChangesFromEvents([{ box: box(0) }, { box: box(1) }])).toEqual({ everything: false, boxes: [box(0), box(1)] });
+        expect(historyChangesFromEvents([{ box: box(0) }, { box: null }]).everything).toBe(true);
+        expect(historyChangesFromEvents(Array.from({ length: MAX_HISTORY_CHANGE_BOXES + 1 }, (_, index) => ({ box: box(index) }))).everything).toBe(true);
+        expect(historyChangesFromEvents([])).toBe(NO_HISTORY_CHANGES);
     });
 
     it('writes RcHistoryChanges: the count, the flag, then each box as min and max', () => {

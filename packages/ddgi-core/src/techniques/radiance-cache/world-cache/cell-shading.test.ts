@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
+import { cellShadingListLayout } from './cell-shading-common.ts';
 import { cellPriorityClass, keepOneSample, prioritizeCells, scatterCells, simulateCell } from './cell-shading-cpu.ts';
 import { CELL_PRIORITY_CLASS, CELL_SHADING_ENTRY_POINT, CELL_SHADING_UNIFORM_BYTES, claimCellsWgsl, prioritizeCellsWgsl, scatterCellsWgsl, shadeCellsWgsl } from './cell-shading-wgsl.ts';
-import { cellShadingWords, keepRecentChanges, recentChangesUnion } from './hash-grid-cache.ts';
+import { cellShadingWords } from './hash-grid-cache.ts';
 import { generateReservoirsWgsl, hashGridCacheRayListLayout, updateTilesWgsl } from './hash-grid-population-wgsl.ts';
 import { makeRandom, rand } from './multibounce-cpu.ts';
 
@@ -111,32 +112,24 @@ describe("lever E8's kernels and lists", () => {
         expect(updateTilesWgsl(layout)).toContain('HashGridCache_CellShadingBudgeted()');
     });
 
-    it('keep a candidate and a lit word per visibility entry', () => {
-        const lists = hashGridCacheRayListLayout(1000, 1 << 20);
-        expect(lists.cellShadeBuffer).toBe(lists.cellCandidateBuffer + lists.maxCombinedRayCount);
-        expect(lists.cellPriorityBins).toBe(lists.cellShadeBuffer + lists.maxCombinedRayCount);
-        expect(lists.bytes).toBe((lists.cellPriorityBins + CELL_SHADING_BINS) * 4);
+    it('keep two candidate words and a lit word per visibility entry, then the bins, in a buffer of their own', () => {
+        const lists = cellShadingListLayout(2000);
+        expect(lists.lit).toBe(lists.candidates + 2 * 2000);
+        expect(lists.bins).toBe(lists.lit + 2000);
+        expect(lists.bytes).toBe((lists.bins + 2 * CELL_SHADING_BINS) * 4);
     });
 
-    it('remember changes for a window of frames, a change with no bounds over every box', () => {
-        const box = { min: [0, 0, 0] as const, max: [1, 1, 1] as const };
-        let recent = keepRecentChanges([], 10, { everything: false, boxes: [box] });
-        recent = keepRecentChanges(recent, 11, undefined);
-        expect(recentChangesUnion(recent).boxes.length).toBe(1);
-        recent = keepRecentChanges(recent, 25, { everything: true, boxes: [] });
-        expect(recentChangesUnion(recent).everything).toBe(true);
-        recent = keepRecentChanges(recent, 26, undefined);
-        expect(recent.map((entry) => entry.frame)).toEqual([25]);
-        expect(recentChangesUnion(keepRecentChanges(recent, 41, undefined))).toEqual({ everything: false, boxes: [] });
-    });
-
-    it("pack the budget and the frame's changes, and take too many boxes as a change everywhere", () => {
+    it('pack the budget and the change events: each box with its epoch plus one, a change with no bounds as the whole world', () => {
         const box = { min: [0, 1, 2] as const, max: [3, 4, 5] as const };
-        const words = cellShadingWords(5000, { everything: false, boxes: [box] });
+        const words = cellShadingWords(5000, { events: [{ box, epoch: 41 }, { box: null, epoch: 7 }] });
         expect(words.byteLength).toBe(CELL_SHADING_UNIFORM_BYTES);
-        expect([...new Uint32Array(words, 0, 3)]).toEqual([5000, 0, 1]);
-        expect([...new Float32Array(words, 16, 8)]).toEqual([0, 1, 2, 0, 3, 4, 5, 0]);
-        expect([...new Uint32Array(cellShadingWords(1, { everything: false, boxes: new Array(17).fill(box) }), 0, 3)]).toEqual([1, 1, 0]);
-        expect([...new Uint32Array(cellShadingWords(1, undefined), 0, 3)]).toEqual([1, 0, 0]);
+        expect([...new Uint32Array(words, 0, 2)]).toEqual([5000, 2]);
+        expect([...new Float32Array(words, 16, 3)]).toEqual([0, 1, 2]);
+        expect(new Uint32Array(words, 28, 1)[0]).toBe(42);
+        expect([...new Float32Array(words, 32, 3)]).toEqual([3, 4, 5]);
+        expect(new Float32Array(words, 48, 1)[0]).toBeLessThan(-1e38);
+        expect(new Uint32Array(words, 60, 1)[0]).toBe(8);
+        expect([...new Uint32Array(cellShadingWords(1, undefined), 0, 2)]).toEqual([1, 0]);
+        expect(() => cellShadingWords(1, { events: new Array(17).fill({ box, epoch: 1 }) })).toThrow(RangeError);
     });
 });

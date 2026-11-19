@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import type { Vec3 } from '../../../platform/contract/math.ts';
-import { CELL_SHADING_BINS, checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
+import { checkHashGridCacheLimits, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
 import { HashGridCache } from './hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
@@ -358,8 +358,7 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         expect(layout.reservoirBuffer).toBe(9 * maxRayCount);
         // Then GI-1.2's second-bounce lists (RC3.3): the BRDF and pdf, and the ray (register D36).
         expect(layout.multibounceInfoBuffer).toBe(9 * maxRayCount + RESERVOIR_WORDS * 2 * maxRayCount);
-        // Then lever E8's candidate and lit lists, one word per entry each (2 × max_ray_count entries).
-        expect(layout.bytes).toBe((layout.multibounceInfoBuffer + (2 + 12 + 1 + 2 + 4) * maxRayCount + CELL_SHADING_BINS) * 4);
+        expect(layout.bytes).toBe((layout.multibounceInfoBuffer + (2 + 12 + 1 + 2) * maxRayCount) * 4);
     });
 
     it('holds at most one update entry per cell', () => {
@@ -367,9 +366,9 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
     });
 
     it('throws GILimitError naming the limit the lists pass (register D14)', () => {
-        // 3840 x 2160: 240 x 135 spawn tiles of 64 rays, 298 MB of lists: past WebGPU's default 128 MiB binding.
+        // 3840 x 2160: 240 x 135 spawn tiles of 64 rays, 265 MB of lists: past WebGPU's default 128 MiB binding.
         const layout = hashGridCacheRayListLayout(240 * 135 * 64, 22282240);
-        expect(layout.bytes).toBe((36 * 240 * 135 * 64 + CELL_SHADING_BINS) * 4);
+        expect(layout.bytes).toBe(32 * 240 * 135 * 64 * 4);
         const defaults = { maxStorageBufferBindingSize: 134217728, maxBufferSize: 268435456 };
         expect(() => checkHashGridRayListLimits(layout, defaults)).toThrow(/maxStorageBufferBindingSize/);
         expect(() => checkHashGridRayListLimits(layout, { maxStorageBufferBindingSize: 2 ** 31 - 4, maxBufferSize: 2 ** 31 })).not.toThrow();

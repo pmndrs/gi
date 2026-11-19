@@ -21,23 +21,28 @@
  *    counts the bin.
  * 2. `PrioritizeCells` (one workgroup, a thread per bin): the bins' counts
  *    become their first slots (a counting sort by priority over 256 bins, 4
- *    classes × 64 random sub-bins, a workgroup scan), the cells lit this frame are
- *    min(candidates, budget), and the
- *    period of the settled cells' turns is set for the next frame.
- * 3. `ScatterCells` (over the candidates): each takes the next slot of its
- *    bin; a slot under the budget goes on the shade list, and a candidate
- *    past it clears the key from its scratch (it is not lit this frame).
+ *    classes × 64 random sub-bins, a workgroup scan), the frame's lit target
+ *    is min(candidates, budget), and the period of the settled cells' turns
+ *    is set for the next frame.
+ * 3. `ScatterCells` (over the candidates): a bin wholly under the target is
+ *    lit, a bin wholly past it is not, and the one bin the target cuts is
+ *    thinned by a hash of the cell (each lit with the share of the bin the
+ *    target leaves), so which of its cells are lit doesn't follow the order
+ *    the claims ran in. A lit cell goes on the lit list; one not lit clears
+ *    the key from its scratch.
  * 4. `ShadeCells` (over the shade list): one light and shadow ray from the
  *    cell's sample hit, stored as the cell's one sample in its scratch, where
  *    `UpdateTiles` blends it in as it blends per-hit samples.
  *
  * The priority classes, highest first:
- * - **new or changed:** no sample yet, or the sample hit is near one of this
- *   scene changes of the last `CELL_SHADING_CHANGE_FRAMES` frames
- *   (`SceneChanges.regions`, or every cell for a change with no bounds). A changed cell keeps its mean (nothing goes dark) but is
- *   marked by its count (`CELL_CHANGED_COUNT`), so whenever it is next lit,
- *   this frame or later, its new sample replaces its value; it stays in this
- *   class until then;
+ * - **new or changed:** no sample yet, or the sample hit is near a change
+ *   event whose current epoch began since the cell last forgot its history
+ *   (`ChangeEventTracker` in the platform contract; the cell's last reset
+ *   frame, `HashGridCache_ClaimChangeReset`): once per event, re-armed every
+ *   8 frames while it goes on and once when it stops. A changed cell keeps its
+ *   mean (nothing goes dark) but is marked by its count (`CELL_CHANGED_COUNT`),
+ *   so whenever it is next lit, this frame or later, its new sample replaces
+ *   its value; it stays in this class until then;
  * - **converging:** fewer samples than `max_sample_count`;
  * - **its turn:** settled cells, each once every `period` frames by a hash of
  *   the cell, the period being the settled cells over the budget they left
@@ -64,35 +69,15 @@
 
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
-import { CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_BOXES, CELL_SHADING_SALT } from './cell-shading-common.ts';
+import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_EVENTS, CELL_SHADING_SALT } from './cell-shading-common.ts';
 import { ALL_LIGHT_GROUPS, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
 
-/** `GPUShaderStage.COMPUTE` (the global doesn't exist in Node, where the tests import this file). */
-const SHADER_STAGE_COMPUTE = 0x4;
+/** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes an event. */
+export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_EVENTS;
 
-export { CELL_SHADING_GROUP, CELL_SHADING_MAX_CHANGE_BOXES } from './cell-shading-common.ts';
-
-export const CELL_SHADING_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [{ binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } }];
-
-/**
- * Frames a scene change is remembered: a cell hit on any of them, near the
- * change, is marked changed (and relit from scratch when next lit). Each mark
- * restarts the cell from one sample, so for these frames a changed cell runs
- * on single samples; after them it accumulates again.
- */
-export const CELL_SHADING_CHANGE_FRAMES = 16;
-
-
-/** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes a box. */
-export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_BOXES;
-
-/** A candidate's word: its visibility entry in the low 23 bits, the changed bit, and its priority bin in the top 8. */
-export const CELL_CANDIDATE_ENTRY_BITS = 23;
-export const CELL_CANDIDATE_CHANGED_BIT = 1 << CELL_CANDIDATE_ENTRY_BITS;
-export const CELL_CANDIDATE_BIN_SHIFT = 24;
-
-/** The most visibility entries a frame can have with the candidates' word: a screen of at most 2^22 probe rays (4K has 2.1 M). */
-export const CELL_SHADING_MAX_ENTRIES = 2 ** CELL_CANDIDATE_ENTRY_BITS;
+/** A candidate's (and a lit cell's) first word: its visibility entry, with this bit when the cell changed. The second word of a candidate is its bin. */
+export const CELL_CANDIDATE_CHANGED_BIT = 0x80000000;
+export const CELL_CANDIDATE_ENTRY_MASK = 0x7fffffff;
 
 export const CELL_SHADING_WORKGROUP_SIZE = {
     claimCells: 64,
@@ -112,16 +97,22 @@ export const CELL_SHADING_ENTRY_POINT = {
 /** The class numbers, as `ClaimCells` assigns them (lower is lit first). */
 export const CELL_PRIORITY_CLASS = { newOrChanged: 0, converging: 1, turn: 2, rest: 3 } as const;
 
-const CELL_SHADING_UNIFORM_WGSL = /* wgsl */ `
-${CELL_CHANGES_WGSL}
-const HASHGRIDCACHE_CELL_ENTRY_MASK: u32 = ${CELL_SHADING_MAX_ENTRIES - 1}u;
+const CELL_LIST_WGSL = /* wgsl */ `
+const HASHGRIDCACHE_CELL_ENTRY_MASK: u32 = ${CELL_CANDIDATE_ENTRY_MASK}u;
 const HASHGRIDCACHE_CELL_CHANGED_BIT: u32 = ${CELL_CANDIDATE_CHANGED_BIT}u;
-const HASHGRIDCACHE_CELL_BIN_SHIFT: u32 = ${CELL_CANDIDATE_BIN_SHIFT}u;
+
+fn HashGridCache_CellListWord(offset: u32, index: u32) -> u32 {
+    return atomicLoad(&g_HashGridCache_CellLists[offset + index]);
+}
+
+fn HashGridCache_SetCellListWord(offset: u32, index: u32, value: u32) {
+    atomicStore(&g_HashGridCache_CellLists[offset + index], value);
+}
 `;
 
 /** The shared head of the lever's kernels. */
 function cellShadingHeadWgsl(layout: HashGridCacheBufferLayout): string {
-    return `${CAPSAICIN_WGSL}\n${populationHeadWgsl(layout)}\n${CELL_SHADING_COMMON_WGSL}\n${CELL_SHADING_UNIFORM_WGSL}`;
+    return `${CAPSAICIN_WGSL}\n${populationHeadWgsl(layout)}\n${CELL_SHADING_COMMON_WGSL}\n${CELL_LIST_WGSL}`;
 }
 
 /**
@@ -164,6 +155,7 @@ const HASHGRIDCACHE_CELL_CLAIMED: u32 = 1u;
 struct HashGridCache_Claim {
     flags: u32,
     word: u32,
+    bin: u32,
 }
 
 fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
@@ -185,7 +177,7 @@ fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
 
     let ray = HashGridCache_VisibilityRay(visibility_index);
     let position = ray.origin + ray.hitT * worldCacheProbeRayDirection(ray);
-    let changed = HashGridCache_NearChange(position, HashGridCache_GetCellSize(position));
+    let changed = HashGridCache_ClaimChangeReset(cell_index, position);
     let direct = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
 
     if (changed) {
@@ -210,10 +202,10 @@ fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
     }
     var random = rcMakeRandom(cell_index ^ HASHGRIDCACHE_CELL_SUB_BIN_SALT, g_HashGridCacheConstants.frame_index);
     let bin = priority * HASHGRIDCACHE_CELL_SUB_BINS + rcRandIntBelow(&random, HASHGRIDCACHE_CELL_SUB_BINS);
-    atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + bin], 1u);
+    atomicAdd(&g_HashGridCache_CellLists[g_HashGridCache_RayLists.cell_priority_bins + HASHGRIDCACHE_CELL_BINS + bin], 1u);
 
     let changed_bit = select(0u, HASHGRIDCACHE_CELL_CHANGED_BIT, changed);
-    return HashGridCache_Claim(HASHGRIDCACHE_CELL_CLAIMED, visibility_index | changed_bit | (bin << HASHGRIDCACHE_CELL_BIN_SHIFT));
+    return HashGridCache_Claim(HASHGRIDCACHE_CELL_CLAIMED, visibility_index | changed_bit, bin);
 }
 
 // The workgroup's claims go on the candidate list with one global atomic: each claim takes a place
@@ -237,7 +229,8 @@ fn HashGridCache_AppendClaims(claim: HashGridCache_Claim, local_index: u32) {
     }
     let first = workgroupUniformLoad(&lds_ClaimCells_First);
     if (claim.flags != 0u) {
-        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_candidate_buffer, first + place, claim.word);
+        HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_candidate_buffer, 2u * (first + place), claim.word);
+        HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_candidate_buffer, 2u * (first + place) + 1u, claim.bin);
     }
 }
 
@@ -286,7 +279,7 @@ var<workgroup> lds_PrioritizeCells_Sums: array<u32, HASHGRIDCACHE_CELL_BINS>;
 @compute @workgroup_size(${CELL_SHADING_BINS})
 fn ${CELL_SHADING_ENTRY_POINT.prioritizeCells}(@builtin(local_invocation_index) bin: u32) {
     // An inclusive scan of the bins' counts in the group's memory (Hillis-Steele: 8 steps for 256).
-    let count = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin);
+    let count = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_priority_bins, HASHGRIDCACHE_CELL_BINS + bin);
     lds_PrioritizeCells_Sums[bin] = count;
     workgroupBarrier();
     for (var offset = 1u; offset < HASHGRIDCACHE_CELL_BINS; offset <<= 1u) {
@@ -299,12 +292,12 @@ fn ${CELL_SHADING_ENTRY_POINT.prioritizeCells}(@builtin(local_invocation_index) 
         workgroupBarrier();
     }
     // Each bin's first slot: the candidates in the bins before it.
-    HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin, lds_PrioritizeCells_Sums[bin] - count);
+    HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_priority_bins, bin, lds_PrioritizeCells_Sums[bin] - count);
 
     if (bin == 0u) {
         let candidates = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT]);
         let budget = g_HashGridCache_CellShading.budget;
-        atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], min(candidates, budget));
+        atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDTARGET], min(candidates, budget));
 
         // The settled cells take what the urgent ones (new, changed, converging) leave of the budget;
         // a period of settled / left frames gives each its turn once in that many frames (the turns'
@@ -325,6 +318,8 @@ export function scatterCellsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${cellShadingHeadWgsl(layout)}
 
+const HASHGRIDCACHE_CELL_THIN_SALT: u32 = ${CELL_SHADING_SALT.thin}u;
+
 @compute @workgroup_size(${size})
 fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -335,16 +330,32 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
     if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT])) {
         return; // out of bounds
     }
-    let candidate = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_candidate_buffer, did);
-    let bin = candidate >> HASHGRIDCACHE_CELL_BIN_SHIFT;
-    let slot = atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + bin], 1u);
-    if (slot < atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT])) {
-        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_shade_buffer, slot, candidate & (HASHGRIDCACHE_CELL_ENTRY_MASK | HASHGRIDCACHE_CELL_CHANGED_BIT));
-        return;
+    let candidate = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_candidate_buffer, 2u * did);
+    let bin = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_candidate_buffer, 2u * did + 1u);
+    let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, candidate & HASHGRIDCACHE_CELL_ENTRY_MASK);
+    let first = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_priority_bins, bin);
+    let count = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_priority_bins, HASHGRIDCACHE_CELL_BINS + bin);
+    let target = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDTARGET]);
+
+    // A bin wholly under the target is lit; the one bin the target cuts is thinned by a hash of the
+    // cell, each lit with the share of the bin the target leaves (lighting it in claim order leaned
+    // the drawn hits toward lower entries); the lit list takes them up to the target.
+    var lit = first + count <= target;
+    if (!lit && first < target) {
+        let share = f32(target - first) / f32(count);
+        lit = f32(rcPcgHash(rcPcgHash(cell_index ^ HASHGRIDCACHE_CELL_THIN_SALT) + rcPcgHash(g_HashGridCacheConstants.frame_index)) >> 8u) * (1.0 / 16777216.0) < share;
+    }
+    if (lit) {
+        let slot = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], 1u);
+        if (slot < target) {
+            HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_shade_buffer, slot, candidate);
+            return;
+        }
+        // Past the target (the thinned bin drew more than its share): not lit (ShadeCells reads the
+        // list up to the target).
     }
     // Not lit this frame: the key and the claim leave the scratch, which UpdateTiles then reads as
     // no sample (the cell keeps its value).
-    let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, candidate & HASHGRIDCACHE_CELL_ENTRY_MASK);
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], 0u);
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], 0u);
@@ -379,10 +390,11 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
     @builtin(local_invocation_index) local_index: u32,
 ) {
     let did = HashGridCache_WorkgroupIndex(workgroup, workgroups) * ${size}u + local_index;
-    if (did >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT])) {
+    // The lit count can pass the target where the thinned bin drew more than its share; those weren't listed.
+    if (did >= min(atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT]), atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDTARGET]))) {
         return; // out of bounds
     }
-    let shaded = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_shade_buffer, did);
+    let shaded = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_shade_buffer, did);
     let visibility_index = shaded & HASHGRIDCACHE_CELL_ENTRY_MASK;
     let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, visibility_index);
     let surface = HashGridCache_ProbeSurface(HashGridCache_VisibilityRay(visibility_index));

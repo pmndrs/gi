@@ -90,8 +90,8 @@ THE SOFTWARE.
 
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
-import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
-import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
+import type { HashGridCacheBufferLayout } from './capacity.ts';
+import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_BINDING, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
 
@@ -118,6 +118,10 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: RAY_DATA_BINDING.probeRays, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: RAY_DATA_BINDING.radiance, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     { binding: RAY_DATA_BINDING.listWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+    // Lever E8 and experiment E9 (cell-shading-common.ts): the change events, each cell's last reset, E8's lists.
+    { binding: CELL_CHANGES_BINDING.uniform, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
+    { binding: CELL_CHANGES_BINDING.resetFrames, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
+    { binding: CELL_CHANGES_BINDING.cellLists, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
 /** Bytes of `HashGridCacheRayLists`: fifteen words, padded to 16 bytes. */
@@ -202,12 +206,6 @@ export interface HashGridCacheRayListLayout {
     readonly firstBounceBypassBuffer: number;
     /** Ours (register D38): per second-bounce entry, its own direct light where its segment bypasses the cache. */
     readonly multibounceDirectBuffer: number;
-    /** Lever E8: one word per cell hit this frame (`max_combined_ray_count`): its representative entry, a changed bit and its priority bin. */
-    readonly cellCandidateBuffer: number;
-    /** Lever E8: the candidates lit this frame, in priority order (`max_combined_ray_count` at most): the entry and the changed bit. */
-    readonly cellShadeBuffer: number;
-    /** Lever E8: `CELL_SHADING_BINS` words, the candidates per priority bin, then each bin's next slot. */
-    readonly cellPriorityBins: number;
     readonly bytes: number;
 }
 
@@ -233,11 +231,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount;
     const firstBounceBypassBuffer = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount;
     const multibounceDirectBuffer = firstBounceBypassBuffer + maxRayCount;
-    // Lever E8's lists: a cell has at least one entry, so there are at most as many candidates as entries.
-    const cellCandidateBuffer = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
-    const cellShadeBuffer = cellCandidateBuffer + maxCombinedRayCount;
-    const cellPriorityBins = cellShadeBuffer + maxCombinedRayCount;
-    const words = cellPriorityBins + CELL_SHADING_BINS;
+    const words = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -251,9 +245,6 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         multibounceRayBuffer,
         firstBounceBypassBuffer,
         multibounceDirectBuffer,
-        cellCandidateBuffer,
-        cellShadeBuffer,
-        cellPriorityBins,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -261,10 +252,10 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
 /**
  * Throws `GILimitError` naming the limit the per-ray lists pass. They are one
  * buffer bound whole as one storage binding, so it must fit both the binding
- * limit and the buffer limit. It grows with the screen (36 words per probe
- * ray, lever E8's two lists included: 33 MB at 1280 × 720, 298 MB at
- * 3840 × 2160, past WebGPU's default 128 MiB binding), so a larger screen or
- * a device with smaller limits can't
+ * limit and the buffer limit. It grows with the screen (32 words per probe
+ * ray: 29 MB at 1280 × 720, 265 MB at 3840 × 2160, past WebGPU's default
+ * 128 MiB binding; lever E8's lists are a buffer of their own, made when it
+ * is used), so a larger screen or a device with smaller limits can't
  * bind it where the cache itself fits (register D14's rule: name the limit,
  * no fallback).
  */
@@ -291,11 +282,13 @@ struct HashGridCacheRayLists {
     multibounce_ray_buffer: u32,    // ours (register D36): each second-bounce entry's ray, a WorldCacheProbeRay in 12 words
     first_bounce_bypass_buffer: u32,  // ours (register D38): 1 where a first-bounce entry's probe ray bypasses the cache
     multibounce_direct_buffer: u32,   // ours (register D38): a bypassing second-bounce entry's own direct light, 2 words
-    cell_candidate_buffer: u32,     // lever E8: the cells hit this frame, one word each (cell-shading-wgsl.ts)
-    cell_shade_buffer: u32,         // lever E8: the cells lit this frame, in priority order
-    cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset
-    cell_priority_bins: u32,        // lever E8: the candidates per priority bin, then each bin's next slot
+    cell_candidate_buffer: u32,     // lever E8, in g_HashGridCache_CellLists: the cells hit this frame, two words each
+    cell_shade_buffer: u32,         // lever E8, in g_HashGridCache_CellLists: the cells lit this frame
+    cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset; bits 8-15: E9's history kept
+    cell_priority_bins: u32,        // lever E8, in g_HashGridCache_CellLists: each bin's first slot, then its count
 }
+
+${CELL_CHANGES_WGSL}
 
 // Lever E8: hits only find their cells, and the cells are lit on a budget (cell-shading-wgsl.ts).
 fn HashGridCache_CellShadingBudgeted() -> bool {
@@ -589,6 +582,10 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
         }
     }
 
+    // Experiment E9: a hit near a change marks its cell here, where every hit passes (with a light or
+    // not, so a light switched off is followed too), not where samples are added.
+    HashGridCache_MarkChangeReset(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did), surface.position);
+
     // Temporal radiance feedback (gi1.comp:2454-2496) runs only with gi1_use_temporal_feedback,
     // off by default (gi1.h:54): not part of the baseline.
 
@@ -664,7 +661,6 @@ export function populateCellsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
-${CELL_CHANGES_WGSL}
 
 // INV_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_INV_PI: f32 = 0.318309886183791;
@@ -719,11 +715,6 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
             atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
         }
         atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
-        // Experiment E9: a sample from near a recent scene change marks its cell, whose history
-        // UpdateTiles then drops for this frame's samples.
-        if (HashGridCache_ChangeResetPerHit() && HashGridCache_NearChange(surface.position, HashGridCache_GetCellSize(surface.position))) {
-            atomicOr(&g_HashGridCache_UpdateScratch[scratch + 3u], HASHGRIDCACHE_CHANGE_RESET_BIT);
-        }
     }
 
     // In some cases, we want to bypass the cache to avoid light leaks;
@@ -896,7 +887,10 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         let previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
         let new_direct_samples = UpdateTiles_TakeScratch(direct_scratch);
         var direct_radiance = previous_direct_radiance;
-        if (change_reset && new_direct_samples.w > 0.0) {
+        if (change_reset && new_direct_samples.w <= 0.0) {
+            // Marked, and every hit in it had no light to draw (a light switched off): its light is none now.
+            direct_radiance = vec4f(0.0);
+        } else if (change_reset) {
             // The history counts as at most cellChangeResetHistory samples beside the frame's (0: replaced).
             let kept = min(HashGridCache_ChangeResetHistory(), previous_direct_radiance.w);
             let total = kept + new_direct_samples.w;
@@ -1289,6 +1283,9 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
             return;
         }
     }
+
+    // Experiment E9: a second hit near a change marks its cell (with a light or not).
+    HashGridCache_MarkChangeReset(HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did), surface.position);
 
     // Recover the ray origin: the first-bounce hit. Capsaicin rebuilds that hit's point from its
     // visibility entry; the second-bounce ray starts there, pushed off by the platform's offset

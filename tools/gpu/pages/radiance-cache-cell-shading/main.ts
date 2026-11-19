@@ -63,7 +63,7 @@ import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techn
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { CELL_SHADING_SALT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-common.ts';
-import { CELL_CANDIDATE_BIN_SHIFT, CELL_CANDIDATE_CHANGED_BIT, CELL_PRIORITY_CLASS, CELL_SHADING_CHANGE_FRAMES, CELL_SHADING_MAX_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-wgsl.ts';
+import { CELL_CANDIDATE_CHANGED_BIT, CELL_CANDIDATE_ENTRY_MASK, CELL_PRIORITY_CLASS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-wgsl.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, pcgHash, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import { MULTIBOUNCE_MISS_CELL } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
@@ -107,6 +107,15 @@ const LAG_FRAMES = 200;
 /** The settled mean after a change: frames LAG_SETTLED_FROM to LAG_FRAMES after it. */
 const LAG_SETTLED_FROM = 150;
 const LAG_WITHIN = 0.05;
+/** Frames past the scene's creation before a check starts: past every change event's epochs (the tracker forgets an event 16 frames after it stops; it re-arms every 8). */
+const PAST_CHANGES_FRAMES = 32;
+/** E9's lag gate under a single light: a change is followed within this many frames. */
+const E9_LAG_FRAMES = 3;
+
+/** The lit count against the frame's target, min(candidates, budget): the thinned bin can fall a little short. */
+function litCountOk(lit: number, target: number): boolean {
+    return lit <= target && lit >= target - 4 * Math.sqrt(target) - 1;
+}
 /**
  * The furnace's near ceiling rays more than 2% off allowed with cells lit on the budget: 2%, where
  * per hit allows 0.5% (the rare misses). A far floor tile also holds ceiling hits (a cell is a
@@ -116,13 +125,14 @@ const LAG_WITHIN = 0.05;
  */
 const BUDGETED_RAYS_OFF = 0.02;
 
-/** Per hit (GI-1.2), per hit with experiment E9's change reset, or budgeted at that many cells (E8). */
-type Mode = 'per-hit' | 'per-hit+E9' | number;
+/** Per hit (GI-1.2), per hit with experiment E9's change reset (history dropped, or 3 samples kept), or budgeted at that many cells (E8). */
+type Mode = 'per-hit' | 'per-hit+E9' | 'per-hit+E9 keep 3' | number;
 
 function settingsFor(mode: Mode, multibounce: boolean): Partial<RadianceCacheSettings> {
     if (mode === 'per-hit') return { useMultibounce: multibounce, cellShading: 'per-hit', cellChangeReset: false };
-    if (mode === 'per-hit+E9') return { useMultibounce: multibounce, cellShading: 'per-hit', cellChangeReset: true };
-    return { useMultibounce: multibounce, cellShading: 'budgeted', cellShadingBudget: mode };
+    if (mode === 'per-hit+E9') return { useMultibounce: multibounce, cellShading: 'per-hit', cellChangeReset: true, cellChangeResetHistory: 0 };
+    if (mode === 'per-hit+E9 keep 3') return { useMultibounce: multibounce, cellShading: 'per-hit', cellChangeReset: true, cellChangeResetHistory: 3 };
+    return { useMultibounce: multibounce, cellShading: 'budgeted', cellShadingBudget: mode, cellChangeReset: false };
 }
 
 function modeName(mode: Mode): string {
@@ -214,7 +224,7 @@ async function startScenario(device: GPUDevice, name: string, kind: SceneKind, l
     await platform.rays.whenBuilt();
     // Past the window lever E8 remembers scene changes for (the scene's creation is one), so the
     // checks start from an empty cache with no change pending.
-    for (let index = 0; index <= CELL_SHADING_CHANGE_FRAMES; index++) frame();
+    for (let index = 0; index < PAST_CHANGES_FRAMES; index++) frame();
     await device.queue.onSubmittedWorkDone();
     technique.resetHistory();
     const cache = technique.worldCache;
@@ -318,7 +328,9 @@ async function litPlane(device: GPUDevice, mode: Mode, fail: (message: string) =
             if (typeof mode === 'number') {
                 const candidates = counters[HASH_GRID_COUNTER.cellCandidateCount];
                 candidatesMax = Math.max(candidatesMax, candidates);
-                if (counters[HASH_GRID_COUNTER.cellShadedCount] !== Math.min(candidates, mode)) fail(`lit plane ${modeName(mode)} frame ${frame}: ${counters[HASH_GRID_COUNTER.cellShadedCount]} cells lit of ${candidates} candidates`);
+                const target = counters[HASH_GRID_COUNTER.cellShadedTarget];
+                const lit = Math.min(counters[HASH_GRID_COUNTER.cellShadedCount], target);
+                if (target !== Math.min(candidates, mode) || !litCountOk(lit, target)) fail(`lit plane ${modeName(mode)} frame ${frame}: ${lit} cells lit of ${candidates} candidates (target ${target})`);
             }
             if (stats.within === stats.hits) {
                 if (convergedAt < 0) convergedAt = frame;
@@ -351,12 +363,16 @@ async function queue(device: GPUDevice, fail: (message: string) => void): Promis
             const frameIndex = scenario.platform.stats.frame;
             const counters = await readCounters(device, scenario.cache);
             const lists = scenario.cache.rayLists;
-            if (!lists) throw new Error('no ray lists');
+            const cellLists = scenario.cache.cellShadingLists;
+            if (!lists || !cellLists) throw new Error('no ray lists or cell lists');
             const words = new Uint32Array(await readRange(device, lists.buffer, 0, lists.buffer.size));
+            const cellWords = new Uint32Array(await readRange(device, cellLists.buffer, 0, cellLists.buffer.size));
             const layout = lists.layout;
+            const cellLayout = cellLists.layout;
             const entries = counters[HASH_GRID_COUNTER.visibilityCount0] + counters[HASH_GRID_COUNTER.visibilityCount1];
             const candidates = counters[HASH_GRID_COUNTER.cellCandidateCount];
-            const lit = counters[HASH_GRID_COUNTER.cellShadedCount];
+            const target = counters[HASH_GRID_COUNTER.cellShadedTarget];
+            const lit = Math.min(counters[HASH_GRID_COUNTER.cellShadedCount], target);
             // The cells' entries, in entry order.
             const entriesOf = new Map<number, number[]>();
             for (let entry = 0; entry < entries; entry++) {
@@ -367,24 +383,25 @@ async function queue(device: GPUDevice, fail: (message: string) => void): Promis
                 else entriesOf.set(cell, [entry]);
             }
             if (candidates !== entriesOf.size) fail(`queue frame ${frame}: ${candidates} candidates for ${entriesOf.size} distinct cells hit`);
-            if (lit !== Math.min(candidates, budget)) fail(`queue frame ${frame}: ${lit} lit of ${candidates} candidates at a budget of ${budget}`);
-            const entryMask = CELL_SHADING_MAX_ENTRIES - 1;
+            if (target !== Math.min(candidates, budget) || !litCountOk(lit, target)) fail(`queue frame ${frame}: ${lit} lit of ${candidates} candidates at a budget of ${budget} (target ${target})`);
+            const entryMask = CELL_CANDIDATE_ENTRY_MASK;
             const candidateCells = new Map<number, { entry: number; bin: number }>();
             for (let index = 0; index < candidates; index++) {
-                const word = words[layout.cellCandidateBuffer + index];
+                const word = cellWords[cellLayout.candidates + 2 * index];
+                const bin = cellWords[cellLayout.candidates + 2 * index + 1];
                 const entry = word & entryMask;
                 const cell = words[layout.visibilityCellBuffer + entry];
                 if (candidateCells.has(cell)) fail(`queue frame ${frame}: cell ${cell} listed twice`);
-                candidateCells.set(cell, { entry, bin: word >>> CELL_CANDIDATE_BIN_SHIFT });
+                candidateCells.set(cell, { entry, bin });
                 // The claimer is the entry with the cell's largest key (a tie, one in billions, is skipped).
                 const keys = (entriesOf.get(cell) ?? []).map((other) => sampleKey(other, frameIndex));
                 if (keys.length > 0 && sampleKey(entry, frameIndex) !== Math.max(...keys)) tally.keyMismatches++;
-                if (frame === 1 && word >>> CELL_CANDIDATE_BIN_SHIFT >= CELL_SHADING_SUB_BINS * (CELL_PRIORITY_CLASS.newOrChanged + 1)) tally.frameOneNotNew++;
+                if (frame === 1 && bin >= CELL_SHADING_SUB_BINS * (CELL_PRIORITY_CLASS.newOrChanged + 1)) tally.frameOneNotNew++;
             }
             const litCells = new Set<number>();
             let worstLitBin = 0;
             for (let slot = 0; slot < lit; slot++) {
-                const word = words[layout.cellShadeBuffer + slot];
+                const word = cellWords[cellLayout.lit + slot];
                 const entry = word & entryMask;
                 if (word & CELL_CANDIDATE_CHANGED_BIT) fail(`queue frame ${frame}: a lit cell marked changed with no change`);
                 const cell = words[layout.visibilityCellBuffer + entry];
@@ -410,7 +427,7 @@ async function queue(device: GPUDevice, fail: (message: string) => void): Promis
     }
     const meanRank = tally.rankSum / Math.max(tally.rankCells, 1);
     if (tally.rankCells < 2000) fail(`queue: only ${tally.rankCells} lit cells with two or more entries; the rank check needs 2,000`);
-    if (Math.abs(meanRank - 0.5) > 0.03) fail(`queue: the sample's rank among its cell's entries averages ${meanRank.toFixed(4)}, not 1/2: the draw isn't uniform`);
+    if (Math.abs(meanRank - 0.5) > 0.01) fail(`queue: the sample's rank among its cell's entries averages ${meanRank.toFixed(4)}, not 1/2: the draw isn't uniform`);
     if (tally.keyMismatches > 0) fail(`queue: ${tally.keyMismatches} candidates are not their cell's largest key`);
     if (tally.frameOneNotNew > 0) fail(`queue: ${tally.frameOneNotNew} candidates of the first frame are not in the new class`);
     if (tally.orderViolations > 0) fail(`queue: ${tally.orderViolations} unlit candidates have a better bin than a lit one`);
@@ -497,6 +514,59 @@ async function lag(device: GPUDevice, mode: Mode, light: 'sun' | 'point'): Promi
     }
 }
 
+// ---- 6. A light switched off, and the second bounce after a change ----------------------------------------
+
+/** The sun switched off (intensity 0): frames until the hit rays' mean is under 5% of what it was. */
+async function lagToZero(device: GPUDevice, mode: Mode): Promise<Record<string, number>> {
+    const scenario = await startScenario(device, `off ${modeName(mode)}`, 'corner', [CORNER_SUN], settingsFor(mode, false));
+    try {
+        for (let frame = 0; frame < LAG_CONVERGE_FRAMES; frame++) scenario.frame();
+        const before = hitRayStats(await readRays(device, scenario)).mean;
+        scenario.platform.scene.updateLight(scenario.lights[0], { intensity: 0 });
+        let frames = LAG_FRAMES;
+        const means: number[] = [];
+        for (let frame = 0; frame < 60; frame++) {
+            scenario.frame();
+            means.push(hitRayStats(await readRays(device, scenario)).mean / before);
+        }
+        for (let frame = means.length - 1; frame >= 0; frame--) {
+            if (means[frame] > LAG_WITHIN) break;
+            frames = frame + 1;
+        }
+        return { framesToUnder5Percent: frames, firstFrameOverBefore: Number(means[0].toFixed(4)), lastFrameOverBefore: Number(means[means.length - 1].toFixed(4)) };
+    } finally {
+        scenario.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+/** The furnace's sun doubled: frames until the near ceiling rays (the second bounce alone) stay within 5% of where they settle. */
+async function multibounceLag(device: GPUDevice, mode: Mode): Promise<Record<string, number>> {
+    const scenario = await startScenario(device, `multibounce lag ${modeName(mode)}`, 'furnace', [FURNACE_SUN], settingsFor(mode, true));
+    try {
+        for (let frame = 0; frame < LAG_CONVERGE_FRAMES; frame++) scenario.frame();
+        const before = nearCeilingStats(await readRays(device, scenario), CEILING_INDIRECT).mean;
+        scenario.platform.scene.updateLight(scenario.lights[0], { intensity: 2 * FURNACE.sunIntensity });
+        const means: number[] = [];
+        for (let frame = 0; frame < LAG_FRAMES; frame++) {
+            scenario.frame();
+            if (frame < 60 || frame >= LAG_SETTLED_FROM) means.push(nearCeilingStats(await readRays(device, scenario), 2 * CEILING_INDIRECT).mean);
+            else means.push(NaN);
+        }
+        const settledFrames = means.slice(LAG_SETTLED_FROM);
+        const settled = settledFrames.reduce((sum, value) => sum + value, 0) / settledFrames.length;
+        let frames = LAG_FRAMES;
+        for (let frame = 59; frame >= 0; frame--) {
+            if (Math.abs(means[frame] / settled - 1) > LAG_WITHIN) break;
+            frames = frame + 1;
+        }
+        return { framesToWithin5Percent: frames, settledOverBefore: Number((settled / before).toFixed(4)), settledOverAnalytic: Number((settled / (2 * CEILING_INDIRECT)).toFixed(4)) };
+    } finally {
+        scenario.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
 // ---- The page ---------------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -511,7 +581,7 @@ try {
     const fail = (message: string): void => {
         if (failures.length < 24) failures.push(message);
     };
-    const modes: Mode[] = ['per-hit', 'per-hit+E9', ...BUDGETS];
+    const modes: Mode[] = ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3', ...BUDGETS];
     const data: Record<string, unknown> = { litRadiance: LIT_RADIANCE, ceilingIndirect: CEILING_INDIRECT, stripsIndirect: STRIPS_INDIRECT };
 
     const lit: Record<string, unknown> = {};
@@ -521,7 +591,7 @@ try {
     data.queue = await queue(device, fail);
 
     const furnaces: Record<string, unknown> = {};
-    for (const mode of ['per-hit', 'per-hit+E9', 20000] as const) furnaces[modeName(mode)] = await furnace(device, mode, 'furnace', fail);
+    for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3', 20000] as const) furnaces[modeName(mode)] = await furnace(device, mode, 'furnace', fail);
     furnaces[`strips ${modeName(20000)}`] = await furnace(device, 20000, 'strips', fail);
     data.furnace = furnaces;
 
@@ -529,10 +599,26 @@ try {
     for (const light of ['sun', 'point'] as const) for (const mode of modes) lags[light][modeName(mode)] = await lag(device, mode, light);
     data.lag = lags;
     const perHitSunLag = lags.sun['per-hit'].framesToWithin5Percent;
-    // E9 (the change reset alone, per hit) must follow a change faster than per hit without it.
+    // E9 (the change reset alone, per hit) follows a single light's change within E9_LAG_FRAMES (dropping the
+    // history; keeping 3 samples, faster than per hit without it), and a light switched off as quickly.
     for (const light of ['sun', 'point'] as const) {
         const resetLag = lags[light]['per-hit+E9'].framesToWithin5Percent;
+        if (light === 'sun' && resetLag > E9_LAG_FRAMES) fail(`lag: per hit with E9 follows the sun in ${resetLag} frames, more than ${E9_LAG_FRAMES}`);
         if (resetLag >= lags[light]['per-hit'].framesToWithin5Percent) fail(`lag: per hit with E9 follows the ${light} in ${resetLag} frames, per hit without it in ${lags[light]['per-hit'].framesToWithin5Percent}`);
+        const keepLag = lags[light]['per-hit+E9 keep 3'].framesToWithin5Percent;
+        if (keepLag >= lags[light]['per-hit'].framesToWithin5Percent) fail(`lag: per hit with E9 keeping 3 follows the ${light} in ${keepLag} frames, per hit without it in ${lags[light]['per-hit'].framesToWithin5Percent}`);
+    }
+    const offLags: Record<string, Record<string, number>> = {};
+    for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3', 20000] as const) offLags[modeName(mode)] = await lagToZero(device, mode);
+    data.lagToZero = offLags;
+    for (const mode of ['per-hit+E9', 'per-hit+E9 keep 3'] as const) {
+        if (offLags[mode].framesToUnder5Percent > E9_LAG_FRAMES) fail(`lag: ${mode} follows the sun switched off in ${offLags[mode].framesToUnder5Percent} frames, more than ${E9_LAG_FRAMES}`);
+    }
+    const bounceLags: Record<string, Record<string, number>> = {};
+    for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3'] as const) bounceLags[modeName(mode)] = await multibounceLag(device, mode);
+    data.multibounceLag = bounceLags;
+    for (const mode of ['per-hit+E9', 'per-hit+E9 keep 3'] as const) {
+        if (bounceLags[mode].framesToWithin5Percent >= bounceLags['per-hit'].framesToWithin5Percent) fail(`lag: the second bounce follows the furnace's sun in ${bounceLags[mode].framesToWithin5Percent} frames with ${mode}, ${bounceLags['per-hit'].framesToWithin5Percent} per hit`);
     }
     for (const budget of [20000, 80000]) {
         const budgetedLag = lags.sun[modeName(budget)].framesToWithin5Percent;
