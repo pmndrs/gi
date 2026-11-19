@@ -503,8 +503,8 @@ export class HashGridCache implements WorldCache {
                 layout.reservoirBuffer,
                 layout.multibounceInfoBuffer,
                 layout.multibounceRayBuffer,
-                0,
-                0,
+                layout.firstBounceBypassBuffer,
+                layout.multibounceDirectBuffer,
             ]),
         );
         const entries: GPUBindGroupEntry[] = [

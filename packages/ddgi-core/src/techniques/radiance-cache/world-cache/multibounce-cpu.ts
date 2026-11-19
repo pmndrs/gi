@@ -160,26 +160,36 @@ export function multibounceDraw(did: number, frameIndex: number, discardProbabil
 }
 
 /**
- * The sample `UpdateMultibounceCells` (gi1.comp:1958-1966) adds to the
- * first-bounce cell for one second-bounce hit: the second-bounce cell's
- * filtered direct radiance (rgb over its count) × BRDF / pdf, divided by
- * 1 - the discard probability.
+ * The sample `UpdateMultibounceCells` adds to the first-bounce cell for one
+ * kept second-bounce ray: the light arriving from the second hit (its cell's
+ * filtered direct radiance, rgb over its count, or its own light where the
+ * segment bypasses the cache) × BRDF / pdf; `null` (a miss) is a sample of
+ * no light. No 1 / (1 - p): the cell averages over kept rays (register D37).
  */
-export function multibounceSample(directMean: Vec3, brdf: Vec3, pdf: number, discardProbability: number): [number, number, number] {
+export function multibounceSample(secondRadiance: Vec3 | null, brdf: Vec3, pdf: number): [number, number, number] {
+    if (!secondRadiance) return [0, 0, 0];
+    return [0, 1, 2].map((i) => f32(f32(secondRadiance[i] * brdf[i]) / pdf)) as [number, number, number];
+}
+
+/**
+ * What a first-bounce probe ray that bypasses the cache gets from its one
+ * draw (register D38): the kept ray's sample over 1 - p, since a discarded
+ * draw gives that ray nothing.
+ */
+export function multibounceBypassAddition(sample: Vec3, discardProbability: number): [number, number, number] {
     const keep = f32(1 - f32(discardProbability));
-    return [0, 1, 2].map((i) => f32(f32(f32(directMean[i] * brdf[i]) / pdf) / keep)) as [number, number, number];
+    return [0, 1, 2].map((i) => f32(sample[i] / keep)) as [number, number, number];
 }
 
 /**
  * The indirect value a first-bounce cell settles at when every second-bounce
  * hit sees the same direct radiance `secondDirect` off Lambert surfaces of
- * albedo `albedo`: each kept sample is albedo × secondDirect / (1 - p)
- * (BRDF / pdf is the albedo), and `UpdateTiles` averages the samples it gets.
- * Only the kept rays add a sample, so the 1 / (1 - p) isn't undone by a count
- * that includes the discarded ones: the value is 1 / (1 - p) times the
- * second bounce's expected value (3.33 × at p = 0.7). Capsaicin behaviour,
- * to be fixed under DECISIONS 2026-11-19 (NOTES, RC3.3).
+ * albedo `albedo` and a kept ray hits with probability `hitProbability`: each
+ * kept ray adds albedo × secondDirect (BRDF / pdf is the albedo) if it hits,
+ * 0 if it misses, and `UpdateTiles` averages them: the second bounce,
+ * albedo × secondDirect × P(hit), whatever the discard probability (register
+ * D37). Capsaicin's value was this times 1 / (1 - p) / P(hit).
  */
-export function multibounceSettledIndirect(albedo: number, secondDirect: number, discardProbability: number): number {
-    return (albedo * secondDirect) / (1 - discardProbability);
+export function multibounceSettledIndirect(albedo: number, secondDirect: number, hitProbability = 1): number {
+    return albedo * secondDirect * hitProbability;
 }

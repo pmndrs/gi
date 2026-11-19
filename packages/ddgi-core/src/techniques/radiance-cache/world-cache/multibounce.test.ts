@@ -3,9 +3,11 @@ import type { Vec3 } from '../../../platform/contract/math.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS } from './capacity.ts';
 import { HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
+import { pcgHash } from './hash-grid-cpu.ts';
 import {
     makeRandom,
     mapToCosineHemisphere,
+    multibounceBypassAddition,
     multibounceDraw,
     multibounceSample,
     multibounceSettledIndirect,
@@ -19,6 +21,7 @@ import {
 import {
     generateMultibounceReservoirsWgsl,
     hashGridCacheRayListLayout,
+    MULTIBOUNCE_DIRECT_WORDS,
     MULTIBOUNCE_INFO_WORDS,
     MULTIBOUNCE_RAY_WORDS,
     POPULATION_ENTRY_POINT,
@@ -171,31 +174,42 @@ describe('the multibounce sample and its settled value', () => {
         expect(Math.abs(kept / draws - 0.3)).toBeLessThan(0.01);
     });
 
-    it("weighs the second cell's direct radiance by BRDF / pdf / (1 - p)", () => {
+    it("weighs the second hit's light by BRDF / pdf, with no 1 / (1 - p); a miss is a sample of no light (register D37)", () => {
         const sample = sampleBRDFAndEvaluateDiffuse([0.5, 0.5, 0.5], [0.3, 0.6], [0, -1, 0]);
-        const value = multibounceSample([2, 1, 0.5], sample.brdf, sample.pdf, 0.7);
-        [2, 1, 0.5].forEach((direct, channel) => expect(value[channel]).toBeCloseTo((0.5 * direct) / 0.3, 4));
+        const value = multibounceSample([2, 1, 0.5], sample.brdf, sample.pdf);
+        [2, 1, 0.5].forEach((direct, channel) => expect(value[channel]).toBeCloseTo(0.5 * direct, 4));
+        expect(multibounceSample(null, sample.brdf, sample.pdf)).toEqual([0, 0, 0]);
+        // A bypassing first bounce's probe ray takes the draw over 1 - p.
+        multibounceBypassAddition(value, 0.7).forEach((added, channel) => expect(added).toBeCloseTo(value[channel] / 0.3, 4));
     });
 
-    it('settles at 1 / (1 - p) times the expected second bounce, since only kept rays count (Capsaicin, kept)', () => {
-        // Simulate one first-bounce cell over many hits: the discarded ones add nothing, not even a count.
+    it('settles at the second bounce, albedo x L x P(hit), whatever the discard probability (register D37)', () => {
+        // One first-bounce cell over many draws: a kept ray hits (a surface of light L) or misses
+        // with probability 1/2, and every kept ray counts. The probe ray of a bypassing first
+        // bounce averages its own draws, discarded ones giving 0.
         const albedo = 0.5;
         const secondDirect = 0.6366;
-        let sum = 0;
-        let count = 0;
-        const hits = 30_000;
-        for (let did = 0; did < hits; did++) {
-            const draw = multibounceDraw(did, 5, 0.7);
-            if (draw.discarded) continue;
-            const sample = sampleBRDFAndEvaluateDiffuse([albedo, albedo, albedo], draw.samples, [0, -1, 0]);
-            sum += multibounceSample([secondDirect, secondDirect, secondDirect], sample.brdf, sample.pdf, 0.7)[0];
-            count++;
+        const draws = 40_000;
+        for (const discard of [0.7, 0.3]) {
+            let sum = 0;
+            let count = 0;
+            let bypassSum = 0;
+            for (let did = 0; did < draws; did++) {
+                const draw = multibounceDraw(did, 5, discard);
+                if (draw.discarded) continue;
+                const hits = (pcgHash(did ^ 0x5bd1e995) & 1) === 0;
+                const sample = sampleBRDFAndEvaluateDiffuse([albedo, albedo, albedo], draw.samples, [0, -1, 0]);
+                const value = multibounceSample(hits ? [secondDirect, secondDirect, secondDirect] : null, sample.brdf, sample.pdf);
+                sum += value[0];
+                count++;
+                bypassSum += multibounceBypassAddition(value, discard)[0];
+            }
+            const expected = multibounceSettledIndirect(albedo, secondDirect, 0.5);
+            // Binomial on the hit share: standard deviation of the mean about 0.5 % here.
+            expect(Math.abs(sum / count / expected - 1)).toBeLessThan(0.03);
+            expect(Math.abs(bypassSum / draws / expected - 1)).toBeLessThan(0.05);
         }
-        // Every kept sample is the same here (BRDF / pdf is the albedo), so the mean is exact to f32.
-        expect(sum / count).toBeCloseTo(multibounceSettledIndirect(albedo, secondDirect, 0.7), 4);
-        // The unbiased second bounce would be the sum over every hit, kept or not (the kept share is binomial).
-        expect(Math.abs(sum / hits / (albedo * secondDirect) - 1)).toBeLessThan(0.05);
-        expect(multibounceSettledIndirect(albedo, secondDirect, 0.7) / (albedo * secondDirect)).toBeCloseTo(1 / 0.3, 10);
+        expect(multibounceSettledIndirect(albedo, secondDirect)).toBeCloseTo(albedo * secondDirect, 10);
     });
 });
 
@@ -207,9 +221,11 @@ describe('the multibounce kernels and lists', () => {
         const lists = hashGridCacheRayListLayout(maxRayCount, 22282240);
         expect(lists.multibounceInfoBuffer).toBe(lists.reservoirBuffer + RESERVOIR_WORDS * 2 * maxRayCount);
         expect(lists.multibounceRayBuffer).toBe(lists.multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount);
-        expect(lists.bytes).toBe((lists.multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount) * 4);
-        // 29 words a probe ray: 26,726,400 bytes at 1280 x 720.
-        expect(lists.bytes).toBe(29 * maxRayCount * 4);
+        expect(lists.firstBounceBypassBuffer).toBe(lists.multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount);
+        expect(lists.multibounceDirectBuffer).toBe(lists.firstBounceBypassBuffer + maxRayCount);
+        expect(lists.bytes).toBe((lists.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount) * 4);
+        // 32 words a probe ray: 29,491,200 bytes at 1280 x 720.
+        expect(lists.bytes).toBe(32 * maxRayCount * 4);
     });
 
     it('declare their entry points, read the multibounce constants and the counters Capsaicin dispatches on', () => {

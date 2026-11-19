@@ -358,7 +358,7 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
         expect(layout.reservoirBuffer).toBe(9 * maxRayCount);
         // Then GI-1.2's second-bounce lists (RC3.3): the BRDF and pdf, and the ray (register D36).
         expect(layout.multibounceInfoBuffer).toBe(9 * maxRayCount + RESERVOIR_WORDS * 2 * maxRayCount);
-        expect(layout.bytes).toBe((layout.multibounceInfoBuffer + (2 + 12) * maxRayCount) * 4);
+        expect(layout.bytes).toBe((layout.multibounceInfoBuffer + (2 + 12 + 1 + 2) * maxRayCount) * 4);
     });
 
     it('holds at most one update entry per cell', () => {
@@ -366,9 +366,9 @@ describe('the per-ray lists (gi1.cpp:637-695)', () => {
     });
 
     it('throws GILimitError naming the limit the lists pass (register D14)', () => {
-        // 3840 x 2160: 240 x 135 spawn tiles of 64 rays, 240 MB of lists: past WebGPU's default 128 MiB binding.
+        // 3840 x 2160: 240 x 135 spawn tiles of 64 rays, 265 MB of lists: past WebGPU's default 128 MiB binding.
         const layout = hashGridCacheRayListLayout(240 * 135 * 64, 22282240);
-        expect(layout.bytes).toBe(29 * 240 * 135 * 64 * 4);
+        expect(layout.bytes).toBe(32 * 240 * 135 * 64 * 4);
         const defaults = { maxStorageBufferBindingSize: 134217728, maxBufferSize: 268435456 };
         expect(() => checkHashGridRayListLimits(layout, defaults)).toThrow(/maxStorageBufferBindingSize/);
         expect(() => checkHashGridRayListLimits(layout, { maxStorageBufferBindingSize: 2 ** 31 - 4, maxBufferSize: 2 ** 31 })).not.toThrow();
