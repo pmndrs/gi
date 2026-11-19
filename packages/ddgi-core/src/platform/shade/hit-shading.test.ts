@@ -10,6 +10,7 @@ import { SKY_CHANGE_MODULE_ENTRIES, SKY_RADIANCE_SH_BYTES, skyChangeModuleWgsl }
 import { DEFAULT_HIT_SHADING_SETTINGS, PlatformHitShading } from './hit-shading.ts';
 import { DIRECT_SKY_LIGHT, DIRECT_SKY_LIGHT_BIT, SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
 import { ALL_LIGHT_GROUPS_MASK } from '../../techniques/ddgi/light-groups.ts';
+import { LIGHT_GROUP_COUNT } from '../contract/scene.ts';
 import { DDGI_LIGHT_GROUP_MASK } from '../../techniques/ddgi/wgsl/trace.ts';
 
 /** Just enough of a GPUDevice to construct hit shading in Node. */
@@ -93,7 +94,10 @@ describe('hit shading', () => {
         expect(code).toContain(`const GI_DIRECT_SKY_LIGHT: u32 = ${DIRECT_SKY_LIGHT}u;`);
         expect(code).toContain('fn giSkyLightWeight(surface: GiSurface) -> f32');
         expect(code).toContain('fn giSkyLightRay(surface: GiSurface, random: vec2f) -> GiDirectLightRay');
-        // Not a light-group bit, and not one of the light table's indices or the "no light" answer.
+        // The first bit above the platform's light groups: not a group bit, and not one of the light
+        // table's indices or the "no light" answer.
+        expect(DIRECT_SKY_LIGHT_BIT).toBe(1 << LIGHT_GROUP_COUNT);
+        expect(DIRECT_SKY_LIGHT_BIT & ((1 << LIGHT_GROUP_COUNT) - 1)).toBe(0);
         expect(DIRECT_SKY_LIGHT_BIT & ALL_LIGHT_GROUPS_MASK).toBe(0);
         expect(DIRECT_SKY_LIGHT).not.toBe(0xffffffff);
         // DDGI never opts in: its trace's group mask holds group bits only (gi/direct's layer

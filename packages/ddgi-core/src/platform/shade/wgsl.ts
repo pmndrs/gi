@@ -90,14 +90,9 @@ export const SHADE_UNIFORM_LAYOUT = {
     byteLength: SKY_HARMONICS_LAYOUT.byteLength + 64,
 } as const;
 
-/**
- * The bit of `giDirectChooseLight`'s `groupMask` that makes the sky one of
- * its candidates (`GI_DIRECT_SKY_LIGHT_BIT`), above the four light groups'.
- */
-export const DIRECT_SKY_LIGHT_BIT = 0x10;
-
-/** The light index `giDirectChooseLight` returns for the sky (`GI_DIRECT_SKY_LIGHT`), which `giDirectLightRay` takes. */
-export const DIRECT_SKY_LIGHT = 0xfffffffe;
+// The sky's bit in a group mask (1 << LIGHT_GROUP_COUNT) and its light index, from the contract.
+import { DIRECT_SKY_LIGHT, DIRECT_SKY_LIGHT_BIT } from '../contract/shade.ts';
+export { DIRECT_SKY_LIGHT, DIRECT_SKY_LIGHT_BIT };
 
 /** The module's source, with its bindings at `slot`. */
 export function shadeModuleWgsl(slot: BindingSlot): string {
@@ -855,7 +850,7 @@ fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLi
 // offers it as its environment light's cosine mode (light_sampling.hlsl:164-182;
 // its default draws the hemisphere uniformly, pdf 1 / (2 pi): the same mean,
 // noisier). A host sky with a sharp sun painted in would want the map's
-// brightness drawn too (the radiance cache's register D49, its way forward).
+// brightness drawn too (the radiance cache's register D59, its way forward).
 
 // The sky's weight among giDirectChooseLight's candidates, in the same units
 // as a light's (the luminance of unshadowed irradiance): the sky's irradiance

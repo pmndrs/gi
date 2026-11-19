@@ -145,7 +145,7 @@
  *    see their undersides; they are left out of the ceiling averages.
  *
  * Sections 15 to 18 (RC3.4) are the sky as one of a hit's lights (register
- * D49): no sun unless named, multibounce on, the sky the only light, so every
+ * D59): no sun unless named, multibounce on, the sky the only light, so every
  * reservoir (first and second bounce) must draw the sky with weight 1. Each
  * cell's direct value is judged against the mean, over this frame's entries
  * in it, of ρ L (1 − F), F the share of the point's cosine-weighted sky its
@@ -1396,7 +1396,7 @@ async function predictProbeRays(device: GPUDevice, scenario: Scenario, state: Fr
  * segment bypasses) × BRDF / pdf; a miss 0. Brightest channel (the furnace is grey).
  *
  * Why the page needs it: a hash-grid cell is a column through its tile (NOTES), so a far floor
- * cell can hold ceiling hits too, which have no light. Since register D50 those count as
+ * cell can hold ceiling hits too, which have no light. Since register D60 those count as
  * samples of no light, so such a cell reads the floor's light times its floor share, and a
  * second bounce landing there brings that, not L_f: the second bounce the cache can give is
  * this mean, a little under ρ L_f (Capsaicin's rule, which counted only lit hits, hid it).
@@ -1474,7 +1474,7 @@ function judgePredictedRays(state: FrameState, prediction: ProbeRayPrediction, f
 
 /**
  * The furnace's probe rays: each reads its prediction, and where its tile is under 2 m its cell
- * holds ceiling hits only, so its direct level reads no light (since register D50 with samples
+ * holds ceiling hits only, so its direct level reads no light (since register D60 with samples
  * counted: the ceiling's hits have no light to draw), and the near rays reading an indirect
  * level average `expectedIndirect` within `meanTolerance`. One ray's indirect value is its
  * cell's mean of second bounces that land in floor cells of different floor shares (see
@@ -1547,7 +1547,7 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
 
     // The second bounce the cache gives the near ceiling this frame (`secondBounceSamples`): within
     // 3% of the true second bounce (far floor cells that share a column with the unlit ceiling
-    // read less than L_f since register D50; measured about 1%).
+    // read less than L_f since register D60; measured about 1%).
     const samples = await secondBounceSamples(device, scenario, state);
     const throughCache = meanSampleOver(state, samples, nearCeilingCells(state));
     if (relativeError(throughCache.mean, CEILING_INDIRECT) > 0.03) fail(`the near ceiling's second bounce through the cache is ${throughCache.mean.toFixed(4)}, the true one ${CEILING_INDIRECT.toFixed(4)}`);
@@ -1557,7 +1557,7 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
 
     // The cells of every tile the frame touched (the ceiling's, the floor's and the far tiles
     // that hold both): indirect values (only the ceiling's first-bounce hits get them) and
-    // direct values (the floor's second-bounce hits, lit, and since register D50 the ceiling's
+    // direct values (the floor's second-bounce hits, lit, and since register D60 the ceiling's
     // first-bounce hits as samples of no light).
     const tileOf = (cell: number): number => Math.floor(cell / capacity.numCellsPerTile);
     const touchedTiles = [...new Set([...Array.from(state.visibilityCell, tileOf), ...secondHits.map(tileOf)])];
@@ -1584,7 +1584,7 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
     if (relativeError(indirectCellMean, allEntries.mean) > 0.01) fail(`the cells' indirect means average ${indirectCellMean.toFixed(4)}, this frame's second bounce through the cache ${allEntries.mean.toFixed(4)}`);
     if (Math.abs(measuredOverTrueSecondBounce - 1) > 0.03) fail(`the cells' indirect means average ${measuredOverTrueSecondBounce.toFixed(4)} x the true second bounce`);
 
-    // Register D50, the direct values, in tiles under 2 m (which can't hold both planes): the
+    // Register D60, the direct values, in tiles under 2 m (which can't hold both planes): the
     // ceiling's cells hold its first-bounce hits, which have no light to draw, as samples of no
     // light: exactly 0, with samples counted (Capsaicin counted none); the floor's hold its lit
     // second-bounce hits: L_f within 2%. Cells of far tiles holding both are recorded; section 19
@@ -1616,7 +1616,7 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
     }
     const mixedRatio = directTally.mixedMeasured / Math.max(directTally.mixedExpected, 1e-30);
     if (directTally.pureCeilingLit > 0) fail(`${directTally.pureCeilingLit} ceiling-only cells hold direct light: the ceiling has none`);
-    if (directTally.pureCeilingSampled < 0.99 * directTally.pureCeiling) fail(`only ${directTally.pureCeilingSampled} of ${directTally.pureCeiling} ceiling-only cells counted their hits as samples of no light (register D50)`);
+    if (directTally.pureCeilingSampled < 0.99 * directTally.pureCeiling) fail(`only ${directTally.pureCeilingSampled} of ${directTally.pureCeiling} ceiling-only cells counted their hits as samples of no light (register D60)`);
     if (directTally.pureFloor === 0 || directTally.pureFloorOff > Math.ceil(0.005 * directTally.pureFloor)) fail(`${directTally.pureFloorOff} of ${directTally.pureFloor} floor-only cells are more than 2% off L_f`);
     if (directTally.pureCeiling < 1000) fail(`only ${directTally.pureCeiling} near ceiling cells`);
 
@@ -1910,7 +1910,7 @@ async function checkStrips(device: GPUDevice, scenario: Scenario): Promise<Check
     const hitShare = hitEntries / Math.max(entries, 1);
     // The second bounce the cache gives the near ceiling this frame: the analytic STRIPS_INDIRECT
     // within 5% (far floor cells that share a column with the unlit ceiling read less than L_f
-    // since register D50; a hit-only mean would read twice it), and the rays and cells against it.
+    // since register D60; a hit-only mean would read twice it), and the rays and cells against it.
     const samples = await secondBounceSamples(device, scenario, state);
     const throughCache = meanSampleOver(state, samples, nearCeilingCells(state));
     if (relativeError(throughCache.mean, STRIPS_INDIRECT) > 0.05) fail(`the near ceiling's second bounce through the cache is ${throughCache.mean.toFixed(4)}, the analytic ${STRIPS_INDIRECT.toFixed(4)}`);
@@ -2740,7 +2740,7 @@ async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Ch
     return { failures, data: { contourCheck, reservoirs, cells: judgement, bySurface, indirect: indirectRatios, indirectByDistance, secondBounceLanding, cornerIndirectExamples: { floorAt0_5m: cornerIndirect([0, 0, 0.5], 'floor'), wallAt0_5m: cornerIndirect([0, 0.5, 0], 'wall') } } };
 }
 
-// ---- Section 19: hits with no light count (register D50) --------------------------------------------
+// ---- Section 19: hits with no light count (register D60) --------------------------------------------
 
 /** One kept quantisation step of `HashGridCache_QuantizeRadiance` (1/1000). */
 const QUANTISATION_STEP = 1e-3;
@@ -2942,7 +2942,7 @@ try {
     await run('skyCeilingOnly', [], { sky: { layout: 'ceilingOnly', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyCeilingOnly, MULTIBOUNCE);
     await run('skyCorner', [], { sky: { layout: 'corner', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyCorner, MULTIBOUNCE);
 
-    // Hits with no light to draw count as samples of no light (register D50), with multibounce
+    // Hits with no light to draw count as samples of no light (register D60), with multibounce
     // (GenerateReservoirs after the resolve list) and without (its early return, register D35).
     await run('unlitHits', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, MULTIBOUNCE);
     await run('unlitHitsSingleBounce', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, SINGLE_BOUNCE);

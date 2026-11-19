@@ -18,6 +18,7 @@
 
 import type { GpuWord } from '../../../platform/contract/compute.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
+import type { Aabb } from '../../../platform/contract/math.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 
 // ---- The probe-ray buffer ------------------------------------------------------------------------
@@ -119,6 +120,19 @@ export interface WorldCacheFrame {
     /** The render size in pixels: cells are sized by how many pixels they cover. */
     readonly width: number;
     readonly height: number;
+    /**
+     * Optional (P6.1): where the scene changed since the last screen stage,
+     * as the screen probes' running means get it (D46): every changed box, or
+     * `everything` for a change with no bounds (the sun, the sky, too many
+     * boxes). A cache may let go of its history there. Absent: no change.
+     */
+    readonly changes?: WorldCacheChanges;
+}
+
+/** The scene's changes for a world cache (the radiance cache's `HistoryChanges`). */
+export interface WorldCacheChanges {
+    readonly everything: boolean;
+    readonly boxes: readonly Aabb[];
 }
 
 /**
@@ -144,7 +158,7 @@ export interface WorldCacheLookup {
 
 /** A world cache the technique owns. */
 export interface WorldCache {
-    /** Short stable id: `hash-grid`. */
+    /** Short stable id: `hash-grid` (Capsaicin's) or `sharc` (P6.1). */
     readonly id: string;
     /** Allocates and compiles. May throw `GILimitError` naming the device limit it needs. Call again after capacity settings change. */
     prepare(context: WorldCacheContext): Promise<void>;
@@ -155,6 +169,15 @@ export interface WorldCache {
      * `queue.writeBuffer`).
      */
     encodeFrame(encoder: GPUCommandEncoder, frame: WorldCacheFrame, rays: WorldCacheProbeRays): void;
+    /**
+     * Optional (P6.1): makes what the cache needs per probe ray for a screen
+     * of up to `maxRayCount` rays, and throws `GILimitError` naming the limit
+     * when the device can't hold it. The technique calls it where it makes
+     * its own screen resources, so a resize fails there and never inside
+     * `encodeFrame`. A cache without it makes its per-ray data in
+     * `encodeFrame`.
+     */
+    prepareScreen?(maxRayCount: number): void;
     /**
      * Records emptying the cache into the encoder: everything it has learned
      * is forgotten, as at `prepare` (a technique's `resetHistory`: a camera

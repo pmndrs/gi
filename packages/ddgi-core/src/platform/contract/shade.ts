@@ -13,9 +13,20 @@
  * unlimited bounces, and how a surfel technique can fall back to DDGI.
  */
 
+import { LIGHT_GROUP_COUNT } from './scene';
 import type { ShadingModule } from './shading-module';
 import type { GpuTimerScope } from './timing';
 import type { WgslModule } from './wgsl';
+
+/**
+ * The bit of `giDirectChooseLight`'s `groupMask` that makes the sky one of its
+ * candidates (`GI_DIRECT_SKY_LIGHT_BIT`): the first bit above the light groups'
+ * (`1 << LIGHT_GROUP_COUNT`), so a mask of group bits alone never has it.
+ */
+export const DIRECT_SKY_LIGHT_BIT = 1 << LIGHT_GROUP_COUNT;
+
+/** The light index `giDirectChooseLight` returns for the sky (`GI_DIRECT_SKY_LIGHT`), which `giDirectLightRay` takes. */
+export const DIRECT_SKY_LIGHT = 0xfffffffe;
 
 /**
  * The hit-shading module defines (and depends on the scene and `rays` modules):
@@ -79,7 +90,7 @@ import type { WgslModule } from './wgsl';
  * // q = weight / total, `random` uniform in [0, 1); `weight` is share / q, so
  * // `irradiance x weight x visibility` estimates giDirectIrradiance's sum
  * // without bias. `light` is GI_DIRECT_NO_LIGHT when nothing reaches the surface.
- * // With GI_DIRECT_SKY_LIGHT_BIT (0x10, above the light groups' bits) set in
+ * // With GI_DIRECT_SKY_LIGHT_BIT (DIRECT_SKY_LIGHT_BIT below, 1 << LIGHT_GROUP_COUNT) set in
  * // `groupMask`, the sky is a candidate too, weighed by its irradiance on the
  * // normal (giSkyLightWeight), and drawn as `light` GI_DIRECT_SKY_LIGHT; the
  * // estimate then includes the sky's irradiance. Opt-in: a technique whose

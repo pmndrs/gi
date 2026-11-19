@@ -321,7 +321,7 @@ fn HashGridCache_SetRayListWord(offset: u32, index: u32, value: u32) {
 
 // A hit with no light to draw (every candidate weighs 0: it faces away from every light, and the
 // sky is black or not a candidate) is a sample of no light for its cell, as PopulateCells counts
-// an occluded shadow ray (register D50). Capsaicin traces no shadow ray for it (gi1.comp:2569-2572,
+// an occluded shadow ray (register D60). Capsaicin traces no shadow ray for it (gi1.comp:2569-2572,
 // 2661-2664), so nothing counted it, and a cell holding lit and unlit hits averaged the lit ones.
 fn HashGridCache_AddSampleOfNoLight(cell_index: u32) {
     atomicAdd(&g_HashGridCache_UpdateScratch[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);
@@ -512,7 +512,7 @@ fn ${POPULATION_ENTRY_POINT.populateScreenProbes}(
  * its weight W); `giDirectChooseLight` draws one of the platform's candidates
  * for the hit (the directional lights, then the point and spot lights or the
  * light grid's picks for the hit's cell, then the sky with
- * `environment_light_enable`, register D49) in proportion to the luminance of
+ * `environment_light_enable`, register D59) in proportion to the luminance of
  * its unshadowed irradiance times its share, and its weight is share over that
  * probability: the same role as W, `light_radiance × W` estimating the
  * candidates' sum. The point on the light is two random numbers drawn here,
@@ -564,7 +564,7 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
 
     // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2506-2510);
     // the platform's materials are diffuse already (register D8). The sky is one of the
-    // candidates, as Capsaicin's environment light is (register D33, D49).
+    // candidates, as Capsaicin's environment light is (register D33, D59).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
     let reservoir = giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random));
     let sample_params = rcRand2(&random);
@@ -1161,7 +1161,7 @@ fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(
     // If we hit some geometry, we append a new world-space hash-grid cache query. A kept ray that
     // hits nothing is an entry too, with no cell: it is a sample of no light that still counts
     // (register D37; Capsaicin's miss shader is empty, gi1.rt:120-123). The sky at the first hit
-    // is the first hit's own light sample (the sky light, register D49), not this bounce's.
+    // is the first hit's own light sample (the sky light, register D59), not this bounce's.
     if (hit.t >= 0.0) {
         PopulateMultibounceCellsHandleHit(did, brdf_sample.brdf, brdf_sample.pdf, ray, hit);
     } else {
@@ -1221,7 +1221,7 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
 
     // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2662-2667);
     // the platform's materials are diffuse already (register D8). The sky is one of the
-    // candidates, as Capsaicin's environment light is (register D33, D49).
+    // candidates, as Capsaicin's environment light is (register D33, D59).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
     let reservoir = giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random));
     let sample_params = rcRand2(&random);

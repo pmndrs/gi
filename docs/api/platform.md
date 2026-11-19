@@ -433,6 +433,8 @@ A technique gets the platform's services when attached, and never sees the host.
 | `WorkFloorRate` | What its fewest units per frame may depend on: the frame rate and the calibrated batch. |
 | `SceneCopy` | The scene as techniques read it: WGSL accessors, counts, memory, the first directional light. |
 | `SceneFingerprint` | `SceneCopy.fingerprint()`: content hashes of the scene by part (geometry, materials, textures, lights, sky), which saved bakes match against. |
+| `fingerprintDifferences(saved, current)` | Which parts (geometry, materials, textures, lights, sky) of two `SceneFingerprint`s differ; every part when their versions differ. For saved bakes. |
+| `halfToFloat(bits)` | A binary16 value's 16 bits to a number; reads saved bakes' half-float fields. |
 | `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
 | `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
 | `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
