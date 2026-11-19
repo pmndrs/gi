@@ -15,6 +15,8 @@
  * configuration").
  */
 
+import { DEFAULT_SCREEN_SPACE_GI_SETTINGS } from '../../platform/contract/compute.ts';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -75,9 +77,36 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * `FilterScreenProbes` (gi1.comp:1356-1442; RC4.2): each probe's cells
+     * averaged with up to three neighbour probes on each side, across then
+     * down, before the SH projection; the filtered atlas is next frame's
+     * history, as Capsaicin's is. Capsaicin always runs it (default true); off
+     * only to measure it. Read every frame.
+     */
+    probeFilter: boolean;
+    /**
+     * Capsaicin's SSGI technique feeding `InterpolateScreenProbes` (its
+     * `HAS_OCCLUSION` branch; RC4.2), through the platform's `gi/ssgi`: the
+     * probes' SH read through the cone around the bent normal that the
+     * ambient visibility leaves open, plus the near-field light from the
+     * occluding pixels. Capsaicin's GI-1 renderer always runs it (default
+     * true). On, the technique asks the host for `FrameScreen.lighting` and
+     * `FrameScreen.albedo` (the lit image SSGI reads, register D51). Fixed at
+     * construction (it decides the screen channels).
+     */
+    ssgi: boolean;
+    /** `ssgi_slice_count_` (ssgi.h:47, default 1). Read every frame. */
+    ssgiSliceCount: number;
+    /** `ssgi_step_count_` (ssgi.h:48, default 2). Read every frame. */
+    ssgiStepCount: number;
+    /** `ssgi_view_radius_` (ssgi.h:49, default 0.2 scene units). Read every frame. */
+    ssgiViewRadius: number;
+    /** `ssgi_falloff_range_` (ssgi.h:50, default 0.05 of the radius). Read every frame. */
+    ssgiFalloffRange: number;
 }
 
-/** Capsaicin's defaults (gi1.h:48-71). */
+/** Capsaicin's defaults (gi1.h:48-71, and SSGI's, ssgi.h:47-50). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
     useTemporalFeedback: false,
@@ -94,6 +123,12 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    probeFilter: true,
+    ssgi: true,
+    ssgiSliceCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.sliceCount,
+    ssgiStepCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.stepCount,
+    ssgiViewRadius: DEFAULT_SCREEN_SPACE_GI_SETTINGS.viewRadius,
+    ssgiFalloffRange: DEFAULT_SCREEN_SPACE_GI_SETTINGS.falloffRange,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

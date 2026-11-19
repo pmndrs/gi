@@ -41,7 +41,7 @@
  * made in `prepare`, for the largest screen the device can draw.
  */
 
-import type { GpuCompaction, GpuIndirectArgs } from '../../platform/contract/compute.ts';
+import type { GpuCompaction, GpuIndirectArgs, GpuScreenSpaceGI } from '../../platform/contract/compute.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import type { FrameScreen } from '../../platform/contract/frame.ts';
 import type { RayScratch } from '../../platform/contract/shade.ts';
@@ -193,9 +193,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /**
      * Rays through the platform's tracer; the host's depth, normals and
      * motion every frame (`encodeScreen`): the probes are reprojected by
-     * `FrameScreen.velocity` (RC4.1).
+     * `FrameScreen.velocity` (RC4.1). With `settings.ssgi` also the host's
+     * lit image and albedo, which make the lit image SSGI reads (RC4.2,
+     * register D51).
      */
-    readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: { velocity: true } };
+    readonly requirements: TechniqueRequirements;
     readonly settings: RadianceCacheSettings;
     /** Reads the interpolated irradiance by screen position (shading.ts). */
     readonly shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() });
@@ -230,6 +232,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private inputGroups: ScreenInputGroups | null = null;
     /** SH projection and per-pixel interpolation (RC2.2): made in `prepare`. */
     private irradiance: ScreenIrradiance | null = null;
+    /** The platform's SSGI (RC4.2), made in `prepare` when `settings.ssgi` is on. */
+    private screenSpaceGI: GpuScreenSpaceGI | null = null;
     private latestFrameIndex = 0;
     /** The camera of the latest `encodeScreen`, which the next one reprojects from. */
     private previousCamera: PreviousCamera | null = null;
@@ -240,6 +244,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
     constructor(settings: Partial<RadianceCacheSettings> = {}) {
         this.settings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS, ...settings };
+        const ssgi = this.settings.ssgi;
+        this.requirements = { queries: ['rays'], screen: { velocity: true, albedo: ssgi, lighting: ssgi } };
     }
 
     attach(context: TechniqueContext): void {
@@ -274,6 +280,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         ]);
         const kernels: Kernels = { clearCounters, spawn, compact, sample, populate, blend, debug };
         const irradiance = await ScreenIrradiance.create(context);
+        this.screenSpaceGI = this.settings.ssgi ? await context.compute.createScreenSpaceGI({ label: TECHNIQUE_ID }) : null;
 
         // The spawn tiles of the largest screen the device can draw: a few MB at most, so a
         // resize never has to wait for new utilities (their creation is asynchronous).
@@ -412,10 +419,25 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.previousCamera = { inverseViewProjection: cameraRelativeInverseViewProjection(frame.camera), eye: [frame.camera.position[0], frame.camera.position[1], frame.camera.position[2]] };
     }
 
-    /** The passes after the blend (screen-irradiance.ts), on this frame's probes and screen. */
+    /**
+     * The passes after the blend (screen-irradiance.ts), on this frame's
+     * probes and screen; first the platform's SSGI (Capsaicin runs its SSGI
+     * technique before GI-1, gi1_renderer.cpp:61), lit by the image the
+     * previous frame's interpolation wrote (register D51).
+     */
     private encodeIrradiance(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): void {
         const irradiance = this.irradiance;
         if (!irradiance) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
+        const settings = this.settings;
+        const screen = frame.screen;
+        const occlusion =
+            this.screenSpaceGI?.encode(encoder, {
+                screen,
+                camera: frame.camera,
+                frame: frame.frame,
+                lighting: irradiance.combinedFor(resources.layout),
+                settings: { sliceCount: settings.ssgiSliceCount, stepCount: settings.ssgiStepCount, viewRadius: settings.ssgiViewRadius, falloffRange: settings.ssgiFalloffRange },
+            }) ?? null;
         irradiance.encode(
             encoder,
             {
@@ -424,11 +446,14 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 probeSpawn: prepared.probeSpawn,
                 probeAtlas: resources.probeAtlas,
                 probeMask: resources.probeMask,
-                depth: frame.screen.depth,
-                normal: frame.screen.normal,
+                depth: screen.depth,
+                normal: screen.normal,
+                occlusion,
+                lighting: occlusion ? (screen.lighting ?? null) : null,
+                albedo: occlusion ? (screen.albedo ?? null) : null,
             },
             frame.camera,
-            this.settings.interpolationJitter,
+            { interpolationJitter: settings.interpolationJitter, probeFilter: settings.probeFilter },
         );
     }
 
@@ -787,6 +812,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         prepared.history.dispose();
         this.irradiance?.dispose();
         this.irradiance = null;
+        this.screenSpaceGI?.dispose();
+        this.screenSpaceGI = null;
         this.prepared = null;
     }
 }

@@ -4,21 +4,33 @@
  * (`GI1::render`, gi1.cpp:2561-2636):
  *
  * 1. `FilterProbeMask`, once per mip level of the probe mask (gi1.cpp:2561-2585);
- * 2. `ProjectScreenProbes`, over every possible ray (gi1.cpp:2618-2625);
- * 3. `InterpolateScreenProbes`, a thread per pixel (gi1.cpp:2629-2636).
+ * 2. `FilterScreenProbes` twice, across then down (gi1.cpp:2587-2612; RC4.2): the
+ *    blended atlas is copied to a scratch atlas first (Capsaicin copies it into
+ *    its other probe buffer, gi1.cpp:2540-2541), the first pass writes the
+ *    scratch, the second writes the atlas back, which is next frame's history;
+ * 3. `ProjectScreenProbes`, over every possible ray (gi1.cpp:2618-2625);
+ * 4. `InterpolateScreenProbes`, a thread per pixel (gi1.cpp:2629-2636), with the
+ *    platform's SSGI occlusion, bent normal and near-field light when the
+ *    technique runs SSGI (RC4.2), and then also the lit image next frame's SSGI
+ *    reads (register D51).
  *
  * The kernels are in `wgsl/screen-irradiance.ts`. This file makes their
- * resources (the SH texture and the irradiance image, per screen size, as
- * Capsaicin's `ensureMemoryIsAllocated` does) and records them. The radiance
- * cache calls it at the end of its screen stage; the shading module reads
- * {@link ScreenIrradiance.irradiance} by screen position.
+ * resources (the SH texture, the irradiance image, the filter's scratch atlas
+ * and the lit image, per screen size, as Capsaicin's `ensureMemoryIsAllocated`
+ * does) and records them. The radiance cache calls it at the end of its
+ * screen stage; the shading module reads {@link ScreenIrradiance.irradiance}
+ * by screen position.
  */
 
 import type { FrameCamera } from '../../platform/contract/frame.ts';
 import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
+import type { ScreenSpaceGITextures } from '../../platform/contract/compute.ts';
 import { PROBE_SIZE, type ScreenProbeLayout } from './settings.ts';
 import {
+    BLUR_DIRECTION_BYTES,
+    FILTER_GROUP,
+    FILTER_WGSL,
     FILTER_PROBE_MASK_GROUP,
     FILTER_PROBE_MASK_WGSL,
     INTERPOLATE_GROUP,
@@ -58,10 +70,28 @@ export interface ScreenIrradianceInputs {
     /** The host's depth and normals (`FrameScreen`). */
     readonly depth: GPUTexture;
     readonly normal: GPUTexture;
+    /** The platform's SSGI images for this frame (Capsaicin's `HAS_OCCLUSION`), or null to run without (ao 1, the shading normal, no near-field light). */
+    readonly occlusion: ScreenSpaceGITextures | null;
+    /**
+     * `FrameScreen.lighting` and `FrameScreen.albedo`: with both, the
+     * interpolation also writes {@link ScreenIrradiance.combined}, the lit
+     * image next frame's SSGI reads (register D51). Null for none.
+     */
+    readonly lighting: GPUTexture | null;
+    readonly albedo: GPUTexture | null;
+}
+
+/** Switches read every frame. */
+export interface ScreenIrradianceOptions {
+    /** Capsaicin's jittered lookup position (`RadianceCacheSettings.interpolationJitter`). */
+    readonly interpolationJitter: boolean;
+    /** Run `FilterScreenProbes` (`RadianceCacheSettings.probeFilter`). */
+    readonly probeFilter: boolean;
 }
 
 interface Kernels {
     readonly filterProbeMask: ComputeKernel;
+    readonly filter: ComputeKernel;
     readonly project: ComputeKernel;
     readonly interpolate: ComputeKernel;
 }
@@ -73,6 +103,10 @@ interface SizedResources {
     readonly probeSH: GPUTexture;
     /** `g_GIDenoiser_ColorBuffer`: `rgba16float`, irradiance in rgb and the denoiser hint in alpha. */
     readonly irradiance: GPUTexture;
+    /** The first filter pass's output: Capsaicin's other probe buffer (gi1.cpp:2604-2610). */
+    readonly filterScratch: GPUTexture;
+    /** This frame's lit image (`FrameScreen.lighting` + albedo / pi x E), next frame's SSGI lighting (register D51). */
+    readonly combined: GPUTexture;
     readonly bytes: number;
 }
 
@@ -82,6 +116,9 @@ interface InputGroups {
     readonly inputs: ScreenIrradianceInputs;
     /** One group per mip level from 1: level − 1 read, level written. */
     readonly filterLevels: readonly GPUBindGroup[];
+    /** FilterScreenProbes across (atlas to scratch), then down (scratch to atlas). */
+    readonly filterAcross: GPUBindGroup;
+    readonly filterDown: GPUBindGroup;
     readonly project: GPUBindGroup;
     readonly interpolate: GPUBindGroup;
 }
@@ -92,6 +129,8 @@ export interface ScreenIrradiancePlaceholders {
     readonly probeAtlas: GPUTexture;
     readonly probeMask: GPUTexture;
     readonly probeSH: GPUTexture;
+    /** For the SSGI images, the host's lighting and albedo when the interpolation runs without them. */
+    readonly screenImage: GPUTexture;
 }
 
 export class ScreenIrradiance {
@@ -105,6 +144,8 @@ export class ScreenIrradiance {
         private readonly context: TechniqueContext,
         private readonly kernels: Kernels,
         private readonly constants: GPUBuffer,
+        /** `g_BlurDirection` for the two filter passes: (1, 0) and (0, 1) (gi1.cpp:2601-2603). */
+        private readonly blurDirections: readonly [GPUBuffer, GPUBuffer],
     ) {
         this.placeholders = makePlaceholders(context.device);
     }
@@ -114,8 +155,9 @@ export class ScreenIrradiance {
         const kernel = (label: string, code: string, entryPoint: string, group: GPUBindGroupLayoutDescriptor) =>
             context.kernels.computeKernel({ label: `${TECHNIQUE_ID}/${label}`, modules: [], code, entryPoint, ownGroups: [group] });
         const entry = SCREEN_IRRADIANCE_ENTRY_POINT;
-        const [filterProbeMask, project, interpolate] = await Promise.all([
+        const [filterProbeMask, filter, project, interpolate] = await Promise.all([
             kernel(entry.filterProbeMask, FILTER_PROBE_MASK_WGSL, entry.filterProbeMask, FILTER_PROBE_MASK_GROUP),
+            kernel(entry.filter, FILTER_WGSL, entry.filter, FILTER_GROUP),
             kernel(entry.project, PROJECT_WGSL, entry.project, PROJECT_GROUP),
             kernel(entry.interpolate, INTERPOLATE_WGSL, entry.interpolate, INTERPOLATE_GROUP),
         ]);
@@ -124,7 +166,12 @@ export class ScreenIrradiance {
             size: SCREEN_PROBES_CONSTANTS_BYTES,
             usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst,
         });
-        return new ScreenIrradiance(context, { filterProbeMask, project, interpolate }, constants);
+        const blurDirection = (x: number, y: number): GPUBuffer => {
+            const buffer = context.device.createBuffer({ label: `${TECHNIQUE_ID} blur direction (${x}, ${y})`, size: BLUR_DIRECTION_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+            context.device.queue.writeBuffer(buffer, 0, new Int32Array([x, y, 0, 0]));
+            return buffer;
+        };
+        return new ScreenIrradiance(context, { filterProbeMask, filter, project, interpolate }, constants, [blurDirection(1, 0), blurDirection(0, 1)]);
     }
 
     /** The latest frame's irradiance image (screen-sized), or null before the first {@link encode}. */
@@ -135,6 +182,20 @@ export class ScreenIrradiance {
     /** The latest frame's SH texture, or null before the first {@link encode}. */
     get probeSH(): GPUTexture | null {
         return this.sized?.probeSH ?? null;
+    }
+
+    /** The first filter pass's output (the probes filtered across only), or null before the first {@link encode}. For tests. */
+    get filterScratch(): GPUTexture | null {
+        return this.sized?.filterScratch ?? null;
+    }
+
+    /**
+     * The lit image the latest {@link encode} wrote (with lighting and
+     * albedo; zeros otherwise), which the next frame's SSGI reads as its
+     * lighting: the image for `layout`, made when the size changes.
+     */
+    combinedFor(layout: ScreenProbeLayout): GPUTexture {
+        return this.sizedFor(layout).combined;
     }
 
     get memoryBytes(): number {
@@ -156,11 +217,17 @@ export class ScreenIrradiance {
      * projection sizes the interpolation's cells, its view gives the axis
      * linear depth is measured along.
      */
-    encode(encoder: GPUCommandEncoder, inputs: ScreenIrradianceInputs, camera: FrameCamera, interpolationJitter = true): void {
+    encode(encoder: GPUCommandEncoder, inputs: ScreenIrradianceInputs, camera: FrameCamera, options: ScreenIrradianceOptions): void {
         const { layout } = inputs;
         const sized = this.sizedFor(layout);
         const groups = this.groupsFor(sized, inputs);
-        this.writeConstants(layout, camera, interpolationJitter);
+        const writeCombined = inputs.lighting !== null && inputs.albedo !== null;
+        this.writeConstants(layout, camera, options.interpolationJitter, inputs.occlusion !== null, writeCombined);
+        if (options.probeFilter) {
+            // Every texel of the atlas into the scratch, so the second pass reads the probes the
+            // first doesn't write (reprojected ones not in this frame's list) as they are (gi1.cpp:2540-2541).
+            encoder.copyTextureToTexture({ texture: inputs.probeAtlas }, { texture: sized.filterScratch }, [layout.atlasSize[0], layout.atlasSize[1]]);
+        }
         const { kernels } = this;
         const timer = this.context.timer;
         const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
@@ -174,6 +241,14 @@ export class ScreenIrradiance {
             pass.setBindGroup(1, group);
             pass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
         });
+        // FilterScreenProbes across, then down, over every possible ray (gi1.cpp:2590-2612).
+        if (options.probeFilter) {
+            kernels.filter.bind(pass);
+            for (const group of [groups.filterAcross, groups.filterDown]) {
+                pass.setBindGroup(1, group);
+                dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+            }
+        }
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
         kernels.project.bind(pass);
         pass.setBindGroup(1, groups.project);
@@ -188,6 +263,7 @@ export class ScreenIrradiance {
     dispose(): void {
         this.releaseSized();
         this.constants.destroy();
+        for (const buffer of this.blurDirections) buffer.destroy();
         for (const texture of Object.values(this.placeholders)) texture.destroy();
     }
 
@@ -195,7 +271,7 @@ export class ScreenIrradiance {
      * `RcScreenProbesConstants`: the camera's forward axis (linear depth),
      * Capsaicin's `cell_size` (gi1.cpp:1839-1843) and the mask's mip count.
      */
-    private writeConstants(layout: ScreenProbeLayout, camera: FrameCamera, interpolationJitter: boolean): void {
+    private writeConstants(layout: ScreenProbeLayout, camera: FrameCamera, interpolationJitter: boolean, hasOcclusion: boolean, writeCombined: boolean): void {
         const words = this.constantWords;
         const floats = new Float32Array(words);
         const uints = new Uint32Array(words);
@@ -204,6 +280,8 @@ export class ScreenIrradiance {
         floats[offsets.cellSize / WORD_BYTES] = screenProbeCellSize(camera, layout.width, layout.height);
         uints[offsets.probeMaskMipCount / WORD_BYTES] = layout.probeMaskMipCount;
         uints[offsets.interpolationJitter / WORD_BYTES] = interpolationJitter ? 1 : 0;
+        uints[offsets.hasOcclusion / WORD_BYTES] = hasOcclusion ? 1 : 0;
+        uints[offsets.writeCombined / WORD_BYTES] = writeCombined ? 1 : 0;
         this.context.device.queue.writeBuffer(this.constants, 0, words);
     }
 
@@ -225,11 +303,28 @@ export class ScreenIrradiance {
             format: 'rgba16float',
             usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
         });
+        const filterScratch = device.createTexture({
+            label: `${TECHNIQUE_ID} probe filter scratch`,
+            size: [layout.atlasSize[0], layout.atlasSize[1]],
+            format: 'rgba16float',
+            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst,
+        });
+        const combined = device.createTexture({
+            label: `${TECHNIQUE_ID} lit image for SSGI`,
+            size: [layout.width, layout.height],
+            format: 'rgba16float',
+            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
+        });
         const sized: SizedResources = {
             layout,
             probeSH,
             irradiance,
-            bytes: shSize[0] * shSize[1] * SH_TEXEL_BYTES + layout.width * layout.height * IRRADIANCE_TEXEL_BYTES,
+            filterScratch,
+            combined,
+            bytes:
+                shSize[0] * shSize[1] * SH_TEXEL_BYTES +
+                2 * layout.width * layout.height * IRRADIANCE_TEXEL_BYTES +
+                layout.atlasSize[0] * layout.atlasSize[1] * IRRADIANCE_TEXEL_BYTES,
         };
         this.sized = sized;
         return sized;
@@ -245,7 +340,11 @@ export class ScreenIrradiance {
             current.inputs.probeAtlas === inputs.probeAtlas &&
             current.inputs.probeMask === inputs.probeMask &&
             current.inputs.depth === inputs.depth &&
-            current.inputs.normal === inputs.normal;
+            current.inputs.normal === inputs.normal &&
+            current.inputs.occlusion?.occlusion === inputs.occlusion?.occlusion &&
+            current.inputs.occlusion?.nearField === inputs.occlusion?.nearField &&
+            current.inputs.lighting === inputs.lighting &&
+            current.inputs.albedo === inputs.albedo;
         if (same) return current;
         const device = this.context.device;
         const { kernels } = this;
@@ -258,10 +357,26 @@ export class ScreenIrradiance {
         }
         const uniforms = { buffer: inputs.frameUniforms };
         const normal = screenTextureView(inputs.normal);
+        const placeholderImage = this.placeholders.screenImage;
+        const maskChain = (): GPUTextureView => inputs.probeMask.createView({ baseMipLevel: 0, mipLevelCount: inputs.layout.probeMaskMipCount });
+        const filterPass = (label: string, from: GPUTexture, to: GPUTexture, direction: GPUBuffer): GPUBindGroup =>
+            group(`${SCREEN_IRRADIANCE_ENTRY_POINT.filter} ${label}`, kernels.filter, [
+                uniforms,
+                { buffer: this.constants },
+                screenTextureView(inputs.depth),
+                normal,
+                maskChain(),
+                { buffer: inputs.probeSpawn },
+                from.createView(),
+                to.createView(),
+                { buffer: direction },
+            ]);
         const groups: InputGroups = {
             sized,
             inputs,
             filterLevels,
+            filterAcross: filterPass('across', inputs.probeAtlas, sized.filterScratch, this.blurDirections[0]),
+            filterDown: filterPass('down', sized.filterScratch, inputs.probeAtlas, this.blurDirections[1]),
             project: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, inputs.probeAtlas.createView(), sized.probeSH.createView()]),
             interpolate: group(SCREEN_IRRADIANCE_ENTRY_POINT.interpolate, kernels.interpolate, [
                 uniforms,
@@ -269,9 +384,14 @@ export class ScreenIrradiance {
                 screenTextureView(inputs.depth),
                 normal,
                 // The whole mip chain: FindClosestProbe walks up it.
-                inputs.probeMask.createView({ baseMipLevel: 0, mipLevelCount: inputs.layout.probeMaskMipCount }),
+                maskChain(),
                 sized.probeSH.createView(),
                 sized.irradiance.createView(),
+                (inputs.occlusion?.occlusion ?? placeholderImage).createView(),
+                (inputs.occlusion?.nearField ?? placeholderImage).createView(),
+                screenTextureView(inputs.lighting ?? placeholderImage),
+                screenTextureView(inputs.albedo ?? placeholderImage),
+                sized.combined.createView(),
             ]),
         };
         this.groups = groups;
@@ -283,6 +403,8 @@ export class ScreenIrradiance {
         if (!sized) return;
         sized.probeSH.destroy();
         sized.irradiance.destroy();
+        sized.filterScratch.destroy();
+        sized.combined.destroy();
         this.sized = null;
         this.groups = null;
     }
@@ -339,5 +461,6 @@ function makePlaceholders(device: GPUDevice): ScreenIrradiancePlaceholders {
         probeAtlas: make('probe atlas', 'rgba16float'),
         probeMask,
         probeSH: make('probe SH', 'rg32uint'),
+        screenImage: make('screen image', 'rgba16float'),
     };
 }

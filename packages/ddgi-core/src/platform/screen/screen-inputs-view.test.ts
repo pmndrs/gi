@@ -32,16 +32,16 @@ describe('the screen inputs view', () => {
 
 describe('screen needs', () => {
     it('reads true as depth and normals only, and merges channels', () => {
-        expect(screenNeedsOf({ queries: [] })).toEqual({ screen: false, velocity: false, albedo: false, instance: false });
-        expect(screenNeedsOf({ queries: [], screen: true })).toEqual({ screen: true, velocity: false, albedo: false, instance: false });
+        expect(screenNeedsOf({ queries: [] })).toEqual({ screen: false, velocity: false, albedo: false, instance: false, lighting: false });
+        expect(screenNeedsOf({ queries: [], screen: true })).toEqual({ screen: true, velocity: false, albedo: false, instance: false, lighting: false });
         const merged = mergeScreenNeeds([{ queries: [], screen: { albedo: true } }, { queries: [], screen: { velocity: true } }, { queries: [] }]);
-        expect(merged).toEqual({ screen: true, velocity: true, albedo: true, instance: false });
+        expect(merged).toEqual({ screen: true, velocity: true, albedo: true, instance: false, lighting: false });
     });
 
     it('lists the channels a screen lacks', () => {
         const texture = {} as GPUTexture;
         const screen = { width: 1, height: 1, depth: texture, normal: texture, normalEncoding: 'unorm' as const, albedo: texture };
-        expect(missingScreenChannels({ screen: true, velocity: true, albedo: true, instance: true }, screen)).toEqual(['velocity', 'instance']);
-        expect(missingScreenChannels({ screen: true, velocity: false, albedo: true, instance: false }, screen)).toEqual([]);
+        expect(missingScreenChannels({ screen: true, velocity: true, albedo: true, instance: true, lighting: false }, screen)).toEqual(['velocity', 'instance']);
+        expect(missingScreenChannels({ screen: true, velocity: false, albedo: true, instance: false, lighting: false }, screen)).toEqual([]);
     });
 });

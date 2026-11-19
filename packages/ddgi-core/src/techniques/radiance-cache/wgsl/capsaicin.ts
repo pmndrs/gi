@@ -57,6 +57,7 @@ const RC_MAX_HIT_DISTANCE: f32 = 1e9;
 const RC_LARGEST_HALF: f32 = 65504.0;
 const RC_QUARTER_PI: f32 = 0.785398163397448;
 const RC_TWO_INV_PI: f32 = 0.636619772367581;
+const RC_INV_PI: f32 = 0.318309886183791;
 
 // ---- gi1.hlsl -------------------------------------------------------------------------------
 

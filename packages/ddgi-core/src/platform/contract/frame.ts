@@ -119,12 +119,22 @@ export interface FrameScreen {
      * adapter work, so only techniques that need it ask for it.
      */
     readonly instance?: GPUTexture;
+    /**
+     * The host's own lit colour of each pixel, before any GI technique's
+     * light is added: direct light, emission and whatever else the host
+     * lights itself, as linear HDR radiance in rgb (not tone mapped). Any
+     * float colour format. Screen-space GI reads it as the light leaving
+     * nearby surfaces (the radiance cache's near-field light, RC4.2); three's
+     * adapter hands over the scene pass's `output`. Only when a technique
+     * asks for it.
+     */
+    readonly lighting?: GPUTexture;
     /** The depth is reversed-Z (1 = near). */
     readonly reversedDepth?: boolean;
 }
 
 /** The optional screen channels, by their `FrameScreen` field names. */
-export type OptionalScreenChannel = 'velocity' | 'albedo' | 'instance';
+export type OptionalScreenChannel = 'velocity' | 'albedo' | 'instance' | 'lighting';
 
 export interface FrameInput {
     /** Seconds since the previous frame. */
