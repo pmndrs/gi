@@ -4,6 +4,8 @@ import {
     capsaicinCompareValues,
     COMPARE_GROUPS,
     compareSettingValue,
+    hostCompareValue,
+    isHostToggle,
     compareValuesFromText,
     parseCompareValue,
     RADIANCE_CACHE_COMPARE_TOGGLES,
@@ -29,7 +31,7 @@ describe('the compare toggles (RC4.5)', () => {
     it('each names a setting, its default and a valid Capsaicin value, with a unique link name and help', () => {
         const urlNames = new Set<string>();
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
-            const top = entry.setting.startsWith('sharc.') ? null : (entry.setting as keyof RadianceCacheSettings);
+            const top = isHostToggle(entry) || entry.setting.startsWith('sharc.') ? null : (entry.setting as keyof RadianceCacheSettings);
             if (top) expect(top in DEFAULT_RADIANCE_CACHE_SETTINGS).toBe(true);
             expect(entry.defaultValue).toBe(compareSettingValue(DEFAULT_RADIANCE_CACHE_SETTINGS, entry.setting));
             expect(entry.defaultValue).toBeDefined();
@@ -40,7 +42,7 @@ describe('the compare toggles (RC4.5)', () => {
             expect(entry.help.length).toBeGreaterThan(20);
             expect(entry.help).toMatch(/Capsaicin/);
             expect(entry.resetsHistory).toBe(top !== null && SCREEN_HISTORY_SETTINGS.includes(top));
-            expect(entry.restartsTechnique).toBe(top !== null && PREPARE_SETTINGS.includes(top));
+            expect(entry.restartsTechnique).toBe(isHostToggle(entry) || (top !== null && PREPARE_SETTINGS.includes(top)));
             // Capsaicin's value (where it has one) and the default are values the toggle can take.
             for (const value of [entry.capsaicin, entry.defaultValue]) {
                 if (value === undefined) continue;
@@ -94,12 +96,18 @@ describe('the compare toggles (RC4.5)', () => {
     });
 
     it('reach the technique: its settings, and the RcFrame words the kernels read', () => {
-        for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
+        // A host choice stays out of the technique's settings and is read from the values.
+        expect(hostCompareValue({}, 'host.cacheAlone')).toBe(false);
+        expect(hostCompareValue(capsaicinCompareValues(), 'host.cacheAlone')).toBe(true);
+        const untouched = new RadianceCacheTechnique();
+        applyCompareValues(untouched.settings, { 'host.cacheAlone': true });
+        expect(Object.keys(untouched.settings)).not.toContain('host.cacheAlone');
+        for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES.filter((candidate) => !isHostToggle(candidate))) {
             const technique = new RadianceCacheTechnique();
             applyCompareValues(technique.settings, { [entry.setting]: entry.capsaicin ?? otherValue(entry) } as CompareValues);
             expect(compareSettingValue(technique.settings, entry.setting)).toBe(entry.capsaicin ?? otherValue(entry));
             // Every other toggle at its default.
-            for (const other of RADIANCE_CACHE_COMPARE_TOGGLES) if (other !== entry) expect(compareSettingValue(technique.settings, other.setting)).toBe(other.defaultValue);
+            for (const other of RADIANCE_CACHE_COMPARE_TOGGLES) if (other !== entry && !isHostToggle(other)) expect(compareSettingValue(technique.settings, other.setting)).toBe(other.defaultValue);
             applyCompareValues(technique.settings, {});
             expect(compareSettingValue(technique.settings, entry.setting)).toBe(entry.defaultValue);
         }

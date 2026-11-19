@@ -39,7 +39,17 @@ export const COMPARE_GROUP_LABELS: Readonly<Record<CompareGroup, string>> = {
 type KeysOfType<S, T> = { [K in keyof S]: S[K] extends T ? K : never }[keyof S];
 /** A SHaRC setting, inside `RadianceCacheSettings.sharc` (P6.1), named `sharc.<key>`. */
 type SharcSetting<T> = `sharc.${KeysOfType<SharcSettings, T> & string}`;
-export type CompareBooleanSetting = KeysOfType<RadianceCacheSettings, boolean> | SharcSetting<boolean>;
+/**
+ * Choices the host makes about how it sets the technique up, not settings of the technique
+ * (`host.<key>`): the host reads them from the compare values (`hostCompareValue`), and the
+ * technique's settings never see them. Each is read when the host makes the technique.
+ */
+export const HOST_COMPARE_DEFAULTS = {
+    /** RC4.6: the viewer stacks a DDGI volume under the radiance cache for its second bounce (E10); true runs the cache alone. */
+    'host.cacheAlone': false,
+} as const;
+type HostSetting = keyof typeof HOST_COMPARE_DEFAULTS;
+export type CompareBooleanSetting = KeysOfType<RadianceCacheSettings, boolean> | SharcSetting<boolean> | HostSetting;
 export type CompareNumberSetting = KeysOfType<RadianceCacheSettings, number> | SharcSetting<number>;
 export type CompareChoiceSetting = KeysOfType<RadianceCacheSettings, string>;
 export type CompareSetting = CompareBooleanSetting | CompareNumberSetting | CompareChoiceSetting;
@@ -93,9 +103,25 @@ export type CompareValues = { [K in CompareSetting]?: CompareValue };
 type ToggleInput<T extends CompareToggle> = Omit<T, 'defaultValue' | 'resetsHistory' | 'restartsTechnique'>;
 
 const SHARC_PREFIX = 'sharc.';
+const HOST_PREFIX = 'host.';
 
-/** A toggle's current value in `settings` (a `sharc.<key>` read through `settings.sharc` over SHaRC's defaults). */
+/** A host choice's value in `values`, or its default (`HOST_COMPARE_DEFAULTS`). */
+export function hostCompareValue<K extends HostSetting>(values: CompareValues, setting: K): (typeof HOST_COMPARE_DEFAULTS)[K] {
+    const value = (values as Record<string, CompareValue | undefined>)[setting];
+    return (value === undefined ? HOST_COMPARE_DEFAULTS[setting] : value) as (typeof HOST_COMPARE_DEFAULTS)[K];
+}
+
+/** Whether the toggle is a host choice (`host.<key>`), which the technique's settings don't hold. */
+export function isHostToggle(entry: { readonly setting: CompareSetting }): boolean {
+    return entry.setting.startsWith(HOST_PREFIX);
+}
+
+/**
+ * A toggle's current value in `settings` (a `sharc.<key>` read through `settings.sharc` over
+ * SHaRC's defaults). A host choice isn't in the settings: this gives its default.
+ */
 export function compareSettingValue(settings: Readonly<RadianceCacheSettings>, setting: CompareSetting): CompareValue {
+    if (setting.startsWith(HOST_PREFIX)) return HOST_COMPARE_DEFAULTS[setting as HostSetting];
     if (setting.startsWith(SHARC_PREFIX)) {
         const key = setting.slice(SHARC_PREFIX.length) as keyof SharcSettings;
         return (settings.sharc[key] ?? DEFAULT_SHARC_SETTINGS[key]) as CompareValue;
@@ -105,6 +131,7 @@ export function compareSettingValue(settings: Readonly<RadianceCacheSettings>, s
 
 /** Sets a toggle's value in `settings` (a SHaRC one in a new `settings.sharc`, which the cache reads every frame). */
 function setCompareSetting(settings: RadianceCacheSettings, setting: CompareSetting, value: CompareValue): void {
+    if (setting.startsWith(HOST_PREFIX)) return; // the host's, not the technique's
     if (setting.startsWith(SHARC_PREFIX)) {
         settings.sharc = { ...settings.sharc, [setting.slice(SHARC_PREFIX.length)]: value };
         return;
@@ -114,12 +141,14 @@ function setCompareSetting(settings: RadianceCacheSettings, setting: CompareSett
 
 /** An entry, with its default, history reset and restart taken from settings.ts so they can't drift. */
 function toggle<T extends CompareToggle>(input: ToggleInput<T>): T {
-    const top = input.setting.startsWith(SHARC_PREFIX) ? null : (input.setting as keyof RadianceCacheSettings);
+    const host = input.setting.startsWith(HOST_PREFIX);
+    const top = host || input.setting.startsWith(SHARC_PREFIX) ? null : (input.setting as keyof RadianceCacheSettings);
     return {
         ...input,
         defaultValue: compareSettingValue(DEFAULT_RADIANCE_CACHE_SETTINGS, input.setting),
         resetsHistory: top !== null && SCREEN_HISTORY_SETTINGS.includes(top),
-        restartsTechnique: top !== null && PREPARE_SETTINGS.includes(top),
+        // A host choice shapes how the technique is made.
+        restartsTechnique: host || (top !== null && PREPARE_SETTINGS.includes(top)),
     } as T;
 }
 
@@ -255,6 +284,16 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         capsaicin: 'gi1-hash-grid',
         help: "Which cache lights the probe rays' hits. Capsaicin's GI-1.2 hash grid (the default), or a SHaRC-style hash cache from pmndrs/pathtracer (smaller, more bounces). Changing it starts the radiance cache over.",
     }),
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'host.cacheAlone',
+        group: 'world-cache',
+        label: 'Run the cache alone (no DDGI under it)',
+        urlName: 'rcalone',
+        register: 'E10',
+        capsaicin: true,
+        help: "Off (ours, what ships): a DDGI volume runs under the radiance cache, updating 256 probes a frame, and gives the cache its second bounce and every bounce after. On: the cache alone, its second bounce from GI-1.2's own rays, as Capsaicin. Changing it starts the radiance cache over.",
+    }),
     toggle<CompareChoiceToggle>({
         kind: 'choice',
         setting: 'secondBounce',
@@ -268,7 +307,7 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
             { value: 'fallback', label: 'The technique stacked under it' },
         ],
         capsaicin: 'gi1-rays',
-        help: "Where the hash grid's second bounce comes from. Capsaicin traces its own second-bounce rays; ours (auto) reads it from a technique stacked under the radiance cache, such as DDGI, when there is one, else the same rays. The viewer stacks nothing yet, so here auto is Capsaicin's way and 'stacked' warns. Changing what runs empties the world cache.",
+        help: "Where the hash grid's second bounce comes from. Capsaicin traces its own second-bounce rays; ours (auto) reads it from the DDGI volume under the radiance cache when one is there, else the same rays. 'Stacked' asks for DDGI and warns without it. Changing what runs empties the world cache.",
     }),
     toggle<CompareNumberToggle>({
         kind: 'number',
