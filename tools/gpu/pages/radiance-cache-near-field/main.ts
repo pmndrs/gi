@@ -119,15 +119,16 @@ const STEP: readonly Quad[] = [
     { corners: [[-200, 0, -25], [200, 0, -25], [200, 3, -25], [-200, 3, -25]], normal: [0, 0, 1] },
 ];
 /**
- * A 0.3 m slab on x < 0, seen from 10 m straight above, and an emissive strip 0.25 m high 8 m away
- * at x = 8: the floor's probes by the slab see the strip on their horizon, the slab's (0.3 m up)
- * don't. Across the slab's edge only the plane test keeps them apart.
+ * A 0.3 m slab on z < 0, seen from 10 m straight above (its edge runs across the screen, so the
+ * second, downward pass crosses it), and an emissive strip 0.25 m high 8 m away at z = 8: the floor's
+ * probes by the slab see the strip on their horizon, the slab's (0.3 m up) don't. Across the slab's
+ * edge only the plane test keeps them apart.
  */
 const SLAB: readonly Quad[] = [
-    { corners: [[-20, 0.3, 20], [0, 0.3, 20], [0, 0.3, -20], [-20, 0.3, -20]], normal: [0, 1, 0] },
-    { corners: [[0, 0, 20], [0, 0, -20], [0, 0.3, -20], [0, 0.3, 20]], normal: [1, 0, 0] },
+    { corners: [[-20, 0.3, 0], [20, 0.3, 0], [20, 0.3, -20], [-20, 0.3, -20]], normal: [0, 1, 0] },
+    { corners: [[-20, 0, 0], [20, 0, 0], [20, 0.3, 0], [-20, 0.3, 0]], normal: [0, 0, 1] },
 ];
-const EMISSIVE_EDGE: Quad = { corners: [[8, 0, 20], [8, 0.25, 20], [8, 0.25, -20], [8, 0, -20]], normal: [-1, 0, 0] };
+const EMISSIVE_EDGE: Quad = { corners: [[-20, 0, 8], [-20, 0.25, 8], [20, 0.25, 8], [20, 0, 8]], normal: [0, 0, -1] };
 const EMISSIVE_EDGE_RADIANCE = 100;
 const SLAB_CAMERA: PageCamera = { position: [0, 10, 0], target: [0, 0, -0.001], fovYDeg: 60, near: 0.1, far: 1000 };
 /** The corner: the floor on x > 0 and a 6 m wall at x = 0 facing +x. */
