@@ -88,6 +88,8 @@ export interface ScreenIrradianceOptions {
     readonly interpolationJitter: boolean;
     /** Run `FilterScreenProbes` (`RadianceCacheSettings.probeFilter`). */
     readonly probeFilter: boolean;
+    /** The second pass writes back into the atlas, the history, as Capsaicin's does (`probeFilterHistory`, D59). */
+    readonly probeFilterHistory: boolean;
 }
 
 interface Kernels {
@@ -125,6 +127,8 @@ interface InputGroups {
     /** FilterScreenProbes across (atlas to scratch), then down (scratch to atlas). */
     readonly filterAcross: GPUBindGroup;
     readonly filterDown: GPUBindGroup;
+    /** The second pass into the atlas itself (Capsaicin's, D59). */
+    readonly filterDownIntoAtlas: GPUBindGroup;
     /** The projection of the filtered atlas, and of the blended one when the filter is off. */
     readonly project: GPUBindGroup;
     readonly projectUnfiltered: GPUBindGroup;
@@ -257,14 +261,14 @@ export class ScreenIrradiance {
         // FilterScreenProbes across, then down, over every possible ray (gi1.cpp:2590-2612).
         if (options.probeFilter) {
             kernels.filter.bind(pass);
-            for (const group of [groups.filterAcross, groups.filterDown]) {
+            for (const group of [groups.filterAcross, options.probeFilterHistory ? groups.filterDownIntoAtlas : groups.filterDown]) {
                 pass.setBindGroup(1, group);
                 dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
             }
         }
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
         kernels.project.bind(pass);
-        pass.setBindGroup(1, options.probeFilter ? groups.project : groups.projectUnfiltered);
+        pass.setBindGroup(1, options.probeFilter && !options.probeFilterHistory ? groups.project : groups.projectUnfiltered);
         dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
         // InterpolateScreenProbes, a thread per pixel (gi1.cpp:2629-2636).
         kernels.interpolate.bind(pass);
@@ -397,6 +401,7 @@ export class ScreenIrradiance {
             filterLevels,
             filterAcross: filterPass('across', inputs.probeAtlas, sized.filterScratch, this.blurDirections[0]),
             filterDown: filterPass('down', sized.filterScratch, sized.filteredAtlas, this.blurDirections[1]),
+            filterDownIntoAtlas: filterPass('down into the atlas', sized.filterScratch, inputs.probeAtlas, this.blurDirections[1]),
             project: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, sized.filteredAtlas.createView(), sized.probeSH.createView()]),
             projectUnfiltered: group(SCREEN_IRRADIANCE_ENTRY_POINT.project, kernels.project, [uniforms, normal, { buffer: inputs.probeSpawn }, inputs.probeAtlas.createView(), sized.probeSH.createView()]),
             interpolate: group(SCREEN_IRRADIANCE_ENTRY_POINT.interpolate, kernels.interpolate, [

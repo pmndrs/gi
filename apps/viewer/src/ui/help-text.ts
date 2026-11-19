@@ -137,6 +137,14 @@ export const HELP = {
     meterSaveCsv:
         "Saves the measurement as a CSV file: one row per frame (frame, milliseconds since the step, the region's brightness, its change from before and its distance from settled, probes updated), with the marks and how it was measured at the top.",
 
+    // The radiance cache's compare toggles (RC4.5): each toggle's own help is in its registry entry
+    // (packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts).
+    rcCompare:
+        "Each of our changes to how AMD's radiance cache (Capsaicin) carries light from frame to frame, with a switch back to Capsaicin's way, so you can see what each does. They take effect on the next frame. A few start the probes' history over when changed (marked ↺), so the picture fills in again from scratch for a moment. The link keeps your choices.",
+    rcCompareCapsaicin: "Sets every toggle to Capsaicin's own behaviour: the port as AMD published it, before our fixes.",
+    rcCompareOurs: 'Sets every toggle back to ours (the decided defaults).',
+    rcCompareReadout:
+        "How much the radiance cache's GI changes from one frame to the next, as the mean change per pixel (each pixel against its own brightness), sampled on a sparse grid. With the camera and scene still, this is the flicker; after a toggle it shows how long the picture takes to settle. Frames since the last change of a toggle count up beside it.",
     // Moving things: the M3 scenarios (T3.8).
     scenarioSelect:
         'Pick a scenario to watch GI follow something that moves: a cabinet sliding along a wall, a door shutting between two rooms, a cabinet door opening (and cabinets you add), a tree in the wind, or a flight down a street. It opens the scene at the right camera view and starts the movement; the text below says what to watch for. The stats box (top left) shows the recompile counter, which should stay 0.',

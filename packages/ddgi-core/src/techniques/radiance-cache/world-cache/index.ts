@@ -12,6 +12,9 @@ export {
 } from './capacity.ts';
 export { HashGridCache, type HashGridCacheBuffers } from './hash-grid-cache.ts';
 export { HASH_GRID_CACHE_GROUP_ENTRIES } from './hash-grid-wgsl.ts';
+// Phase 6 experiment P6.1: the SHaRC-style hash cache from pmndrs/pathtracer, the slot's second backend.
+export { SharcCache, type SharcCacheBuffers, type SharcCacheOptions } from './sharc/sharc-cache.ts';
+export { DEFAULT_SHARC_SETTINGS, resolveSharcSettings, type SharcSettings } from './sharc/sharc-settings.ts';
 export {
     WORLD_CACHE_PROBE_RAY_BYPASS,
     WORLD_CACHE_PROBE_RAY_BYTES,

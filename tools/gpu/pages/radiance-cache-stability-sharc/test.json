@@ -1,0 +1,4 @@
+{
+    "description": "P6.1: radiance-cache-stability rerun with the SHaRC-style hash cache in the world-cache slot (the page's data-world-cache attribute): the frame-to-frame change of the interpolated irradiance on cornell-box, two-room and sponza, still and moving, history on and off, jitter on and off. A measurement; fails only on NaN, infinite or negative values and device errors.",
+    "timeoutMs": 1200000
+}

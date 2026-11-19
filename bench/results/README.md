@@ -14,6 +14,12 @@ Columns, in this order:
 | `metric` | what was measured, with the unit in the name, e.g. `gpu_ms_probe_update` |
 | `value` | the number |
 
+## radiance-cache-accuracy.csv
+
+From RC4.4 (2026-11-19): the `radiance-cache-accuracy` page (tools/reference/README.md, "Radiance cache accuracy"), one row per number. `scene` is `<scene>/<camera>`. `rc4.4/<setting>/<image>/<number>`: setting `default`, `history-off`, `multibounce-off`, `cells-16-px`; image `gi` (E averaged over 60 frames), `giOneFrame`, `composite` (information: three's picture carries specular lobes the diffuse-only references don't), `worldCache` (the cache looked up at the visible surfaces, over the pixels with a cell, `coverage` the share); number `bias`, `meanError8`, `p95Error8` (fractions). `rc4.4/same_manifest,0` marks a reference rendered before the scene's manifest last changed.
+
+From P6.3 (2026-11-19, branch `p6-ddgi-bounce`): `p6.3/<setting>/<image>/<number>`, the same numbers for experiment E10's settings: `default`, `ddgi-256`, `ddgi-512` (DDGI stacked under the cache supplies the second bounce, updating 256 or 512 probes a frame), `ddgi-cap4-256`, `ddgi-cap4-512` (the cells' indirect cap 4), `ddgi-cap4-512-no-env` (DDGI's environment layer, sky and emitters, at 0), and on Sponza `history-off` and `ddgi-cap4-512-history-off`.
+
 ## trace.csv
 
 - **Repeated runs:** a 3-run measurement writes `run1/`, `run2/` and `run3/` rows plus `median/` rows (the median of the three). Quote the `median/` rows.

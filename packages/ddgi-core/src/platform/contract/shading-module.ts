@@ -96,6 +96,17 @@ export interface ShadingModule {
     /** Which optional entry points exist. */
     readonly provides: {
         readonly radiance: boolean;
+        /**
+         * Whether `giIrradiance` answers at any world-space point from the
+         * position and normal alone, `screenUV` unused (a probe field, say),
+         * so another technique can read it at its own ray hits (its bounce
+         * source: the radiance cache's `secondBounce`, register E10). False or
+         * absent for a screen-space technique, whose answer depends on the
+         * pixel. A compute kernel can read such a module through
+         * `globalsCode`, which DDGI's functions allow (`textureSampleLevel`
+         * and `textureLoad` only).
+         */
+        readonly worldSpaceIrradiance?: boolean;
     };
     /**
      * True when the irradiance already carries the technique's own

@@ -1,6 +1,5 @@
 /**
- * The radiance cache (AMD GI-1.0/1.2: screen probes and the world cache,
- * single bounce until RC3.3, no history until phase 4),
+ * The radiance cache (AMD GI-1.0/1.2: screen probes with history and the world cache),
  * through the three.js adapter, the way a three user builds a screen-space
  * technique (docs/api/three.md):
  *
@@ -22,6 +21,11 @@
  * mask, probe SH), drawn by its shading module's `giDebugColor` by screen
  * position, as the pass's override material. The pass draws before this
  * frame's screen stage, so a debug view shows the previous frame's probes.
+ *
+ * The compare toggles (RC4.5, `settings.compare`) go into the core
+ * technique's settings, live: it reads them every frame and starts its
+ * history over where a rule changed. `changeReadout` measures how much the
+ * GI changes per frame (rc-change-meter.ts) for the panel's readout.
  *
  * Not yet: the upscaler (the composite and the screen stage would need the
  * upscaler's jitter, `ThreeGI.jitter`, and its pass; RC2.2 leaves the
@@ -46,6 +50,8 @@ import {
 } from '../ddgi/library';
 // Not in the published package (internal until validated, docs/design/radiance-cache.md): by path.
 import { RADIANCE_CACHE_DEBUG_VIEW, RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/index.ts';
+import { applyCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { RcChangeMeter } from './rc-change-meter';
 import { applyViewLayers, LAYER_RADIANCE_CACHE, type GiMode } from '../scene/layers';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';
 import { copyViewerCamera, createViewCamera } from './view-camera';
@@ -62,9 +68,18 @@ export type RadianceCacheScreenView = keyof typeof RADIANCE_CACHE_SCREEN_VIEWS;
 export interface RadianceCacheViewerSettings {
     /** A debug view instead of the normal picture, or null. */
     screenView: RadianceCacheScreenView | null;
+    /** The compare toggles that differ from ours (RC4.5; compare-toggles.ts), applied live. */
+    compare: CompareValues;
 }
 
-export const DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS: RadianceCacheViewerSettings = { screenView: null };
+export const DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS: RadianceCacheViewerSettings = { screenView: null, compare: {} };
+
+/** The compare section's readout: the GI's change per frame and the frames since a toggle changed. */
+export interface RadianceCacheChangeReadout {
+    /** Mean |ΔE| over mean E from the previous frame, in percent (null until measured). */
+    meanChangePercent: number | null;
+    framesSinceChange: number;
+}
 
 type Phase = 'preparing' | 'ready' | 'failed';
 
@@ -94,12 +109,16 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
     private giGraph: GiGraph | null = null;
     private debugMaterial: DdgiDebugMaterial | null = null;
     private readonly warnings = new Set<string>();
+    /** The GI's change per frame, for the compare readout (made when the technique is ready). */
+    private changeMeter: RcChangeMeter | null = null;
+    /** Frames drawn with GI since a compare toggle last changed. */
+    private framesSinceCompareChange = 0;
 
     constructor(
         private readonly context: TechniqueContext,
         settings: RadianceCacheViewerSettings = DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS,
     ) {
-        this.settings = { ...settings };
+        this.settings = { ...settings, compare: { ...settings.compare } };
         this.applyLayers();
         this.plainPass = pass(context.loaded.scene, this.camera);
         void this.start().catch((error: unknown) => this.fail(error));
@@ -113,7 +132,10 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         const { device, loaded, hasTimestamps } = this.context;
         const platform = createGI(device, { gpuTiming: hasTimestamps, label: `viewer radiance cache ${loaded.manifest.id}` });
         this.platform = platform;
-        const technique = platform.addTechnique(new RadianceCacheTechnique());
+        // SSGI decides the screen channels the technique asks for, so it is given at construction (a restart setting).
+        const technique = new RadianceCacheTechnique({ ssgi: this.settings.compare.ssgi === true });
+        applyCompareValues(technique.settings, this.settings.compare);
+        platform.addTechnique(technique);
         this.technique = technique;
         platform.setOutput(technique);
         const preparing = platform.prepare();
@@ -132,6 +154,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         this.giGraph = this.buildGiGraph(threeGI);
         this.debugMaterial = new DdgiDebugMaterial(platform.shading);
         this.applyDebugView();
+        this.changeMeter = new RcChangeMeter(device);
         this.phase = 'ready';
     }
 
@@ -203,8 +226,20 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
     }
 
     configure(settings: RadianceCacheViewerSettings): void {
-        this.settings = { ...settings };
+        const compareChanged = JSON.stringify(settings.compare) !== JSON.stringify(this.settings.compare);
+        this.settings = { ...settings, compare: { ...settings.compare } };
         this.applyDebugView();
+        if (compareChanged) {
+            // Live: the core technique reads its settings every frame (RC4.5).
+            if (this.technique) applyCompareValues(this.technique.settings, this.settings.compare);
+            this.framesSinceCompareChange = 0;
+        }
+    }
+
+    /** The GI's change per frame and the frames since a toggle changed; null before the technique is ready. */
+    get changeReadout(): RadianceCacheChangeReadout | null {
+        if (this.phase !== 'ready' || !this.changeMeter) return null;
+        return { meanChangePercent: this.changeMeter.meanChangePercent, framesSinceChange: this.framesSinceCompareChange };
     }
 
     get currentSettings(): Readonly<RadianceCacheViewerSettings> {
@@ -214,7 +249,14 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
     /** The frame's `encode` (the camera the screen stage rebuilds positions with), before the pipeline draws. */
     renderBeforePipeline(): void {
         const threeGI = this.threeGI;
-        if (!threeGI || this.phase !== 'ready' || this.giMode === 'off') return;
+        if (!threeGI || this.phase !== 'ready' || this.giMode === 'off') {
+            this.changeMeter?.restart();
+            return;
+        }
+        // The previous frame's GI against the one before, before this frame's runs (rc-change-meter.ts).
+        const irradiance = this.technique?.probes?.irradiance;
+        if (irradiance) this.changeMeter?.measure(irradiance);
+        this.framesSinceCompareChange++;
         threeGI.update(this.camera);
         if (this.settings.screenView !== null) this.debugMaterial?.refresh();
     }
@@ -227,7 +269,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
                 return `Could not start: ${this.failure}`;
             case 'ready': {
                 const tiles = this.technique?.counters['spawn tiles'] ?? 0;
-                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each, lit through the world cache (hash grid); one bounce, no history yet`;
+                return `Screen probes: up to ${tiles.toLocaleString('en')} a frame (one per 16 × 16 pixels), 64 rays each, kept from frame to frame, lit through the world cache (hash grid, with GI-1.2's second bounce)`;
             }
         }
     }
@@ -250,6 +292,7 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
 
     dispose(): void {
         this.disposed = true;
+        this.changeMeter?.dispose();
         this.debugMaterial?.dispose();
         this.giGraph?.stage.dispose();
         this.giGraph?.scenePass.dispose();

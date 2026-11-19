@@ -36,7 +36,7 @@
  */
 
 import type { SceneFingerprint } from '../../platform/contract/scene-copy.ts';
-import { halfToFloat } from '../../platform/sky/half-float.ts';
+import { halfToFloat } from '../../platform/contract/helpers.ts';
 import { BYTES_PER_TEXEL, PROBE_HISTORY_FLAG, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, type DistanceFormat } from './layout.ts';
 
 /** The first four bytes of every saved field. */

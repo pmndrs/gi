@@ -67,7 +67,7 @@ export const ENTRY_POINT = {
 } as const;
 
 /** Bytes of `RcFrame`. */
-export const FRAME_UNIFORM_BYTES = 256;
+export const FRAME_UNIFORM_BYTES = 288;
 
 /**
  * Words of `RcCounters`: Capsaicin's append counters (`ClearCounters`,
@@ -133,6 +133,13 @@ struct RcFrame {
     viewProjection: mat4x4f,         // g_ViewProjection, relative to eye: projection x view x translate(eye)
     previousEye: vec3f,              // g_PreviousEye
     cellSize: f32,                   // ScreenProbesConstants.cell_size, per unit distance from the eye
+    // The temporal rules (RadianceCacheSettings, RC4.5: each with Capsaicin's way as a value).
+    historySampleCap: u32,           // the running mean's most samples (D46)
+    rayGuidingUniformShare: f32,     // rays that sample their own cell (D42); 0: Capsaicin's guiding
+    capsaicinHysteresis: u32,        // 1: Capsaicin's biased hysteresis instead of the running mean (D46)
+    capsaicinEmptyCells: u32,        // 1: Capsaicin's backup in every cell no ray reached (D41)
+    fillHitDistance: f32,            // a backup fill's hit distance: -1 (never history, D47) or 65,504 (Capsaicin)
+    probeChangeReset: u32,           // 1: a scene change on a cell's last ray resets its count (D46)
 }
 @group(1) @binding(0) var<uniform> rcFrame: RcFrame;
 `;
@@ -157,6 +164,12 @@ export const FRAME_UNIFORM_OFFSETS = {
     viewProjection: 176,
     previousEye: 240,
     cellSize: 252,
+    historySampleCap: 256,
+    rayGuidingUniformShare: 260,
+    capsaicinHysteresis: 264,
+    capsaicinEmptyCells: 268,
+    fillHitDistance: 272,
+    probeChangeReset: 276,
 } as const;
 
 /** The host's depth (`FrameScreen.depth`) and the reads Capsaicin makes of its own depth buffer. */
@@ -311,24 +324,27 @@ fn rcMeanHistoryCount(cellIndex: u32) -> u32 {
 `;
 
 /**
- * Capsaicin's backup for cells no sample reached (`lds_ScreenProbes_RadianceBackup`,
+ * The backup for cells no sample reached (`lds_ScreenProbes_RadianceBackup`,
  * gi1.comp:407-429 and 1212-1234): every thread puts in its own cell's
  * radiance and whether it was reached, a tree sum adds them up, and thread 0
  * leaves the result in element 0.
  *
- * Two fixes (register D41). Capsaicin puts in each cell's *summed* samples, so
- * a cell that guiding sent 30 rays to weighs 30 times, and then divides the
- * mean by the number of empty cells, so the more cells go unsampled the
- * darker each reads. We put in each cell's mean and keep the mean of the
- * reached cells.
+ * Ours (register D41) puts in each cell's mean and keeps the mean of the
+ * reached cells. Capsaicin's (`rcFrame.capsaicinEmptyCells`, RC4.5) puts in
+ * each cell's *summed* samples, so a cell that guiding sent 30 rays to weighs
+ * 30 times, and then divides the mean by the number of empty cells, so the
+ * more cells go unsampled the darker each reads.
  */
 export const RADIANCE_BACKUP_WGSL = /* wgsl */ `
 var<workgroup> rcRadianceBackup: array<vec4f, 64>;
 
 // Every thread of the workgroup calls it (it has barriers); the result is in rcRadianceBackup[0].
 fn rcComputeRadianceBackup(localId: u32) {
+    let capsaicin = rcFrame.capsaicinEmptyCells != 0u;
     let samples = rcRadianceSampleCount(localId);
-    rcRadianceBackup[localId] = vec4f(rcRecoverRadianceSum(localId).xyz / f32(max(samples, 1u)), select(0.0, 1.0, samples > 0u));
+    // Capsaicin's: the cell's sum (gi1.comp:408-411); ours: its mean.
+    let divisor = select(f32(max(samples, 1u)), 1.0, capsaicin);
+    rcRadianceBackup[localId] = vec4f(rcRecoverRadianceSum(localId).xyz / divisor, select(0.0, 1.0, samples > 0u));
     workgroupBarrier();
     for (var stride = 1u; stride < 64u; stride <<= 1u) {
         if (localId < 64u / (2u * stride)) {
@@ -338,12 +354,16 @@ fn rcComputeRadianceBackup(localId: u32) {
     }
     if (localId == 0u) {
         let totalRadiance = rcRadianceBackup[64u - 1u];
-        // The reached cells' mean radiance. Capsaicin divides it by the number of empty cells
-        // too (radiance / max(empty_cell_count, 1.0f)), so the more cells go unsampled the darker
-        // each of them reads: under a constant sky with history, about a third of the cells
-        // (register D41).
-        // Its hit distance is the fill sentinel: a fill is never history (D47).
-        rcRadianceBackup[0] = vec4f(totalRadiance.xyz / max(totalRadiance.w, 1.0), RC_FILL_HIT_DISTANCE);
+        var radiance = totalRadiance.xyz / max(totalRadiance.w, 1.0);
+        if (capsaicin) {
+            // radiance / max(empty_cell_count, 1.0f) (gi1.comp:424-427): the more cells go
+            // unsampled the darker each reads; under a constant sky with history, about a third
+            // of the cells (D41).
+            let emptyCellCount = f32(RC_PROBE_CELLS) - totalRadiance.w;
+            radiance /= max(emptyCellCount, 1.0);
+        }
+        // The fill's hit distance: ours never history (-1, D47); Capsaicin's MAX_HIT_DISTANCE (D19).
+        rcRadianceBackup[0] = vec4f(radiance, rcFrame.fillHitDistance);
     }
     workgroupBarrier();
 }
@@ -351,16 +371,13 @@ fn rcComputeRadianceBackup(localId: u32) {
 
 /**
  * The screen probes' history per cell (RC4.1 review): a running mean over at
- * most RC_HISTORY_SAMPLE_CAP samples (D46), its count kept beside the atlas
- * in a word per texel; and the hit distance a backup fill is stored with, a
- * negative value that the reprojection and the taps skip, so a fill is made
- * again each frame and never kept as history (D47).
+ * most `rcFrame.historySampleCap` samples (D46), its count kept beside the
+ * atlas in a word per texel. A backup fill's hit distance is
+ * `rcFrame.fillHitDistance`: by default negative, which the reprojection and
+ * the taps skip, so a fill is made again each frame and never kept as history
+ * (D47).
  */
-export const HISTORY_SAMPLE_CAP = 8;
 export const HISTORY_WGSL = /* wgsl */ `
-const RC_HISTORY_SAMPLE_CAP: u32 = ${HISTORY_SAMPLE_CAP}u;
-const RC_FILL_HIT_DISTANCE: f32 = -1.0;
-
 // A texel of the probe atlas (and of the cached tiles' atlas) as an index into the count buffers.
 fn rcAtlasIndex(pos: vec2u) -> u32 {
     return pos.y * rcFrame.probeCount.x * RC_PROBE_SIZE + pos.x;
@@ -630,13 +647,6 @@ export const SAMPLE_GROUP: GPUBindGroupLayoutDescriptor = {
     ],
 };
 
-/**
- * The share of a probe's rays that sample their own cell even when ray
- * guiding has a CDF (register D42): a floor under the luminance CDF, so a
- * cell that reads black is still refreshed now and then.
- */
-export const RAY_GUIDING_UNIFORM_SHARE = 0.125;
-
 /** `RcProbeSpawnProbe`: per spawned probe, the cached tiles it evicts into and refreshes, and the probe it replaces. */
 export const PROBE_SPAWN_PROBE_BYTES = 16;
 
@@ -721,8 +731,6 @@ ${PROBE_SPAWN_PROBE_WGSL}
 // to copy into the cache (register D43).
 @group(1) @binding(17) var<storage, read_write> rcEvictedProbeRadiance: array<vec2u>;
 
-const RC_RAY_GUIDING_UNIFORM_SHARE: f32 = ${RAY_GUIDING_UNIFORM_SHARE};
-
 var<workgroup> rcRadianceReuseSampleCount: atomic<u32>;
 // lds_ScreenProbes_Radiance: the cells' sampling CDF (exclusive sums over the total).
 var<workgroup> rcCellCdf: array<f32, 64>;
@@ -776,8 +784,9 @@ fn rcClaimCachedTile(entry: u32) -> bool {
 
 // ScreenProbes_ScanRadiance (screen_probes.hlsl:282-338): every thread puts in its cell's weight;
 // the workgroup leaves each cell's exclusive prefix sum over the total in rcCellCdf and the
-// total in rcCellCdfTotal. Capsaicin divides by max(total, 1e-5); a total of 0 is kept as 0 here
-// and the caller samples its own cell instead (register D42).
+// total in rcCellCdfTotal. Capsaicin divides by max(total, 1e-5); ours keeps a total of 0 as 0
+// and the caller samples its own cell instead (register D42). A uniform share of 0 is
+// Capsaicin's guiding (RC4.5): its divisor, and an all-black CDF sends every ray to the last cell.
 fn rcScanCellRadiance(localId: u32, weight: f32) {
     rcCellCdf[localId] = weight;
     workgroupBarrier();
@@ -794,7 +803,11 @@ fn rcScanCellRadiance(localId: u32, weight: f32) {
     let total = rcCellCdf[63];
     let exclusive = select(0.0, rcCellCdf[max(localId, 1u) - 1u], localId > 0u);
     workgroupBarrier();
-    rcCellCdf[localId] = select(0.0, exclusive / total, total > 0.0);
+    if (rcFrame.rayGuidingUniformShare > 0.0) {
+        rcCellCdf[localId] = select(0.0, exclusive / total, total > 0.0);
+    } else {
+        rcCellCdf[localId] = exclusive / max(total, 1e-5);
+    }
     if (localId == 0u) {
         rcCellCdfTotal = total;
     }
@@ -826,10 +839,10 @@ fn rcFindCellIndex(s: f32) -> u32 {
 // rays are guided by (gi1.comp:901-919, 969-978). The probe also picks the cached tile its
 // tile's old probe is evicted into and the cached tile it refreshes (gi1.comp:767-897).
 //
-// Ours differs in the guiding (register D42): a share of the rays (RC_RAY_GUIDING_UNIFORM_SHARE)
+// Ours differs in the guiding (register D42): a share of the rays (rcFrame.rayGuidingUniformShare)
 // samples its own cell, as a probe without history does, so a black cell is still refreshed;
 // and a probe whose cells all read black samples its own cells (Capsaicin's empty CDF sends
-// every ray to the last cell).
+// every ray to the last cell). A share of 0 is Capsaicin's rule, both parts (RC4.5).
 //
 // The specular branch (GGX by the surface's BRDF probability, gi1.comp:952-965) is not
 // taken: the platform's materials are diffuse-only (registers D8, D16).
@@ -1009,8 +1022,15 @@ fn ${ENTRY_POINT.sample}(
     _ = rcRand2(&random);
     let guide = rcRand(&random);
     var sampledCell = cell;
-    if (totalWeight > 0.0 && rcCellCdfTotal > 0.0 && guide >= RC_RAY_GUIDING_UNIFORM_SHARE) {
-        let sampledCellIndex = rcFindCellIndex((guide - RC_RAY_GUIDING_UNIFORM_SHARE) / (1.0 - RC_RAY_GUIDING_UNIFORM_SHARE));
+    let uniformShare = min(rcFrame.rayGuidingUniformShare, 1.0);
+    if (uniformShare <= 0.0) {
+        // Capsaicin's: every ray of a cell with history follows the CDF (gi1.comp:969-972).
+        if (totalWeight > 0.0) {
+            let sampledCellIndex = rcFindCellIndex(guide);
+            sampledCell = vec2u(sampledCellIndex % RC_PROBE_SIZE, sampledCellIndex / RC_PROBE_SIZE);
+        }
+    } else if (totalWeight > 0.0 && rcCellCdfTotal > 0.0 && guide >= uniformShare && uniformShare < 1.0) {
+        let sampledCellIndex = rcFindCellIndex((guide - uniformShare) / (1.0 - uniformShare));
         sampledCell = vec2u(sampledCellIndex % RC_PROBE_SIZE, sampledCellIndex / RC_PROBE_SIZE);
     }
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
@@ -1247,11 +1267,15 @@ ${HISTORY_CHANGES_WGSL}
 // previous radiance, which keeps nothing of the past unless the new value is over twice as bright
 // (gi1.comp:1258-1269): every cell is about a one-ray estimate, and on noisy cells the mean
 // comes out dark. Here a cell with history moves towards this frame's mean by k / n, its k rays
-// over its samples n, n capped at RC_HISTORY_SAMPLE_CAP; a scene change on the cell's last ray
+// over its samples n, n capped at rcFrame.historySampleCap; a scene change on the cell's last ray
 // resets n, so a change still shows at once.
 //
 // A cell no ray reached keeps its previous radiance and count (D41); a cell with no history
 // either takes the backup as a fill (negative hit distance), never kept as history (D47).
+//
+// Each rule has Capsaicin's way back as an RcFrame setting (RC4.5): its hysteresis
+// (capsaicinHysteresis), its backup in every unreached cell (capsaicinEmptyCells), fills kept as
+// history (fillHitDistance) and no change reset (probeChangeReset).
 @compute @workgroup_size(64)
 fn ${ENTRY_POINT.blend}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -1301,7 +1325,7 @@ fn ${ENTRY_POINT.blend}(
     let previousRadiance = textureLoad(rcPreviousProbeBuffer, pos, 0);
     let hasHistory = previousRadiance.w > 0.0;
     var historyCount = select(0u, rcPreviousCellCounts[atlasIndex], hasHistory);
-    if (historyCount > 0u) {
+    if (historyCount > 0u && rcFrame.probeChangeReset != 0u) {
         let probePosition = rcTransformPointProjection((vec2f(seed) + 0.5) / vec2f(rcFrame.bufferDimensions), rcLoadDepth(seed));
         let cellDirection = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE)), normal);
         if (rcCellLightingChanged(probePosition, cellDirection, previousRadiance.w)) {
@@ -1311,15 +1335,33 @@ fn ${ENTRY_POINT.blend}(
 
     var radiance: vec4f;
     var count = 0u;
+    let historySampleCap = max(rcFrame.historySampleCap, 1u);
     if (sampleCount > 0u) {
         let frameMean = rcRecoverRadianceSum(localId) / f32(sampleCount);
-        count = min(historyCount + sampleCount, RC_HISTORY_SAMPLE_CAP);
-        radiance = select(mix(previousRadiance, frameMean, min(f32(sampleCount) / f32(count), 1.0)), frameMean, historyCount == 0u);
-    } else if (hasHistory) {
+        count = min(historyCount + sampleCount, historySampleCap);
+        if (rcFrame.capsaicinHysteresis != 0u) {
+            radiance = frameMean; // the hysteresis below (gi1.comp:1249-1254)
+        } else {
+            radiance = select(mix(previousRadiance, frameMean, min(f32(sampleCount) / f32(count), 1.0)), frameMean, historyCount == 0u);
+        }
+    } else if (hasHistory && rcFrame.capsaicinEmptyCells == 0u) {
         radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D41)
         count = historyCount;
     } else {
-        radiance = rcRadianceBackup[0]; // a fill, with the fill hit distance (D47)
+        // A fill, with the fill hit distance (D47); Capsaicin's rule gives every unreached cell
+        // its backup, history or not (gi1.comp:1250-1256).
+        radiance = rcRadianceBackup[0];
+    }
+
+    // Capsaicin's shadow-preserving biased temporal hysteresis (gi1.comp:1258-1269): the previous
+    // radiance is kept only against a sudden brightening, up to 0.95^2 of it; the whole vec4
+    // (the hit distance too) is mixed, as Capsaicin's lerp does. With our D41 rule a kept cell
+    // equals its previous value, so the mix leaves it as it is.
+    if (rcFrame.capsaicinHysteresis != 0u && previousRadiance.w > 0.0) {
+        let lumaA = rcLuminance(radiance.xyz);
+        let lumaB = rcLuminance(previousRadiance.xyz);
+        let blend = clamp(max(lumaA - lumaB - min(lumaA, lumaB), 0.0) / max(max(lumaA, lumaB), 1e-4), 0.0, 0.95);
+        radiance = mix(radiance, previousRadiance, blend * blend);
     }
 
     // The off-screen probe cache (gi1.comp:1271-1323).
