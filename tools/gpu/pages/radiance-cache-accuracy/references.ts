@@ -5,8 +5,9 @@
  *
  * A view is a scene's manifest bookmark with a rendered reference folder
  * (`bench/references/<scene>/<bookmark name>/`, gitignored; a junction to
- * another checkout's folder works). The viewer's `findReference` picks the
- * render that matches GI with textures on: `cycles-textured-*` where it
+ * another checkout's folder works), listed by the test server
+ * (`REFERENCE_FILES`). The render that matches GI with its textures on is
+ * picked as the viewer's `findReference` does: `cycles-textured-*` where it
  * exists, else the plain `cycles-*` (scenes without textures, metals or
  * glass, where the two are the same). Of that render, the page reads the
  * GI composite and its parts (tools/reference/README.md, "The GI
@@ -26,7 +27,8 @@
 
 import { EXRLoader } from 'three/addons/loaders/EXRLoader.js';
 import { FloatType } from 'three/webgpu';
-import { findReference, shotProvenance, type ReferenceInfo, type ReferenceMaterials, type ReferenceShot } from '../../../../apps/viewer/src/scene/reference-files.ts';
+import { SHOT_FORMAT, shotProvenance, type ReferenceInfo, type ReferenceMaterials, type ReferenceShot } from '../../../../apps/viewer/src/scene/reference-files.ts';
+import { REFERENCE_FILES } from '../../contract.ts';
 import { rgbOfRgba, type RgbImage } from './accuracy.ts';
 
 /** The parts of a reference render the page reads, by the file suffix after the render's prefix. */
@@ -48,19 +50,50 @@ export interface ReferenceView {
     readonly sameManifest: boolean | null;
 }
 
+/** One scene's reference files as the test server lists them (`REFERENCE_FILES`). */
+export interface SceneReferenceFiles {
+    /** The scene's folder as served (`/@fs/.../bench/references/<scene>`). */
+    readonly url: string;
+    /** `<camera>/<file>` paths. */
+    readonly paths: ReadonlySet<string>;
+}
+
+/** Lists a scene's reference files through the test server (no probing, so no 404s in the log). */
+export async function listReferenceFiles(scene: string): Promise<SceneReferenceFiles> {
+    const response = await fetch(`${REFERENCE_FILES}?scene=${encodeURIComponent(scene)}`);
+    if (!response.ok) throw new Error(`${REFERENCE_FILES}: ${response.status}`);
+    const listing = (await response.json()) as { url: string; files: { path: string }[] };
+    return { url: listing.url, paths: new Set(listing.files.map((file) => file.path)) };
+}
+
 /**
- * The reference of one bookmark, or null when it has no GI composite with a
- * stored shot (not rendered, or rendered before T1.13 stored shots).
+ * Render prefixes, best first, as the viewer's `findReference` picks them with
+ * GI's textures on: a textured render, then the plain one.
  */
-export async function findReferenceView(scene: string, camera: string): Promise<ReferenceView | null> {
-    const found = await findReference(scene, camera, 'gi', true);
-    if (!found || !found.fileName.endsWith(`-${REFERENCE_PARTS.gi}.exr`)) return null;
-    const shot = found.info?.shot;
-    if (!found.info || !shot) return null;
-    const prefix = found.fileName.slice(0, -`-${REFERENCE_PARTS.gi}.exr`.length);
-    const folderUrl = found.imageUrl.slice(0, found.imageUrl.length - found.fileName.length - 1);
-    const provenance = await shotProvenance(shot);
-    return { scene, camera, folderUrl, prefix, materials: found.materials, info: found.info, shot, sameManifest: provenance.sameManifest };
+const PREFIXES: readonly { prefix: string; materials: ReferenceMaterials }[] = [
+    { prefix: 'cycles-textured', materials: 'textured' },
+    { prefix: 'cycles', materials: 'plain' },
+];
+
+/**
+ * The reference of one bookmark, or null when its folder has no render with
+ * every part and a stored shot (not rendered, or rendered before T1.13
+ * stored shots).
+ */
+export async function findReferenceView(files: SceneReferenceFiles, scene: string, camera: string): Promise<ReferenceView | null> {
+    for (const { prefix, materials } of PREFIXES) {
+        const parts = Object.values(REFERENCE_PARTS).map((part) => `${camera}/${prefix}-${part}.exr`);
+        if (!parts.every((path) => files.paths.has(path)) || !files.paths.has(`${camera}/${prefix}.json`)) continue;
+        const folderUrl = `${files.url}/${camera}`;
+        const response = await fetch(`${folderUrl}/${prefix}.json`);
+        if (!response.ok) continue;
+        const info = (await response.json()) as ReferenceInfo;
+        const shot = info.shot;
+        if (!shot || shot.format !== SHOT_FORMAT) continue;
+        const provenance = await shotProvenance(shot);
+        return { scene, camera, folderUrl, prefix, materials, info, shot, sameManifest: provenance.sameManifest };
+    }
+    return null;
 }
 
 /** One part of a reference render as RGB floats, top row first; throws when the file is missing. */

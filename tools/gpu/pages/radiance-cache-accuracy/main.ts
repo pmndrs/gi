@@ -75,7 +75,7 @@ import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts'
 import { advanceThreeFrame, findManifest, HdrReader, SHOT_FAR, SHOT_NEAR } from '../three-composite-shared/composite-check.ts';
 import { accuracyNumbers, addImages, giTerm, type AccuracyNumbers, type RgbImage } from './accuracy.ts';
 import { IrradianceAccumulator, WorldCacheProbe } from './gpu.ts';
-import { findReferenceView, loadReferencePart, type ReferenceView } from './references.ts';
+import { findReferenceView, listReferenceFiles, loadReferencePart, type ReferenceView } from './references.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 const listFromEnv = (name: string): string[] | null => (typeof env[name] === 'string' && env[name] ? (env[name] as string).split(',').map((item) => item.trim()).filter(Boolean) : null);
@@ -142,6 +142,13 @@ interface ViewResult {
     readonly configurations: Record<string, ConfigurationResult>;
     /** The default's 8 × 8 mean error against the reference read the other way up (must be worse: the rows are the right way up). */
     readonly upsideDownMeanError8: number | null;
+    /**
+     * The check on the setup itself: three's picture without GI (its lights, shadow maps, emission
+     * and sky dome) against Cycles' full image minus its GI composite (the scene lights' direct light,
+     * emitters and the sky seen directly). Close means camera, units and orientation line up, so the
+     * GI numbers are about GI.
+     */
+    readonly threeDirect: AccuracyNumbers | null;
 }
 
 /** Linear HDR rgb to display bytes at a thumbnail's size: exposure, Reinhard, sRGB-ish. */
@@ -405,6 +412,20 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
             Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS);
 
             const defaultPicture = pictures['default'] ?? Object.values(pictures)[0];
+            let threeDirect: AccuracyNumbers | null = null;
+            if (passColor) {
+                const cyclesDirect: RgbImage = { width, height, rgb: new Float32Array(width * height * 3) };
+                const threeColor: RgbImage = { width, height, rgb: new Float32Array(width * height * 3) };
+                for (let pixel = 0; pixel < width * height; pixel++) {
+                    for (let channel = 0; channel < 3; channel++) {
+                        const index = pixel * 3 + channel;
+                        cyclesDirect.rgb[index] = reference.full.rgb[index] - reference.gi.rgb[index];
+                        threeColor.rgb[index] = passColor[pixel * 4 + channel];
+                    }
+                }
+                threeDirect = accuracyNumbers(cyclesDirect, threeColor);
+                log(`${sceneId}/${view.camera}: three without GI vs Cycles full minus GI: ${formatNumbers(threeDirect)}`);
+            }
             const upsideDownMeanError8 = defaultPicture ? accuracyNumbers(upsideDown(reference.gi), defaultPicture).meanError8 : null;
             const firstResult = Object.values(configurations)[0];
             assert(
@@ -419,6 +440,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
                 sameManifest: view.sameManifest,
                 configurations,
                 upsideDownMeanError8,
+                threeDirect,
             };
 
             const row = document.createElement('div');
@@ -465,9 +487,10 @@ await runThreePage(
         data.skipped = skipped;
         for (const sceneId of SCENES) {
             const manifest = findManifest(sceneId);
+            const files = await listReferenceFiles(sceneId);
             const views: ReferenceView[] = [];
             for (const bookmark of manifest.cameras) {
-                const view = await findReferenceView(sceneId, bookmark.name);
+                const view = await findReferenceView(files, sceneId, bookmark.name);
                 if (view) views.push(view);
             }
             if (views.length === 0) {
