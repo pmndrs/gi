@@ -19,7 +19,9 @@
  * cache keeps its cells in both). Those eight measure the raw interpolated irradiance (the
  * denoiser off). RC4.3 adds the denoised irradiance, the term the composite reads (Capsaicin's
  * `ReprojectGI` and `FilterGI`, gi-denoiser.ts): still and moving, history on, jitter on and off,
- * after `DENOISED_CONVERGE_FRAMES` (the denoiser keeps up to 64 frames). After `CONVERGE_FRAMES` frames, over
+ * after `DENOISED_CONVERGE_FRAMES` (the denoiser keeps up to 64 frames). Moving, the extra
+ * frames are spent still at the bookmark first, so the camera then travels the same path as the
+ * raw configurations (two-room's camera passes through the wall after about 70 frames of the slide). After `CONVERGE_FRAMES` frames, over
  * `MEASURE_FRAMES` frames, per surface pixel: the relative change of the
  * interpolated irradiance E from the previous frame, |E_t − E_t−1| /
  * max(E_t−1, 5% of the frame's mean E), as the mean and the 95th percentile
@@ -252,9 +254,10 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 technique.settings.denoiser = denoised;
                 technique.resetScreenHistory();
                 let step = 0;
+                let stillLeadIn = denoised ? DENOISED_CONVERGE_FRAMES - CONVERGE_FRAMES : 0;
                 const advance = (): void => {
                     if (history === 'off') technique.resetScreenHistory();
-                    if (motion === 'moving') camera = movingCamera(base, step++);
+                    if (motion === 'moving' && stillLeadIn-- <= 0) camera = movingCamera(base, step++);
                     frame();
                 };
                 camera = base;
