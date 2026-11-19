@@ -20,8 +20,9 @@
  *    claim puts the cell in a priority class and a random sub-bin, and
  *    counts the bin.
  * 2. `PrioritizeCells` (one thread): the bins' counts become their first
- *    slots (a counting sort by priority over 32 bins, too few for a scan
- *    kernel), the cells lit this frame are min(candidates, budget), and the
+ *    slots (a counting sort by priority over 256 bins, 4 classes × 64 random
+ *    sub-bins, too few for a scan kernel), the cells lit this frame are
+ *    min(candidates, budget), and the
  *    period of the settled cells' turns is set for the next frame.
  * 3. `ScatterCells` (over the candidates): each takes the next slot of its
  *    bin; a slot under the budget goes on the shade list, and a candidate
@@ -227,7 +228,7 @@ fn HashGridCache_ClaimCell(visibility_index: u32) {
     }
     var random = rcMakeRandom(cell_index ^ HASHGRIDCACHE_CELL_SUB_BIN_SALT, g_HashGridCacheConstants.frame_index);
     let bin = priority * HASHGRIDCACHE_CELL_SUB_BINS + rcRandIntBelow(&random, HASHGRIDCACHE_CELL_SUB_BINS);
-    atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLPRIORITYBINS + bin], 1u);
+    atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + bin], 1u);
 
     let candidate = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLCANDIDATECOUNT], 1u);
     let changed_bit = select(0u, HASHGRIDCACHE_CELL_CHANGED_BIT, changed);
@@ -264,7 +265,7 @@ fn ${CELL_SHADING_ENTRY_POINT.claimSecondBounceCells}(
 
 /**
  * `PrioritizeCells`: one thread turns the bins' counts into their first
- * slots (an exclusive prefix sum over 32 words), sets the frame's lit count
+ * slots (an exclusive prefix sum over 256 words), sets the frame's lit count
  * and the next frame's turn period. CPU twin `prioritizeCells` (cell-shading-cpu.ts).
  */
 export function prioritizeCellsWgsl(layout: HashGridCacheBufferLayout): string {
@@ -279,8 +280,8 @@ fn ${CELL_SHADING_ENTRY_POINT.prioritizeCells}() {
     var first_slot = 0u;
     var urgent = 0u; // candidates new, changed or converging
     for (var bin = 0u; bin < HASHGRIDCACHE_CELL_BINS; bin++) {
-        let count = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLPRIORITYBINS + bin]);
-        atomicStore(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLPRIORITYBINS + bin], first_slot);
+        let count = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_priority_bins, bin, first_slot);
         first_slot += count;
         if (bin < ${CELL_PRIORITY_CLASS.turn}u * HASHGRIDCACHE_CELL_SUB_BINS) {
             urgent += count;
@@ -316,7 +317,7 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
     }
     let candidate = HashGridCache_RayListWord(g_HashGridCache_RayLists.cell_candidate_buffer, did);
     let bin = candidate >> HASHGRIDCACHE_CELL_BIN_SHIFT;
-    let slot = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLPRIORITYBINS + bin], 1u);
+    let slot = atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + bin], 1u);
     if (slot < atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT])) {
         HashGridCache_SetRayListWord(g_HashGridCache_RayLists.cell_shade_buffer, slot, candidate & (HASHGRIDCACHE_CELL_ENTRY_MASK | HASHGRIDCACHE_CELL_CHANGED_BIT));
         return;

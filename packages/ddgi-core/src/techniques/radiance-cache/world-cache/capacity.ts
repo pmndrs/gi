@@ -212,15 +212,20 @@ export const HASH_GRID_COUNTER = {
      * frames; 0 (an empty cache) reads as 1.
      */
     cellSchedulePeriod: 11,
-    /** Lever L1: the first of `CELL_SHADING_BINS` words, the candidates per priority bin (then each bin's first slot). */
-    cellPriorityBins: 32,
 } as const;
 
 /** Lever L1's priority classes: new or changed, still converging, its turn, the rest (cell-shading-wgsl.ts). */
 export const CELL_SHADING_CLASSES = 4;
-/** Random sub-bins per class, so the class the budget cuts through is cut at random places. */
-export const CELL_SHADING_SUB_BINS = 8;
-/** Priority bins: class × sub-bin, in the counter block from `HASH_GRID_COUNTER.cellPriorityBins` (32 words, its end). */
+/**
+ * Random sub-bins per class, so the class the budget cuts through is cut at
+ * random: only the one sub-bin the budget ends in is lit in the order the
+ * claims happened to run (which leans toward lower entries, so toward the
+ * hits drawn from them). With 8 the lit cells' drawn hits sat at 0.482 of
+ * their cells' entries on the GPU, against 1/2 for an even draw; 64 leaves
+ * a 64th of the class to that order.
+ */
+export const CELL_SHADING_SUB_BINS = 64;
+/** Priority bins: class × sub-bin (a candidate's word keeps the bin in 8 bits), in the per-ray lists (`cellPriorityBins`). */
 export const CELL_SHADING_BINS = CELL_SHADING_CLASSES * CELL_SHADING_SUB_BINS;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */

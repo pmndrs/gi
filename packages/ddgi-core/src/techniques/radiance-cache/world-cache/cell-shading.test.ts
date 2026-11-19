@@ -114,7 +114,8 @@ describe("lever L1's kernels and lists", () => {
     it('keep a candidate and a lit word per visibility entry', () => {
         const lists = hashGridCacheRayListLayout(1000, 1 << 20);
         expect(lists.cellShadeBuffer).toBe(lists.cellCandidateBuffer + lists.maxCombinedRayCount);
-        expect(lists.bytes).toBe((lists.cellShadeBuffer + lists.maxCombinedRayCount) * 4);
+        expect(lists.cellPriorityBins).toBe(lists.cellShadeBuffer + lists.maxCombinedRayCount);
+        expect(lists.bytes).toBe((lists.cellPriorityBins + CELL_SHADING_BINS) * 4);
     });
 
     it("pack the budget and the frame's changes, and take too many boxes as a change everywhere", () => {

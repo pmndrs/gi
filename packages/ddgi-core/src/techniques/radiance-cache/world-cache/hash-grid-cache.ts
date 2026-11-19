@@ -560,7 +560,7 @@ export class HashGridCache implements WorldCache {
         device.queue.writeBuffer(prepared.cellShading.uniform, 0, cellShadingWords(budget, changes));
         // The candidate and lit counts and the priority bins start at zero (the turn period is kept).
         encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellCandidateCount * WORD_BYTES, 2 * WORD_BYTES);
-        encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellPriorityBins * WORD_BYTES, CELL_SHADING_BINS * WORD_BYTES);
+        encoder.clearBuffer(rayData.listWords, rayData.layout.cellPriorityBins * WORD_BYTES, CELL_SHADING_BINS * WORD_BYTES);
         return true;
     }
 
@@ -627,7 +627,7 @@ export class HashGridCache implements WorldCache {
         const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells);
         // The lists grow with the screen: a device that can't bind them gets GILimitError before anything is made (D14).
         checkHashGridRayListLimits(layout, device.limits);
-        const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
+        const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         device.queue.writeBuffer(
             prepared.rayListsUniform,
             0,
@@ -646,6 +646,8 @@ export class HashGridCache implements WorldCache {
                 layout.multibounceDirectBuffer,
                 layout.cellCandidateBuffer,
                 layout.cellShadeBuffer,
+                0, // cell_shading: written every frame (writeCellShading)
+                layout.cellPriorityBins,
             ]),
         );
         const entries: GPUBindGroupEntry[] = [

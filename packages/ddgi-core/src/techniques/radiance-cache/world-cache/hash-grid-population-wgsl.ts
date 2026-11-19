@@ -90,7 +90,7 @@ THE SOFTWARE.
 
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
-import type { HashGridCacheBufferLayout } from './capacity.ts';
+import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
@@ -204,6 +204,8 @@ export interface HashGridCacheRayListLayout {
     readonly cellCandidateBuffer: number;
     /** Lever L1: the candidates lit this frame, in priority order (`max_combined_ray_count` at most): the entry and the changed bit. */
     readonly cellShadeBuffer: number;
+    /** Lever L1: `CELL_SHADING_BINS` words, the candidates per priority bin, then each bin's next slot. */
+    readonly cellPriorityBins: number;
     readonly bytes: number;
 }
 
@@ -232,7 +234,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     // Lever L1's lists: a cell has at least one entry, so there are at most as many candidates as entries.
     const cellCandidateBuffer = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount;
     const cellShadeBuffer = cellCandidateBuffer + maxCombinedRayCount;
-    const words = cellShadeBuffer + maxCombinedRayCount;
+    const cellPriorityBins = cellShadeBuffer + maxCombinedRayCount;
+    const words = cellPriorityBins + CELL_SHADING_BINS;
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -248,6 +251,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         multibounceDirectBuffer,
         cellCandidateBuffer,
         cellShadeBuffer,
+        cellPriorityBins,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -288,7 +292,7 @@ struct HashGridCacheRayLists {
     cell_candidate_buffer: u32,     // lever L1: the cells hit this frame, one word each (cell-shading-wgsl.ts)
     cell_shade_buffer: u32,         // lever L1: the cells lit this frame, in priority order
     cell_shading: u32,              // lever L1: 0 per hit (GI-1.2), 1 budgeted; written every frame
-    padding0: u32,
+    cell_priority_bins: u32,        // lever L1: the candidates per priority bin, then each bin's next slot
 }
 
 // Lever L1: hits only find their cells, and the cells are lit on a budget (cell-shading-wgsl.ts).

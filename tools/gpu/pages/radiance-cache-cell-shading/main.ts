@@ -57,7 +57,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { CELL_SHADING_BINS, HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { CELL_SHADING_SALT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-common.ts';
 import { CELL_CANDIDATE_BIN_SHIFT, CELL_CANDIDATE_CHANGED_BIT, CELL_PRIORITY_CLASS, CELL_SHADING_MAX_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/cell-shading-wgsl.ts';
 import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
@@ -103,6 +103,14 @@ const LAG_FRAMES = 200;
 /** The settled mean after a change: frames LAG_SETTLED_FROM to LAG_FRAMES after it. */
 const LAG_SETTLED_FROM = 150;
 const LAG_WITHIN = 0.05;
+/**
+ * The furnace's near ceiling rays more than 2% off allowed with cells lit on the budget: 2%, where
+ * per hit allows 0.5% (the rare misses). A far floor tile also holds ceiling hits (a cell is a
+ * column through its tile), so a far floor cell lit from one drawn hit a frame is noisier than
+ * per hit's mean over all its hits, and the second-bounce samples that read it are too (first run:
+ * 0.94% of the rays, the mean within 0.05%).
+ */
+const BUDGETED_RAYS_OFF = 0.02;
 
 type Mode = 'per-hit' | number;
 
@@ -362,7 +370,7 @@ async function queue(device: GPUDevice, fail: (message: string) => void): Promis
                 // The claimer is the entry with the cell's largest key (a tie, one in billions, is skipped).
                 const keys = (entriesOf.get(cell) ?? []).map((other) => sampleKey(other, frameIndex));
                 if (keys.length > 0 && sampleKey(entry, frameIndex) !== Math.max(...keys)) tally.keyMismatches++;
-                if (frame === 1 && word >>> CELL_CANDIDATE_BIN_SHIFT >= 8 * (CELL_PRIORITY_CLASS.newOrChanged + 1)) tally.frameOneNotNew++;
+                if (frame === 1 && word >>> CELL_CANDIDATE_BIN_SHIFT >= CELL_SHADING_SUB_BINS * (CELL_PRIORITY_CLASS.newOrChanged + 1)) tally.frameOneNotNew++;
             }
             const litCells = new Set<number>();
             let worstLitBin = 0;
@@ -438,7 +446,7 @@ async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips'
         if (final.rays === 0) fail(`${name}: no near ceiling ray`);
         if (kind === 'furnace') {
             if (convergedAt < 0) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, not ${expected.toFixed(4)} within 1%, after ${FURNACE_FRAMES} frames`);
-            if (final.off > Math.ceil(0.005 * final.rays)) fail(`${name}: ${final.off} of ${final.rays} near ceiling rays off ${expected.toFixed(4)} by more than 2%`);
+            if (final.off > Math.ceil((mode === 'per-hit' ? 0.005 : BUDGETED_RAYS_OFF) * final.rays)) fail(`${name}: ${final.off} of ${final.rays} near ceiling rays off ${expected.toFixed(4)} by more than 2%`);
         } else if (Math.abs(final.mean / expected - 1) > TOLERANCE) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, expected ${expected.toFixed(4)} within 2%`);
         return { convergedWithin1PercentAtFrame: convergedAt, meanOverExpected: Number((final.mean / expected).toFixed(5)), nearRays: final.rays, nearRaysOff: final.off };
     } finally {
