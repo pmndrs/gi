@@ -274,6 +274,17 @@ export function updateTilesAccumulate(stored: CellValue, newSamples: CellValue, 
 }
 
 /**
+ * `UpdateTiles`' blend of a cell's indirect value since RC3.5 (register D37):
+ * `updateTilesAccumulate`, except that a frame with no indirect sample
+ * leaves the stored value and its count as they are (Capsaicin's blend would
+ * step the count down, and read 0 at a count of 0).
+ */
+export function updateTilesAccumulateIndirect(stored: CellValue, newSamples: CellValue, maxCount: number): [number, number, number, number] {
+    if (!(newSamples[3] > 0)) return [stored[0], stored[1], stored[2], stored[3]];
+    return updateTilesAccumulate(stored, newSamples, maxCount);
+}
+
+/**
  * `HashGridCache_RoundHalfBits` (ours, register D31): the half nearest
  * `value`, a tie to the even one as `f32tof16` rounds, from the half `bits`
  * that `pack2x16float` gave for it (either neighbour: WGSL leaves the

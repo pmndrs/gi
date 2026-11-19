@@ -77,8 +77,8 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
 /**
  * Word offsets of `HashGridCacheConstants`' fields (`gi1_shared.h:59-92`,
  * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front and
- * `g_UseDirectLighting` in the first padding word), for
- * the TypeScript that writes the block. 32 words, 128 bytes.
+ * `g_UseDirectLighting` and `gi1_use_multibounce` in the first padding
+ * words), for the TypeScript that writes the block. 32 words, 128 bytes.
  */
 export const HASH_GRID_CONSTANTS_WORD = {
     eyePosition: 0,
@@ -100,6 +100,7 @@ export const HASH_GRID_CONSTANTS_WORD = {
     discardMultibounceRayProbability: 27,
     maxMultibounceSampleCount: 28,
     useDirectLighting: 29,
+    useMultibounce: 30,
 } as const;
 
 /** Bytes of `HashGridCacheConstants`. */
@@ -143,7 +144,7 @@ struct HashGridCacheConstants {
     discard_multibounce_ray_probability: f32,
     max_multibounce_sample_count: f32,
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
-    padding1: u32,
+    use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D35)
     padding2: u32,
 }
 `;
@@ -643,8 +644,11 @@ fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
     }
     HashGridCache_TouchTile(found.tile_index);
     let direct_radiance = HashGridCache_FilteredRadianceDirect(found.cell_index);
-    let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
-    let radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0) + indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
+    var radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
+    if (g_HashGridCacheConstants.use_multibounce != 0u) {  // USE_MULTI_BOUNCE
+        let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
+        radiance += indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
+    }
     return vec4f(radiance, 1.0);
 }
 `;

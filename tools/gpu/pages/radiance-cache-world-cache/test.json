@@ -1,4 +1,4 @@
 {
-    "description": "RC3.2: the radiance cache's world cache, populated and resolved through the technique at 1280x720: a sunlit corner (floor and wall, black sky) converges in its cells and probe rays to albedo/pi x E within 2%; UpdateTiles caps the sample count at 16 and its mips are 2x2 sums; ResolveCells reads a coarser mip while a cell has fewer than 16 samples (point light, fresh cache); emissive hits and rays shorter than their cell skip the cache; two coloured suns average to their sum within 2% (the light weight). Correctness only.",
-    "timeoutMs": 300000
+    "description": "RC3.2, RC3.3 and RC3.5: the radiance cache's world cache at 1280x720. Single bounce (multibounce off): a sunlit corner converges to albedo/pi x E within 2%; UpdateTiles' cap, mips and blend; ResolveCells' coarser mips; emissive and short-ray bypasses; two suns; shadow rays. GI-1.2 multibounce (RC3.5's unbiased estimator and bypass routing): a furnace (floor and ceiling, a shadowless sun) reads the true second bounce rho^2 E / pi within 2%, its draws and directions match the CPU twin, the indirect value lags one frame, multibounce off reads 0; bypass additions predicted ray by ray in the shaded corner; cache emptied on cell-size changes; an open scene (strip floor, half the rays miss) reads half the second bounce. Correctness only.",
+    "timeoutMs": 600000
 }
