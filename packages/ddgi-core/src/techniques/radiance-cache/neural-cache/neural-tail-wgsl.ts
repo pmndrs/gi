@@ -39,7 +39,7 @@
 import { nrcEncodingWgsl } from '@pathtracer/mlp';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import type { HashGridCacheBufferLayout } from '../world-cache/capacity.ts';
-import { HASH_GRID_PROBE_RAY_SURFACE_WGSL, hashGridPopulationHeadWgsl } from '../world-cache/hash-grid-population-wgsl.ts';
+import { PROBE_RAY_SURFACE_WGSL, populationHeadWgsl } from '../world-cache/hash-grid-population-wgsl.ts';
 
 /** `GPUShaderStage.COMPUTE` (the global doesn't exist in Node, where the tests import this file). */
 const SHADER_STAGE_COMPUTE = 0x4;
@@ -174,8 +174,8 @@ export const NEURAL_TAIL_HASH_GRID_GROUP = 3;
 export function gatherCellRecordsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
-${hashGridPopulationHeadWgsl(layout)}
-${HASH_GRID_PROBE_RAY_SURFACE_WGSL}
+${populationHeadWgsl(layout)}
+${PROBE_RAY_SURFACE_WGSL}
 ${groupDeclarationsWgsl(NEURAL_TAIL_HASH_GRID_GROUP, false)}
 ${INPUT_HELPERS_WGSL}
 ${APPEND_RECORD_WGSL}
@@ -221,8 +221,8 @@ fn ${NEURAL_TAIL_ENTRY_POINT.gatherCellRecords}(
 export function gatherQueriesWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${CAPSAICIN_WGSL}
-${hashGridPopulationHeadWgsl(layout)}
-${HASH_GRID_PROBE_RAY_SURFACE_WGSL}
+${populationHeadWgsl(layout)}
+${PROBE_RAY_SURFACE_WGSL}
 ${groupDeclarationsWgsl(NEURAL_TAIL_HASH_GRID_GROUP, false)}
 ${INPUT_HELPERS_WGSL}
 

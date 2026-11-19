@@ -15,6 +15,16 @@
  * configuration").
  */
 
+import type { SecondBounceSource } from './world-cache/capacity.ts';
+import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
+
+/**
+ * Which backend fills the world-cache slot (docs/design/radiance-cache.md,
+ * "World cache as a slot"): Capsaicin's GI-1.2 hash grid (the default), or
+ * the SHaRC-style hash cache ported from pmndrs/pathtracer (phase 6
+ * experiment P6.1, register E1-E7).
+ */
+export type WorldCacheKind = 'gi1-hash-grid' | 'sharc';
 import type { NeuralCacheMode, NeuralTailSettings } from './neural-cache/neural-tail-settings.ts';
 
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
@@ -78,10 +88,36 @@ export interface RadianceCacheSettings {
      */
     interpolationJitter: boolean;
     /**
+     * Experiment E10 (P6.3; not Capsaicin's): where the world cache's second
+     * bounce comes from with `useMultibounce` on. `'auto'` (default; lead
+     * decision 2026-11-19): from the technique stacked under this one
+     * (`gi.setFallback(radianceCache, ddgi)`) when its shading module answers
+     * in world space, else GI-1.2's rays. `'fallback'` asks for the stacked
+     * technique (and warns when it can't have it); `'gi1-rays'` is GI-1.2's
+     * rays, the faithful baseline. Details on `HashGridCacheOptions.secondBounce`
+     * and register E10. Changing what runs empties the world cache. Read every
+     * frame.
+     */
+    secondBounce: SecondBounceSource;
+    /** The cells' indirect sample cap with the second bounce from a fallback (E10; default 4). Read every frame. */
+    fallbackIndirectSampleCount: number;
+    /**
+     * The world-cache backend (P6.1): `gi1-hash-grid` (Capsaicin's, the
+     * default; the `hashGridCache*` and multibounce options above are its) or
+     * `sharc`. Read at `prepare`: changing it makes the other cache there.
+     */
+    worldCache: WorldCacheKind;
+    /** The SHaRC backend's settings over its defaults (`DEFAULT_SHARC_SETTINGS`), with `worldCache: 'sharc'`. Read every frame, but the table size, fallback levels and pyramid at `prepare`. */
+    sharc: Partial<SharcSettings>;
+    /**
      * Phase 6 experiment P6.4 (register E11): `tail` adds a neural network
      * (pmndrs/pathtracer's `@pathtracer/mlp`) as the second bounce's tail, so
      * GI-1.2's multibounce carries every bounce; the hash grid stays the near
-     * cache. `off` (the default) is GI-1.2. Needs `useMultibounce`. Read at
+     * cache. `off` (the default) is GI-1.2. Applies only with `useMultibounce`,
+     * the GI-1.2 grid (`worldCache: 'gi1-hash-grid'`) and its own second-bounce
+     * rays (`secondBounce` resolved to `'gi1-rays'`; a fallback's field already
+     * carries the later bounces, register E11): otherwise it is off, with one
+     * warning. Read at
      * `prepare`.
      */
     neuralCache: NeuralCacheMode;
@@ -106,6 +142,10 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    secondBounce: 'auto',
+    fallbackIndirectSampleCount: 4,
+    worldCache: 'gi1-hash-grid',
+    sharc: Object.freeze({}),
     neuralCache: 'off',
     neural: Object.freeze({}),
 });

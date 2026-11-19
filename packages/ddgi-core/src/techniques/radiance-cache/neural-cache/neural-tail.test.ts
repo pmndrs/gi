@@ -86,7 +86,7 @@ describe('the neural tail (P6.4, register E11)', () => {
 
     it('gives the hash grid a tail list and a constant only with a tail', () => {
         const without = hashGridCacheRayListLayout(4096, 22282240);
-        const withTail = hashGridCacheRayListLayout(4096, 22282240, true);
+        const withTail = hashGridCacheRayListLayout(4096, 22282240, true, true);
         expect(without.neuralTailBuffer).toBe(0);
         expect(withTail.neuralTailBuffer).toBe(without.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * 4096);
         expect(withTail.bytes - without.bytes).toBe(NEURAL_TAIL_WORDS * 4096 * 4);

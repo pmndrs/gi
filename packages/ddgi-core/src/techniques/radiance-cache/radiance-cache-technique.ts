@@ -54,6 +54,7 @@ import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES, ScreenPro
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
+import { SharcCache } from './world-cache/sharc/sharc-cache.ts';
 import { NeuralTail } from './neural-cache/neural-tail.ts';
 import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
@@ -223,8 +224,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
     private context: TechniqueContext | null = null;
     private prepared: Prepared | null = null;
-    /** Capsaicin's hash grid behind the world-cache slot (RC3.2), made in `prepare`. */
-    private cache: HashGridCache | null = null;
+    /** The world-cache slot's backend, made in `prepare`: Capsaicin's hash grid (RC3.2) or, with `worldCache: 'sharc'`, the SHaRC cache (P6.1). */
+    private cache: WorldCache | null = null;
     /** `resetHistory` empties the cache at the next `encodeScreen` (it has no encoder of its own). */
     private worldCacheResetPending = false;
     /** P6.4's neural tail (register E11), with `neuralCache: 'tail'`; null otherwise. */
@@ -242,7 +243,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private disposed = false;
 
     constructor(settings: Partial<RadianceCacheSettings> = {}) {
-        this.settings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS, ...settings };
+        // The SHaRC overrides are copied too, so changing them never touches the frozen defaults.
+        this.settings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS, ...settings, sharc: { ...settings.sharc } };
     }
 
     attach(context: TechniqueContext): void {
@@ -349,6 +351,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.latestFrameIndex = frame.frame >>> 0;
         this.writeFrameUniforms(context.device, prepared, layout, frame);
         context.device.queue.writeBuffer(prepared.historyChanges, 0, historyChangesWords(this.pendingChanges));
+        // The world cache gets the same changes (P6.1: the SHaRC cache lets go of its history there).
+        const changes = this.pendingChanges;
         this.pendingChanges = NO_HISTORY_CHANGES;
         const { kernels, history } = prepared;
         const timer = context.timer;
@@ -398,7 +402,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         tracePass.end();
 
         // 5: the world cache lights the rays' hits.
-        this.encodeWorldCache(encoder, frame, resources);
+        this.encodeWorldCache(encoder, frame, resources, changes);
 
         // 6: the rays into the probe atlas, the mask and the off-screen cache.
         const blendPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/blend`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/blend`) });
@@ -519,13 +523,22 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         };
     }
 
-    /** P6.4's neural tail once prepared (`neuralCache: 'tail'`), for tests and pages; null otherwise. */
+    /** P6.4's neural tail once prepared (`neuralCache: 'tail'` with the hash grid), for tests and pages; null otherwise. */
     get neuralTail(): NeuralTail | null {
         return this.tail;
     }
 
-    /** The world cache (Capsaicin's hash grid) once prepared, for tests and debug views; null before `prepare`. */
+    /**
+     * Capsaicin's hash grid once prepared, for tests and debug views; null
+     * before `prepare` or when another backend fills the slot (P6.1: see
+     * {@link worldCacheBackend}).
+     */
     get worldCache(): HashGridCache | null {
+        return this.cache instanceof HashGridCache ? this.cache : null;
+    }
+
+    /** Whichever backend fills the world-cache slot (`settings.worldCache`) once prepared; null before `prepare`. */
+    get worldCacheBackend(): WorldCache | null {
         return this.cache;
     }
 
@@ -581,20 +594,30 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * Makes the world cache at the technique's settings (they carry the hash
      * grid's options under the same names) and prepares it: Capsaicin's
      * default capacity, about 1 GiB, or `GILimitError` naming the limit on a
-     * device that can't hold it (register D14).
+     * device that can't hold it (register D14). With `worldCache: 'sharc'`,
+     * the SHaRC cache at its settings (`settings.sharc`, P6.1) instead.
      */
-    private async prepareWorldCache(context: TechniqueContext): Promise<HashGridCache> {
-        const cache = this.cache ?? new HashGridCache(this.settings);
+    private async prepareWorldCache(context: TechniqueContext): Promise<WorldCache> {
+        // The backend the settings name (P6.1); a change of backend disposes the other one.
+        const wanted = this.settings.worldCache === 'sharc' ? 'sharc' : 'hash-grid';
+        if (this.cache && this.cache.id !== wanted) {
+            this.cache.dispose();
+            this.cache = null;
+        }
+        const cache = this.cache ?? (wanted === 'sharc' ? new SharcCache(this.settings) : new HashGridCache(this.settings));
         await cache.prepare(context);
         // P6.4 (register E11): the neural tail runs inside the grid's frame, so it is made after the grid.
         this.tail?.dispose();
         this.tail = null;
-        if (this.settings.neuralCache === 'tail') {
+        // It extends the GI-1.2 grid only: SHaRC's paths already end in their own cache (register E3).
+        if (this.settings.neuralCache === 'tail' && cache instanceof HashGridCache) {
             const tail = new NeuralTail(this.settings.neural);
             await tail.prepare(context, cache);
             this.tail = tail;
+        } else if (this.settings.neuralCache === 'tail') {
+            context.warn("@pmndrs/gi: the radiance cache's neuralCache 'tail' extends the GI-1.2 hash grid only; with worldCache 'sharc' it is off");
         }
-        cache.tail = this.tail;
+        if (cache instanceof HashGridCache) cache.tail = this.tail;
         this.worldCacheResetPending = false;
         return cache;
     }
@@ -605,7 +628,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * their radiance slots (docs/design/radiance-cache.md, "The world-cache
      * interface"), and first, after `resetHistory`, its `reset`.
      */
-    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources): void {
+    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources, changes: HistoryChanges): void {
         const cache: WorldCache | null = this.cache;
         if (!cache) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         if (this.worldCacheResetPending) {
@@ -619,7 +642,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             capacity: resources.layout.maxRayCount,
             radiance: resources.rayScratch.rayResults,
         };
-        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height }, rays);
+        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height, changes }, rays);
     }
 
     private resourcesFor(context: TechniqueContext, prepared: Prepared, screen: FrameScreen): ScreenResources {
@@ -627,6 +650,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (current && current.layout.width === screen.width && current.layout.height === screen.height) return current;
         const device = context.device;
         const layout = screenProbeLayout(screen.width, screen.height);
+        // The world cache's per-ray data first: a device that can't hold it throws here, before
+        // anything for the new size is made (P6.1).
+        this.cache?.prepareScreen?.(layout.maxRayCount);
         this.releaseScreen();
         // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by RC2.2's projection, SampleScreenProbes' taps and
         // the debug view; copied by tests and, as last frame's, by the history.
