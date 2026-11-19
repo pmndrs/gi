@@ -173,8 +173,22 @@ async function checkComposite(core: ViewerCore, technique: RadianceCacheViewerTe
 /** The compare section beside the picture, wired to the viewer core as the viewer app wires it. */
 function showCompareControls(core: ViewerCore): RcCompareControls {
     const controls = new RcCompareControls({ onCompare: (values: CompareValues) => core.configureRadianceCache({ screenView: null, compare: values }) });
+    // Beside the picture, as the viewer's panel is: fixed, never wider than the window, its own vertical scroll.
+    const style = document.createElement('style');
+    style.textContent = `
+        html, body { overflow: hidden; background: #0b0d10; }
+        .rc-compare-box { position: fixed; top: 0; right: 0; bottom: 0; width: min(300px, 100vw); box-sizing: border-box; overflow-y: auto; overflow-x: hidden;
+            padding: 6px 10px; background: #10141a; color: #d8dee6; font: 12px/1.4 system-ui, sans-serif; }
+        .rc-compare-box h2 { font-size: 13px; margin: 4px 0 6px; }
+        .rc-compare-box select, .rc-compare-box input[type='range'], .rc-compare-box button { width: 100%; box-sizing: border-box; }
+        .rc-compare-box .button-row { display: flex; gap: 4px; }
+        .rc-compare-box .label { margin: 6px 0 2px; color: #8f9bab; }
+        .rc-compare-box label.inline { display: inline-flex; align-items: center; gap: 4px; margin: 2px 0; }
+        .rc-compare-box .muted { color: #8f9bab; }
+        .rc-compare-box .changed { border-left: 2px solid #4da3ff; padding-left: 4px; }`;
+    document.head.append(style);
     const box = document.createElement('div');
-    box.style.cssText = 'position:absolute;top:0;right:0;width:300px;max-height:100vh;overflow:auto;padding:6px 10px;background:rgba(16,20,26,0.88);color:#d8dee6;font:12px system-ui,sans-serif';
+    box.className = 'rc-compare-box';
     box.append(controls.section);
     document.body.append(box);
     return controls;
@@ -284,7 +298,8 @@ try {
     canvas.height = HEIGHT;
     // Drawn at 1280 × 720 (resize below); shown scaled to fit the runner's window, so the screenshot holds all of it.
     canvas.style.display = 'block';
-    canvas.style.width = `min(100vw, calc(100vh * ${WIDTH} / ${HEIGHT}))`;
+    // Left of the compare section (300 px), as the viewer draws beside its panel.
+    canvas.style.width = `min(calc(100vw - min(300px, 100vw)), calc(100vh * ${WIDTH} / ${HEIGHT}))`;
     canvas.style.aspectRatio = `${WIDTH} / ${HEIGHT}`;
     document.body.style.margin = '0';
     document.body.style.overflow = 'hidden';

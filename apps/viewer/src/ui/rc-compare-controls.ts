@@ -135,7 +135,8 @@ export class RcCompareControls {
             case 'boolean': {
                 const input = h('input', { type: 'checkbox' });
                 input.addEventListener('change', () => this.changed(entry, input.checked));
-                const row = withEntryHelp(h('label', { className: 'inline' }, input, ` ${title}`, h('span', { className: 'muted small', text: ` (Capsaicin: ${capsaicinText})` })));
+                // Its own line: inline labels would otherwise flow side by side.
+                const row = withEntryHelp(h('div', {}, h('label', { className: 'inline' }, input, ` ${title}`, h('span', { className: 'muted small', text: ` (Capsaicin: ${capsaicinText})` }))));
                 return { entry, row, show: (value) => (input.checked = value === true) };
             }
             case 'choice': {
