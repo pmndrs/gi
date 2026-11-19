@@ -39,8 +39,10 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
     let depth = textureLoad(giSourceDepth, id.xy, 0).x;
     let stored = textureLoad(giSourceNormal, id.xy, 0).xyz;
-    // Decoded, not normalised: a sky pixel's zero normal stays zero.
-    let normal = select(stored, 2.0 * stored - 1.0, giCopy.normalUnorm != 0u);
+    // Decoded, not normalised. A stored zero (a pixel nothing was drawn on) stays zero in either
+    // encoding: decoded, a 0..1-encoded zero would read (-1, -1, -1), a real direction.
+    let decoded = select(stored, 2.0 * stored - 1.0, giCopy.normalUnorm != 0u);
+    let normal = select(decoded, vec3f(0.0), all(stored == vec3f(0.0)));
     textureStore(giHistoryDepth, id.xy, vec4f(depth, 0.0, 0.0, 0.0));
     textureStore(giHistoryNormal, id.xy, vec4f(normal, 0.0));
 }

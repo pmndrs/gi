@@ -50,7 +50,7 @@ import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequiremen
 import type { ComputeKernel, WgslModule } from '../../platform/contract/wgsl.ts';
 import { cameraRelativeInverseViewProjection, cameraRelativeViewProjection } from './camera.ts';
 import { ScreenIrradiance, screenProbeCellSize } from './screen-irradiance.ts';
-import { ScreenProbeHistory, type HistoryResources } from './screen-probe-history.ts';
+import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES, ScreenProbeHistory, type HistoryChanges, type HistoryResources } from './screen-probe-history.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
@@ -67,6 +67,7 @@ import {
     ENTRY_POINT,
     FRAME_UNIFORM_BYTES,
     FRAME_UNIFORM_OFFSETS,
+    HISTORY_CHANGES_BYTES,
     POPULATE_GROUP,
     populateWgsl,
     PROBE_RAY_BYTES,
@@ -147,6 +148,8 @@ interface Prepared {
     readonly compactArgs: GpuIndirectArgs;
     readonly clearCountersGroup: GPUBindGroup;
     readonly debugUniforms: GPUBuffer;
+    /** `RcHistoryChanges`: this frame's changed boxes for the blend's running mean (D46). */
+    readonly historyChanges: GPUBuffer;
     /** The probes' history: reprojection, the off-screen cache, the patch, the reorder (RC4.1). */
     readonly history: ScreenProbeHistory;
     readonly bytes: number;
@@ -231,6 +234,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /** The camera of the latest `encodeScreen`, which the next one reprojects from. */
     private previousCamera: PreviousCamera | null = null;
     private readonly frameWords = new ArrayBuffer(FRAME_UNIFORM_BYTES);
+    /** Scene changes since the last screen stage, for the running means (D46). */
+    private pendingChanges: HistoryChanges = NO_HISTORY_CHANGES;
     private disposed = false;
 
     constructor(settings: Partial<RadianceCacheSettings> = {}) {
@@ -282,6 +287,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const counters = storage('counters', COUNTERS_BYTES);
         const frameUniforms = device.createBuffer({ label: `${TECHNIQUE_ID} frame`, size: FRAME_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         const debugUniforms = device.createBuffer({ label: `${TECHNIQUE_ID} debug view`, size: DEBUG_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        const historyChanges = device.createBuffer({ label: `${TECHNIQUE_ID} history changes`, size: HISTORY_CHANGES_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         const compaction = await context.compute.createCompaction({ label: `${TECHNIQUE_ID} spawn compaction`, flags: spawnFlags, capacity: spawnTileCapacity });
         const compactArgs = await context.compute.createIndirectArgs({
             label: `${TECHNIQUE_ID} CompactScreenProbes args`,
@@ -307,6 +313,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             compactArgs,
             clearCountersGroup: device.createBindGroup({ label: `${TECHNIQUE_ID}/ClearCounters`, layout: clearCounters.ownLayouts[0], entries: [{ binding: 0, resource: { buffer: counters } }] }),
             debugUniforms,
+            historyChanges,
             history,
             bytes: spawnFlags.size + spawnSeeds.size + probeSpawn.size + counters.size + frameUniforms.size + debugUniforms.size,
         };
@@ -315,11 +322,13 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /**
      * No world-space work: the world cache runs in `encodeScreen`, where the
      * probe rays are (Capsaicin updates it from the screen probes' hits), so
-     * every unit is left unused.
+     * every unit is left unused. The frame's scene changes are kept for the
+     * screen stage, whose frame carries none: where they are, the probe
+     * cells' running means start over (D46).
      */
     encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number {
         void encoder;
-        void frame;
+        this.pendingChanges = mergeHistoryChanges(this.pendingChanges, frame.changes);
         return 0;
     }
 
@@ -336,6 +345,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         }
         this.latestFrameIndex = frame.frame >>> 0;
         this.writeFrameUniforms(context.device, prepared, layout, frame);
+        context.device.queue.writeBuffer(prepared.historyChanges, 0, historyChangesWords(this.pendingChanges));
+        this.pendingChanges = NO_HISTORY_CHANGES;
         const { kernels, history } = prepared;
         const timer = context.timer;
         const maxPerDimension = context.device.limits.maxComputeWorkgroupsPerDimension;
@@ -496,8 +507,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             irradiance: irradiance.irradiance,
             counters: prepared.counters,
             history: resources.history,
-            cachedTileListCount: prepared.history.scanBuffers.cachedTileListCount,
-            cachedTileLRUFlags: prepared.history.scanBuffers.cachedTileLRUFlags,
+            cachedTileListCount: resources.history.scanBuffers.cachedTileListCount,
+            cachedTileLRUFlags: resources.history.scanBuffers.cachedTileLRUFlags,
         };
     }
 
@@ -661,7 +672,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const uniforms = { buffer: prepared.frameUniforms };
         const { kernels } = prepared;
         const { history } = resources;
-        const scanBuffers = prepared.history.scanBuffers;
+        const { scanBuffers } = history;
         const counters = { buffer: prepared.counters };
         const group = (label: string, kernel: ComputeKernel, entries: GPUBindingResource[]): GPUBindGroup =>
             device.createBindGroup({ label: `${TECHNIQUE_ID}/${label}`, layout: kernel.ownLayouts[0], entries: entries.map((resource, binding) => ({ binding, resource })) });
@@ -690,6 +701,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 counters,
                 { buffer: history.spawnProbe },
                 { buffer: history.evictedRadiance },
+                { buffer: history.cellCounts },
+                { buffer: history.previousCellCounts },
+                { buffer: history.cachedCellCounts },
             ]),
             populate: group('PopulateScreenProbes', kernels.populate, [
                 uniforms,
@@ -717,6 +731,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 { buffer: history.cachedTileMRU },
                 { buffer: history.cachedTileIndex },
                 history.cachedTileAtlas.createView(),
+                { buffer: prepared.historyChanges },
+                { buffer: history.cellCounts },
+                { buffer: history.previousCellCounts },
+                { buffer: history.cachedCellCounts },
             ]),
         };
         this.inputGroups = groups;
@@ -762,7 +780,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private releasePrepared(): void {
         const prepared = this.prepared;
         if (!prepared) return;
-        for (const buffer of [prepared.frameUniforms, prepared.counters, prepared.spawnFlags, prepared.spawnSeeds, prepared.probeSpawn, prepared.debugUniforms]) buffer.destroy();
+        for (const buffer of [prepared.frameUniforms, prepared.counters, prepared.spawnFlags, prepared.spawnSeeds, prepared.probeSpawn, prepared.debugUniforms, prepared.historyChanges]) buffer.destroy();
         prepared.compaction.dispose();
         prepared.compactArgs.dispose();
         prepared.history.dispose();

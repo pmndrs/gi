@@ -264,17 +264,21 @@ export const WIDE_RADIANCE_SUMS_WGSL = /* wgsl */ `
 // Per cell, per channel (radiance rgb, hit distance): the low word, then the carries.
 var<workgroup> rcRadianceValues: array<atomic<u32>, 512>;
 var<workgroup> rcRadianceSampleCounts: array<atomic<u32>, 64>;
+// Per cell, the sum of the contributions' history sample counts (register D46).
+var<workgroup> rcHistoryCountSums: array<atomic<u32>, 64>;
 
 fn rcClearRadianceSums(localId: u32) {
     for (var word = 0u; word < 8u; word++) {
         atomicStore(&rcRadianceValues[(localId << 3u) + word], 0u);
     }
     atomicStore(&rcRadianceSampleCounts[localId], 0u);
+    atomicStore(&rcHistoryCountSums[localId], 0u);
 }
 
 // One sample into a cell: InterlockedAdd of each quantised channel, plus the carry when the
 // low word wraps (the old value plus the addend is below the old value exactly then).
-fn rcAccumulateRadiance(cellIndex: u32, quantized: vec4u) {
+// historyCount: the samples the contribution stands for (D46; 0 for this frame's rays).
+fn rcAccumulateRadiance(cellIndex: u32, quantized: vec4u, historyCount: u32) {
     for (var channel = 0u; channel < 4u; channel++) {
         let word = (cellIndex << 3u) + (channel << 1u);
         let previous = atomicAdd(&rcRadianceValues[word], quantized[channel]);
@@ -283,6 +287,7 @@ fn rcAccumulateRadiance(cellIndex: u32, quantized: vec4u) {
         }
     }
     atomicAdd(&rcRadianceSampleCounts[cellIndex], 1u);
+    atomicAdd(&rcHistoryCountSums[cellIndex], historyCount);
 }
 
 // ScreenProbes_RecoverRadiance (screen_probes.hlsl:237-246) of a cell's 64-bit sums.
@@ -297,6 +302,11 @@ fn rcRecoverRadianceSum(cellIndex: u32) -> vec4f {
 
 fn rcRadianceSampleCount(cellIndex: u32) -> u32 {
     return atomicLoad(&rcRadianceSampleCounts[cellIndex]);
+}
+
+// The mean history sample count of a cell's contributions, rounded down (D46).
+fn rcMeanHistoryCount(cellIndex: u32) -> u32 {
+    return atomicLoad(&rcHistoryCountSums[cellIndex]) / max(rcRadianceSampleCount(cellIndex), 1u);
 }
 `;
 
@@ -332,9 +342,28 @@ fn rcComputeRadianceBackup(localId: u32) {
         // too (radiance / max(empty_cell_count, 1.0f)), so the more cells go unsampled the darker
         // each of them reads: under a constant sky with history, about a third of the cells
         // (register D41).
-        rcRadianceBackup[0] = vec4f(totalRadiance.xyz / max(totalRadiance.w, 1.0), RC_MAX_HIT_DISTANCE);
+        // Its hit distance is the fill sentinel: a fill is never history (D47).
+        rcRadianceBackup[0] = vec4f(totalRadiance.xyz / max(totalRadiance.w, 1.0), RC_FILL_HIT_DISTANCE);
     }
     workgroupBarrier();
+}
+`;
+
+/**
+ * The screen probes' history per cell (RC4.1 review): a running mean over at
+ * most RC_HISTORY_SAMPLE_CAP samples (D46), its count kept beside the atlas
+ * in a word per texel; and the hit distance a backup fill is stored with, a
+ * negative value that the reprojection and the taps skip, so a fill is made
+ * again each frame and never kept as history (D47).
+ */
+export const HISTORY_SAMPLE_CAP = 8;
+export const HISTORY_WGSL = /* wgsl */ `
+const RC_HISTORY_SAMPLE_CAP: u32 = ${HISTORY_SAMPLE_CAP}u;
+const RC_FILL_HIT_DISTANCE: f32 = -1.0;
+
+// A texel of the probe atlas (and of the cached tiles' atlas) as an index into the count buffers.
+fn rcAtlasIndex(pos: vec2u) -> u32 {
+    return pos.y * rcFrame.probeCount.x * RC_PROBE_SIZE + pos.x;
 }
 `;
 
@@ -595,6 +624,9 @@ export const SAMPLE_GROUP: GPUBindGroupLayoutDescriptor = {
         storage(15, 'storage'),
         storage(16, 'storage'),
         storage(17, 'storage'),
+        storage(18, 'read-only-storage'),
+        storage(19, 'storage'),
+        storage(20, 'read-only-storage'),
     ],
 };
 
@@ -655,9 +687,15 @@ ${PROBE_RAYS_STRUCT_WGSL}
 ${WORKGROUP_INDEX_WGSL}
 ${COUNTERS_WGSL}
 ${WIDE_RADIANCE_SUMS_WGSL}
+${HISTORY_WGSL}
 ${PROBE_CELL_WGSL}
 ${PROBE_SPAWN_PROBE_WGSL}
 @group(1) @binding(2) var<storage, read> rcProbeSpawn: RcProbeSpawn;
+// The history sample count of each atlas cell (D46): this frame's (as reprojected), the
+// previous one this kernel writes for the blend, and the cached tiles'.
+@group(1) @binding(18) var<storage, read> rcCellCounts: array<u32>;
+@group(1) @binding(19) var<storage, read_write> rcPreviousCellCounts: array<u32>;
+@group(1) @binding(20) var<storage, read> rcCachedCellCounts: array<u32>;
 // The probe rays: this kernel writes their count and directions.
 @group(1) @binding(3) var<storage, read_write> rcProbeRays: RcProbeRays;
 // g_ScreenProbes_ProbeBuffer: the atlas as ReprojectScreenProbes left it (last frame's probes, moved).
@@ -693,8 +731,12 @@ var<workgroup> rcCellCdfTotal: f32;
 // A cell of a nearby or cached probe, moved into this probe's frame (gi1.comp:725-756 and
 // 819-843): the point its ray hit, seen from this probe, lands in one of this probe's cells,
 // which takes the cell's radiance and the new hit distance. 'strict' is the cached probes'
-// test (dot > 0); the screen taps take dot >= 0.
-fn rcReuseCell(radiance: vec4f, probePosition: vec3f, probeNormal: vec3f, cell: vec2u, worldPosition: vec3f, normal: vec3f, strict: bool) -> bool {
+// test (dot > 0); the screen taps take dot >= 0. A backup fill (negative hit distance) is no
+// history and is skipped (D47); historyCount is the samples the cell stands for (D46).
+fn rcReuseCell(radiance: vec4f, probePosition: vec3f, probeNormal: vec3f, cell: vec2u, worldPosition: vec3f, normal: vec3f, strict: bool, historyCount: u32) -> bool {
+    if (radiance.w < 0.0) {
+        return false;
+    }
     let probeDirection = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE)), probeNormal);
     let hitPoint = probePosition + probeDirection * radiance.w;
     let reprojected = hitPoint - worldPosition;
@@ -708,7 +750,7 @@ fn rcReuseCell(radiance: vec4f, probePosition: vec3f, probeNormal: vec3f, cell: 
         return false; // oriented hemispheres do not overlap
     }
     let quantized = rcQuantizeRadiance(vec4f(radiance.xyz, min(reprojectedLength, RC_LARGEST_HALF)));
-    rcAccumulateRadiance(rcProbeCellIndex(reprojectedDirection, normal), quantized);
+    rcAccumulateRadiance(rcProbeCellIndex(reprojectedDirection, normal), quantized, historyCount);
     return true;
 }
 
@@ -852,8 +894,9 @@ fn ${ENTRY_POINT.sample}(
                     continue; // prevent leaks from faraway probes
                 }
                 let probeNormal = rcLoadNormal(probeSeed);
-                let probeRadiance = textureLoad(rcProbeBuffer, (probeSeed / RC_PROBE_SIZE) * RC_PROBE_SIZE + cell, 0);
-                if (rcReuseCell(probeRadiance, probePosition, probeNormal, cell, worldPosition, normal, false) && isCentre) {
+                let probeCell = (probeSeed / RC_PROBE_SIZE) * RC_PROBE_SIZE + cell;
+                let probeRadiance = textureLoad(rcProbeBuffer, probeCell, 0);
+                if (rcReuseCell(probeRadiance, probePosition, probeNormal, cell, worldPosition, normal, false, rcCellCounts[rcAtlasIndex(probeCell)]) && isCentre) {
                     atomicAdd(&rcRadianceReuseSampleCount, 1u);
                 }
             }
@@ -904,8 +947,9 @@ fn ${ENTRY_POINT.sample}(
                             updatedProbeMask = cachedTile;
                             bestUpdatedProbeScore = updatedProbeScore;
                         }
-                        let cachedProbeRadiance = textureLoad(rcCachedTileBuffer, cachedProbe * RC_PROBE_SIZE + cell, 0);
-                        _ = rcReuseCell(cachedProbeRadiance, cachedProbePosition, cachedProbeNormal, cell, worldPosition, normal, true);
+                        let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
+                        let cachedProbeRadiance = textureLoad(rcCachedTileBuffer, cachedCell, 0);
+                        _ = rcReuseCell(cachedProbeRadiance, cachedProbePosition, cachedProbeNormal, cell, worldPosition, normal, true, rcCachedCellCounts[rcAtlasIndex(cachedCell)]);
                     }
 
                     if (previousProbeMask != RC_INVALID_ID) {
@@ -957,8 +1001,10 @@ fn ${ENTRY_POINT.sample}(
     // gi1.comp:1308); it writes the atlas itself, so the cell is read here (register D43).
     rcEvictedProbeRadiance[did] = rcPackRadiance(textureLoad(rcProbeBuffer, pos, 0));
 
-    // Capsaicin's draws, in its order: rand2() for the GGX sample (gi1.comp:950), the
-    // CDF draw of ray guiding (gi1.comp:971), then the point inside the cell (gi1.comp:973).
+    // Capsaicin's draws in the order of its DISABLE_SPECULAR_MATERIALS build: rand2() for the GGX
+    // sample (gi1.comp:950), the CDF draw of ray guiding (gi1.comp:971), then the point inside the
+    // cell (gi1.comp:973). Its default build also draws rand() for the BRDF lobe (gi1.comp:960)
+    // before the CDF draw; with diffuse-only materials that lobe is never taken (D16).
     var random = rcMakeRandom(did, rcFrame.frameIndex);
     _ = rcRand2(&random);
     let guide = rcRand(&random);
@@ -970,6 +1016,8 @@ fn ${ENTRY_POINT.sample}(
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
 
     textureStore(rcPreviousProbeBuffer, pos, previousRadiance);
+    // The samples the previous radiance stands for: the contributions' mean count (D46).
+    rcPreviousCellCounts[rcAtlasIndex(pos)] = select(0u, rcMeanHistoryCount(localId), totalWeight > 0.0);
     rcProbeRays.rays[did].direction = rcPackSample(direction);
 }
 `;
@@ -1095,21 +1143,60 @@ export const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         storage(14, 'storage'),
         storage(15, 'storage'),
         storageTexture(16, 'rgba16float'),
+        { binding: 17, visibility: COMPUTE, buffer: { type: 'uniform' } },
+        storage(18, 'storage'),
+        storage(19, 'read-only-storage'),
+        storage(20, 'storage'),
     ],
 };
 
+/** Boxes of this frame's scene changes the blend can test a cell against (`RcHistoryChanges`); more make it reset everything. */
+export const MAX_HISTORY_CHANGE_BOXES = 16;
+/** Bytes of `RcHistoryChanges`: a header, then a min and a max per box. */
+export const HISTORY_CHANGES_BYTES = 16 + MAX_HISTORY_CHANGE_BOXES * 32;
+
 /**
- * `BlendScreenProbes`' biased temporal hysteresis (gi1.comp:1262-1268): how
- * much of the previous radiance a cell keeps, from the new and the previous
- * luminance. It keeps nothing when the new value is darker or less than twice
- * as bright (shadows arrive at once), and up to 0.95² of the previous value
- * against a sudden brightening (fireflies). The CPU twin is
- * `temporalBlendFactor` (screen-probe-history.ts).
+ * Where this frame's scene changes are (register D46): the platform's dirty
+ * regions (`SceneChanges.regions`: lights with their reach, geometry and
+ * materials), and a flag for a change with no bounds (`SceneChanges.global`:
+ * the sun, the environment, too many lights) or more regions than fit. A cell
+ * whose last ray crossed one forgets its count, so its next sample replaces it
+ * rather than joining the running mean.
  */
-export const TEMPORAL_BLEND_WGSL = /* wgsl */ `
-fn rcTemporalBlend(lumaA: f32, lumaB: f32) -> f32 {
-    let t = clamp(max(lumaA - lumaB - min(lumaA, lumaB), 0.0) / max(max(lumaA, lumaB), 1e-4), 0.0, 0.95);
-    return t * t; // squared
+const HISTORY_CHANGES_WGSL = /* wgsl */ `
+struct RcHistoryChanges {
+    boxCount: u32,
+    everything: u32,          // 1: a change with no bounds, every cell forgets its count
+    reserved: vec2u,
+    boxes: array<vec4f, ${2 * MAX_HISTORY_CHANGE_BOXES}>, // min then max of each box (xyz)
+}
+@group(1) @binding(17) var<uniform> rcChanges: RcHistoryChanges;
+
+// Whether the segment from origin along direction for length crosses box i (slab test).
+fn rcSegmentCrossesBox(origin: vec3f, direction: vec3f, length: f32, box: u32) -> bool {
+    let lower = rcChanges.boxes[2u * box].xyz;
+    let upper = rcChanges.boxes[2u * box + 1u].xyz;
+    let safe = select(direction, vec3f(1e-30), abs(direction) < vec3f(1e-30));
+    let inverse = 1.0 / safe;
+    let t0 = (lower - origin) * inverse;
+    let t1 = (upper - origin) * inverse;
+    let near = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
+    let far = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
+    return near <= far && far >= 0.0 && near <= length;
+}
+
+// The lighting a cell saw may have changed: its last ray (from the probe along the cell's
+// centre direction, to its hit distance) crosses a changed box.
+fn rcCellLightingChanged(origin: vec3f, direction: vec3f, hitDistance: f32) -> bool {
+    if (rcChanges.everything != 0u) {
+        return true;
+    }
+    for (var box = 0u; box < min(rcChanges.boxCount, ${MAX_HISTORY_CHANGE_BOXES}u); box++) {
+        if (rcSegmentCrossesBox(origin, direction, max(hitDistance, 0.0), box)) {
+            return true;
+        }
+    }
+    return false;
 }
 `;
 
@@ -1123,10 +1210,11 @@ ${PROBE_RAYS_STRUCT_WGSL}
 ${WORKGROUP_INDEX_WGSL}
 ${COUNTERS_WGSL}
 ${WIDE_RADIANCE_SUMS_WGSL}
+${HISTORY_WGSL}
 ${RADIANCE_BACKUP_WGSL}
 ${PROBE_CELL_WGSL}
 ${PROBE_SPAWN_PROBE_WGSL}
-${TEMPORAL_BLEND_WGSL}
+${HISTORY_CHANGES_WGSL}
 @group(1) @binding(2) var<storage, read> rcProbeSpawn: RcProbeSpawn;
 @group(1) @binding(3) var<storage, read> rcProbeRays: RcProbeRays;
 // The ray scratch's results alone (RayScratch.rayResults): g_ScreenProbes_ProbeSpawnRadianceBuffer.
@@ -1147,14 +1235,23 @@ ${TEMPORAL_BLEND_WGSL}
 @group(1) @binding(14) var<storage, read_write> rcCachedTileMRU: array<u32>;
 @group(1) @binding(15) var<storage, read_write> rcCachedTileIndex: array<vec4u>;
 @group(1) @binding(16) var rcCachedTileBuffer: texture_storage_2d<rgba16float, write>;
+// The history sample counts (D46): this frame's atlas (written here), the previous ones from
+// SampleScreenProbes, and the cached tiles'.
+@group(1) @binding(18) var<storage, read_write> rcCellCounts: array<u32>;
+@group(1) @binding(19) var<storage, read> rcPreviousCellCounts: array<u32>;
+@group(1) @binding(20) var<storage, read_write> rcCachedCellCounts: array<u32>;
 
-// BlendScreenProbes (gi1.comp:1166-1331).
+// BlendScreenProbes (gi1.comp:1166-1331), each cell a running mean (register D46).
 //
-// A cell no ray reached this frame keeps its previous radiance, and only a cell with no
-// history either takes the backup (register D41). Capsaicin gives every unreached cell the
-// backup, divided by the number of empty cells; with ray guiding about a third of a probe's
-// cells go unreached each frame, and the hysteresis below takes a darker value at once, so
-// a constant sky read 1.29 pi L at frame 1 falls to 0.87 pi L.
+// Capsaicin takes this frame's mean of a cell's rays and then its biased hysteresis against the
+// previous radiance, which keeps nothing of the past unless the new value is over twice as bright
+// (gi1.comp:1258-1269): every cell is about a one-ray estimate, and on noisy cells the mean
+// comes out dark. Here a cell with history moves towards this frame's mean by k / n, its k rays
+// over its samples n, n capped at RC_HISTORY_SAMPLE_CAP; a scene change on the cell's last ray
+// resets n, so a change still shows at once.
+//
+// A cell no ray reached keeps its previous radiance and count (D41); a cell with no history
+// either takes the backup as a fill (negative hit distance), never kept as history (D47).
 @compute @workgroup_size(64)
 fn ${ENTRY_POINT.blend}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -1182,15 +1279,16 @@ fn ${ENTRY_POINT.blend}(
 
     // ... and accumulate into the sampled cells (gi1.comp:1193-1210). Each ray goes to the
     // cell its direction falls in.
+    var normal = vec3f(0.0, 0.0, 1.0);
     if (isProbe) {
-        let normal = rcLoadNormal(seed);
+        normal = rcLoadNormal(seed);
         let direction = rcUnpackSample(rcProbeRays.rays[did].direction);
         let radiance = rcUnpackRadiance(rcProbeSpawnRadiance[did]);
-        rcAccumulateRadiance(rcProbeCellIndex(direction, normal), rcQuantizeRadiance(radiance));
+        rcAccumulateRadiance(rcProbeCellIndex(direction, normal), rcQuantizeRadiance(radiance), 0u);
     }
     workgroupBarrier();
 
-    // The backup for cells with neither a sample nor history (gi1.comp:1212-1234; D41).
+    // The backup for cells with neither a sample nor history (gi1.comp:1212-1234; D41, D47).
     rcComputeRadianceBackup(localId);
 
     // We can now map back to our regular probe grid (gi1.comp:1236-1256).
@@ -1198,20 +1296,30 @@ fn ${ENTRY_POINT.blend}(
         return; // out of bounds
     }
 
+    let atlasIndex = rcAtlasIndex(pos);
     let sampleCount = rcRadianceSampleCount(localId);
     let previousRadiance = textureLoad(rcPreviousProbeBuffer, pos, 0);
-    var radiance = rcRecoverRadianceSum(localId);
-    if (sampleCount > 0u) {
-        radiance /= f32(sampleCount);
-    } else if (previousRadiance.w > 0.0) {
-        radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D41)
-    } else {
-        radiance = rcRadianceBackup[0];
+    let hasHistory = previousRadiance.w > 0.0;
+    var historyCount = select(0u, rcPreviousCellCounts[atlasIndex], hasHistory);
+    if (historyCount > 0u) {
+        let probePosition = rcTransformPointProjection((vec2f(seed) + 0.5) / vec2f(rcFrame.bufferDimensions), rcLoadDepth(seed));
+        let cellDirection = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE)), normal);
+        if (rcCellLightingChanged(probePosition, cellDirection, previousRadiance.w)) {
+            historyCount = 0u;
+        }
     }
 
-    // Shadow-preserving biased temporal hysteresis (gi1.comp:1258-1269).
-    if (previousRadiance.w > 0.0) {
-        radiance = mix(radiance, previousRadiance, rcTemporalBlend(rcLuminance(radiance.xyz), rcLuminance(previousRadiance.xyz)));
+    var radiance: vec4f;
+    var count = 0u;
+    if (sampleCount > 0u) {
+        let frameMean = rcRecoverRadianceSum(localId) / f32(sampleCount);
+        count = min(historyCount + sampleCount, RC_HISTORY_SAMPLE_CAP);
+        radiance = select(mix(previousRadiance, frameMean, min(f32(sampleCount) / f32(count), 1.0)), frameMean, historyCount == 0u);
+    } else if (hasHistory) {
+        radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D41)
+        count = historyCount;
+    } else {
+        radiance = rcRadianceBackup[0]; // a fill, with the fill hit distance (D47)
     }
 
     // The off-screen probe cache (gi1.comp:1271-1323).
@@ -1237,7 +1345,10 @@ fn ${ENTRY_POINT.blend}(
             rcCachedTileIndex[cachedIndex] = vec4u(bitcast<vec3u>(previousWorld), rcPackNormal(previousNormal));
         }
         let cachedProbe = vec2u(cachedIndex % rcFrame.probeCount.x, cachedIndex / rcFrame.probeCount.x);
-        textureStore(rcCachedTileBuffer, cachedProbe * RC_PROBE_SIZE + cell, rcUnpackRadiance(rcEvictedProbeRadiance[did]));
+        let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
+        textureStore(rcCachedTileBuffer, cachedCell, rcUnpackRadiance(rcEvictedProbeRadiance[did]));
+        // The replaced probe's count, read before this frame's is written below.
+        rcCachedCellCounts[rcAtlasIndex(cachedCell)] = rcCellCounts[atlasIndex];
     }
 
     // The cached probe this one stands on gets its new radiance.
@@ -1248,7 +1359,9 @@ fn ${ENTRY_POINT.blend}(
             atomicStore(&rcCachedTileLRUFlags[updatedProbeMask], 1u);
         }
         let cachedProbe = vec2u(cachedIndex % rcFrame.probeCount.x, cachedIndex / rcFrame.probeCount.x);
-        textureStore(rcCachedTileBuffer, cachedProbe * RC_PROBE_SIZE + cell, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+        let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
+        textureStore(rcCachedTileBuffer, cachedCell, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+        rcCachedCellCounts[rcAtlasIndex(cachedCell)] = count;
     }
 
     // gi1.comp:1325-1330. The hit distance is kept below the half range (register D19).
@@ -1256,5 +1369,6 @@ fn ${ENTRY_POINT.blend}(
         textureStore(rcProbeMaskBuffer, probe, vec4u(rcPackSeed(seed), 0u, 0u, 0u));
     }
     textureStore(rcProbeBuffer, pos, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+    rcCellCounts[atlasIndex] = count;
 }
 `;

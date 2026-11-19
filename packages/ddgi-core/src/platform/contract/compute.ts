@@ -50,6 +50,7 @@ export interface PrefixScanOptions {
 
 /** An exclusive prefix sum of `u32`s: item i becomes the sum of items 0..i-1 (wrapping at 2^32). */
 export interface GpuPrefixScan {
+    /** The most items one encode may scan (the latest `rebind`'s, or the creation's). */
     readonly capacity: number;
     /** The sum of all the items of the latest encode, written by its pass (0 for an empty scan). */
     readonly total: GpuWord;
@@ -62,6 +63,15 @@ export interface GpuPrefixScan {
      * of this scan runs.
      */
     encode(pass: GPUComputePassEncoder, count: number): void;
+    /**
+     * Points the scan at other buffers, of another capacity (in the same
+     * place: same variant, in place or not), synchronously: its kernels are
+     * compiled already, so only the scratch and the bind groups are made
+     * again. For a caller whose sizes follow the screen and change inside a
+     * frame. Command buffers encoded before keep the old buffers; `capacity`
+     * and `total` (a new word) are this binding's from here on.
+     */
+    rebind(options: Omit<PrefixScanOptions, 'label'>): void;
     dispose(): void;
 }
 
@@ -143,7 +153,7 @@ export interface ScreenHistoryOptions {
 export interface ScreenHistoryTextures {
     /** `r32float`: the previous frame's `FrameScreen.depth`, unchanged (the same convention, `reversedDepth` included). */
     readonly depth: GPUTexture;
-    /** `rgba16float`: the previous frame's `FrameScreen.normal` decoded to signed floats (whatever its `normalEncoding`), w 0. */
+    /** `rgba16float`: the previous frame's `FrameScreen.normal` decoded to signed floats (whatever its `normalEncoding`), w 0; a stored zero (nothing drawn) stays zero. */
     readonly normal: GPUTexture;
     /**
      * True when a frame of this size was copied in since the textures were

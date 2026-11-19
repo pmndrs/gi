@@ -42,8 +42,61 @@ export function temporalBlendFactor(a: number, b: number): number {
     return t * t;
 }
 
-/** The empty-cell rule: Capsaicin's (gi1.comp:1212-1256) or ours (register D41). */
-export type EmptyCellRule = 'capsaicin' | 'fixed';
+/**
+ * The blend's rule: Capsaicin's (the backup for every unreached cell, then the
+ * hysteresis; gi1.comp:1212-1269); `fixed`, D41 alone (an unreached cell keeps
+ * its value, then Capsaicin's hysteresis); `running`, ours (D41 and the
+ * running mean of D46, with the fill of D47).
+ */
+export type EmptyCellRule = 'capsaicin' | 'fixed' | 'running';
+
+/** The most samples a cell's running mean counts (D46); the WGSL's `RC_HISTORY_SAMPLE_CAP`. */
+export const HISTORY_SAMPLE_CAP = 8;
+
+/**
+ * One probe's blend with the running mean (D46): `sums` and `counts` this
+ * frame's rays per cell, `previous` the previous radiance and
+ * `previousCounts` the samples it stands for (0: no history). A cell with
+ * rays moves to their mean by k / min(n + k, cap); a cell without keeps its
+ * value and count; a cell with neither is a fill (the reached cells' mean),
+ * count 0, which is never history (D47).
+ */
+export function blendRunningMean(
+    sums: readonly number[],
+    counts: readonly number[],
+    previous: ReadonlyArray<number | null>,
+    previousCounts: readonly number[],
+    cap = HISTORY_SAMPLE_CAP,
+): { values: number[]; counts: number[] } {
+    let reached = 0;
+    let meanSum = 0;
+    counts.forEach((count, cell) => {
+        if (count === 0) return;
+        reached++;
+        meanSum += sums[cell] / count;
+    });
+    const fill = meanSum / Math.max(reached, 1);
+    const values: number[] = [];
+    const nextCounts: number[] = [];
+    for (let cell = 0; cell < sums.length; cell++) {
+        const before = previous[cell];
+        const history = before === null ? 0 : previousCounts[cell];
+        const k = counts[cell];
+        if (k > 0) {
+            const mean = sums[cell] / k;
+            const n = Math.min(history + k, cap);
+            values.push(history === 0 || before === null ? mean : before + (mean - before) * Math.min(k / n, 1));
+            nextCounts.push(n);
+        } else if (before !== null && history > 0) {
+            values.push(before);
+            nextCounts.push(history);
+        } else {
+            values.push(fill);
+            nextCounts.push(0);
+        }
+    }
+    return { values, counts: nextCounts };
+}
 
 /**
  * One probe's blend (gi1.comp:1193-1269) on per-cell sums: `sums[cell]` and
@@ -289,6 +342,12 @@ export interface ConstantSkyOptions {
     /** Frames (1-based) at which to report E / (π L). */
     readonly report?: readonly number[];
     readonly seed?: number;
+    /**
+     * Each ray's radiance: the sky's 1 (`none`), or noisy with mean 1:
+     * exponential (coefficient of variation 1), or 5 with probability 0.2
+     * and 0 otherwise (`sparse`, a bright source few rays find).
+     */
+    readonly noise?: 'none' | 'exponential' | 'sparse';
 }
 
 /**
@@ -298,6 +357,8 @@ export interface ConstantSkyOptions {
  * spawned at the Halton cycle's tile, guided by the 3 × 3 tiles' previous
  * radiance (all on the plane with the same frame, so a cell moves into the
  * same cell), with 64 rays drawn with replacement, every one reading the sky.
+ * With `noise`, each ray's radiance is random with mean 1, so the model also
+ * shows the bias of the blend's rule on noisy cells (D46).
  * Returns E / (π L) over all probes (the probe's SH with Capsaicin's
  * projection, `1/8` at the cell centre, and with ours, the solid angle over
  * the cell's mean basis, D25 and D34), and the share of cells no ray reached.
@@ -311,6 +372,9 @@ export function simulateConstantSky(options: ConstantSkyOptions): Array<{ frame:
     const up: Direction = [0, 0, 1];
     const cosine = Array.from({ length: PROBE_CELLS }, (_, cell) => mapToHemiOctahedron(((cell % PROBE_SIZE) + 0.5) / PROBE_SIZE, (Math.floor(cell / PROBE_SIZE) + 0.5) / PROBE_SIZE)[2]);
     let probes: Array<number[] | null> = new Array(tiles * tiles).fill(null);
+    // The running mean's counts per probe cell (D46): 0 is no history, a fill (D47).
+    let probeCounts: number[][] = Array.from({ length: tiles * tiles }, () => new Array<number>(PROBE_CELLS).fill(0));
+    const noise = options.noise ?? 'none';
     const random = new CpuRandom(options.seed ?? 1, 0);
     const report = new Set(options.report ?? [1, options.frames]);
     const results: Array<{ frame: number; capsaicinProjection: number; ourProjection: number; unreachedShare: number }> = [];
@@ -318,26 +382,34 @@ export function simulateConstantSky(options: ConstantSkyOptions): Array<{ frame:
     let spawnedCells = 0;
     for (let frame = 0; frame < options.frames; frame++) {
         const next = probes.map((probe) => probe?.slice() ?? null);
+        const nextCounts = probeCounts.map((counts) => counts.slice());
         const jitter = [frame % 2, Math.floor(frame / 2) % 2];
         for (let ty = jitter[1]; ty < tiles; ty += 2) {
             for (let tx = jitter[0]; tx < tiles; tx += 2) {
                 // The 3 x 3 taps' previous radiance, per cell.
                 const tapSums = new Array<number>(PROBE_CELLS).fill(0);
                 const tapCounts = new Array<number>(PROBE_CELLS).fill(0);
+                const tapHistory = new Array<number>(PROBE_CELLS).fill(0);
                 for (let dy = -1; dy <= 1; dy++) {
                     for (let dx = -1; dx <= 1; dx++) {
-                        const tap = probes[((ty + dy + tiles) % tiles) * tiles + ((tx + dx + tiles) % tiles)];
+                        const index = ((ty + dy + tiles) % tiles) * tiles + ((tx + dx + tiles) % tiles);
+                        const tap = probes[index];
                         if (!tap) continue;
                         tap.forEach((value, cell) => {
+                            // Under D47 a fill is no history: the taps skip it.
+                            if (options.rule === 'running' && probeCounts[index][cell] === 0) return;
                             tapSums[cell] += value;
                             tapCounts[cell]++;
+                            tapHistory[cell] += probeCounts[index][cell];
                         });
                     }
                 }
                 const previous = tapSums.map((sum, cell) => (tapCounts[cell] > 0 ? sum / tapCounts[cell] : null));
+                const previousCounts = tapHistory.map((sum, cell) => (tapCounts[cell] > 0 ? Math.floor(sum / tapCounts[cell]) : 0));
                 const cdf = cellCdf(previous.map((value, cell) => (value ?? 0) * cosine[cell]));
                 const sums = new Array<number>(PROBE_CELLS).fill(0);
                 const counts = new Array<number>(PROBE_CELLS).fill(0);
+                if (options.rule !== 'running') previousCounts.fill(1);
                 for (let thread = 0; thread < PROBE_CELLS; thread++) {
                     const guide = random.rand();
                     const ownHasHistory = previous[thread] !== null;
@@ -347,15 +419,24 @@ export function simulateConstantSky(options: ConstantSkyOptions): Array<{ frame:
                             : ownHasHistory
                               ? findCellIndex(cdf.total > 0 ? cdf.cdf : new Array<number>(PROBE_CELLS).fill(0), guide)
                               : thread;
-                    sums[cell] += 1; // every ray reads the sky
+                    const u = random.rand();
+                    sums[cell] += noise === 'exponential' ? -Math.log(1 - u) : noise === 'sparse' ? (u < 0.2 ? 5 : 0) : 1;
                     counts[cell]++;
                 }
                 unreachedCells += counts.filter((count) => count === 0).length;
                 spawnedCells += PROBE_CELLS;
-                next[ty * tiles + tx] = blendProbeCells(sums, counts, previous, options.rule);
+                if (options.rule === 'running') {
+                    const blended = blendRunningMean(sums, counts, previous, previousCounts);
+                    next[ty * tiles + tx] = blended.values;
+                    nextCounts[ty * tiles + tx] = blended.counts;
+                } else {
+                    next[ty * tiles + tx] = blendProbeCells(sums, counts, previous, options.rule);
+                    nextCounts[ty * tiles + tx] = new Array<number>(PROBE_CELLS).fill(1);
+                }
             }
         }
         probes = next;
+        probeCounts = nextCounts;
         if (report.has(frame + 1)) {
             const live = probes.filter((probe): probe is number[] => probe !== null);
             const mean = (weight: number, subsamples: number): number =>

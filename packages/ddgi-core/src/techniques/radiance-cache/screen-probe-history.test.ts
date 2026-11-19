@@ -3,6 +3,8 @@ import { cameraRelativeViewProjection } from './camera.ts';
 import { PROBE_CELLS } from './settings.ts';
 import {
     blendProbeCells,
+    blendRunningMean,
+    HISTORY_SAMPLE_CAP,
     CACHED_TILE_NEW,
     cellCdf,
     findCellIndex,
@@ -15,7 +17,7 @@ import {
     temporalBlendFactor,
     unpackNormal,
 } from './screen-probe-history-cpu.ts';
-import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, RAY_GUIDING_UNIFORM_SHARE as WGSL_RAY_GUIDING_UNIFORM_SHARE, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
+import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_SAMPLE_CAP as WGSL_HISTORY_SAMPLE_CAP, RAY_GUIDING_UNIFORM_SHARE as WGSL_RAY_GUIDING_UNIFORM_SHARE, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
 
 describe("BlendScreenProbes' biased hysteresis (gi1.comp:1262-1268)", () => {
     it('keeps nothing of the past when the new value is darker or under twice as bright', () => {
@@ -150,4 +152,56 @@ describe('a constant sky with history (register D41): the cause of GI-1.2 drifti
         const results = simulateConstantSky({ rule: 'capsaicin', guiding: 'fixed', frames: 128, report: [128] });
         expect(results[0].ourProjection).toBeLessThan(0.8);
     }, 60_000);
+});
+
+describe('noisy rays with history (register D46): the running mean against the hysteresis', () => {
+    // E / (pi L) averaged over frames 100 to 200, so one frame's probe noise doesn't decide.
+    const settled = (rule: 'fixed' | 'running', noise: 'exponential' | 'sparse'): number => {
+        const report = Array.from({ length: 26 }, (_, index) => 100 + 4 * index);
+        const results = simulateConstantSky({ rule, guiding: 'fixed', frames: 200, report, noise });
+        return results.reduce((sum, result) => sum + result.ourProjection, 0) / results.length;
+    };
+
+    it('the hysteresis darkens noisy cells (6% at coefficient of variation 1, over half on sparse rays)', () => {
+        expect(settled('fixed', 'exponential')).toBeLessThan(0.95);
+        expect(settled('fixed', 'sparse')).toBeLessThan(0.6);
+    }, 120_000);
+
+    it('the running mean keeps the mean within 1% at coefficient of variation 1, and within 3% on sparse rays', () => {
+        expect(Math.abs(settled('running', 'exponential') - 1)).toBeLessThan(0.01);
+        // What is left on sparse rays is ray guiding by the cell's own estimate (NOTES).
+        expect(Math.abs(settled('running', 'sparse') - 1)).toBeLessThan(0.03);
+    }, 120_000);
+
+    it('the running mean keeps the noiseless sky exact', () => {
+        for (const result of simulateConstantSky({ rule: 'running', guiding: 'fixed', frames: 100, report: [1, 50, 100] })) {
+            expect(Math.abs(result.ourProjection - 1)).toBeLessThan(0.002);
+        }
+    }, 60_000);
+
+    it('takes k rays into a cell of n samples with weight k / min(n + k, cap), and fills without history', () => {
+        const sums = new Array<number>(64).fill(0);
+        const counts = new Array<number>(64).fill(0);
+        sums[0] = 4;
+        counts[0] = 2; // two rays, mean 2
+        sums[1] = 3;
+        counts[1] = 1;
+        const previous: Array<number | null> = new Array<number | null>(64).fill(null);
+        const previousCounts = new Array<number>(64).fill(0);
+        previous[0] = 1;
+        previousCounts[0] = 7;
+        previous[2] = 5;
+        previousCounts[2] = 3;
+        const { values, counts: next } = blendRunningMean(sums, counts, previous, previousCounts);
+        expect(values[0]).toBeCloseTo(1 + (2 - 1) * (2 / 8), 12);
+        expect(next[0]).toBe(HISTORY_SAMPLE_CAP);
+        expect(values[1]).toBe(3);
+        expect(next[1]).toBe(1);
+        expect(values[2]).toBe(5);
+        expect(next[2]).toBe(3);
+        // Neither rays nor history: the reached cells' mean, as a fill that counts nothing.
+        expect(values[3]).toBeCloseTo((2 + 3) / 2, 12);
+        expect(next[3]).toBe(0);
+        expect(HISTORY_SAMPLE_CAP).toBe(WGSL_HISTORY_SAMPLE_CAP);
+    });
 });

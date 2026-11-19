@@ -55,6 +55,7 @@ import {
     FRAME_WGSL,
     LAYOUT,
     previousScreenWgsl,
+    HISTORY_WGSL,
     RADIANCE_BACKUP_WGSL,
     screenDepthWgsl,
     screenNormalWgsl,
@@ -146,6 +147,8 @@ export const REPROJECT_GROUP: GPUBindGroupLayoutDescriptor = {
         storageTexture(11, 'rg32uint'),
         storage(12, 'storage'),
         storage(13, 'storage'),
+        storage(14, 'read-only-storage'),
+        storage(15, 'storage'),
     ],
 };
 
@@ -158,6 +161,7 @@ ${screenVelocityWgsl(3)}
 ${previousScreenWgsl(4, 5)}
 ${COUNTERS_WGSL}
 ${WIDE_RADIANCE_SUMS_WGSL}
+${HISTORY_WGSL}
 ${RADIANCE_BACKUP_WGSL}
 // g_ScreenProbes_PreviousProbeMaskBuffer and g_ScreenProbes_PreviousProbeBuffer: last frame's probes.
 @group(1) @binding(6) var rcPreviousProbeMask: texture_2d<u32>;
@@ -172,6 +176,9 @@ ${RADIANCE_BACKUP_WGSL}
 // g_ScreenProbes_EmptyTileBuffer: disoccluded tiles the spawn will not fill.
 @group(1) @binding(12) var<storage, read_write> rcEmptyTiles: array<u32>;
 @group(1) @binding(13) var<storage, read_write> rcCounters: array<atomic<u32>, 16>;
+// The history sample counts per atlas cell (D46): last frame's, and this frame's (written here).
+@group(1) @binding(14) var<storage, read> rcPreviousCellCounts: array<u32>;
+@group(1) @binding(15) var<storage, read_write> rcCellCounts: array<u32>;
 
 // lds_ScreenProbes_Reprojection: the best pixel's score (half of distance / cell size in the
 // high 16 bits) and its lane (the low 16). One 8 x 8 probe per workgroup, so one segment.
@@ -261,7 +268,8 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
         let probeSeed = rcUnpackSeed(previousProbeMask);
         let probePos = rcPreviousProbePosition(probeSeed);
         let probeNormal = rcLoadPreviousNormal(probeSeed);
-        let probeRadiance = textureLoad(rcPreviousProbeBuffer, (probeSeed / RC_PROBE_SIZE) * RC_PROBE_SIZE + cell, 0);
+        let probeCell = (probeSeed / RC_PROBE_SIZE) * RC_PROBE_SIZE + cell;
+        let probeRadiance = textureLoad(rcPreviousProbeBuffer, probeCell, 0);
         let probeDirection = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE)), probeNormal);
 
         let hitPoint = probePos + probeDirection * probeRadiance.w;
@@ -269,11 +277,12 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
         let reprojectedLen = length(reprojected);
         let reprojectedDir = reprojected / max(reprojectedLen, 1e-30); // normalize
 
-        if (dot(seedNormal, reprojectedDir) > 0.0) {
+        // A backup fill (negative hit distance) is no history: it is made again, never moved (D47).
+        if (probeRadiance.w >= 0.0 && dot(seedNormal, reprojectedDir) > 0.0) {
             // Kept in the probe: a direction on the square's far edge would give cell 8 (D45).
             let remapCell = min(vec2u(rcMapToHemiOctahedronInverse(rcToProbeFrame(reprojectedDir, seedNormal)) * f32(RC_PROBE_SIZE)), vec2u(RC_PROBE_SIZE - 1u));
             let remapCellIndex = remapCell.x + remapCell.y * RC_PROBE_SIZE;
-            rcAccumulateRadiance(remapCellIndex, rcQuantizeRadiance(vec4f(probeRadiance.xyz, min(reprojectedLen, RC_LARGEST_HALF))));
+            rcAccumulateRadiance(remapCellIndex, rcQuantizeRadiance(vec4f(probeRadiance.xyz, min(reprojectedLen, RC_LARGEST_HALF))), rcPreviousCellCounts[rcAtlasIndex(probeCell)]);
         }
     }
     workgroupBarrier();
@@ -314,12 +323,15 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
     // And reproject the radiance (gi1.comp:481-498).
     var radiance = rcRecoverRadianceSum(cellIndex);
     let sampleCount = rcRadianceSampleCount(cellIndex);
+    var count = 0u;
     if (sampleCount > 0u) {
         radiance /= f32(sampleCount);
+        count = rcMeanHistoryCount(cellIndex);
     } else {
-        radiance = rcRadianceBackup[0];
+        radiance = rcRadianceBackup[0]; // a fill (D47)
     }
     textureStore(rcProbeBuffer, did, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+    rcCellCounts[rcAtlasIndex(did)] = count;
 }
 `;
 

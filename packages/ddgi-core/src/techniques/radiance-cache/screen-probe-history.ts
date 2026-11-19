@@ -16,19 +16,20 @@
  * write this history too; their bind groups (in the technique) take the
  * buffers from {@link HistoryResources}.
  *
- * Everything here is sized per screen when the screen's size changes, except
- * the four buffers the platform's scans are bound to, which must exist when a
- * scan is made (asynchronously, in `prepare`): those hold the probe tiles of
- * the largest screen the device can draw.
+ * Everything here is sized per screen when the screen's size changes; the
+ * platform's two scans are made once (in `prepare`, on placeholder buffers)
+ * and pointed at each size's buffers with `rebind` (register D44).
  */
 
 import type { GpuIndirectArgs, GpuPrefixScan, GpuScreenHistory, GpuWord, ScreenHistoryTextures } from '../../platform/contract/compute.ts';
 import type { FrameScreen } from '../../platform/contract/frame.ts';
+import type { Aabb } from '../../platform/contract/math.ts';
+import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
 import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
-import { PROBE_SIZE, type ScreenProbeLayout } from './settings.ts';
+import type { ScreenProbeLayout } from './settings.ts';
 import { SH_BLOCK_SIZE } from './wgsl/spherical-harmonics.ts';
-import { CLEAR_PROBE_MASK_GROUP, CLEAR_PROBE_MASK_WGSL, COUNTER, ENTRY_POINT, PROBE_SPAWN_PROBE_BYTES, WORKGROUP_SIZE } from './wgsl/screen-probes.ts';
+import { CLEAR_PROBE_MASK_GROUP, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, CLEAR_PROBE_MASK_WGSL, COUNTER, ENTRY_POINT, PROBE_SPAWN_PROBE_BYTES, WORKGROUP_SIZE } from './wgsl/screen-probes.ts';
 import {
     COUNT_GROUP,
     COUNT_WGSL,
@@ -92,10 +93,20 @@ export interface HistoryResources {
     readonly spawnProbe: GPUBuffer;
     /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D43). */
     readonly evictedRadiance: GPUBuffer;
+    /**
+     * The history sample count of each atlas texel (D46): this frame's, last
+     * frame's (then each spawned probe's previous count, from Sample), and the
+     * cached tiles'. One word a texel, the atlas's row order.
+     */
+    readonly cellCounts: GPUBuffer;
+    readonly previousCellCounts: GPUBuffer;
+    readonly cachedCellCounts: GPUBuffer;
+    /** The buffers the platform's scans read and write for this size. */
+    readonly scanBuffers: HistoryScanBuffers;
     readonly bytes: number;
 }
 
-/** The buffers the platform's scans are bound to: made in `prepare` for the largest screen. */
+/** The buffers the platform's scans are bound to, sized to the screen's probe tiles. */
 export interface HistoryScanBuffers {
     /** g_ScreenProbes_ProbeCachedTileListCountBuffer and ...ListIndexBuffer (its exclusive scan). */
     readonly cachedTileListCount: GPUBuffer;
@@ -127,14 +138,12 @@ export class ScreenProbeHistory {
     private constructor(
         private readonly context: TechniqueContext,
         private readonly kernels: HistoryKernels,
-        readonly scanBuffers: HistoryScanBuffers,
+        private readonly placeholders: readonly GPUBuffer[],
         private readonly listScan: GpuPrefixScan,
         private readonly lruScan: GpuPrefixScan,
         private readonly scatterArgs: GpuIndirectArgs,
         private readonly patchArgs: GpuIndirectArgs,
         readonly screenHistory: GpuScreenHistory,
-        /** Probe tiles the scan buffers hold. */
-        readonly probeTileCapacity: number,
     ) {}
 
     /** Compiles the kernels and makes the scans, the indirect arguments and the screen history. */
@@ -152,26 +161,20 @@ export class ScreenProbeHistory {
             kernel(entry.reorder, REORDER_WGSL, entry.reorder, REORDER_GROUP),
         ]);
         const device = context.device;
-        // The probe tiles of the largest screen the device can draw.
-        const probeTileCapacity = Math.ceil(device.limits.maxTextureDimension2D / PROBE_SIZE) ** 2;
-        const storage = (label: string, words: number): GPUBuffer =>
-            device.createBuffer({ label: `${TECHNIQUE_ID} ${label}`, size: words * WORD_BYTES, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
-        const scanBuffers: HistoryScanBuffers = {
-            cachedTileListCount: storage('cached tile list count', probeTileCapacity),
-            cachedTileListIndex: storage('cached tile list index', probeTileCapacity),
-            cachedTileLRUFlags: storage('cached tile LRU flags', probeTileCapacity + 1),
-            cachedTileLRUIndex: storage('cached tile LRU index', probeTileCapacity + 1),
-        };
+        // The scans are made on placeholders (their kernels compile now, asynchronously); each screen
+        // size rebinds them to its own buffers, synchronously (resourcesFor).
+        const placeholder = (label: string): GPUBuffer => device.createBuffer({ label: `${TECHNIQUE_ID} ${label} (placeholder)`, size: 16, usage: BUFFER_USAGE.storage });
+        const placeholders = [placeholder('scan input'), placeholder('scan output'), placeholder('scan input'), placeholder('scan output')];
         const counterWord = (name: keyof typeof COUNTER): GpuWord => ({ buffer: counters, offset: COUNTER[name] * WORD_BYTES });
         const [listScan, lruScan, scatterArgs, patchArgs, screenHistory] = await Promise.all([
-            context.compute.createPrefixScan({ label: `${TECHNIQUE_ID} cached tile lists`, input: scanBuffers.cachedTileListCount, output: scanBuffers.cachedTileListIndex, capacity: probeTileCapacity }),
-            context.compute.createPrefixScan({ label: `${TECHNIQUE_ID} cached tile LRU`, input: scanBuffers.cachedTileLRUFlags, output: scanBuffers.cachedTileLRUIndex, capacity: probeTileCapacity + 1 }),
+            context.compute.createPrefixScan({ label: `${TECHNIQUE_ID} cached tile lists`, input: placeholders[0], output: placeholders[1], capacity: 1 }),
+            context.compute.createPrefixScan({ label: `${TECHNIQUE_ID} cached tile LRU`, input: placeholders[2], output: placeholders[3], capacity: 1 }),
             context.compute.createIndirectArgs({ label: `${TECHNIQUE_ID} ScatterScreenProbes args`, count: counterWord('cachedTileListElementCount'), itemsPerWorkgroup: TEMPORAL_WORKGROUP.list }),
             context.compute.createIndirectArgs({ label: `${TECHNIQUE_ID} PatchScreenProbes args`, count: counterWord('emptyTileCount'), itemsPerWorkgroup: TEMPORAL_WORKGROUP.list }),
             context.compute.createScreenHistory({ label: TECHNIQUE_ID }),
         ]);
         const kernels: HistoryKernels = { initCachedTileLRU, clearProbeMask, reproject, count, scatter, patch, reorder };
-        return new ScreenProbeHistory(context, kernels, scanBuffers, listScan, lruScan, scatterArgs, patchArgs, screenHistory, probeTileCapacity);
+        return new ScreenProbeHistory(context, kernels, placeholders, listScan, lruScan, scatterArgs, patchArgs, screenHistory);
     }
 
     /** The resources of the latest screen size, or null before the first frame. */
@@ -185,9 +188,8 @@ export class ScreenProbeHistory {
     }
 
     get memoryBytes(): number {
-        const scans = Object.values(this.scanBuffers).reduce((sum, buffer) => sum + buffer.size, 0);
         const utilities = this.listScan.memoryBytes + this.lruScan.memoryBytes + this.scatterArgs.memoryBytes + this.patchArgs.memoryBytes;
-        return scans + utilities + this.screenHistory.memoryBytes + (this.sized?.bytes ?? 0);
+        return utilities + this.screenHistory.memoryBytes + (this.sized?.bytes ?? 0);
     }
 
     /** The resources for `layout`, made (empty, no history) when the size changes. */
@@ -197,7 +199,7 @@ export class ScreenProbeHistory {
         this.releaseSized();
         const device = this.context.device;
         const probeTileCount = layout.probeCount[0] * layout.probeCount[1];
-        if (probeTileCount > this.probeTileCapacity) throw new RangeError(`@pmndrs/gi: the radiance cache's history holds ${this.probeTileCapacity} probe tiles, this screen has ${probeTileCount}`);
+        const atlasTexels = layout.atlasSize[0] * layout.atlasSize[1];
         const texture = (label: string, size: readonly [number, number], format: GPUTextureFormat, usage: number): GPUTexture =>
             device.createTexture({ label: `${TECHNIQUE_ID} ${label}`, size: [size[0], size[1]], format, usage });
         const buffer = (label: string, bytes: number): GPUBuffer =>
@@ -221,8 +223,21 @@ export class ScreenProbeHistory {
             overrideTiles: buffer('override tiles', layout.maxProbeSpawnCount * WORD_BYTES),
             spawnProbe: buffer('spawn probe', layout.maxProbeSpawnCount * PROBE_SPAWN_PROBE_BYTES),
             evictedRadiance: buffer('evicted probe radiance', layout.maxRayCount * 8),
+            cellCounts: buffer('cell counts', atlasTexels * WORD_BYTES),
+            previousCellCounts: buffer('previous cell counts', atlasTexels * WORD_BYTES),
+            cachedCellCounts: buffer('cached cell counts', atlasTexels * WORD_BYTES),
+            scanBuffers: {
+                cachedTileListCount: buffer('cached tile list count', probeTileCount * WORD_BYTES),
+                cachedTileListIndex: buffer('cached tile list index', probeTileCount * WORD_BYTES),
+                // One word more than the tiles: the scan's last word counts the unused entries.
+                cachedTileLRUFlags: buffer('cached tile LRU flags', (probeTileCount + 1) * WORD_BYTES),
+                cachedTileLRUIndex: buffer('cached tile LRU index', (probeTileCount + 1) * WORD_BYTES),
+            },
             bytes: 0,
         };
+        const { scanBuffers } = resources;
+        this.listScan.rebind({ input: scanBuffers.cachedTileListCount, output: scanBuffers.cachedTileListIndex, capacity: probeTileCount });
+        this.lruScan.rebind({ input: scanBuffers.cachedTileLRUFlags, output: scanBuffers.cachedTileLRUIndex, capacity: probeTileCount + 1 });
         const textureBytes = layout.atlasSize[0] * layout.atlasSize[1] * 8 * 2 + probeTileCount * WORD_BYTES + shSize[0] * shSize[1] * 8;
         const bufferBytes = [
             resources.cachedTileIndex,
@@ -235,6 +250,10 @@ export class ScreenProbeHistory {
             resources.overrideTiles,
             resources.spawnProbe,
             resources.evictedRadiance,
+            resources.cellCounts,
+            resources.previousCellCounts,
+            resources.cachedCellCounts,
+            ...Object.values(scanBuffers),
         ].reduce((sum, item) => sum + item.size, 0);
         this.sized = { ...resources, bytes: textureBytes + bufferBytes };
         this.sizedValid = false;
@@ -269,9 +288,10 @@ export class ScreenProbeHistory {
             encoder.copyTextureToTexture({ texture: inputs.probeAtlas }, { texture: resources.previousProbeAtlas }, [layout.atlasSize[0], layout.atlasSize[1]]);
             encoder.copyTextureToTexture({ texture: inputs.probeMask, mipLevel: 0 }, { texture: resources.previousProbeMask }, [layout.probeCount[0], layout.probeCount[1]]);
             encoder.copyTextureToTexture({ texture: inputs.probeSH }, { texture: resources.previousProbeSH }, [layout.probeCount[0] * SH_BLOCK_SIZE, layout.probeCount[1] * SH_BLOCK_SIZE]);
+            encoder.copyBufferToBuffer(resources.cellCounts, 0, resources.previousCellCounts, 0, resources.cellCounts.size);
         }
         // gfxCommandClearBuffer of the per-tile list counts (gi1.cpp:2283).
-        encoder.clearBuffer(this.scanBuffers.cachedTileListCount, 0, tiles * WORD_BYTES);
+        encoder.clearBuffer(resources.scanBuffers.cachedTileListCount, 0, tiles * WORD_BYTES);
 
         const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/reproject`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/reproject`) });
         if (!hasHistory) {
@@ -335,7 +355,7 @@ export class ScreenProbeHistory {
 
     dispose(): void {
         this.releaseSized();
-        for (const buffer of Object.values(this.scanBuffers)) buffer.destroy();
+        for (const buffer of this.placeholders) buffer.destroy();
         this.listScan.dispose();
         this.lruScan.dispose();
         this.scatterArgs.dispose();
@@ -351,7 +371,8 @@ export class ScreenProbeHistory {
         const current = this.groups;
         if (current && current.key.length === key.length && current.key.every((value, index) => value === key[index])) return current.value;
         const device = this.context.device;
-        const { kernels, scanBuffers } = this;
+        const { kernels } = this;
+        const { scanBuffers } = resources;
         const group = (label: string, kernel: ComputeKernel, resourceList: GPUBindingResource[]): GPUBindGroup =>
             device.createBindGroup({ label: `${TECHNIQUE_ID}/${label}`, layout: kernel.ownLayouts[0], entries: resourceList.map((resource, binding) => ({ binding, resource })) });
         const uniforms = { buffer: inputs.frameUniforms };
@@ -375,6 +396,8 @@ export class ScreenProbeHistory {
                 inputs.probeSH.createView(),
                 { buffer: resources.emptyTiles },
                 counters,
+                { buffer: resources.previousCellCounts },
+                { buffer: resources.cellCounts },
             ]),
             count: group(TEMPORAL_ENTRY_POINT.count, kernels.count, [
                 uniforms,
@@ -428,6 +451,10 @@ export class ScreenProbeHistory {
             sized.overrideTiles,
             sized.spawnProbe,
             sized.evictedRadiance,
+            sized.cellCounts,
+            sized.previousCellCounts,
+            sized.cachedCellCounts,
+            ...Object.values(sized.scanBuffers),
         ]) {
             buffer.destroy();
         }
@@ -460,4 +487,41 @@ function dispatchSplit(pass: GPUComputePassEncoder, workgroups: number, maxPerDi
 function screenTextureView(texture: GPUTexture): GPUTextureView {
     const isDepth = texture.format.startsWith('depth');
     return texture.createView({ aspect: isDepth ? 'depth-only' : 'all', baseMipLevel: 0, mipLevelCount: 1 });
+}
+
+/** Where this frame's scene changes are, for the running means (D46): boxes, or everything. */
+export interface HistoryChanges {
+    readonly everything: boolean;
+    readonly boxes: readonly Aabb[];
+}
+
+export const NO_HISTORY_CHANGES: HistoryChanges = Object.freeze({ everything: false, boxes: [] });
+
+/**
+ * Adds a frame's `SceneChanges` to those not yet given to a screen stage:
+ * every dirty region's box (lights with their reach, geometry, materials);
+ * a change with no bounds (`global`: the sun, the environment, too many
+ * lights) or more boxes than the blend takes counts as everything.
+ */
+export function mergeHistoryChanges(pending: HistoryChanges, changes: SceneChanges): HistoryChanges {
+    if (pending.everything) return pending;
+    if (changes.global.length > 0) return { everything: true, boxes: [] };
+    if (changes.regions.length === 0) return pending;
+    const boxes = [...pending.boxes, ...changes.regions.map((region) => region.bounds)];
+    if (boxes.length > MAX_HISTORY_CHANGE_BOXES) return { everything: true, boxes: [] };
+    return { everything: false, boxes };
+}
+
+/** `RcHistoryChanges` (wgsl/screen-probes.ts) for `changes`. */
+export function historyChangesWords(changes: HistoryChanges): ArrayBuffer {
+    const words = new ArrayBuffer(HISTORY_CHANGES_BYTES);
+    const uints = new Uint32Array(words);
+    const floats = new Float32Array(words);
+    uints[0] = changes.everything ? 0 : changes.boxes.length;
+    uints[1] = changes.everything ? 1 : 0;
+    changes.boxes.forEach((box, index) => {
+        floats.set([box.min[0], box.min[1], box.min[2], 0], 4 + index * 8);
+        floats.set([box.max[0], box.max[1], box.max[2], 0], 8 + index * 8);
+    });
+    return words;
 }
