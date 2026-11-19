@@ -1,4 +1,4 @@
 {
-    "description": "T1.5b: probe states and offsets against the geometry (Cornell blocks, cabinet row), the points view, and subgroups vs the fallback reduction giving identical states and offsets.",
+    "description": "T1.5b: probe states and offsets against the geometry (Cornell blocks, cabinet row), the points view, and subgroups vs the fallback reduction giving identical states and offsets. DV-12: resetProbes ({}, offsets, states, both) on the settled field changes the probe data as the rule says and leaves irradiance and distances alone.",
     "timeoutMs": 300000
 }

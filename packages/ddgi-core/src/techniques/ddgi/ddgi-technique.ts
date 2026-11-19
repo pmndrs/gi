@@ -189,6 +189,8 @@ import {
     SCROLL_UNIFORM_WORDS,
     SCROLL_WORKGROUP_SIZE,
 } from './wgsl/scroll.ts';
+import { PendingProbeReset, PROBE_RESET_GROUP, ProbeResetPass, type ProbeResetRequest, type ProbeResetVolume } from './probe-reset.ts';
+import { DDGI_PROBE_RESET_WGSL, PROBE_RESET_ENTRY_POINT } from './wgsl/probe-reset.ts';
 import { buildMarkTable, type MarkTable, type SunLayerMarks } from './mark-table.ts';
 import { layerPlan, MAX_IRRADIANCE_LAYERS, MAX_LIGHT_GROUPS, sunLayerWeight, sunLightOf, writeLayerWeights, type LayerPlan } from './light-groups.ts';
 import { COMPOSE_ENTRY_POINTS, COMPOSE_WEIGHTS_BYTES, composeKernelWgsl } from './wgsl/compose.ts';
@@ -422,6 +424,8 @@ interface SharedResources {
     readonly scheduleKernels: Readonly<Record<keyof typeof SCHEDULE_ENTRY_POINTS, ComputeKernel>>;
     /** `ddgi/scroll`'s two kernels (wgsl/scroll.ts); null when no volume follows the camera (they are not compiled then). */
     readonly scrollKernels: Readonly<Record<keyof typeof SCROLL_ENTRY_POINTS, ComputeKernel>> | null;
+    /** `resetProbes`' pass (probe-reset.ts); its own textures and buffers are made at the first reset. */
+    readonly probeReset: ProbeResetPass;
     /** Deferred only: the byte distance between two rounds' `DdgiTraceRound`s (dynamic offsets). */
     readonly traceRoundStride: number;
     /** Bytes of the shared textures and buffers. */
@@ -785,6 +789,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     private warmUp: { phase: WarmUpPhase; startedAt: number | null } = { phase: 'done', startedAt: null };
     /** `resetHistory` asked for the history and the feedback requests to be cleared, in the next encode. */
     private historyClearPending = false;
+    /** `resetProbes` asked for offsets or states to be reset, in the next encode (probe-reset.ts). */
+    private readonly pendingProbeReset = new PendingProbeReset();
     /** The objects that moved lately, for the mover mask (mover-table.ts). */
     private readonly movers = new MoverTable();
     /** The layers' weights as last written to the GPU (light groups), 4 floats a layer. */
@@ -975,6 +981,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             composeUpdated,
             composeListed,
             composeAll,
+            probeResetKernel,
         ] = await Promise.all([
             context.kernels.computeKernel({
                 label: directWorkList ? `ddgi/trace (deferred direct light, ${directWorkList})` : 'ddgi/trace (inline direct light)',
@@ -1037,6 +1044,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             composeKernel(COMPOSE_ENTRY_POINTS.updated, 'updated'),
             composeKernel(COMPOSE_ENTRY_POINTS.listed, 'listed'),
             composeKernel(COMPOSE_ENTRY_POINTS.all, 'all'),
+            // resetProbes (DV-12): small, and compiled here so a reset lands in the next frame.
+            context.kernels.computeKernel({ label: 'ddgi/reset-probes', modules: [], code: DDGI_PROBE_RESET_WGSL, entryPoint: PROBE_RESET_ENTRY_POINT, ownGroups: [PROBE_RESET_GROUP] }),
             // gi/direct (also for the inline path: its ray scratch comes from the same place). Last, so it sits past the named kernels.
             context.shade.direct.prepare(),
         ]);
@@ -1102,6 +1111,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             markClockKernel,
             scheduleKernels: { count: scheduleCount, select: scheduleSelect, write: scheduleWrite, fill: scheduleFill },
             scrollKernels,
+            probeReset: new ProbeResetPass(device, probeResetKernel, { probeData, points: pointsTexture }),
             // Deferred: a DdgiTraceRound per round, each at a uniform-offset boundary for its dynamic offset.
             traceRoundStride: Math.max(TRACE_ROUND_BYTES, device.limits.minUniformBufferOffsetAlignment),
             sharedBytes:
@@ -1127,6 +1137,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         this.latestMarkEntries = 0;
         this.clockSeconds = 0;
         this.historyClearPending = false;
+        this.pendingProbeReset.clear();
         this.movers.clear();
         // The composed atlas starts empty: the first frame composes every tile, with the weights as they are then.
         this.layerWeights.fill(Number.NaN);
@@ -1548,6 +1559,9 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // The biases are live settings, and renderers read them from the table; so are the windows.
         this.refreshVolumeTable(context);
         for (const [volume, move] of windowMoves) this.encodeScroll(encoder, context, volume, move, frame);
+        // resetProbes: after the windows moved (the points view needs where they are now), before any volume's passes.
+        const probeReset = this.pendingProbeReset.take();
+        if (probeReset) first.probeReset.encode(encoder, context.timer, this.volumes.map(probeResetVolume), probeReset);
         // Light groups and the sun layer: a weight changed since the last frame (or the composed atlas is new), so every
         // tile is composed this frame. A change of the sun's colour or intensity is one, with a sun layer.
         const composeAll = this.updateLayerWeights(context, first, sun?.descriptor ?? null);
@@ -2146,7 +2160,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     get memoryBytes(): number {
         const first = this.firstVolume;
         if (!first) return 0;
-        return first.sharedBytes + this.volumes.reduce((sum, volume) => sum + volume.ownBytes + volume.rays.scratch.bytes, 0);
+        return first.sharedBytes + first.probeReset.bytes + this.volumes.reduce((sum, volume) => sum + volume.ownBytes + volume.rays.scratch.bytes, 0);
     }
 
     /**
@@ -2166,8 +2180,53 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             // Every probe is cold again: the valid extent takes its targets at the next frame (the warm-up covers it).
             if (volume.scroll) volume.scroll.extentToTarget = true;
         }
+        // Its rewrite of the probe data already puts every offset at 0 and every probe in state 3.
+        this.pendingProbeReset.clear();
         this.startWarmUp();
         this.markAllNotUpdated();
+    }
+
+    /**
+     * Separate resets for the probes' relocation offsets and their
+     * classification states (DV-12, docs/divergence.md), for after the
+     * geometry around the probes changed in a way relocation or
+     * classification won't undo by itself. Unlike `resetHistory`, the probes
+     * keep their irradiance, distances and history, and the warm-up doesn't
+     * run again.
+     *
+     * - `offsets: true`: every probe goes back to its grid point (offset 0),
+     *   keeping its state. Relocation moves it again over its usual updates.
+     *   A probe that was moved out of geometry is inside it again until its
+     *   next update; it is then switched off for that update, as at the
+     *   start, and comes back on from its new place. A probe that is off for
+     *   being inside geometry stays put (relocation has had its go at it);
+     *   reset the states too to give it another.
+     * - `states: true`: every probe classification switched off ("inside
+     *   geometry" or "no surface nearby") comes back on the way an off probe
+     *   always does: as "not updated yet", so its next update traces all its
+     *   rays, classification decides again, and if it stays on it is used in
+     *   shading after two blended updates of fresh light rather than with its
+     *   stale tiles. Active probes and probes not updated yet are left as
+     *   they are; classification looks at them at every update anyway. The
+     *   probes keep their offsets. (RTXGI's reset makes every probe active;
+     *   ours goes through "not updated yet" so shading never reads a tile
+     *   that was never blended.) In a camera-following volume, planes with
+     *   many such probes count as still warming, so the valid extent waits
+     *   for their next update before it grows over them.
+     * - Both: both of the above.
+     * - Neither, `{}` or no argument: nothing happens. Each flag defaults to
+     *   false.
+     *
+     * Lands in the next `encode`, before any update, as one small GPU pass
+     * (`ddgi/reset-probes`): the offset and the state share each probe's
+     * probe-data texel and the CPU knows neither. Calls before that frame
+     * add up. A `resetHistory` or `loadField` after the call, before the
+     * frame, replaces it. Before `prepare`, and after `dispose`, it does
+     * nothing.
+     */
+    resetProbes(what: ProbeResetRequest = {}): void {
+        if (!this.firstVolume || this.disposed) return;
+        this.pendingProbeReset.request(what);
     }
 
     /**
@@ -2338,6 +2397,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         // The histories hold the time of each probe's last update on the clock they were saved with.
         this.clockSeconds = header.clockSeconds;
         this.historyClearPending = false;
+        // The loaded offsets and states are what the host asked for last.
+        this.pendingProbeReset.clear();
         this.movers.clear();
         // The composed atlas is rebuilt from the loaded layers in the next frame; the windows may have moved.
         this.composeAllPending = first.composed !== null;
@@ -2550,6 +2611,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         first.composed?.destroy();
         first.composeWeights?.destroy();
         first.movers.destroy();
+        first.probeReset.destroy();
         // Each volume's own.
         for (const resources of volumes) {
             for (const buffer of [
@@ -2786,6 +2848,20 @@ export function changeServing(grid: ProbeGrid, batch: number, settings: DDGISett
  * volume's origin is its window's first probe (scroll.ts); a fixed volume's
  * grid as it is. What `ddgi/mark`'s table is built on (in window probes).
  */
+/** What `ddgi/reset-probes` needs of a volume: its window as it is this frame, and where its data sits. */
+function probeResetVolume(resources: PreparedResources): ProbeResetVolume {
+    const { grid, volume } = resources;
+    const origin = windowGrid(resources).origin;
+    return {
+        counts: grid.counts,
+        spacing: grid.spacing,
+        origin: [origin[0], origin[1], origin[2]],
+        window: resources.scroll?.window.window ?? [0, 0, 0],
+        layerBase: volume.layerBase,
+        probeBase: volume.probeBase,
+    };
+}
+
 function windowGrid(resources: Pick<PreparedResources, 'grid' | 'scroll'>): ProbeGrid {
     const window = resources.scroll?.window;
     return window ? { ...resources.grid, origin: window.windowOrigin } : resources.grid;

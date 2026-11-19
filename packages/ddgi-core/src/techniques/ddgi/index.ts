@@ -1,6 +1,8 @@
 // DDGI, the first GI technique built on the platform (docs/design/ddgi.md).
 // Published as `@pmndrs/gi/ddgi`.
 export { DDGITechnique, type DDGIField, type LoadedField, type LoadFieldOptions } from './ddgi-technique.ts';
+// What DDGITechnique.resetProbes takes (DV-12): offsets, states, or both.
+export type { ProbeResetRequest } from './probe-reset.ts';
 // Saved bakes (T5.2): the .ddgibake format, for hosts that read a file's header or catch its errors.
 export {
     decodeSavedField,
