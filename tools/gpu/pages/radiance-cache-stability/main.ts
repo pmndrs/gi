@@ -27,7 +27,8 @@
  * P6.3: with `VITE_RC_SECOND_BOUNCE=ddgi-volume` a DDGI volume (the manifest's)
  * is stacked under the radiance cache and supplies its second bounce
  * (experiment E10), DDGI updating 2,048 probes a frame; otherwise GI-1.2's
- * second-bounce rays, with no DDGI.
+ * second-bounce rays, with no DDGI. `VITE_RC_INDIRECT_CAP` sets
+ * `hashGridCacheMaxMultibounceSampleCount` (default 16).
  *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
@@ -69,6 +70,8 @@ const CONFIGURATIONS = [
 const DARK_FLOOR = 0.05;
 /** P6.3: the world cache's second bounce in this run (experiment E10), from the environment. */
 const SECOND_BOUNCE = (import.meta.env as Record<string, unknown>).VITE_RC_SECOND_BOUNCE === 'ddgi-volume' ? 'ddgi-volume' : 'gi1-rays';
+/** The cells' indirect sample cap in this run (Capsaicin's 16 unless the environment says). */
+const INDIRECT_CAP = Number((import.meta.env as Record<string, unknown>).VITE_RC_INDIRECT_CAP ?? 16);
 /** DDGI's probes a frame when it supplies the second bounce. */
 const DDGI_UNITS = 2048;
 
@@ -210,7 +213,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ secondBounce: SECOND_BOUNCE }));
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ secondBounce: SECOND_BOUNCE, hashGridCacheMaxMultibounceSampleCount: INDIRECT_CAP }));
     platform.setOutput(technique);
     if (SECOND_BOUNCE === 'ddgi-volume') {
         const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
@@ -329,7 +332,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, secondBounce: SECOND_BOUNCE, scenes },
+        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, secondBounce: SECOND_BOUNCE, indirectCap: INDIRECT_CAP, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

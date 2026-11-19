@@ -57,7 +57,8 @@
  *    that. Each scene with gi1-rays and with ddgi-volume, and ddgi-volume with
  *    the cells' indirect cap at 4 samples instead of 16
  *    (`hashGridCacheMaxMultibounceSampleCount`): DDGI's value carries no ray
- *    noise, so a shorter running mean may do.
+ *    noise, so a shorter running mean may do; and that with DDGI updating
+ *    256 probes a frame instead of every probe.
  *
  * `VITE_E10_SECTIONS=accuracy` runs sections 1-7 only and `lag` section 8
  * only (for mutation runs); unset, all of them.
@@ -145,6 +146,8 @@ interface ScenarioOptions {
     readonly settings: Partial<RadianceCacheSettings>;
     /** DDGI stacked under the radiance cache, with these settings; null for none. */
     readonly ddgi: Partial<Omit<DDGISettings, 'volume' | 'volumes'>> | null;
+    /** DDGI's probes a frame (default `DDGI_UNITS`). */
+    readonly ddgiUnits?: number;
 }
 
 // ---- The scenes ---------------------------------------------------------------------------------
@@ -215,7 +218,7 @@ async function startScenario(device: GPUDevice, name: string, options: ScenarioO
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
         const encoder = device.createCommandEncoder({ label: `radiance-cache-ddgi-bounce ${name}` });
-        platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: DDGI_UNITS }, camera: frameCamera(camera, WIDTH, HEIGHT) });
+        platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: options.ddgiUnits ?? DDGI_UNITS }, camera: frameCamera(camera, WIDTH, HEIGHT) });
         screen.encode(encoder, camera);
         platform.encodeScreen(encoder, screen.screen);
         device.queue.submit([encoder.finish()]);
@@ -445,16 +448,18 @@ interface LagCase {
     readonly name: string;
     readonly scene: ScenarioOptions['scene'];
     readonly settings: Partial<RadianceCacheSettings>;
+    readonly ddgiUnits?: number;
 }
 
 const LAG_SCENES: readonly { readonly label: string; readonly scene: ScenarioOptions['scene'] }[] = [
     { label: 'furnace, sun doubled', scene: { kind: 'furnace', strips: false } },
     { label: 'two-room, lamp doubled', scene: { kind: 'manifest', id: 'two-room' } },
 ];
-const LAG_SETTINGS: readonly { readonly label: string; readonly settings: Partial<RadianceCacheSettings> }[] = [
+const LAG_SETTINGS: readonly { readonly label: string; readonly settings: Partial<RadianceCacheSettings>; readonly ddgiUnits?: number }[] = [
     { label: 'gi1-rays', settings: { secondBounce: 'gi1-rays' } },
     { label: 'ddgi-volume', settings: { secondBounce: 'ddgi-volume' } },
     { label: 'ddgi-volume, indirect cap 4', settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 } },
+    { label: 'ddgi-volume, indirect cap 4, DDGI 256 probes a frame', settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 }, ddgiUnits: 256 },
 ];
 
 function framesToSettle(series: readonly number[], target: number): number | null {
@@ -465,7 +470,7 @@ function framesToSettle(series: readonly number[], target: number): number | nul
 async function runLag(device: GPUDevice, lagCase: LagCase, failures: string[]): Promise<Record<string, unknown>> {
     const furnace = lagCase.scene.kind === 'furnace';
     // DDGI at its defaults (the adaptive hysteresis, the change response, the warm-up).
-    const scenario = await startScenario(device, lagCase.name, { scene: lagCase.scene, settings: lagCase.settings, ddgi: {} });
+    const scenario = await startScenario(device, lagCase.name, { scene: lagCase.scene, settings: lagCase.settings, ddgi: {}, ddgiUnits: lagCase.ddgiUnits });
     try {
         await runFrames(device, scenario, LAG_SETTLE_FRAMES - 10);
         const before: { rays: number; cells: number }[] = [];
@@ -526,9 +531,9 @@ try {
     }
     const lag: Record<string, unknown> = {};
     for (const { label, scene } of SECTIONS === 'accuracy' ? [] : LAG_SCENES) {
-        for (const { label: settingsLabel, settings } of LAG_SETTINGS) {
+        for (const { label: settingsLabel, settings, ddgiUnits } of LAG_SETTINGS) {
             const name = `8 ${label}, ${settingsLabel}`;
-            lag[name] = await runLag(device, { name, scene, settings }, failures);
+            lag[name] = await runLag(device, { name, scene, settings, ddgiUnits }, failures);
         }
     }
     await drainDevice(device);

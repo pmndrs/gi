@@ -3,9 +3,11 @@
  * frame with GI-1.2's second-bounce rays (`secondBounce: 'gi1-rays'`) against
  * the second bounce read from a DDGI volume stacked under it
  * (`'ddgi-volume'`), on Sponza (with curtains) and Bistro exterior at
- * 1280 × 720 from each scene's first bookmark, the camera still. DDGI runs in
- * both (on the manifest's volume, `DDGI_UNITS` probes a frame), so its own
- * update cost is the same on both sides and is listed separately. A
+ * 1280 × 720 from each scene's first bookmark, the camera still. DDGI is
+ * stacked under the cache on the manifest's volume in every setting; with
+ * 'gi1-rays' it updates no probe (nothing reads it), with 'ddgi-volume' it
+ * updates 2,048, 512 or 256 probes a frame, its own cost listed separately
+ * (the second bounce's cost moves from the world cache to DDGI). A
  * measurement (DECISIONS 2026-11-06/09: no timing gates); the page fails only
  * on device errors or when a setting records no timed frame.
  *
@@ -44,9 +46,15 @@ const HEIGHT = 720;
 const WARM_FRAMES = 60;
 const SETTLE_FRAMES = 30;
 const TIMED_FRAMES = 60;
-/** DDGI's probes updated a frame (its `maxProbesPerFrame` default is 4,096). */
-const DDGI_UNITS = 2048;
-const SETTINGS: readonly Pick<RadianceCacheSettings, 'secondBounce'>[] = [{ secondBounce: 'gi1-rays' }, { secondBounce: 'ddgi-volume' }];
+/** Each setting: the estimator, and DDGI's probes updated a frame (its `maxProbesPerFrame` default is 4,096). */
+const SETTINGS: readonly { readonly secondBounce: RadianceCacheSettings['secondBounce']; readonly ddgiUnits: number }[] = [
+    { secondBounce: 'gi1-rays', ddgiUnits: 0 },
+    { secondBounce: 'ddgi-volume', ddgiUnits: 2048 },
+    { secondBounce: 'ddgi-volume', ddgiUnits: 512 },
+    { secondBounce: 'ddgi-volume', ddgiUnits: 256 },
+];
+/** DDGI's probes a frame while warming up: its field filled before anything is timed. */
+const WARM_UNITS = 2048;
 
 /** The world cache's timed sections (hash-grid-cache.ts), in their order; E10's in its slot. */
 const WORLD_CACHE_SECTIONS = [
@@ -116,11 +124,12 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
     const beforeFrame = await describeLoaded(platform, device, manifest);
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     let frameNumber = 0;
+    let ddgiUnits = WARM_UNITS;
     const frame = (): void => {
         beforeFrame();
         timer.beginFrame(++frameNumber);
         const encoder = device.createCommandEncoder({ label: `radiance-cache-ddgi-bounce-cost ${id}` });
-        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: DDGI_UNITS }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: ddgiUnits }, camera: frameCamera(camera, WIDTH, HEIGHT) };
         platform.encode(encoder, input);
         screen.encode(encoder, camera);
         platform.encodeScreen(encoder, screen.screen);
@@ -140,7 +149,8 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
         if (!cache) throw new Error('no world cache');
         const results: Record<string, unknown> = {};
         for (const setting of SETTINGS) {
-            Object.assign(technique.settings, setting);
+            technique.settings.secondBounce = setting.secondBounce;
+            ddgiUnits = setting.ddgiUnits;
             for (let index = 0; index < SETTLE_FRAMES; index++) {
                 frame();
                 if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
@@ -169,7 +179,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
             const worldCacheMs = WORLD_CACHE_SECTIONS.reduce((sum, section) => sum + mean(`radiance-cache/${section}`), 0);
             const radianceCacheMs = prefixed('radiance-cache/').reduce((sum, name) => sum + mean(name), 0);
             const ddgiPasses = prefixed('ddgi/');
-            results[setting.secondBounce] = {
+            results[setting.secondBounce === 'gi1-rays' ? 'gi1-rays' : `ddgi-volume, ${setting.ddgiUnits} probes`] = {
                 worldCacheMs: round(worldCacheMs),
                 probeTraceMs: round(mean('radiance-cache/sample-populate')),
                 radianceCacheMs: round(radianceCacheMs),
@@ -213,7 +223,7 @@ try {
     await drainDevice(device);
     reportGpuTest({
         status: deviceErrors.length === 0 ? 'pass' : 'fail',
-        data: { width: WIDTH, height: HEIGHT, ddgiUnits: DDGI_UNITS, warmFrames: WARM_FRAMES, settleFrames: SETTLE_FRAMES, timedFrames: TIMED_FRAMES, scenes },
+        data: { width: WIDTH, height: HEIGHT, warmFrames: WARM_FRAMES, settleFrames: SETTLE_FRAMES, timedFrames: TIMED_FRAMES, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
