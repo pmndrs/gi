@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-19 · Windows checks ported onto pmndrs/gi; TASKS TU.1, TU.2, TU.4 · implementer (opus)
+Did: cherry-picked the three Windows entries below, their CSV rows (`bench/results/m4-textured-accuracy.csv`, `bench/results/checks.csv`) and `tools/gpu/pages/ddgi-low-warmup` from the old repo's `m34-win` (7375729, 8bd3493, 18b5cac, a0cc24d; not a18be01, whose GTAO-off change `main` already has). Their commit IDs (e6d0d21, f183fb7) are the old repo's. Entries moved to the top, as this log orders them. `docs/milestones/M3-M4.md`: one accuracy table, without GTAO (the default) first and with GTAO second, plus the sponza-full verdict; the "not run on the Mac" lines say what ran. TASKS: TU.2 done; TU.1's Intel half and TU.4's table recorded in their status; Later drops the finished items and gains the 2nd-page Intel hang and the out-of-bar scenes. NOTES: the Intel hang note.
+Verified: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test` (1,617 pass, 13 skipped) pass; `ddgi-low-warmup` type-checks and builds with vite against this code (paths and harness exports unchanged). No GPU run: the numbers are the Windows sessions'.
+Not verified: `ddgi-low-warmup` wasn't run on this tree.
+Next: TU.1's iPad half and then the `low` batch change; TU.4's door and cabinet, sponza-full's foliage, and switching `m4-textured-accuracy` to no GTAO by default.
+
 ## 2026-11-19 (later) · Windows RTX: M4 accuracy without GTAO, and sponza-full's -30% · measurer
 Did: worktree `webgpu-ddgi-win-m34`, `m34-win` at f183fb7 (GTAO off by default), `run.ts --gpu nvidia --no-occlusion` over all 10 scenes under `bench-lock run --no-cool-wait`; no code changes. Thermal verdict INVALID (42% throttled), no timing used. Rows added to `bench/results/m4-textured-accuracy.csv` (setting "no GTAO"), full table in `docs/milestones/M3-M4.md`.
 | scene | cameras | mean error without GTAO | FLIP 8x8 |
