@@ -46,6 +46,8 @@ const resolve = select('resolve'), ratio = select('ratio'), outputSize = select(
 const sharpness = document.querySelector<HTMLInputElement>('#sharpness')!;
 if (params.has('sharpness')) sharpness.value = params.get('sharpness')!;
 if (verify && !params.has('backend')) backend.value = 'three';
+if (!verify && !params.has('resolve')) resolve.value = 'upscale';
+if (!verify && !params.has('ratio')) ratio.value = '1.5';
 door.closest('label')!.hidden = scene.value !== 'door';
 cue.closest('label')!.hidden = scene.value === 'door';
 if (scene.value === 'door') {

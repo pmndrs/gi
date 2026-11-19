@@ -21,6 +21,29 @@ Rules:
 
 ---
 
+## 2026-11-19 · Native Split RC, gallery A/B and shutter response
+
+The public `@pmndrs/gi/radiance-cascades` entry runs on a bare GPUDevice. The interval transport uses the pathtracer for closest hits and shadow visibility. The gallery offers the native solver, the S5 Three.js reference, a moving shutter and native, TAA or reduced-resolution temporal presentation. [Spec and API](docs/radiance-cascades/SPEC.md) · [Reproduction](docs/radiance-cascades/PLAN.md)
+
+At 320 × 180, stride 2, the shutter moved over 30 frames while the recessed emitter stayed constant. Time is measured from the end of travel to the first of eight consecutive samples past the threshold. Luminance is linear and measured on a fixed receiver before tone mapping or upscaling.
+
+| Solver | Open luminance | Closed / open | Close T50 / T90 | Reopen T50 / T90 | Reopened / open |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native WebGPU | 0.13462 | 0.79% | 0 / 2 frames | 0 / 12 frames | 96.5% |
+| Three.js reference | 0.28246 | 9.53% | 8 / 58 frames | 4 / 49 frames | 100.8% |
+
+A CPU single-bounce integration of the same 144 receiver samples gives 0.16962 with the shutter open and zero with it closed. Doubling the samples per emitting face axis changed the integral by 0.42%. The native open value was 20.6% below this emitter-only estimate. The estimate omits the guide light and secondary bounces. [CPU check](tools/gpu/pages/rc-door-response/emitter-oracle.ts)
+
+Native close/reopen T90 was 33/200 ms of observed wall time. Three.js took 1,050/933 ms. The laptop started the response run at 87°C. [Per-frame data](bench/results/radiance-cascades-shutter.csv) · [Response plot](docs/radiance-cascades/images/shutter-response.png)
+
+At the same 640 × 360 rail poses, the native and reference direct-only frames were byte-identical. At amber/blue ticks 183/359 the native composite differed from the reference by 28.22/25.01 mean absolute 8-bit RGB values. Native average displayed indirect luminance was 0.189/0.305, versus 0.332/0.473 for the reference. Native used 27.19 MB of probe storage and 8.06 MB of ray and transport scratch. Three.js used 50.06 MB and 2.30 MB respectively. GPU queue-span medians were 4.88/4.85 ms for native and 5.50/5.93 ms for Three.js. This first A/B started at 73°C and did not qualify for a sustained performance verdict. A separate 64°C run returned 4.90/4.58 ms for native and 6.52/4.98 ms for Three.js. Vsync kept utilization below the clock validator’s 70% load threshold, so this run also gives no speed verdict. The two solvers use different probe layouts, and the reference adds secondary bounces. [Measured rail and reconstruction data](bench/results/radiance-cascades.csv)
+
+At the 960 × 540 preview size, whole-frame GPU-span medians at ticks 183/359 were 7.63/7.01 ms for native and 7.77/8.06 ms for the reference, with 24 timestamps per pose and backend. Direct images again matched byte for byte. This 65°C run also produced zero high-load clock samples.
+
+Temporal reconstruction passed live resize, camera-cut reset, camera jitter and one solver update per displayed frame. Native used a 320 × 180 source at 481 × 271 display and 1.5×. On the reference gallery's fixed direct-only pose, 2× temporal reconstruction reduced mean RGB error across 3,839 edge pixels from 12.21 to 8.36 code values relative to converged native-resolution Three TRAA. The comparison used bilinear reconstruction of the same half-resolution input and zero sharpening.
+
+The analytic no-engine GPU tests covered constant incoming radiance, near occlusion, split intervals, moving-instance shadows, external output textures and resize. Two clean npm consumers imported the packed subpath with Three.js absent. Frozen install, package build, typecheck, lint and the complete unit suite passed (1,620 tests, 13 skipped). Hardware validation used Chrome on the RTX 3060 Laptop.
+
 ## 2026-11-19 · SRC.1 · Split Radiance Cascades rail and interval tracer
 Did: added the [lamp gallery and spec](docs/radiance-cascades/SPEC.md), [plan](docs/radiance-cascades/PLAN.md), [research collection](research/radiance-cascades/README.md), and [GPU interval fixture](experiments/rc-intervals/README.md). The rail freezes pose/history for direct, indirect and composite inspection. Hit scratch is indexed by ray lane.
 Verified: locked install, Pages-base examples build, typecheck and lint. The full unit suite with two workers passed 1,617 tests with 13 skips. The first parallel run timed out in an existing archive-unpack test. Six interval results matched the analytical fixture through both Vite dev and build on NVIDIA Ampere.

@@ -4,7 +4,10 @@ import { imageMean, waitForRailControl, type RailCapture } from '../rc-rail/fram
 
 type Backend = 'three' | 'interval';
 type Views = Record<'lit' | 'direct' | 'indirect', RailCapture>;
-const width = 640, height = 360, warmFrames = 48, measuredFrames = 24;
+// The full gallery preview increases GPU load on a vsync-paced host.
+const preview = import.meta.env.VITE_RC_AB_SIZE === '960x540';
+const width = preview ? 960 : 640, height = preview ? 540 : 360;
+const warmFrames = 48, measuredFrames = 24;
 const starts = [112, 288];
 const startTime = performance.now();
 const data: Record<string, unknown> = { width, height, warmFrames, measuredFrames, starts, resolve: 'native', stride: 2 };

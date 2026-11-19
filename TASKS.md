@@ -563,7 +563,7 @@ Status: **todo**. Dennis's picks on the close-out page (2026-11-18): these five 
 
 | Task | Status | Scope |
 | --- | --- | --- |
-| SRC.1 | review | [Reference solver, architectural rail and interval consumer](docs/radiance-cascades/SPEC.md). [Follow-on work](docs/radiance-cascades/PLAN.md) covers the shared tracer, moving geometry and reconstruction. |
+| SRC.1 | review | [Reference solver, architectural rail and interval consumer](docs/radiance-cascades/SPEC.md). [Native WebGPU solver, gallery A/B, moving shutter and temporal reconstruction](docs/radiance-cascades/PLAN.md). |
 
 ## Later
 

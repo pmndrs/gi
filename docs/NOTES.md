@@ -600,4 +600,6 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 
 ## Split Radiance Cascades
 
+The native solver accepts world-position and signed normal textures. Its output is linear diffuse irradiance; multiply by albedo / π before display. The gallery can render reduced-resolution inputs and reconstruct from color, depth and motion.
+
 The S5 solver snapshots opaque triangles in world space at `setScene`. Camera motion and changes to existing lights or materials can share that snapshot. Rigid motion requires updating the geometry seen by both the closest-hit and shadow paths. The [project spec](radiance-cascades/SPEC.md) describes the interval-tracer boundary.
