@@ -2,7 +2,7 @@
  * then: node tools/gpu/pages/rc-polished-budget/run.ts */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, parse, resolve } from 'node:path';
 import { judgeTiming, type ClockSummary } from '../../clock-note.ts';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { LOCK_HELD_ENV, withBenchLock } from '../../../reference/bench-lock.ts';
@@ -26,7 +26,9 @@ if (process.argv[2] === '--inside-lock') {
     }
     writeFileSync(idleFile, JSON.stringify(idleWindows,null,2) + '\n');
     console.log('RTX utilization before Chrome:', JSON.stringify(idleWindows));
-    const child = spawnSync(process.execPath, ['tools/gpu/run.ts', '--gpu', 'nvidia', '--filter', 'rc-polished-budget', '--json', resultFile], {stdio:'inherit'});
+    const capture = parse(resultFile);
+    const child = spawnSync(process.execPath, ['tools/gpu/run.ts', '--gpu', 'nvidia', '--filter', 'rc-polished-budget',
+        '--json', resultFile, '--out', join(capture.dir, capture.name + '-captures')], {stdio:'inherit'});
     if (child.error) throw child.error;
     process.exit(child.status ?? 1);
 }
