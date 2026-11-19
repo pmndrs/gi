@@ -559,7 +559,9 @@ export class HashGridCache implements WorldCache {
         const budgeted = options.cellShading === 'budgeted';
         if (!budgeted && options.cellShading !== 'per-hit') throw new RangeError(`@pmndrs/gi: cellShading is 'per-hit' or 'budgeted', got ${String(options.cellShading)}`);
         const changeReset = !budgeted && options.cellChangeReset === true;
-        const flags = (budgeted ? CELL_SHADING_FLAG.budgeted : 0) | (changeReset ? CELL_SHADING_FLAG.changeReset : 0);
+        const history = options.cellChangeResetHistory ?? 0;
+        if (!Number.isInteger(history) || history < 0 || history > 15) throw new RangeError(`@pmndrs/gi: cellChangeResetHistory is a whole number of samples from 0 to 15, got ${history}`);
+        const flags = (budgeted ? CELL_SHADING_FLAG.budgeted : 0) | (changeReset ? CELL_SHADING_FLAG.changeReset | (history << CELL_SHADING_FLAG.historyShift) : 0);
         device.queue.writeBuffer(prepared.rayListsUniform, RAY_LISTS_CELL_SHADING_WORD * WORD_BYTES, new Uint32Array([flags]));
         if (changeReset) device.queue.writeBuffer(prepared.cellShading.uniform, 0, cellShadingWords(0, recentChangesUnion(this.recentChanges)));
         if (!budgeted) return false;

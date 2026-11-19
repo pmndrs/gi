@@ -43,7 +43,7 @@
  *    follow the sun no slower than per hit (their changed cells start over).
  *    Recorded: every lag.
  *
- * P6.3 (experiment E9, `cellChangeReset`): every section also runs per hit
+ * P6.2b (experiment E9, `cellChangeReset`): every section also runs per hit
  * with E9 on, which must converge as per hit does and follow both changes
  * in fewer frames than per hit without it.
  *

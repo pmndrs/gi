@@ -47,10 +47,21 @@ const HEIGHT = 720;
 const WARM_FRAMES = 60;
 const SETTLE_FRAMES = 30;
 const TIMED_FRAMES = 60;
-/** Per hit, then each budget (cells lit a frame). */
-const SETTINGS: readonly Pick<RadianceCacheSettings, 'cellShading' | 'cellShadingBudget'>[] = [
-    { cellShading: 'per-hit', cellShadingBudget: 0 },
-    ...[5000, 20000, 80000].map((budget) => ({ cellShading: 'budgeted' as const, cellShadingBudget: budget })),
+/**
+ * Per hit, then each budget (cells lit a frame); then, for E9's box test
+ * (P6.2b), per hit with a point light changing every frame (16 change boxes
+ * in the window), E9 off and on. A scene with no point light skips those.
+ */
+interface CostSetting {
+    readonly name: string;
+    readonly settings: Pick<RadianceCacheSettings, 'cellShading' | 'cellShadingBudget' | 'cellChangeReset'>;
+    readonly lightChanging: boolean;
+}
+const SETTINGS: readonly CostSetting[] = [
+    { name: 'per-hit', settings: { cellShading: 'per-hit', cellShadingBudget: 0, cellChangeReset: false }, lightChanging: false },
+    ...[5000, 20000, 80000].map((budget) => ({ name: `budgeted ${budget / 1000}k`, settings: { cellShading: 'budgeted' as const, cellShadingBudget: budget, cellChangeReset: false }, lightChanging: false })),
+    { name: 'per-hit, a light changing, E9 off', settings: { cellShading: 'per-hit', cellShadingBudget: 0, cellChangeReset: false }, lightChanging: true },
+    { name: 'per-hit, a light changing, E9 on', settings: { cellShading: 'per-hit', cellShadingBudget: 0, cellChangeReset: true }, lightChanging: true },
 ];
 
 /** The world cache's timed sections (hash-grid-cache.ts), in their order. */
@@ -69,7 +80,8 @@ const WORLD_CACHE_SECTIONS = [
     'ResolveCells',
 ] as const;
 
-async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<() => void> {
+/** The loaded scene's update, and a way to nudge its first point light's intensity (null without one). */
+async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<{ update: () => void; nudge: ((on: boolean) => void) | null }> {
     const loaded = await loadScene(manifest, () => {});
     const content = new Set<object>();
     loaded.content.traverse((object) => content.add(object));
@@ -79,7 +91,16 @@ async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manif
     loaded.scene.updateMatrixWorld();
     const sync = new SceneSync(platform.scene, { device, warn: () => {} });
     sync.environment = platformSkyEnvironment(manifest);
-    return () => sync.update(loaded.scene);
+    let nudge: ((on: boolean) => void) | null = null;
+    loaded.scene.traverse((object) => {
+        const light = object as unknown as { isPointLight?: boolean; intensity: number };
+        if (!light.isPointLight || nudge) return;
+        const base = light.intensity;
+        nudge = (on) => {
+            light.intensity = on ? base * 1.01 : base;
+        };
+    });
+    return { update: () => sync.update(loaded.scene), nudge };
 }
 
 async function readCounters(device: GPUDevice, buffer: GPUBuffer): Promise<Uint32Array> {
@@ -111,7 +132,12 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
     platform.addTechnique(technique);
     platform.setOutput(technique);
     await platform.prepare();
-    const beforeFrame = await describeLoaded(platform, device, manifest);
+    const described = await describeLoaded(platform, device, manifest);
+    let lightChanging = false;
+    const beforeFrame = (): void => {
+        if (lightChanging) described.nudge?.(frameNumber % 2 === 0);
+        described.update();
+    };
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     let frameNumber = 0;
     const frame = (): void => {
@@ -138,7 +164,9 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
         if (!cache) throw new Error('no world cache');
         const results: Record<string, unknown> = {};
         for (const setting of SETTINGS) {
-            Object.assign(technique.settings, setting);
+            if (setting.lightChanging && !described.nudge) continue;
+            Object.assign(technique.settings, setting.settings);
+            lightChanging = setting.lightChanging;
             for (let index = 0; index < SETTLE_FRAMES; index++) {
                 frame();
                 if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
@@ -156,13 +184,14 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
                 timedFrames++;
                 for (const pass of sample.passes) sums.set(pass.name, (sums.get(pass.name) ?? 0) + pass.gpuMs);
             }
-            if (timedFrames === 0) throw new Error(`${id}, ${JSON.stringify(setting)}: no timed frame`);
+            if (timedFrames === 0) throw new Error(`${id}, ${setting.name}: no timed frame`);
             const counters = await readCounters(device, cache.buffers.tileWords);
             const mean = (name: string): number => (sums.get(name) ?? 0) / timedFrames;
             const sections = Object.fromEntries(WORLD_CACHE_SECTIONS.map((section) => [section, round(mean(`radiance-cache/${section}`))]));
             const worldCacheMs = WORLD_CACHE_SECTIONS.reduce((sum, section) => sum + mean(`radiance-cache/${section}`), 0);
             const allMs = [...sums.keys()].reduce((sum, name) => sum + mean(name), 0);
-            const name = setting.cellShading === 'per-hit' ? 'per-hit' : `budgeted ${setting.cellShadingBudget / 1000}k`;
+            const name = setting.name;
+            const budgeted = setting.settings.cellShading === 'budgeted';
             results[name] = {
                 worldCacheMs: round(worldCacheMs),
                 probeTraceMs: round(mean('radiance-cache/sample-populate')),
@@ -173,8 +202,8 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
                     firstBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount0],
                     secondBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount1],
                     shadowRays: counters[HASH_GRID_COUNTER.visibilityRayCount],
-                    cellsHit: setting.cellShading === 'per-hit' ? null : counters[HASH_GRID_COUNTER.cellCandidateCount],
-                    cellsLit: setting.cellShading === 'per-hit' ? null : counters[HASH_GRID_COUNTER.cellShadedCount],
+                    cellsHit: budgeted ? counters[HASH_GRID_COUNTER.cellCandidateCount] : null,
+                    cellsLit: budgeted ? counters[HASH_GRID_COUNTER.cellShadedCount] : null,
                 },
             };
         }

@@ -125,8 +125,8 @@ export const RAY_LISTS_UNIFORM_BYTES = 64;
 
 /** Word of `HashGridCacheRayLists` that says how cells are lit: bit 0 budgeted (lever E8), bit 1 per-hit change reset (E9). Written every frame. */
 export const RAY_LISTS_CELL_SHADING_WORD = 14;
-/** Bits of that word. */
-export const CELL_SHADING_FLAG = { budgeted: 1, changeReset: 2 } as const;
+/** Bits of that word; bits 8-15 hold E9's history kept (`cellChangeResetHistory`). */
+export const CELL_SHADING_FLAG = { budgeted: 1, changeReset: 2, historyShift: 8 } as const;
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
 export const RESERVOIR_WORDS = 3;
@@ -305,6 +305,11 @@ fn HashGridCache_CellShadingBudgeted() -> bool {
 // Experiment E9: per hit, a cell hit near a recent scene change takes the frame's samples whole.
 fn HashGridCache_ChangeResetPerHit() -> bool {
     return (g_HashGridCache_RayLists.cell_shading & ${CELL_SHADING_FLAG.changeReset}u) != 0u;
+}
+
+// E9: the samples of a marked cell's history it keeps (0: the frame's samples replace it).
+fn HashGridCache_ChangeResetHistory() -> f32 {
+    return f32((g_HashGridCache_RayLists.cell_shading >> ${CELL_SHADING_FLAG.historyShift}u) & 0xffu);
 }
 
 // E9's mark in a cell's direct scratch count (PopulateCells sets it, UpdateTiles takes it off).
@@ -888,13 +893,17 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // Experiment E9: a cell marked near a recent change takes this frame's samples whole.
         let direct_scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
         let change_reset = (atomicAnd(&g_HashGridCache_UpdateScratch[direct_scratch + 3u], ~HASHGRIDCACHE_CHANGE_RESET_BIT) & HASHGRIDCACHE_CHANGE_RESET_BIT) != 0u;
-        var previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
+        let previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
         let new_direct_samples = UpdateTiles_TakeScratch(direct_scratch);
-        if (change_reset && new_direct_samples.w > 0.0) {
-            previous_direct_radiance = vec4f(0.0);
-        }
         var direct_radiance = previous_direct_radiance;
-        if (!HashGridCache_CellShadingBudgeted() || new_direct_samples.w > 0.0) {
+        if (change_reset && new_direct_samples.w > 0.0) {
+            // The history counts as at most cellChangeResetHistory samples beside the frame's (0: replaced).
+            let kept = min(HashGridCache_ChangeResetHistory(), previous_direct_radiance.w);
+            let total = kept + new_direct_samples.w;
+            let mean = (previous_direct_radiance.rgb / max(previous_direct_radiance.w, 1.0) * kept + new_direct_samples.rgb) / total;
+            let count = min(total, g_HashGridCacheConstants.max_sample_count);
+            direct_radiance = vec4f(mean * count, count);
+        } else if (!HashGridCache_CellShadingBudgeted() || new_direct_samples.w > 0.0) {
             direct_radiance = UpdateTiles_Accumulate(previous_direct_radiance, new_direct_samples, g_HashGridCacheConstants.max_sample_count);
         }
 
@@ -911,9 +920,11 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // Capsaicin's blend.
         if (g_HashGridCacheConstants.use_multibounce != 0u) {
             var previous_indirect_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index]);
-            // E9: the second bounce's history is cut to one sample (its mean kept), so it follows too.
-            if (change_reset && previous_indirect_radiance.w > 1.0) {
-                previous_indirect_radiance = vec4f(previous_indirect_radiance.rgb / previous_indirect_radiance.w, 1.0);
+            // E9: the second bounce's history is cut to max(cellChangeResetHistory, 1) samples (its mean
+            // kept), so it follows too.
+            let indirect_kept = max(HashGridCache_ChangeResetHistory(), 1.0);
+            if (change_reset && previous_indirect_radiance.w > indirect_kept) {
+                previous_indirect_radiance = vec4f(previous_indirect_radiance.rgb / previous_indirect_radiance.w * indirect_kept, indirect_kept);
             }
             let new_indirect_samples = UpdateTiles_TakeScratch(HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index);
             var indirect_radiance = previous_indirect_radiance;

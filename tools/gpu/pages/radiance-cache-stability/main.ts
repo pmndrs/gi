@@ -71,7 +71,7 @@ const DARK_FLOOR = 0.05;
 const env = import.meta.env as Record<string, unknown>;
 const CELL_SHADING: Partial<RadianceCacheSettings> = {
     ...(env.VITE_RC_CELL_SHADING === 'budgeted' ? { cellShading: 'budgeted', cellShadingBudget: Number(env.VITE_RC_CELL_BUDGET ?? 20000) } : { cellShading: 'per-hit' }),
-    // P6.3: experiment E9, per-hit change reset.
+    // P6.2b: experiment E9, per-hit change reset.
     cellChangeReset: env.VITE_RC_CHANGE_RESET === '1',
 };
 
