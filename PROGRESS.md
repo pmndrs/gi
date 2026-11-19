@@ -21,6 +21,19 @@ Rules:
 
 ---
 
+## 2026-11-19 · TU.5 DV-01: RTXGI's back-face rule, built and measured, off by default · implementer (opus)
+Did: worktree `gi-tu5`, branch `tu5-divergence` (from `win-tu-checks` 4198c6c). New setting `backFaceRayThreshold` (settings.ts; `null` default = our old rule, back-face rays are black samples; a number = RTXGI's `probeRandomRayBackfaceThreshold`, `RTXGI_BACK_FACE_RAY_THRESHOLD` 0.1). `wgsl/blend.ts`: back-face blended rays leave the irradiance average; an update with at least ⌊N × t⌋ (min 1) blended back faces is `DDGI_UPDATE_SKIPPED`: old irradiance tiles and history kept, distances blend, a state-3 probe stays in state 3, one owed update taken off (as RTXGI's early `return`, `ProbeBlendingCS.hlsl:417-465`). Uniform word 97 (`layout.ts`, `wgsl/common.ts`); census word "updates skipped for back faces (total)". Unit test for the setting's mapping (ddgi.test.ts). Rows in `bench/results/checks.csv` and `m4-textured-accuracy.csv`.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, bench lock; A/B = same code, default off vs on):
+| check | rule off (default) | rule on |
+|---|---|---|
+| `ddgi-leak` two-room / thin-wall / closed-door | 0.836 / 0.603 / 0.060% PASS | 0.836 / 0.603 / 0.060% PASS (all within 1e-6) |
+| `ddgi-furnace` E/π (mean err, worst) | 0.49925 (0.15%, 3.7%) PASS | the same PASS |
+| `ddgi-change-still` | PASS, 0 skips | PASS; Cornell identical, two-room atlas mean +0.015%; 0 updates skipped on either |
+| Sponza textured, no GTAO vs Cycles: colonnade / upper gallery | +25.46% (FLIP 0.366) / +21.77% (0.394) | +31.50% (0.402) / +22.99% (0.400) |
+On against off, Sponza's GI term is +4.8% (colonnade) and +1.0% (gallery), mostly on the curtains. So the rule takes Sponza further from Cycles and is not the cause of its +22–25%. **Default: off** (DECISIONS 2026-11-19); the setting stays for native parity. Reviewer (Opus, read-only `claude -p` with `.claude/agents/reviewer.md`): pass with notes; its one note (a skipped update keeps `lastUpdateSeconds`) checked: only the hysteresis fade reads it, so the next blended update fades over the time since the last real one, as intended.
+Not verified: the untextured Sponza page (`ddgi-sponza-accuracy/run.ts`): the page passed but the runner timed out reading its 1920×1080 report both times (NOTES); its reference is older than the manifest anyway. Baseline means from its screenshot: indirect 0.001686, full 0.013974. Not run on the Intel (correctness unchanged with the rule off, which is the default). `ddgi-door-swing` and the furnished room (the register's other checks) not run.
+Next: nothing for DV-01 unless Sponza's overshoot is fixed elsewhere (then try the rule again).
+
 ## 2026-11-19 · Windows checks ported onto pmndrs/gi; TASKS TU.1, TU.2, TU.4 · implementer (opus)
 Did: cherry-picked the three Windows entries below, their CSV rows (`bench/results/m4-textured-accuracy.csv`, `bench/results/checks.csv`) and `tools/gpu/pages/ddgi-low-warmup` from the old repo's `m34-win` (7375729, 8bd3493, 18b5cac, a0cc24d; not a18be01, whose GTAO-off change `main` already has). Their commit IDs (e6d0d21, f183fb7) are the old repo's. Entries moved to the top, as this log orders them. `docs/milestones/M3-M4.md`: one accuracy table, without GTAO (the default) first and with GTAO second, plus the sponza-full verdict; the "not run on the Mac" lines say what ran. TASKS: TU.2 done; TU.1's Intel half and TU.4's table recorded in their status; Later drops the finished items and gains the 2nd-page Intel hang and the out-of-bar scenes. NOTES: the Intel hang note.
 Verified: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test` (1,617 pass, 13 skipped) pass; `ddgi-low-warmup` type-checks and builds with vite against this code (paths and harness exports unchanged). No GPU run: the numbers are the Windows sessions'.

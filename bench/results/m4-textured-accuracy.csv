@@ -111,3 +111,15 @@ date,commit,device,browser,adapter,scene,camera,setting,metric,value,unit
 2026-11-19,f183fb7,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO on GI term (--no-occlusion; new default),mean_error,-16.21,percent
 2026-11-19,f183fb7,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO on GI term (--no-occlusion; new default),flip_8x8,0.722,flip
 2026-11-19,f183fb7,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO on GI term (--no-occlusion; new default),block_error_mean,73.3,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),mean_error,25.46,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),flip_8x8,0.366,flip
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),block_error_mean,31.0,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,upper-gallery,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),mean_error,21.77,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,upper-gallery,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),flip_8x8,0.394,flip
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,upper-gallery,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),block_error_mean,32.3,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 on (backFaceRayThreshold 0.1: RTXGI's back-face rule),mean_error,31.5,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 on (backFaceRayThreshold 0.1: RTXGI's back-face rule),flip_8x8,0.402,flip
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 on (backFaceRayThreshold 0.1: RTXGI's back-face rule),block_error_mean,35.7,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,upper-gallery,no GTAO; DV-01 on (backFaceRayThreshold 0.1: RTXGI's back-face rule),mean_error,22.99,percent
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,upper-gallery,no GTAO; DV-01 on (backFaceRayThreshold 0.1: RTXGI's back-face rule),flip_8x8,0.4,flip
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,upper-gallery,no GTAO; DV-01 on (backFaceRayThreshold 0.1: RTXGI's back-face rule),block_error_mean,33.2,percent

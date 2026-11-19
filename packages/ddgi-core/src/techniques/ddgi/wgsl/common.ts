@@ -87,6 +87,11 @@ struct DdgiUniforms {
     // uniforms of its own, and its probes' points are listed from here on in
     // the points debug view (the volumes' probes one after another).
     probeBase: u32,
+    // RTXGI's back-face rule (settings.backFaceRayThreshold, ddgi/blend): back-face
+    // rays are left out of the irradiance average, and an update whose blended
+    // rays hit back faces at least this share of the time isn't blended.
+    // Negative: the rule is off and back-face rays are black samples.
+    backFaceRayThreshold: f32,
     // The camera-following volume (m3-moving.md §4.2, scroll.ts): xyz the
     // lattice coordinates of its window's first probe, whose world position
     // is volumeOrigin (whole numbers; 0 for a fixed volume); w unused.

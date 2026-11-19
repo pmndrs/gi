@@ -1235,3 +1235,11 @@ date,commit,device,browser,scene,metric,value
 2026-11-19,e6d0d21,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,m34-intel/low_warmup/max4096/median_frame_ms,25.9
 2026-11-19,e6d0d21,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,m34-intel/low_warmup/max4096/warm_up_frames,98
 2026-11-19,e6d0d21,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,m34-intel/low_warmup/max1024/warm_up_frames,393
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,two-room,tu5/dv01-off/leak/percent,0.836
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,thin-wall,tu5/dv01-off/leak/percent,0.603
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,closed-door,tu5/dv01-off/leak/percent,0.06
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,furnace,tu5/dv01-off/furnace/e_over_pi,0.49925
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,two-room,tu5/dv01-on/leak/percent,0.836
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,thin-wall,tu5/dv01-on/leak/percent,0.603
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,closed-door,tu5/dv01-on/leak/percent,0.06
+2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,furnace,tu5/dv01-on/furnace/e_over_pi,0.49925

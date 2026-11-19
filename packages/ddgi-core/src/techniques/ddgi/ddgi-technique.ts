@@ -81,6 +81,7 @@ import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import {
     BYTES_PER_TEXEL,
+    CENSUS_BACK_FACE_SKIPS_TOTAL,
     CENSUS_CHANGE_CLOCK,
     CENSUS_DIRECT_DROPPED,
     CENSUS_DIRECT_HITS,
@@ -1960,9 +1961,10 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * counts twice), "probes marked (total)" (every mark since `prepare`),
      * "probes owed updates" and "probes updated at priority" (the
      * scheduler's), "feedback requests" (updates whose feedback test fired
-     * that frame), "feedback requests (total)" and "probes blended (total)"
-     * (since `prepare`), "key probes passing a change" and "probes
-     * propagated" (that frame; T2.4c), their totals since `prepare`, and the
+     * that frame), "feedback requests (total)", "probes blended (total)" and
+     * "updates skipped for back faces (total)" (since `prepare`), "key
+     * probes passing a change" and "probes propagated" (that frame; T2.4c),
+     * their totals since `prepare`, and the
      * volume's "change clock" need the GPU census, which runs only when the
      * platform times passes (`gpuTiming`), and arrive a few frames late;
      * without them those counters are absent, not guessed.
@@ -2019,6 +2021,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             'probes blended (total)': census[CENSUS_PROBES_BLENDED_TOTAL],
             'key probes passing a change': census[CENSUS_KEY_CHANGES_PASSED],
             'key changes passed (total)': census[CENSUS_KEY_CHANGES_PASSED_TOTAL],
+            'updates skipped for back faces (total)': census[CENSUS_BACK_FACE_SKIPS_TOTAL],
             'probes propagated': census[CENSUS_PROBES_PROPAGATED],
             'probes propagated (total)': census[CENSUS_PROBES_PROPAGATED_TOTAL],
             // Each volume has a clock of its own: their sum (one volume's own with one), and each beside it with several.
@@ -2734,6 +2737,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         words[UNIFORM_WORD.holdFineProbes] = blend.holdFineProbes ? 1 : 0;
         // The sun layer's unit (T2.6b): the blend weighs that layer by it in the probe's mean. Read only with a sun layer.
         data.set([...(sun ? sunLightOf(sun) : [0, 0, 0]), 0], UNIFORM_WORD.sunLight);
+        data[UNIFORM_WORD.backFaceRayThreshold] = blend.backFaceRayThreshold;
         data[UNIFORM_WORD.cameraFalloffDistance] = cameraFalloffDistance(grid);
         data.set([...frame.camera.position, inViewMargin(grid)], UNIFORM_WORD.cameraPosition);
         frustumPlanes(frame.camera).forEach((plane, index) => data.set(plane, FRUSTUM_PLANE_WORDS[index]));
