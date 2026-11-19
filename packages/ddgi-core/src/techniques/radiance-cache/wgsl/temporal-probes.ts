@@ -55,7 +55,6 @@ import {
     FRAME_WGSL,
     LAYOUT,
     previousScreenWgsl,
-    PROBE_SPAWN_STRUCT_WGSL,
     RADIANCE_BACKUP_WGSL,
     screenDepthWgsl,
     screenNormalWgsl,
@@ -187,7 +186,9 @@ fn rcIsSurfacePixel(pixel: vec2u) -> bool {
 // last frame's mask, or RC_INVALID_ID when the pixel came from off the screen.
 fn rcPreviousProbeMaskAt(pixel: vec2u) -> u32 {
     let uv = (vec2f(pixel) + 0.5) / vec2f(rcFrame.bufferDimensions);
-    let previousPos = vec2i(floor(rcPreviousUv(pixel, uv) * vec2f(rcFrame.bufferDimensions)));
+    // int2(previous_uv * g_BufferDimensions): truncated towards zero, so a point up to a pixel
+    // off the left or top edge still reads the first column or row.
+    let previousPos = vec2i(rcPreviousUv(pixel, uv) * vec2f(rcFrame.bufferDimensions));
     if (any(previousPos < vec2i(0)) || any(previousPos >= vec2i(rcFrame.bufferDimensions))) {
         return RC_INVALID_ID;
     }
@@ -269,6 +270,7 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
         let reprojectedDir = reprojected / max(reprojectedLen, 1e-30); // normalize
 
         if (dot(seedNormal, reprojectedDir) > 0.0) {
+            // Kept in the probe: a direction on the square's far edge would give cell 8 (D45).
             let remapCell = min(vec2u(rcMapToHemiOctahedronInverse(rcToProbeFrame(reprojectedDir, seedNormal)) * f32(RC_PROBE_SIZE)), vec2u(RC_PROBE_SIZE - 1u));
             let remapCellIndex = remapCell.x + remapCell.y * RC_PROBE_SIZE;
             rcAccumulateRadiance(remapCellIndex, rcQuantizeRadiance(vec4f(probeRadiance.xyz, min(reprojectedLen, RC_LARGEST_HALF))));
@@ -276,7 +278,7 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
     }
     workgroupBarrier();
 
-    // Calculate the radiance backup value to be used for unvisited cells (gi1.comp:407-429; D36).
+    // Calculate the radiance backup value to be used for unvisited cells (gi1.comp:407-429; D41).
     rcComputeRadianceBackup(localIndex);
 
     let probe = did / RC_PROBE_SIZE;
@@ -334,7 +336,8 @@ ${FRAME_WGSL}
 ${LINEAR_INDEX_WGSL}
 ${COUNTERS_WGSL}
 @group(1) @binding(1) var<storage, read> rcCachedTileLRU: array<u32>;
-// g_ScreenProbes_ProbeCachedTileIndexBuffer: each cached slot's position (f32 bits) and packed normal.
+// g_ScreenProbes_ProbeCachedTileIndexBuffer: each cached slot's position (f32 bits) and packed normal,
+// as words of a buffer rather than an rgba32float texture (register D45).
 @group(1) @binding(2) var<storage, read> rcCachedTileIndex: array<vec4u>;
 @group(1) @binding(3) var<storage, read_write> rcCachedTileListCount: array<atomic<u32>>;
 @group(1) @binding(4) var<storage, read_write> rcCachedTileListElements: array<vec4u>;
@@ -354,7 +357,7 @@ fn ${TEMPORAL_ENTRY_POINT.count}(@builtin(workgroup_id) workgroup: vec3u, @built
     if ((cachedTileIndex & 0x80000000u) == 0u) {
         let worldPos = bitcast<vec3f>(rcCachedTileIndex[cachedTileIndex].xyz);
         // transformPointProjection(world_pos, g_ViewProjection), camera-relative. A point behind
-        // the camera (w <= 0) is never on the screen; Capsaicin relies on its depth test for that.
+        // the camera (w <= 0) is never on the screen; Capsaicin relies on its depth test for that (D45).
         let clip = rcFrame.viewProjection * vec4f(worldPos - rcFrame.eye, 1.0);
         var homogeneous = clip.xyz / clip.w;
         homogeneous = vec3f(0.5 * vec2f(homogeneous.x, -homogeneous.y) + 0.5, homogeneous.z);

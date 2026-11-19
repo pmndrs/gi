@@ -4,11 +4,11 @@
  *
  * - **Last frame's probes:** the atlas, the mask and the SH as the frame left
  *   them (Capsaicin swaps two of each, `probe_buffer_index_`; we copy the
- *   current ones at the start of the frame, register D39), and the host's
+ *   current ones at the start of the frame, register D44), and the host's
  *   depth and normals through the platform's `GpuScreenHistory`.
  * - **The off-screen probe cache:** an atlas of cached probe tiles, each
  *   tile's position and normal, the LRU list (Capsaicin's two lists swap; we
- *   copy the reordered one back, D39) with its flags, MRU order and scans, and
+ *   copy the reordered one back, D44) with its flags, MRU order and scans, and
  *   the per-tile lists `CountScreenProbes` and `ScatterScreenProbes` build.
  * - **Adaptive sampling:** the empty-tile and override-tile lists.
  *
@@ -90,7 +90,7 @@ export interface HistoryResources {
     readonly overrideTiles: GPUBuffer;
     /** g_ScreenProbes_ProbeSpawnProbeBuffer: per spawned probe, the evicted and updated LRU entries and the replaced probe's seed. */
     readonly spawnProbe: GPUBuffer;
-    /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D38). */
+    /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D43). */
     readonly evictedRadiance: GPUBuffer;
     readonly bytes: number;
 }
@@ -264,7 +264,7 @@ export class ScreenProbeHistory {
         const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
         const tiles = resources.probeTileCount;
 
-        // Last frame's probes, aside: Capsaicin swaps its two buffers (probe_buffer_index_), we copy (D39).
+        // Last frame's probes, aside: Capsaicin swaps its two buffers (probe_buffer_index_), we copy (D44).
         if (hasHistory) {
             encoder.copyTextureToTexture({ texture: inputs.probeAtlas }, { texture: resources.previousProbeAtlas }, [layout.atlasSize[0], layout.atlasSize[1]]);
             encoder.copyTextureToTexture({ texture: inputs.probeMask, mipLevel: 0 }, { texture: resources.previousProbeMask }, [layout.probeCount[0], layout.probeCount[1]]);
@@ -312,7 +312,7 @@ export class ScreenProbeHistory {
 
     /**
      * After the blend: `ReorderScreenProbes` (gi1.cpp:2544-2557) with the scan
-     * of the LRU flags, the new order copied back (D39); and the screen's depth
+     * of the LRU flags, the new order copied back (D44); and the screen's depth
      * and normals copied for the next frame. The history is valid from here.
      */
     encodeReorder(encoder: GPUCommandEncoder, screen: FrameScreen): void {

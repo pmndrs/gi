@@ -25,20 +25,17 @@
  */
 
 /**
- * The screen-probe kernels of phase 2 (RC2.1), one WGSL entry point per
- * Capsaicin kernel, named as Capsaicin names it, with the lines it ports.
- * Each kernel's own resources are in group 1 (the platform's are group 0);
- * the layouts are next to the code.
+ * The screen-probe kernels (RC2.1, with history since RC4.1), one WGSL entry
+ * point per Capsaicin kernel, named as Capsaicin names it, with the lines it
+ * ports. Each kernel's own resources are in group 1 (the platform's are group
+ * 0); the layouts are next to the code.
  *
- * What phase 2 leaves out, and where it comes back (docs/design/radiance-cache.md,
- * "Phase 2"): `ReprojectScreenProbes` and every history read (phase 4), so a
- * frame starts with the probe mask cleared, as reprojection leaves a tile with
- * no previous probe (gi1.comp:457); the override-tile list and
- * `PatchScreenProbes` (phase 4); ray guiding and the previous-probe taps in
- * `SampleScreenProbes` (phase 4); temporal blending and the off-screen probe
- * cache in `BlendScreenProbes` (phase 4). Since RC3.2 the probe rays' hits are
- * lit by the world cache between `PopulateScreenProbes` and `BlendScreenProbes`
- * (phase 2's staging, which lit every hit directly, is retired).
+ * The kernels that carry probes between frames (`ReprojectScreenProbes`, the
+ * off-screen cache's lookup and reorder, `PatchScreenProbes`) are in
+ * temporal-probes.ts; `SampleScreenProbes` and `BlendScreenProbes` here read
+ * and write that history (the taps, ray guiding, the hysteresis, the cache).
+ * Since RC3.2 the probe rays' hits are lit by the world cache between
+ * `PopulateScreenProbes` and `BlendScreenProbes`.
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
@@ -253,7 +250,7 @@ fn rcPreviousUv(pixel: vec2u, uv: vec2f) -> vec2f {
  * The per-cell sums of quantised radiance and hit distance that Capsaicin
  * accumulates with `InterlockedAdd` in workgroup memory
  * (`lds_ScreenProbes_RadianceValues`, screen_probes.hlsl:82), kept as 64-bit
- * sums: a low word and a carry word per channel (register D35).
+ * sums: a low word and a carry word per channel (register D40).
  *
  * Capsaicin's 32-bit sums wrap: a miss's hit distance is `FLT_MAX` packed as
  * a half (infinity), which `uint(round(1e4 × ∞))` turns into 0xffffffff, so
@@ -309,7 +306,7 @@ fn rcRadianceSampleCount(cellIndex: u32) -> u32 {
  * radiance and whether it was reached, a tree sum adds them up, and thread 0
  * leaves the result in element 0.
  *
- * Two fixes (register D36). Capsaicin puts in each cell's *summed* samples, so
+ * Two fixes (register D41). Capsaicin puts in each cell's *summed* samples, so
  * a cell that guiding sent 30 rays to weighs 30 times, and then divides the
  * mean by the number of empty cells, so the more cells go unsampled the
  * darker each reads. We put in each cell's mean and keep the mean of the
@@ -334,7 +331,7 @@ fn rcComputeRadianceBackup(localId: u32) {
         // The reached cells' mean radiance. Capsaicin divides it by the number of empty cells
         // too (radiance / max(empty_cell_count, 1.0f)), so the more cells go unsampled the darker
         // each of them reads: under a constant sky with history, about a third of the cells
-        // (register D36).
+        // (register D41).
         rcRadianceBackup[0] = vec4f(totalRadiance.xyz / max(totalRadiance.w, 1.0), RC_MAX_HIT_DISTANCE);
     }
     workgroupBarrier();
@@ -406,9 +403,9 @@ ${CAPSAICIN_WGSL}
 ${FRAME_WGSL}
 @group(1) @binding(1) var rcProbeMask: texture_storage_2d<r32uint, write>;
 
-// ClearProbeMask (gi1.comp:242-246). Capsaicin runs it when the mask is made; in phase 2
-// it runs every frame, leaving each tile as ReprojectScreenProbes leaves a tile that
-// found no previous probe (gi1.comp:457). Phase 4's reprojection takes its place.
+// ClearProbeMask (gi1.comp:242-246). Capsaicin runs it when the mask is made; we run it on
+// last frame's mask when there is no history (the first frame, a resize, resetScreenHistory),
+// so ReprojectScreenProbes finds no previous probe anywhere.
 @compute @workgroup_size(8, 8)
 fn ${ENTRY_POINT.clearProbeMask}(@builtin(global_invocation_id) did: vec3u) {
     if (any(did.xy >= rcFrame.probeCount)) {
@@ -603,7 +600,7 @@ export const SAMPLE_GROUP: GPUBindGroupLayoutDescriptor = {
 
 /**
  * The share of a probe's rays that sample their own cell even when ray
- * guiding has a CDF (register D37): a floor under the luminance CDF, so a
+ * guiding has a CDF (register D42): a floor under the luminance CDF, so a
  * cell that reads black is still refreshed now and then.
  */
 export const RAY_GUIDING_UNIFORM_SHARE = 0.125;
@@ -618,7 +615,7 @@ export const CACHED_TILE_NEW = 0x80000000;
 const PROBE_CELL_WGSL = /* wgsl */ `
 // uint2(mapToHemiOctahedronInverse(mul(direction, CreateTBN(normal))) * probe_size)
 // (gi1.comp:747-749, 1201-1202), as a cell index. A direction exactly on the square's far
-// edge would give cell 8, past the probe; it is kept in the last cell.
+// edge would give cell 8, past the probe; it is kept in the last cell (register D45).
 fn rcProbeCellIndex(direction: vec3f, normal: vec3f) -> u32 {
     let cell = min(vec2u(rcMapToHemiOctahedronInverse(rcToProbeFrame(direction, normal)) * f32(RC_PROBE_SIZE)), vec2u(RC_PROBE_SIZE - 1u));
     return cell.x + cell.y * RC_PROBE_SIZE;
@@ -683,7 +680,7 @@ ${PROBE_SPAWN_PROBE_WGSL}
 @group(1) @binding(15) var<storage, read_write> rcCounters: array<atomic<u32>, 16>;
 @group(1) @binding(16) var<storage, read_write> rcProbeSpawnProbe: array<RcProbeSpawnProbe>;
 // The radiance of the probe each spawned probe replaces, a cell per ray, for BlendScreenProbes
-// to copy into the cache (register D38).
+// to copy into the cache (register D43).
 @group(1) @binding(17) var<storage, read_write> rcEvictedProbeRadiance: array<vec2u>;
 
 const RC_RAY_GUIDING_UNIFORM_SHARE: f32 = ${RAY_GUIDING_UNIFORM_SHARE};
@@ -703,7 +700,7 @@ fn rcReuseCell(radiance: vec4f, probePosition: vec3f, probeNormal: vec3f, cell: 
     let reprojected = hitPoint - worldPosition;
     let reprojectedLength = length(reprojected);
     if (!(reprojectedLength > 0.0)) {
-        return false; // the hit is the probe itself: no direction to take
+        return false; // the hit is the probe itself: no direction to take (D45)
     }
     let reprojectedDirection = reprojected / reprojectedLength; // normalize
     let facing = dot(normal, reprojectedDirection);
@@ -738,7 +735,7 @@ fn rcClaimCachedTile(entry: u32) -> bool {
 // ScreenProbes_ScanRadiance (screen_probes.hlsl:282-338): every thread puts in its cell's weight;
 // the workgroup leaves each cell's exclusive prefix sum over the total in rcCellCdf and the
 // total in rcCellCdfTotal. Capsaicin divides by max(total, 1e-5); a total of 0 is kept as 0 here
-// and the caller samples its own cell instead (register D37).
+// and the caller samples its own cell instead (register D42).
 fn rcScanCellRadiance(localId: u32, weight: f32) {
     rcCellCdf[localId] = weight;
     workgroupBarrier();
@@ -787,7 +784,7 @@ fn rcFindCellIndex(s: f32) -> u32 {
 // rays are guided by (gi1.comp:901-919, 969-978). The probe also picks the cached tile its
 // tile's old probe is evicted into and the cached tile it refreshes (gi1.comp:767-897).
 //
-// Ours differs in the guiding (register D37): a share of the rays (RC_RAY_GUIDING_UNIFORM_SHARE)
+// Ours differs in the guiding (register D42): a share of the rays (RC_RAY_GUIDING_UNIFORM_SHARE)
 // samples its own cell, as a probe without history does, so a black cell is still refreshed;
 // and a probe whose cells all read black samples its own cells (Capsaicin's empty CDF sends
 // every ray to the last cell).
@@ -957,7 +954,7 @@ fn ${ENTRY_POINT.sample}(
     }
 
     // BlendScreenProbes copies the probe this one replaces into the cache (g_ScreenProbes_ProbeBuffer[pos],
-    // gi1.comp:1308); it writes the atlas itself, so the cell is read here (register D38).
+    // gi1.comp:1308); it writes the atlas itself, so the cell is read here (register D43).
     rcEvictedProbeRadiance[did] = rcPackRadiance(textureLoad(rcProbeBuffer, pos, 0));
 
     // Capsaicin's draws, in its order: rand2() for the GGX sample (gi1.comp:950), the
@@ -1154,7 +1151,7 @@ ${TEMPORAL_BLEND_WGSL}
 // BlendScreenProbes (gi1.comp:1166-1331).
 //
 // A cell no ray reached this frame keeps its previous radiance, and only a cell with no
-// history either takes the backup (register D36). Capsaicin gives every unreached cell the
+// history either takes the backup (register D41). Capsaicin gives every unreached cell the
 // backup, divided by the number of empty cells; with ray guiding about a third of a probe's
 // cells go unreached each frame, and the hysteresis below takes a darker value at once, so
 // a constant sky read 1.29 pi L at frame 1 falls to 0.87 pi L.
@@ -1193,7 +1190,7 @@ fn ${ENTRY_POINT.blend}(
     }
     workgroupBarrier();
 
-    // The backup for cells with neither a sample nor history (gi1.comp:1212-1234; D36).
+    // The backup for cells with neither a sample nor history (gi1.comp:1212-1234; D41).
     rcComputeRadianceBackup(localId);
 
     // We can now map back to our regular probe grid (gi1.comp:1236-1256).
@@ -1207,7 +1204,7 @@ fn ${ENTRY_POINT.blend}(
     if (sampleCount > 0u) {
         radiance /= f32(sampleCount);
     } else if (previousRadiance.w > 0.0) {
-        radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D36)
+        radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D41)
     } else {
         radiance = rcRadianceBackup[0];
     }

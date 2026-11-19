@@ -36,7 +36,7 @@ describe("BlendScreenProbes' biased hysteresis (gi1.comp:1262-1268)", () => {
     });
 });
 
-describe('the empty-cell rule (register D36)', () => {
+describe('the empty-cell rule (register D41)', () => {
     // Every reached cell holds the sky (1); cells 0..19 got no ray this frame.
     const counts = Array.from({ length: PROBE_CELLS }, (_, cell) => (cell < 20 ? 0 : 1 + (cell % 3)));
     const sums = counts.map((count) => count * 1);
@@ -58,7 +58,7 @@ describe('the empty-cell rule (register D36)', () => {
     });
 });
 
-describe('ray guiding (SampleScreenProbes, gi1.comp:916-978, register D37)', () => {
+describe('ray guiding (SampleScreenProbes, gi1.comp:916-978, register D42)', () => {
     it('builds the exclusive CDF and finds the last cell at or below a draw, skipping empty cells', () => {
         const { cdf, total } = cellCdf([1, 0, 1, 2]);
         expect(total).toBe(4);
@@ -118,7 +118,7 @@ describe('the off-screen probe cache', () => {
     });
 });
 
-describe('a constant sky with history (register D36): the cause of GI-1.2 drifting dark', () => {
+describe('a constant sky with history (register D41): the cause of GI-1.2 drifting dark', () => {
     const report = [1, 2, 4, 8, 16, 32, 64, 128, 200, 300];
 
     it("reproduces Capsaicin's 1.30 at frame 1 falling to about 0.87 (native: 1.294 and 0.874)", () => {

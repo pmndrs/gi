@@ -1,0 +1,4 @@
+{
+    "description": "RC4.1: frame-to-frame relative change of the radiance cache irradiance (mean and p95 per pixel) on two-room and Sponza, camera still and slowly moving, screen-probe history on and off, after convergence. A measurement, not a gate: only NaN, infinite or negative values fail.",
+    "timeoutMs": 900000
+}

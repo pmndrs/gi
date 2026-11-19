@@ -658,7 +658,7 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| RC4.1 | Temporal screen probes: `ReprojectScreenProbes` (plane and normal tests, the 3×3 taps, backup radiance), the off-screen LRU probe cache (`CountScreenProbes`, the scan, `ScatterScreenProbes`, `ReorderScreenProbes`), `PatchScreenProbes` (adaptive sampling of empty tiles), luminance-CDF ray guiding in `SampleScreenProbes`, biased hysteresis in `BlendScreenProbes` | implementer | M | RC3.2 | todo |
+| RC4.1 | Temporal screen probes: `ReprojectScreenProbes` (plane and normal tests, the 3×3 taps, backup radiance), the off-screen LRU probe cache (`CountScreenProbes`, the scan, `ScatterScreenProbes`, `ReorderScreenProbes`), `PatchScreenProbes` (adaptive sampling of empty tiles), luminance-CDF ray guiding in `SampleScreenProbes`, biased hysteresis in `BlendScreenProbes` | implementer | M | RC3.2 | review (2026-11-19; branch `rc4-1`; GI-1.2's steady-state darkening found and fixed, register D40-D45; see PROGRESS) |
 | RC4.2 | `FilterScreenProbes` (the separable probe filter) and Capsaicin's SSGI technique (near-field GI and bent-normal occlusion) feeding `InterpolateScreenProbes` | implementer | M | RC4.1 | todo |
 | RC4.3 | The image-space GI denoiser (`ReprojectGI`, `FilterGI` ×2, `gi_denoiser.hlsl`), built as a self-contained module with no dependency on `ddgi-core`'s internals, ready to move into `pmndrs/denoiser` | implementer | M | RC4.1 | todo |
 

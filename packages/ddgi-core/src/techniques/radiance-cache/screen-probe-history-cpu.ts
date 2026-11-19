@@ -5,7 +5,7 @@
  * tile. Unit tests check them against hand-worked values; the GPU pages run
  * them on the GPU's own inputs.
  *
- * Also the derivation of register D36: a model of `SampleScreenProbes` and
+ * Also the derivation of register D41: a model of `SampleScreenProbes` and
  * `BlendScreenProbes` with history under a constant sky
  * ({@link simulateConstantSky}), with Capsaicin's empty-cell rule and with
  * ours.
@@ -42,7 +42,7 @@ export function temporalBlendFactor(a: number, b: number): number {
     return t * t;
 }
 
-/** The empty-cell rule: Capsaicin's (gi1.comp:1212-1256) or ours (register D36). */
+/** The empty-cell rule: Capsaicin's (gi1.comp:1212-1256) or ours (register D41). */
 export type EmptyCellRule = 'capsaicin' | 'fixed';
 
 /**
@@ -77,7 +77,7 @@ export function blendProbeCells(sums: readonly number[], counts: readonly number
 /**
  * `ScreenProbes_ScanRadiance` (screen_probes.hlsl:282-338): each cell's
  * exclusive prefix sum over the total, and the total. A total of 0 leaves the
- * CDF at 0 (register D37).
+ * CDF at 0 (register D42).
  */
 export function cellCdf(weights: readonly number[]): { cdf: number[]; total: number } {
     const total = weights.reduce((sum, value) => sum + value, 0);
@@ -107,11 +107,11 @@ export function findCellIndex(cdf: readonly number[], s: number): number {
     return Math.max(index, 1) - 1;
 }
 
-/** The share of rays that sample their own cell under guiding (register D37); the WGSL's `RC_RAY_GUIDING_UNIFORM_SHARE`. */
+/** The share of rays that sample their own cell under guiding (register D42); the WGSL's `RC_RAY_GUIDING_UNIFORM_SHARE`. */
 export const RAY_GUIDING_UNIFORM_SHARE = 0.125;
 
 /**
- * The cell a ray samples (`SampleScreenProbes`, gi1.comp:969-972, with D37):
+ * The cell a ray samples (`SampleScreenProbes`, gi1.comp:969-972, with D42):
  * its own cell when its cell has no history, when the CDF is empty, or for a
  * `guide` draw below the uniform share; otherwise the CDF's cell for the draw
  * rescaled past the share. Capsaicin's rule is `uniformShare` 0 and no test of
@@ -179,16 +179,20 @@ export interface ReprojectionInputs {
 /** One probe tile's reprojection: the seed it found (or `INVALID_ID`), its 64 cells, and whether it was listed as an empty tile. */
 export interface ReprojectedTile {
     readonly seed: number;
+    /** Each lane's score (`(half(distance / cell size) << 16) | lane`), or -1 where the lane found no probe. */
+    readonly scores: readonly number[];
     readonly cells: Array<readonly [number, number, number, number]>;
     readonly empty: boolean;
 }
 
 /**
  * `ReprojectScreenProbes` (gi1.comp:292-499) for probe tile (`tileX`,
- * `tileY`), with D36's backup. Sums are exact here (the GPU's are 64-bit,
- * D35), and quantised as the GPU quantises.
+ * `tileY`), with D41's backup. Sums are exact here (the GPU's are 64-bit,
+ * D40), and quantised as the GPU quantises. `lane`, when given, takes that
+ * pixel as the seed instead of the best one (a page comparing with the GPU
+ * where f32 and f64 round a score to different halves).
  */
-export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, tileY: number, halfBits: (value: number) => number): ReprojectedTile {
+export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, tileY: number, halfBits: (value: number) => number, forcedLane?: number): ReprojectedTile {
     const { width, height } = inputs;
     const dot = (a: Direction, b: Direction): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
     const distance = (a: Direction, b: Direction): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -205,6 +209,7 @@ export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, ti
 
     // The best pixel's score: (half(distance / cell size) << 16) | lane.
     let best = (halfBits(65504) << 16) | 0xffff;
+    const scores = new Array<number>(PROBE_CELLS).fill(-1);
     for (let lane = 0; lane < PROBE_CELLS; lane++) {
         const x = tileX * PROBE_SIZE + (lane % PROBE_SIZE);
         const y = tileY * PROBE_SIZE + Math.floor(lane / PROBE_SIZE);
@@ -220,10 +225,11 @@ export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, ti
         const offset: Direction = [probePosition[0] - world[0], probePosition[1] - world[1], probePosition[2] - world[2]];
         if (Math.abs(dot(offset, normal)) < cellSize && dot(normal, probeNormal) > 0.95) {
             const score = ((halfBits(Math.min(distance(probePosition, world) / cellSize, 65504)) << 16) | lane) >>> 0;
+            scores[lane] = score;
             best = Math.min(best, score);
         }
     }
-    const lane = best & 0xffff;
+    const lane = forcedLane ?? best & 0xffff;
     const tileTopLeft = [tileX * PROBE_SIZE, tileY * PROBE_SIZE];
     if (lane === 0xffff) {
         // A disocclusion: listed as empty when the spawn's jitter is in another 8 x 8 tile of its 16 x 16.
@@ -234,7 +240,7 @@ export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, ti
             const ratio = PROBE_SPAWN_TILE_SIZE / PROBE_SIZE;
             empty = Math.floor(jitter[0] / PROBE_SIZE) !== tileX % ratio || Math.floor(jitter[1] / PROBE_SIZE) !== tileY % ratio;
         }
-        return { seed: INVALID_ID, cells: [], empty };
+        return { seed: INVALID_ID, scores, cells: [], empty };
     }
 
     const seedX = tileTopLeft[0] + (lane & 7);
@@ -268,14 +274,14 @@ export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, ti
     const backup: [number, number, number, number] = [0, 1, 2].map((channel) => reached.reduce((sum, mean) => sum + mean[channel], 0) / Math.max(reached.length, 1)) as unknown as [number, number, number, number];
     backup[3] = 65504;
     const cells = reachedMeans.map((mean) => (mean ? ([mean[0], mean[1], mean[2], Math.min(mean[3], 65504)] as const) : backup));
-    return { seed: packSeed(seedX, seedY), cells, empty: false };
+    return { seed: packSeed(seedX, seedY), scores, cells, empty: false };
 }
 
-// ---- The constant-sky model (register D36) -------------------------------------------------------
+// ---- The constant-sky model (register D41) -------------------------------------------------------
 
 export interface ConstantSkyOptions {
     readonly rule: EmptyCellRule;
-    /** Capsaicin's guiding (no uniform share, the empty CDF's last cell) or ours (D37). */
+    /** Capsaicin's guiding (no uniform share, the empty CDF's last cell) or ours (D42). */
     readonly guiding: 'capsaicin' | 'fixed';
     readonly frames: number;
     /** Probe tiles across a square torus (every tile has a probe; one in each 2 × 2 is spawned per frame). */

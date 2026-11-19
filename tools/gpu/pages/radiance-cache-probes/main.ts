@@ -4,7 +4,10 @@
  *
  * Three scenes, each at 1280 × 720 with one frame of the technique, its
  * `FrameScreen` drawn engine-free by primary rays through the platform's
- * tracer (screen.ts; the three adapter's screen inputs come with RC2.2):
+ * tracer (screen.ts; the three adapter's screen inputs come with RC2.2).
+ * Every frame runs without the screen probes' history (`resetScreenHistory`
+ * before it), as a first frame does: these are RC2.1's rules for a probe with
+ * no history; radiance-cache-temporal checks the history (RC4.1):
  *
  * - `sky-plane`: a 400 m floor under a constant white sky (radiance 1), no
  *   lights, the camera 3 m up looking a little down, so the top of the image
@@ -105,6 +108,8 @@ async function startScene(device: GPUDevice, name: string, camera: PageCamera, d
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
         beforeFrame();
+        // No reprojection, taps or guiding: each frame is checked as a first frame (RC2.1's rules).
+        technique.resetScreenHistory();
         const encoder = device.createCommandEncoder({ label: `radiance-cache-probes ${name}` });
         platform.encode(encoder, frameInput(camera));
         screen.encode(encoder, camera);
@@ -330,8 +335,8 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
         if (!(worstRay <= SKY_TOLERANCE)) fail(`a probe ray reads the sky ${(worstRay * 100).toFixed(2)}% off (rays from ${rayMinimum} to ${rayMaximum})`);
 
         // A cell some ray reached holds its rays' mean: the sky. A cell no ray reached (its ray moved across
-        // an edge by half precision) holds Capsaicin's backup: the mean of the reached cells divided by the
-        // number of empty cells (gi1.comp:1226-1233, 1249-1256).
+        // an edge by half precision) and with no history holds the backup: the mean of the reached cells'
+        // means, the sky too (register D41; Capsaicin divides it by the number of empty cells).
         const [atlasWidth, atlasHeight] = layout.atlasSize;
         const atlas = halves(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
         let reachedCells = 0;
@@ -352,9 +357,8 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             const backupErrors: number[] = [];
             for (let cell = 0; cell < PROBE_CELLS; cell++) {
                 const texel = ((tileY + Math.floor(cell / PROBE_SIZE)) * atlasWidth + tileX + (cell % PROBE_SIZE)) * 4;
-                // The backup sums each reached cell's summed (not averaged) radiance, so a cell with two
-            // rays counts twice: all 64 rays' radiance over the reached cells, over the empty cells.
-            const backup = (SKY_RADIANCE * PROBE_CELLS) / (PROBE_CELLS - empty) / Math.max(empty, 1);
+                // The mean of the reached cells' means (D41).
+                const backup = SKY_RADIANCE;
             const expectedValue = samples[cell] > 0 ? SKY_RADIANCE : backup;
                 let cellError = 0;
                 let readsTheSky = true;
@@ -378,7 +382,7 @@ async function checkScene(device: GPUDevice, run: SceneRun, skyCheck: boolean): 
             worstBackup = Math.max(worstBackup, 0, ...backupErrors);
         });
         if (!(worstReached <= SKY_TOLERANCE)) fail(`a probe cell some ray reached reads ${(worstReached * 100).toFixed(2)}% off the sky`);
-        if (!(worstBackup <= SKY_TOLERANCE)) fail(`a probe cell no ray reached is ${(worstBackup * 100).toFixed(2)}% off Capsaicin's backup value`);
+        if (!(worstBackup <= SKY_TOLERANCE)) fail(`a probe cell no ray reached is ${(worstBackup * 100).toFixed(2)}% off the backup value (the sky)`);
         Object.assign(sky, {
             worstRayError: worstRay,
             rayMinimum,
