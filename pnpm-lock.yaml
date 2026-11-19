@@ -86,6 +86,10 @@ importers:
   packages/bvh: {}
 
   packages/ddgi:
+    dependencies:
+      '@pmndrs/rc-bvh':
+        specifier: npm:@pmndrs/bvh@0.1.0
+        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
     devDependencies:
       '@pmndrs/ddgi-core':
         specifier: workspace:*
@@ -114,6 +118,12 @@ importers:
       '@pmndrs/bvh':
         specifier: workspace:*
         version: link:../bvh
+      '@pmndrs/raytracer':
+        specifier: git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer
+        version: git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer(@babylonjs/core@9.33.2)(three@0.187.0)
+      '@pmndrs/rc-bvh':
+        specifier: npm:@pmndrs/bvh@0.1.0
+        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
 
   packages/ddgi-three:
     dependencies:
@@ -548,6 +558,35 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@napi-rs/lzma-linux-x64-gnu@1.5.1':
+    resolution: {integrity: sha512-oTXEIha4SsuXdTA4Iyskj0kpdx2yVXdhd75c2v3xGrHFfVMsbhTPZU/nMPL4sWKo4pBHm3aucLaqGlF696dTyQ==}
+    engines: {node: ^22.20 || ^24.12 || >=25}
+    cpu: [x64]
+    os: [linux]
+
+  '@pmndrs/bvh@0.1.0':
+    resolution: {integrity: sha512-5pVuSDX4Ud7WMprV197XtGwlMZDwZCVI/SYzMEihg7CZiiUOqH8NcvqQN85aPNRXmTu7taNTLZDNRPxNQF+CCg==}
+    peerDependencies:
+      '@babylonjs/core': '>=9.35.0 <10.0.0'
+      three: '>=0.187.0 <0.188.0'
+    peerDependenciesMeta:
+      '@babylonjs/core':
+        optional: true
+      three:
+        optional: true
+
+  '@pmndrs/downsampler@0.1.0':
+    resolution: {integrity: sha512-PQf5QLUEy5qRl+2e0gHVfdMcfinqHjG/HJKO4xk+EJrOgeucNzUesGuSHq/eyAy8s22hvf/4oQPV3fntM7WKSw==}
+    peerDependencies:
+      three: '>=0.170.0'
+    peerDependenciesMeta:
+      three:
+        optional: true
+
+  '@pmndrs/raytracer@git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer':
+    resolution: {commit: 2489a09ab1844a7effe6e845ecccd05876580c9f, path: packages/raytracer, repo: https://github.com/pmndrs/pathtracer.git, type: git}
+    version: 0.0.0
 
   '@pmndrs/upscaler@0.5.0':
     resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
@@ -1639,6 +1678,26 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
 
+  '@napi-rs/lzma-linux-x64-gnu@1.5.1':
+    optional: true
+
+  '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
+    optionalDependencies:
+      '@babylonjs/core': 9.33.2
+      three: 0.187.0
+
+  '@pmndrs/downsampler@0.1.0(three@0.187.0)':
+    optionalDependencies:
+      three: 0.187.0
+
+  '@pmndrs/raytracer@git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer(@babylonjs/core@9.33.2)(three@0.187.0)':
+    dependencies:
+      '@pmndrs/bvh': 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
+      '@pmndrs/downsampler': 0.1.0(three@0.187.0)
+    transitivePeerDependencies:
+      - '@babylonjs/core'
+      - three
+
   '@pmndrs/upscaler@0.5.0(three@0.187.0)':
     dependencies:
       three: 0.187.0
@@ -2275,6 +2334,7 @@ snapshots:
     dependencies:
       '@types/estree': 1.0.10
     optionalDependencies:
+      '@napi-rs/lzma-linux-x64-gnu': 1.5.1
       '@rollup/rollup-android-arm-eabi': 4.67.4
       '@rollup/rollup-android-arm64': 4.67.4
       '@rollup/rollup-android-x64': 4.67.4

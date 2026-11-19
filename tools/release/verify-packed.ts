@@ -48,6 +48,8 @@ export const REQUIRED_FILES = [
     'licenses/tinybvh.txt',
     'licenses/emscripten-runtime.txt',
     'licenses/hiprt.txt',
+    'licenses/pathtracer-MIT.txt',
+    'licenses/pbrt-v4-Apache-2.0.txt',
 ];
 
 /**
@@ -61,10 +63,11 @@ export const ENTRY_IMPORTS: Record<string, RegExp[]> = {
     three: THREE_SPECIFIERS,
     core: [],
     ddgi: [],
+    'radiance-cascades': [/^@pmndrs\/rc-bvh$/],
 };
 
 /** Entries that must work with no engine installed. */
-const ENGINE_FREE_ENTRIES = ['core', 'ddgi'];
+const ENGINE_FREE_ENTRIES = ['core', 'ddgi', 'radiance-cascades'];
 
 interface Consumer {
     /** Packages installed next to the tarball (versions are the repository's own). */
@@ -119,10 +122,16 @@ if (!(technique instanceof ddgi.DDGITechnique)) throw new Error('DDGITechnique f
     },
     core: {
         packages: ['@webgpu/types'],
-        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`],
+        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/radiance-cascades`],
         // The platform and DDGI on a bare device, as in docs/api/platform.md.
         source: `import { createGI, requiredLimits } from '@pmndrs/gi/core';
 import { DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
+import { NativeRadianceCascades, createRcTransport, type NativeRcTransport, type RcTransportScene } from '@pmndrs/gi/radiance-cascades';
+
+export async function makeTransport(device: GPUDevice, scene: RcTransportScene): Promise<NativeRcTransport> {
+    return createRcTransport(device, scene);
+}
+export const createCascades = NativeRadianceCascades.create;
 
 export async function start(adapter: GPUAdapter) {
     const device = await adapter.requestDevice({ requiredLimits: requiredLimits(adapter) });
@@ -316,7 +325,7 @@ export function checkTarballContents(paths: string[], manifest: Manifest): strin
     // devDependencies may name workspace packages: npm never installs a dependency's devDependencies.
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
         for (const [name, version] of Object.entries(manifest[field] ?? {})) {
-            if (version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh') {
+            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh') {
                 failures.push(`${field} names ${name}@${version}, which isn't on npm`);
             }
         }
@@ -400,7 +409,7 @@ function main(): void {
             ...checkImportGraph(unpacked),
         ];
         if (failures.length) throw new Error(`The tarball:\n${failures.join('\n')}`);
-        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /core loads only platform code, /ddgi no three code.`);
+        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /radiance-cascades reaches only its published BVH dependency.`);
 
         for (const [name, consumer] of Object.entries(CONSUMERS)) {
             const directory = join(temporaryRoot, `consumer-${name}`);

@@ -11,6 +11,8 @@
         "./*": "./src/*.ts"
     },
     "dependencies": {
-        "@pmndrs/bvh": "workspace:*"
+        "@pmndrs/bvh": "workspace:*",
+        "@pmndrs/rc-bvh": "npm:@pmndrs/bvh@0.1.0",
+        "@pmndrs/raytracer": "git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer"
     }
 }

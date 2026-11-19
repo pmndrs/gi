@@ -18,12 +18,13 @@
 // or `three` chunk, and `/ddgi` no `three` chunk.
 
 /** Chunk names by layer, in the order the layers build on each other. */
-export const LAYER_CHUNKS = ['platform', 'ddgi', 'three'] as const;
+export const LAYER_CHUNKS = ['platform', 'ddgi', 'three', 'rc'] as const;
 
 export type Layer = (typeof LAYER_CHUNKS)[number];
 
 /** The layers each public entry may load: an entry below a layer must never reach its code. */
 export const ENTRY_LAYERS: Record<string, readonly Layer[]> = {
+    'radiance-cascades': ['platform', 'rc'],
     core: ['platform'],
     ddgi: ['platform', 'ddgi'],
     three: ['platform', 'ddgi', 'three'],
@@ -33,6 +34,7 @@ export const ENTRY_LAYERS: Record<string, readonly Layer[]> = {
 /** Rollup's `manualChunks`: the layer chunk a module belongs to, or undefined for the entries and helpers. */
 export function layerChunk(id: string): Layer | undefined {
     const path = id.replaceAll('\\', '/');
+    if (path.includes('/techniques/radiance-cascades/')) return 'rc';
     if (path.includes('/packages/ddgi-three/src/')) return 'three';
     if (path.includes('/packages/ddgi-core/src/techniques/ddgi/')) return 'ddgi';
     if (path.includes('/packages/ddgi-core/src/platform/') || path.includes('/packages/bvh/')) return 'platform';

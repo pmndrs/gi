@@ -1,0 +1,4 @@
+{
+    "description": "Engine-free interval tracer on two triangles. Checks primary hit distance, emission, misses, visibility and analytic diffuse lighting before and after moving a rigid blocker.",
+    "timeoutMs": 120000
+}
