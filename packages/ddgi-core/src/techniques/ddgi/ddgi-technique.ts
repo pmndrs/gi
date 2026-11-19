@@ -138,6 +138,7 @@ import {
     AUTO_NORMAL_BIAS_SHARE,
     AUTO_VIEW_BIAS_SHARE,
     blendSettings,
+    blendedRaysPerProbe,
     clockStep,
     CLOCK_WRAP_SECONDS,
     FIXED_RAYS,
@@ -1651,8 +1652,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
 
         const rays = resources.rays;
         const roundProbes = Math.min(count, DIRECT_ROUND_PROBES);
-        // raysPerProbe is a live setting, so the work list is checked against this frame's blended rays.
-        const listOutgrown = resources.directWorkList !== null && roundProbes * Math.max(0, raysPerProbe - FIXED_RAYS) > rays.scratch.itemCapacity;
+        // raysPerProbe, relocation and classification are live settings, so the work list is checked against this frame's blended rays.
+        const listOutgrown = resources.directWorkList !== null && roundProbes * blendedRaysPerProbe(raysPerProbe, this.settings) > rays.scratch.itemCapacity;
         const outgrown = count * raysPerProbe > rays.capacity || listOutgrown;
         if (outgrown) {
             // Nothing recorded in this frame uses the old scratch yet, and earlier frames are submitted.
@@ -2426,7 +2427,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
     /**
      * The ray scratch for `capacity` ray results (`RAY_RECORD_BYTES` each, layout.ts)
      * and, with direct light deferred, a work list with room for every
-     * blended ray of one round at `raysPerProbe`; and the groups that bind it.
+     * blended ray of one round at `raysPerProbe` (every ray, with relocation
+     * and classification off); and the groups that bind it.
      */
     private createRayBuffer(context: TechniqueContext, resources: Omit<PreparedResources, 'rays' | 'mark'>, capacity: number, raysPerProbe: number): RayBuffers {
         const device = context.device;
@@ -2435,7 +2437,7 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
         const scratch = context.shade.direct.createScratch({
             label: 'ddgi rays',
             rays: capacity,
-            workItems: probesPerRound * Math.max(0, raysPerProbe - FIXED_RAYS),
+            workItems: probesPerRound * blendedRaysPerProbe(raysPerProbe, this.settings),
             // A result per irradiance layer (light groups).
             layers: resources.plan.layers.length,
         });
@@ -2639,7 +2641,8 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
      * Writes the volume table's CPU part (a row per volume, priority order:
      * the sampling parameters and the window, VOLUME_TABLE_CPU_TEXELS) when a
      * row changed since it was last written: after `prepare`, when a bias
-     * setting changes, and when a camera-following volume's window moves.
+     * setting or `samplingWeightFloors` changes, and when a camera-following
+     * volume's window moves.
      * `whole` (after `prepare`) writes the valid extents too: a fixed
      * volume's every probe, a camera-following volume's starting extent;
      * after that only `ddgi/scroll` writes them. Lands before the host's next
@@ -2654,7 +2657,14 @@ export class DDGITechnique implements GITechnique<DDGISettings> {
             const offset = row * VOLUME_TABLE_ROW_FLOATS;
             rows.set(this.volumeParameters(volume), offset);
             const window = volume.scroll?.window;
-            writeVolumeWindow(rows, offset, window?.window ?? [0, 0, 0], window?.fadeSpacings ?? FIXED_VOLUME_FADE, window ? window.initialExtent() : wholeGridExtent(volume.grid));
+            writeVolumeWindow(
+                rows,
+                offset,
+                window?.window ?? [0, 0, 0],
+                window?.fadeSpacings ?? FIXED_VOLUME_FADE,
+                window ? window.initialExtent() : wholeGridExtent(volume.grid),
+                this.settings.samplingWeightFloors === true,
+            );
         });
         // Compare the CPU texels only: the extents in `rows` are the starting ones, not what the GPU holds.
         const cpuFloats = VOLUME_TABLE_CPU_TEXELS * 4;

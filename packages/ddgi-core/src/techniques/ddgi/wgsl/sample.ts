@@ -34,7 +34,8 @@
  *   volume the window is 0 and a slot is its window probe: the same code,
  *   not a second path. The four-`vec4f` entry points (`ddgiSampleIrradiance`,
  *   `ddgiAccumulateField`) describe a fixed volume; read a camera-following
- *   one through the table.
+ *   one through the table. They also have no live `samplingWeightFloors`
+ *   (DV-06): they use its default, where the table has the setting.
  *
  * ```wgsl
  * fn ddgiSampleIrradiance(
@@ -53,6 +54,7 @@
 
 import { PROBE_STATE, TILE_BORDER } from '../layout.ts';
 import { BLEND_COMPLETE_WEIGHT, COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT, MAX_BLENDED_VOLUMES, VOLUME_TABLE_TEXEL } from '../volumes.ts';
+import { DEFAULT_DDGI_SETTINGS } from '../settings.ts';
 
 export const DDGI_SAMPLE_WGSL = /* wgsl */ `
 // ---- DDGI field sampling (techniques/ddgi) ---------------------------------------------
@@ -72,6 +74,18 @@ const DDGI_CHEBYSHEV_FLOOR: f32 = 0.05;
 // Weights below this are crushed by (w / threshold)^2, so small weights fade
 // fast instead of adding a faint wrong colour (Majercik et al. 2021).
 const DDGI_CRUSH_THRESHOLD: f32 = 0.2;
+// RTXGI's floors on the sampling weights (DV-06, a volume's weightFloors;
+// RTXGI's Irradiance.hlsl, DDGIGetVolumeIrradiance). Each axis of a corner
+// probe's trilinear weight is at least this, so a point on a probe plane
+// still gives the far plane's probes a tiny weight: when the near plane's
+// probes are all off, the far ones answer instead of nobody.
+const DDGI_TRILINEAR_AXIS_FLOOR: f32 = 0.001;
+// ...and a probe's weight before the crush is at least this ("avoid a weight
+// of zero"). With the direction and Chebyshev floors above the weight is
+// already at least 0.2 x 0.05 = 0.01, so this only matters to a NaN.
+const DDGI_WEIGHT_FLOOR: f32 = 1.0e-6;
+// The four-vec4f entry points (ddgiVolume) have no volume table to say, so they use the setting's default.
+const DDGI_DEFAULT_WEIGHT_FLOORS: bool = ${DEFAULT_DDGI_SETTINGS.samplingWeightFloors};
 // Keeps the direction to a probe defined when the sample point sits on it.
 const DDGI_MIN_PROBE_DISTANCE: f32 = 1.0e-4;
 // Keeps the final division defined when no probe has any weight (then the sum is 0 too).
@@ -134,6 +148,7 @@ struct DdgiVolume {
     validMin: vec3f,         // the valid extent's low sides, lattice units
     validMax: vec3f,         // its high sides
     fade: vec3f,             // the fade band's width per axis, spacings
+    weightFloors: bool,      // RTXGI's floors on the sampling weights (DDGI_TRILINEAR_AXIS_FLOOR, DDGI_WEIGHT_FLOOR)
 }
 
 // value mod divisor in 0..divisor - 1, also for negative values (WGSL's % keeps the dividend's sign).
@@ -141,7 +156,9 @@ fn ddgiPositiveModulo(value: vec3i, divisor: vec3i) -> vec3i {
     return ((value % divisor) + divisor) % divisor;
 }
 
-// A fixed volume from its four vec4f parameters: window 0, every probe valid, the usual fade.
+// A fixed volume from its four vec4f parameters: window 0, every probe valid,
+// the usual fade, and the sampling weights as the settings' default
+// (samplingWeightFloors); the volume table carries the live setting.
 fn ddgiVolume(volumeOrigin: vec4f, volumeSpacing: vec4f, volumeCounts: vec4f, volumeTexels: vec4f) -> DdgiVolume {
     let counts = vec3i(volumeCounts.xyz);
     return DdgiVolume(
@@ -150,6 +167,7 @@ fn ddgiVolume(volumeOrigin: vec4f, volumeSpacing: vec4f, volumeCounts: vec4f, vo
         counts, i32(volumeCounts.w),
         volumeTexels.x, volumeTexels.y, volumeTexels.zw,
         vec3i(0), vec3i(0), vec3f(0.0), vec3f(counts - 1), vec3f(DDGI_COVERAGE_FADE),
+        DDGI_DEFAULT_WEIGHT_FLOORS,
     );
 }
 
@@ -255,6 +273,17 @@ fn ddgiTrilinearWeight(cage: DdgiCage, step: vec3i) -> f32 {
     return trilinear.x * trilinear.y * trilinear.z;
 }
 
+// The trilinear weight a corner probe's sampling weight uses: with the
+// volume's weightFloors, each axis is at least DDGI_TRILINEAR_AXIS_FLOOR, as
+// RTXGI's max(0.001, lerp(1 - alpha, alpha, offset)).
+fn ddgiSamplingTrilinearWeight(volume: DdgiVolume, cage: DdgiCage, step: vec3i) -> f32 {
+    var trilinear = mix(1.0 - cage.alpha, cage.alpha, vec3f(step));
+    if (volume.weightFloors) {
+        trilinear = max(trilinear, vec3f(DDGI_TRILINEAR_AXIS_FLOOR));
+    }
+    return trilinear.x * trilinear.y * trilinear.z;
+}
+
 // The field's weighted sum at a point, before normalising: sum of w * E, and
 // sum of w. ddgiSampleIrradiance divides one by the other; coverage
 // (giCoverage) reads the weight sum, which is 0 where no active probe counts.
@@ -328,11 +357,14 @@ fn ddgiCornerWeight(
         weight *= max(chebyshev * chebyshev * chebyshev, DDGI_CHEBYSHEV_FLOOR);
     }
 
+    if (volume.weightFloors) {
+        weight = max(weight, DDGI_WEIGHT_FLOOR);
+    }
     if (weight < DDGI_CRUSH_THRESHOLD) {
         weight *= (weight * weight) * (1.0 / (DDGI_CRUSH_THRESHOLD * DDGI_CRUSH_THRESHOLD));
     }
 
-    weight *= ddgiTrilinearWeight(cage, step);
+    weight *= ddgiSamplingTrilinearWeight(volume, cage, step);
     return DdgiCornerWeight(slot, weight, true);
 }
 
@@ -510,8 +542,10 @@ fn ddgiTableVolume(volumeTable: texture_2d<f32>, index: u32) -> DdgiVolume {
     let window = vec3i(round(textureLoad(volumeTable, vec2i(DDGI_TABLE_WINDOW_TEXEL, row), 0).xyz));
     let validMin = textureLoad(volumeTable, vec2i(DDGI_TABLE_VALID_MIN_TEXEL, row), 0).xyz;
     let validMax = textureLoad(volumeTable, vec2i(DDGI_TABLE_VALID_MAX_TEXEL, row), 0).xyz;
-    let fade = textureLoad(volumeTable, vec2i(DDGI_TABLE_FADE_TEXEL, row), 0).xyz;
-    return ddgiVolumeInWindow(volume, window, validMin, validMax, fade);
+    let fadeAndFloors = textureLoad(volumeTable, vec2i(DDGI_TABLE_FADE_TEXEL, row), 0);
+    var placed = ddgiVolumeInWindow(volume, window, validMin, validMax, fadeAndFloors.xyz);
+    placed.weightFloors = fadeAndFloors.w > 0.5;
+    return placed;
 }
 
 // Whether the blend reads a volume: one whose edge coverage is 0 adds

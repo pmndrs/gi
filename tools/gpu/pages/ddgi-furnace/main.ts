@@ -20,6 +20,10 @@
  *
  * Under a quality preset (T5.1): `VITE_DDGI_PRESET=low|medium|high` runs it
  * with that preset's rays, tile sizes and texture store (ddgi-shared/page-preset.ts).
+ *
+ * `VITE_DDGI_PROBE_RULES=off` runs it with relocation and classification
+ * both off (DV-07: then no rays are set aside as fixed rays, and every ray
+ * of a probe is blended).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
@@ -43,6 +47,9 @@ const FRAMES = Number(env.VITE_DDGI_FRAMES) > 0 ? Math.round(Number(env.VITE_DDG
 /** The quality preset, when a run names one (T5.1). */
 const PRESET = pagePreset();
 const HYSTERESIS = typeof env.VITE_DDGI_HYSTERESIS === 'string' && env.VITE_DDGI_HYSTERESIS !== '' ? parseHysteresisMode(env.VITE_DDGI_HYSTERESIS) : null;
+/** Relocation and classification, both on (the defaults) unless `VITE_DDGI_PROBE_RULES=off`. */
+const PROBE_RULES_OFF = env.VITE_DDGI_PROBE_RULES === 'off';
+const PROBE_RULES = PROBE_RULES_OFF ? { relocation: false, classification: false } : {};
 /** The check: the mean relative error, over every point and channel. */
 const MEAN_TOLERANCE = 0.02;
 /** Points per metre on each surface. */
@@ -113,7 +120,7 @@ function surfacePoints(blocks: readonly Box[]): SurfacePoint[] {
 await runGpuTest(
     async ({ device, log }) => {
         releaseDeviceOnPageHide(device);
-        const scene = await createDdgiScene(device, 'furnace-room', { ...PRESET?.ddgi, ...HYSTERESIS?.settings }, { textureLayerSize: PRESET?.textureLayerSize });
+        const scene = await createDdgiScene(device, 'furnace-room', { ...PRESET?.ddgi, ...HYSTERESIS?.settings, ...PROBE_RULES }, { textureLayerSize: PRESET?.textureLayerSize });
         const field = scene.ddgi.field;
         assert(field, 'DDGI has no field after prepare');
         const probeCount = field.grid.probeCount;
@@ -156,6 +163,7 @@ await runGpuTest(
             ...presetReport(PRESET),
             frames: FRAMES,
             hysteresis: HYSTERESIS?.name ?? 'default',
+            probeRules: PROBE_RULES_OFF ? 'off' : 'default',
             probesPerFrame: probeCount,
             probes: field.grid.counts,
             distanceFormat: field.layout.distanceFormat,

@@ -100,7 +100,8 @@ struct DdgiUniforms {
 
 const DDGI_MAX_RAYS: u32 = ${MAX_RAYS_PER_PROBE}u;
 // The first rays of every probe: fixed directions, never rotated or blended;
-// they feed classification and relocation (phase B in ddgi/blend).
+// they feed classification and relocation (phase B in ddgi/blend). Set
+// aside only while relocation or classification is on (ddgiSetAsideRays).
 const DDGI_FIXED_RAYS: u32 = ${FIXED_RAYS}u;
 // 1 / golden ratio, for spherical Fibonacci points.
 const DDGI_GOLDEN_FRACTION: f32 = 0.618033988749895;
@@ -174,6 +175,15 @@ fn ddgiIsOff(state: u32) -> bool {
 
 fn ddgiTracedRays(state: u32) -> u32 {
     return select(ddgi.raysPerProbe, DDGI_FIXED_RAYS, ddgiIsOff(state));
+}
+
+// How many of a probe's first rays are fixed rays, kept out of the blend
+// (DV-07, as RTXGI: DDGIGetProbeRayDirection and ProbeBlendingCS.hlsl). Only
+// relocation and classification read them, so with both off there are none:
+// every ray turns with the frame's rotation and is blended. With either on,
+// DDGI_FIXED_RAYS.
+fn ddgiSetAsideRays() -> u32 {
+    return select(0u, DDGI_FIXED_RAYS, ddgi.relocation != 0u || ddgi.classification != 0u);
 }
 
 // ---- The camera weight (docs/design/m2-lights.md §4.3) ----
@@ -269,13 +279,15 @@ fn ddgiSphericalFibonacci(index: u32, count: u32) -> vec3f {
     return vec3f(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 }
 
-// Ray 'index' of a probe: the fixed rays never rotate; the blended ones turn
-// with this frame's rotation, so successive updates sample new directions.
+// Ray 'index' of a probe: the fixed rays (ddgiSetAsideRays) never rotate; the
+// blended ones turn with this frame's rotation, so successive updates sample
+// new directions.
 fn ddgiRayDirection(index: u32) -> vec3f {
-    if (index < DDGI_FIXED_RAYS) {
+    let setAside = ddgiSetAsideRays();
+    if (index < setAside) {
         return ddgiSphericalFibonacci(index, DDGI_FIXED_RAYS);
     }
-    return ddgi.rayRotation * ddgiSphericalFibonacci(index - DDGI_FIXED_RAYS, ddgi.raysPerProbe - DDGI_FIXED_RAYS);
+    return ddgi.rayRotation * ddgiSphericalFibonacci(index - setAside, ddgi.raysPerProbe - setAside);
 }
 
 // PCG hash (Jarzynski and Olano 2020), for decorrelated random numbers.

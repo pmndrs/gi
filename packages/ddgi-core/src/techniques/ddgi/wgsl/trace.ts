@@ -8,8 +8,9 @@
  * workgroup was register-bound (RTX 3060 2.48 ms against 1.22 ms split, at
  * 512 probes × 256 rays; DECISIONS 2026-11-05).
  *
- * - Fixed rays (the first 32) need only the hit distance and whether it was a
- *   front face (for phase B); they are not shaded.
+ * - Fixed rays (the first 32, while relocation or classification is on;
+ *   none with both off, DV-07) need only the hit distance and whether it was
+ *   a front face (for phase B); they are not shaded.
  * - Blended rays: a miss sees the sky; a back face is black with a shortened
  *   distance; a front face gets emission plus albedo / π × (direct light +
  *   bounce light from the current field).
@@ -132,10 +133,10 @@ fn ddgiShadeRay(ray: GiRay, hit: GiHit, random: vec2f) -> vec3f {
         surface.position, surface.normal, ray.direction,
         ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
     ).irradiance;
-    let albedoOverPi = surface.albedo * (1.0 / DDGI_PI);
-    let emittedAndBounced = surface.emission + albedoOverPi * (ddgi.bounceEnergy * bounce);
+    // Only the bounce term's albedo is capped (giBounceAlbedo, bounceAlbedoCap), as native RTXGI.
+    let emittedAndBounced = surface.emission + giBounceAlbedo(surface) * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
     let direct = giDirectIrradiance(surface, DDGI_ALL_LIGHT_GROUPS, random);
-    return emittedAndBounced + albedoOverPi * direct;
+    return emittedAndBounced + surface.albedo * (1.0 / DDGI_PI) * direct;
 }
 
 // Workgroup (x, y, z): x walks a probe's rays 64 at a time; y and z give the
@@ -159,7 +160,7 @@ fn ddgiTrace(
     }
     let rayRecord = slot * ddgi.raysPerProbe + rayIndex;
 
-    let isFixed = rayIndex < DDGI_FIXED_RAYS;
+    let isFixed = rayIndex < ddgiSetAsideRays();
     let direction = ddgiRayDirection(rayIndex);
     let ray = GiRay(ddgiProbePosition(probe, probeData.offset), 0.0, direction, ddgi.maxRayDistance);
     let hit = giTraceClosest(ray);
@@ -224,7 +225,8 @@ fn ddgiEmittedAndBounced(ray: GiRay, surface: GiSurface) -> vec3f {
         surface.position, surface.normal, ray.direction,
         ddgiIrradianceAtlas, ddgiAtlasSampler, ddgiDistanceAtlas, ddgiAtlasSampler, ddgiProbeData, ddgiVolumeTable,
     ).irradiance;
-    return surface.emission + surface.albedo * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
+    // The bounce term's albedo is capped (giBounceAlbedo, bounceAlbedoCap); gi/direct's isn't, as native RTXGI.
+    return surface.emission + giBounceAlbedo(surface) * (1.0 / DDGI_PI) * (ddgi.bounceEnergy * bounce);
 }
 `;
 
@@ -354,7 +356,8 @@ fn ddgiLayeredIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f) -
 // albedo / pi × each group's direct light, is added to its layer by gi/direct.
 fn ddgiEmittedAndBouncedLayers(ray: GiRay, surface: GiSurface) -> DdgiLayerRadiance {
     let bounce = ddgiLayeredIrradiance(surface.position, surface.normal, ray.direction);
-    let reflected = surface.albedo * (1.0 / DDGI_PI) * ddgi.bounceEnergy;
+    // The bounce term's albedo is capped (giBounceAlbedo, bounceAlbedoCap); gi/direct's isn't, as native RTXGI.
+    let reflected = giBounceAlbedo(surface) * (1.0 / DDGI_PI) * ddgi.bounceEnergy;
     var result = DdgiLayerRadiance(${perLayer(plan, (layer) => `reflected * bounce.layer${layer}`, ', ')});
     result.layer${plan.environmentLayer} += surface.emission;
     return result;
@@ -462,7 +465,7 @@ fn ddgiTrace(
     var deferred = false;
     var record = GiSurfaceRecord();
     if (rayIndex < ddgiTracedRays(probeData.state)) {
-        let isFixed = rayIndex < DDGI_FIXED_RAYS;
+        let isFixed = rayIndex < ddgiSetAsideRays();
         let direction = ddgiRayDirection(rayIndex);
         let ray = GiRay(ddgiProbePosition(probe, probeData.offset), 0.0, direction, ddgi.maxRayDistance);
         let hit = giTraceClosest(ray);
