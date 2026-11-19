@@ -153,7 +153,8 @@ interface RunExtras {
 
 async function makeRun(device: GPUDevice, name: string, quads: readonly Quad[], material: MaterialDescriptor, environment: EnvironmentDescriptor, camera: PageCamera, extras: RunExtras = {}): Promise<Run> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-near-field ${name}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    // SSGI is opt-in (D61).
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ ssgi: true }));
     platform.setOutput(technique);
     await platform.prepare();
     const scene = platform.scene;

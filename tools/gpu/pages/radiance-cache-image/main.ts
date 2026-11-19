@@ -142,7 +142,8 @@ const STEP_AND_WALL = quadsMesh([
 /** A 400 m floor at y = 0 under `environment`, no lights (with `withStep`, also section 3's box and wall); frames until the trees are built, then one more. */
 async function runFloor(device: GPUDevice, name: string, environment: Parameters<GIPlatformImpl['scene']['setEnvironment']>[0], withStep = false): Promise<ImageRun> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-image ${name}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    // The step and wall run with SSGI (opt-in, D61), so section 3 checks its HAS_OCCLUSION branch too.
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ ssgi: withStep }));
     platform.setOutput(technique);
     await platform.prepare();
     const half = 200;

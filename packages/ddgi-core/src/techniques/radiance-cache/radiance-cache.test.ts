@@ -24,9 +24,9 @@ describe('settings (gi1.h)', () => {
         const technique = new RadianceCacheTechnique({ useDirectLighting: false });
         expect(technique.settings.useDirectLighting).toBe(false);
         expect(technique.settings.useMultibounce).toBe(true);
-        // SSGI (on by default) reads the host's lit image and albedo (RC4.2, register D51).
-        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: true, lighting: true } });
-        expect(new RadianceCacheTechnique({ ssgi: false }).requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: false, lighting: false } });
+        // SSGI (off by default, D61) reads the host's lit image and albedo when on (RC4.2, register D51).
+        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: false, lighting: false } });
+        expect(new RadianceCacheTechnique({ ssgi: true }).requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: true, lighting: true } });
     });
 
     it('size the probes as Capsaicin does (gi1.cpp:113-129)', () => {

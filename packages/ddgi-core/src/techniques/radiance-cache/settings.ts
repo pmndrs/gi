@@ -90,8 +90,9 @@ export interface RadianceCacheSettings {
      * `HAS_OCCLUSION` branch; RC4.2), through the platform's `gi/ssgi`: the
      * probes' SH read through the cone around the bent normal that the
      * ambient visibility leaves open, plus the near-field light from the
-     * occluding pixels. Capsaicin's GI-1 renderer always runs it (default
-     * true). On, the technique asks the host for `FrameScreen.lighting` and
+     * occluding pixels. Capsaicin's GI-1 renderer always runs it; ours is
+     * off by default (Dennis, 2026-11-19: its noise outweighs it; register
+     * D61), on to opt in. On, the technique asks the host for `FrameScreen.lighting` and
      * `FrameScreen.albedo` (the lit image SSGI reads, register D51). Fixed at
      * construction for the screen channels it asks for; turned off later,
      * SSGI stops (to measure it). Read every frame.
@@ -130,7 +131,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
     probeFilter: true,
-    ssgi: true,
+    ssgi: false,
     ssgiSliceCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.sliceCount,
     ssgiStepCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.stepCount,
     ssgiViewRadius: DEFAULT_SCREEN_SPACE_GI_SETTINGS.viewRadius,

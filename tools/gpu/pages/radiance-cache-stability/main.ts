@@ -214,7 +214,8 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    // Made with SSGI so the variants can turn it on and off (it is opt-in, D61).
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ ssgi: true }));
     platform.setOutput(technique);
     await platform.prepare();
     let beforeFrame = (): void => {};

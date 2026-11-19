@@ -36,7 +36,7 @@ async function measure(device: GPUDevice, width: number, height: number): Promis
     const bookmark = manifest.cameras[0];
     const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `ssgi cost ${width}`, gpuTiming: true });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ ssgi: true }));
     platform.setOutput(technique);
     await platform.prepare();
     describeScene(platform, manifest);
