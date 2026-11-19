@@ -33,8 +33,8 @@
  *
  * The priority classes, highest first:
  * - **new or changed:** no sample yet, or the sample hit is near one of this
- *   frame's scene changes (`SceneChanges.regions`, or every cell for a change
- *   with no bounds). A changed cell keeps its mean (nothing goes dark) but is
+ *   scene changes of the last `CELL_SHADING_CHANGE_FRAMES` frames
+ *   (`SceneChanges.regions`, or every cell for a change with no bounds). A changed cell keeps its mean (nothing goes dark) but is
  *   marked by its count (`CELL_CHANGED_COUNT`), so whenever it is next lit,
  *   this frame or later, its new sample replaces its value; it stays in this
  *   class until then;
@@ -75,7 +75,15 @@ export const CELL_SHADING_GROUP = 3;
 
 export const CELL_SHADING_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [{ binding: 0, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } }];
 
-/** The most change boxes a frame passes; more count as a change everywhere (as the screen probes' history counts them, D46). */
+/**
+ * Frames a scene change is remembered: a cell hit on any of them, near the
+ * change, is marked changed (and relit from scratch when next lit). Each mark
+ * restarts the cell from one sample, so for these frames a changed cell runs
+ * on single samples; after them it accumulates again.
+ */
+export const CELL_SHADING_CHANGE_FRAMES = 16;
+
+/** The most change boxes passed (over the window); more count as a change everywhere (as the screen probes' history counts them, D46). */
 export const CELL_SHADING_MAX_CHANGE_BOXES = 16;
 
 /** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes a box. */

@@ -45,6 +45,7 @@ import {
     type HashGridCacheOptions,
 } from './capacity.ts';
 import {
+    CELL_SHADING_CHANGE_FRAMES,
     CELL_SHADING_ENTRY_POINT,
     CELL_SHADING_GROUP_ENTRIES,
     CELL_SHADING_MAX_CHANGE_BOXES,
@@ -194,6 +195,8 @@ export class HashGridCache implements WorldCache {
     private lastFramePingPong: number | null = null;
     /** The options whose change empties the cache, as the last `encodeFrame` read them; null before the first. */
     private lastClearOptions: HashGridCacheClearOptions | null = null;
+    /** Lever L1: the scene changes of the last `CELL_SHADING_CHANGE_FRAMES` frames, kept so cells hit only now and then are caught too. */
+    private recentChanges: RecentCellChanges = [];
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
     constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
@@ -491,7 +494,7 @@ export class HashGridCache implements WorldCache {
         }
         this.lastClearOptions = clearOptions;
         const useMultibounce = clearOptions.useMultibounce;
-        const budgeted = this.writeCellShading(encoder, prepared, rayData, frame.changes);
+        const budgeted = this.writeCellShading(encoder, prepared, rayData, frame);
 
         // The probe-ray count where the insert pass's indirect arguments read it.
         encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.tileWords, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
@@ -543,7 +546,9 @@ export class HashGridCache implements WorldCache {
      * and the changes into the lever's uniform, and records clearing its
      * per-frame counters. Returns whether the cells are lit on the budget.
      */
-    private writeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, changes: WorldCacheChanges | undefined): boolean {
+    private writeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, frame: WorldCacheFrame): boolean {
+        // Kept whichever way cells are lit, so switching to budgeted catches a change just made.
+        this.recentChanges = keepRecentChanges(this.recentChanges, frame.frame, frame.changes);
         const { device, buffers } = prepared;
         const options = this.options;
         const budgeted = options.cellShading === 'budgeted';
@@ -557,7 +562,7 @@ export class HashGridCache implements WorldCache {
         if (rayData.layout.maxCombinedRayCount > CELL_SHADING_MAX_ENTRIES) {
             throw new RangeError(`@pmndrs/gi: cells lit on a budget take at most ${CELL_SHADING_MAX_ENTRIES} hits a frame; this screen can have ${rayData.layout.maxCombinedRayCount}`);
         }
-        device.queue.writeBuffer(prepared.cellShading.uniform, 0, cellShadingWords(budget, changes));
+        device.queue.writeBuffer(prepared.cellShading.uniform, 0, cellShadingWords(budget, recentChangesUnion(this.recentChanges)));
         // The candidate and lit counts and the priority bins start at zero (the turn period is kept).
         encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellCandidateCount * WORD_BYTES, 2 * WORD_BYTES);
         encoder.clearBuffer(rayData.listWords, rayData.layout.cellPriorityBins * WORD_BYTES, CELL_SHADING_BINS * WORD_BYTES);
@@ -741,6 +746,29 @@ export function hashGridCacheClearOptions(options: HashGridCacheOptions): HashGr
 
 export function sameClearOptions(a: HashGridCacheClearOptions, b: HashGridCacheClearOptions): boolean {
     return a.cellSize === b.cellSize && a.minCellSize === b.minCellSize && a.useMultibounce === b.useMultibounce;
+}
+
+/** Lever L1: a frame's changes and its number, newest last. */
+export type RecentCellChanges = readonly { readonly frame: number; readonly changes: WorldCacheChanges }[];
+
+/**
+ * Lever L1: the changes of the frames in the window ending at `frame`
+ * (`CELL_SHADING_CHANGE_FRAMES`), with this frame's added. A cell is marked
+ * changed only on a frame it is hit, and on a still camera the jittered
+ * probes reach some cells only now and then; a change remembered for a few
+ * frames catches them (on the GPU, cells hit only on the change's frame left
+ * the sun's lag at 31 frames with 20k cells lit, against 37 per hit).
+ */
+export function keepRecentChanges(recent: RecentCellChanges, frame: number, changes: WorldCacheChanges | undefined): RecentCellChanges {
+    const kept = recent.filter((entry) => frame - entry.frame < CELL_SHADING_CHANGE_FRAMES && entry.frame <= frame);
+    if (changes && (changes.everything || changes.boxes.length > 0)) kept.push({ frame, changes });
+    return kept;
+}
+
+/** The window's changes as one: everything if any frame's was, else every box (`cellShadingWords` takes too many boxes as everything). */
+export function recentChangesUnion(recent: RecentCellChanges): WorldCacheChanges {
+    if (recent.some((entry) => entry.changes.everything)) return { everything: true, boxes: [] };
+    return { everything: false, boxes: recent.flatMap((entry) => entry.changes.boxes) };
 }
 
 /** The group lever L1's kernels put their uniform in (cell-shading-wgsl.ts's `CELL_SHADING_GROUP`). */

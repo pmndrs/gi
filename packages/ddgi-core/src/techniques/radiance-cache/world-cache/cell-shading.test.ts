@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CELL_SHADING_BINS, CELL_SHADING_SUB_BINS, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
 import { cellPriorityClass, keepOneSample, prioritizeCells, scatterCells, simulateCell } from './cell-shading-cpu.ts';
 import { CELL_PRIORITY_CLASS, CELL_SHADING_ENTRY_POINT, CELL_SHADING_UNIFORM_BYTES, claimCellsWgsl, prioritizeCellsWgsl, scatterCellsWgsl, shadeCellsWgsl } from './cell-shading-wgsl.ts';
-import { cellShadingWords } from './hash-grid-cache.ts';
+import { cellShadingWords, keepRecentChanges, recentChangesUnion } from './hash-grid-cache.ts';
 import { generateReservoirsWgsl, hashGridCacheRayListLayout, updateTilesWgsl } from './hash-grid-population-wgsl.ts';
 import { makeRandom, rand } from './multibounce-cpu.ts';
 
@@ -116,6 +116,18 @@ describe("lever L1's kernels and lists", () => {
         expect(lists.cellShadeBuffer).toBe(lists.cellCandidateBuffer + lists.maxCombinedRayCount);
         expect(lists.cellPriorityBins).toBe(lists.cellShadeBuffer + lists.maxCombinedRayCount);
         expect(lists.bytes).toBe((lists.cellPriorityBins + CELL_SHADING_BINS) * 4);
+    });
+
+    it('remember changes for a window of frames, a change with no bounds over every box', () => {
+        const box = { min: [0, 0, 0] as const, max: [1, 1, 1] as const };
+        let recent = keepRecentChanges([], 10, { everything: false, boxes: [box] });
+        recent = keepRecentChanges(recent, 11, undefined);
+        expect(recentChangesUnion(recent).boxes.length).toBe(1);
+        recent = keepRecentChanges(recent, 25, { everything: true, boxes: [] });
+        expect(recentChangesUnion(recent).everything).toBe(true);
+        recent = keepRecentChanges(recent, 26, undefined);
+        expect(recent.map((entry) => entry.frame)).toEqual([25]);
+        expect(recentChangesUnion(keepRecentChanges(recent, 41, undefined))).toEqual({ everything: false, boxes: [] });
     });
 
     it("pack the budget and the frame's changes, and take too many boxes as a change everywhere", () => {
