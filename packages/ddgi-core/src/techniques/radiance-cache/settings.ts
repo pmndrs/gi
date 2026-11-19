@@ -93,7 +93,8 @@ export interface RadianceCacheSettings {
      * occluding pixels. Capsaicin's GI-1 renderer always runs it (default
      * true). On, the technique asks the host for `FrameScreen.lighting` and
      * `FrameScreen.albedo` (the lit image SSGI reads, register D51). Fixed at
-     * construction (it decides the screen channels).
+     * construction for the screen channels it asks for; turned off later,
+     * SSGI stops (to measure it). Read every frame.
      */
     ssgi: boolean;
     /** `ssgi_slice_count_` (ssgi.h:47, default 1). Read every frame. */

@@ -1,0 +1,4 @@
+{
+    "description": "RC4.2: FilterScreenProbes and the platform SSGI feeding InterpolateScreenProbes: a uniform field unchanged by the filter, the filter against its CPU port on depth edges, SSGI on an open plane (visibility 1, bent normal = normal, no near-field light), SSGI in a corner against the analytic visibility and bent-normal tilt, and a near-field furnace (every direction L reads pi L). Correctness only.",
+    "timeoutMs": 600000
+}

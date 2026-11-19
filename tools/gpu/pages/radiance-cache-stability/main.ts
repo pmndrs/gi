@@ -59,6 +59,15 @@ const CONFIGURATIONS = [
     ['moving', 'on'],
     ['moving', 'off'],
 ] as const;
+/**
+ * RC4.2: the probe filter and SSGI on (the product), the filter alone, and both off (RC4.1's
+ * image), each measured with history; history off only for the first.
+ */
+const VARIANTS = [
+    { name: 'filter and SSGI', probeFilter: true, ssgi: true },
+    { name: 'filter only', probeFilter: true, ssgi: false },
+    { name: 'neither (RC4.1)', probeFilter: false, ssgi: false },
+] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
 
@@ -237,55 +246,62 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
             if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
         }
         const results: Record<string, Measurement> = {};
-        for (const jitter of [true, false]) {
-            for (const [motion, history] of CONFIGURATIONS) {
-                technique.settings.interpolationJitter = jitter;
-                technique.resetScreenHistory();
-                let step = 0;
-                const advance = (): void => {
-                    if (history === 'off') technique.resetScreenHistory();
-                    if (motion === 'moving') camera = movingCamera(base, step++);
-                    frame();
-                };
-                camera = base;
-                for (let index = 0; index < CONVERGE_FRAMES; index++) {
-                    advance();
-                    if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
-                }
-                await device.queue.onSubmittedWorkDone();
-                let previous = await readFrame(motion === 'moving');
-                const tally = new ChangeTally();
-                let leftOut = 0;
-                let eSum = 0;
-                let eCount = 0;
-                let bad = 0;
-                for (let index = 0; index < MEASURE_FRAMES; index++) {
-                    advance();
-                    await device.queue.onSubmittedWorkDone();
-                    const current = await readFrame(motion === 'moving');
-                    for (let pixel = 0; pixel < current.e.length; pixel++) {
-                        if (current.depth[pixel] === 1) continue;
-                        const value = current.e[pixel];
-                        if (!(Number.isFinite(value) && value >= 0)) bad++;
-                        else {
-                            eSum += value;
-                            eCount++;
-                        }
+        for (const variant of VARIANTS) {
+            technique.settings.probeFilter = variant.probeFilter;
+            technique.settings.ssgi = variant.ssgi;
+            for (const jitter of [true, false]) {
+                for (const [motion, history] of CONFIGURATIONS) {
+                    if (history === 'off' && variant !== VARIANTS[0]) continue;
+                    technique.settings.interpolationJitter = jitter;
+                    technique.resetScreenHistory();
+                    let step = 0;
+                    const advance = (): void => {
+                        if (history === 'off') technique.resetScreenHistory();
+                        if (motion === 'moving') camera = movingCamera(base, step++);
+                        frame();
+                    };
+                    camera = base;
+                    for (let index = 0; index < CONVERGE_FRAMES; index++) {
+                        advance();
+                        if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
                     }
-                    leftOut += changes(previous, current, tally).leftOut;
-                    previous = current;
+                    await device.queue.onSubmittedWorkDone();
+                    let previous = await readFrame(motion === 'moving');
+                    const tally = new ChangeTally();
+                    let leftOut = 0;
+                    let eSum = 0;
+                    let eCount = 0;
+                    let bad = 0;
+                    for (let index = 0; index < MEASURE_FRAMES; index++) {
+                        advance();
+                        await device.queue.onSubmittedWorkDone();
+                        const current = await readFrame(motion === 'moving');
+                        for (let pixel = 0; pixel < current.e.length; pixel++) {
+                            if (current.depth[pixel] === 1) continue;
+                            const value = current.e[pixel];
+                            if (!(Number.isFinite(value) && value >= 0)) bad++;
+                            else {
+                                eSum += value;
+                                eCount++;
+                            }
+                        }
+                        leftOut += changes(previous, current, tally).leftOut;
+                        previous = current;
+                    }
+                    results[`${variant.name}: ${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
+                        meanChange: Number((tally.sum / Math.max(tally.count, 1)).toFixed(5)),
+                        p95Change: Number(tally.percentile(0.95).toFixed(4)),
+                        meanE: Number((eSum / Math.max(eCount, 1)).toPrecision(5)),
+                        pixels: tally.count,
+                        leftOut,
+                        bad,
+                    };
                 }
-                results[`${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
-                    meanChange: Number((tally.sum / Math.max(tally.count, 1)).toFixed(5)),
-                    p95Change: Number(tally.percentile(0.95).toFixed(4)),
-                    meanE: Number((eSum / Math.max(eCount, 1)).toPrecision(5)),
-                    pixels: tally.count,
-                    leftOut,
-                    bad,
-                };
             }
         }
         technique.settings.interpolationJitter = true;
+        technique.settings.probeFilter = true;
+        technique.settings.ssgi = true;
         return results;
     } finally {
         screen.dispose();

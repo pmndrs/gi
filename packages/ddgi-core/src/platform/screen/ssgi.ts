@@ -164,15 +164,15 @@ fn giSsgiIntersectDirPlaneOneSided(dir: vec3f, normal: vec3f, pt: vec3f) -> f32 
 
 // RotFromToMatrix (ssgi.comp:81-111, from assimp's FromToMatrix) applied to 'v': the rotation taking
 // unit 'from' to unit 'to'.
-fn giSsgiRotateFromTo(from: vec3f, to: vec3f, v: vec3f) -> vec3f {
-    let e = dot(from, to);
+fn giSsgiRotateFromTo(fromDir: vec3f, toDir: vec3f, v: vec3f) -> vec3f {
+    let e = dot(fromDir, toDir);
     let f = abs(e);
 
     if (f > 1.0 - 0.0003) {
         return v;
     }
 
-    let c = cross(from, to);
+    let c = cross(fromDir, toDir);
     let h = 1.0 / (1.0 + e); // optimization by Gottfried Chen
     let hvx = h * c.x;
     let hvz = h * c.z;

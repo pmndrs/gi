@@ -73,6 +73,9 @@
  * running a second GTAO. If the pass already applies AO to its materials (a
  * context with `getAO`, three's `builtinAOContext`), `giAlbedo` carries that
  * AO already, so adding the composite's occlusion as well darkens GI twice.
+ * The same holds for the radiance cache, whose E already carries its own
+ * SSGI occlusion (RC4.2, `RadianceCacheSettings.ssgi`, on by default): leave
+ * `occlusion` off with it, or turn its SSGI off.
  */
 
 import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type Camera, type NodeBuilder, type PassNode, type TextureNode } from 'three/webgpu';

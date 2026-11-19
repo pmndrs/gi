@@ -336,6 +336,8 @@ async function checkInterpolation(device: GPUDevice, run: ImageRun, fail: (messa
         const length = Math.hypot(normals[index], normals[index + 1], normals[index + 2]);
         return [normals[index] / length, normals[index + 1] / length, normals[index + 2] / length];
     };
+    const occlusionImage = probes.occlusion ? halves(await readTexture(device, probes.occlusion.occlusion, 8, WIDTH, HEIGHT)) : null;
+    const nearFieldImage = probes.occlusion ? halves(await readTexture(device, probes.occlusion.nearField, 8, WIDTH, HEIGHT)) : null;
     const coefficientsByTile = new Map<number, number[]>();
     const inputs: InterpolationInputs = {
         width: WIDTH,
@@ -349,15 +351,27 @@ async function checkInterpolation(device: GPUDevice, run: ImageRun, fail: (messa
         worldPosition,
         normal,
         probeMask: (level, x, y) => levels[level].texels[y * levels[level].width + x],
-        probeIrradiance: (tileX, tileY, direction) => {
+        probeIrradiance: (tileX, tileY, direction, ao) => {
             const key = tileY * probeCount[0] + tileX;
             let coefficients = coefficientsByTile.get(key);
             if (!coefficients) {
                 coefficients = probeCoefficients(readback, ((tileX * PROBE_SIZE) << 16) | (tileY * PROBE_SIZE));
                 coefficientsByTile.set(key, coefficients);
             }
-            return shIrradiance(coefficients, direction);
+            return shIrradiance(coefficients, direction, ao);
         },
+        // SSGI's images as the GPU read them (RC4.2): the CPU port checks the HAS_OCCLUSION branch on them.
+        occlusion: occlusionImage
+            ? (x, y) => {
+                  const index = (y * WIDTH + x) * 4;
+                  const near = nearFieldImage ?? occlusionImage;
+                  return {
+                      ao: occlusionImage[index + 3],
+                      bentNormal: [occlusionImage[index], occlusionImage[index + 1], occlusionImage[index + 2]],
+                      nearField: nearFieldImage ? (near[index] + near[index + 1] + near[index + 2]) / 3 : 0,
+                  };
+              }
+            : undefined,
     };
     let surfacePixels = 0;
     let gpuSum = 0;
@@ -377,7 +391,7 @@ async function checkInterpolation(device: GPUDevice, run: ImageRun, fail: (messa
             if (result.hint === 0) backupPixels++;
             if (result.weights.filter((w) => w > 0).length > 1) mixedPixels++;
             const [sx, sy] = unpackSeed(result.probes[0]);
-            const nearest = result.probes[0] === INVALID_ID ? 0 : inputs.probeIrradiance(Math.floor(sx / PROBE_SIZE), Math.floor(sy / PROBE_SIZE), normal(x, y));
+            const nearest = result.probes[0] === INVALID_ID ? 0 : inputs.probeIrradiance(Math.floor(sx / PROBE_SIZE), Math.floor(sy / PROBE_SIZE), normal(x, y), 1);
             cpuValues.push({ pixel, cpu: result.irradiance, nearest });
         }
     }

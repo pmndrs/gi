@@ -41,7 +41,7 @@
  * made in `prepare`, for the largest screen the device can draw.
  */
 
-import type { GpuCompaction, GpuIndirectArgs, GpuScreenSpaceGI } from '../../platform/contract/compute.ts';
+import type { GpuCompaction, GpuIndirectArgs, GpuScreenSpaceGI, ScreenSpaceGITextures } from '../../platform/contract/compute.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import type { FrameScreen } from '../../platform/contract/frame.ts';
 import type { RayScratch } from '../../platform/contract/shade.ts';
@@ -114,6 +114,12 @@ export interface RadianceCacheProbes {
     readonly probeSH: GPUTexture;
     /** The interpolated irradiance, screen-sized `rgba16float`: rgb E, alpha Capsaicin's denoiser hint. */
     readonly irradiance: GPUTexture;
+    /** The probe filter's first pass output (filtered across only; RC4.2), the atlas' size; after the second pass the atlas holds the filtered probes. */
+    readonly filterScratch: GPUTexture;
+    /** The platform's SSGI images of the latest frame (RC4.2), or null with `settings.ssgi` off. */
+    readonly occlusion: ScreenSpaceGITextures | null;
+    /** The lit image the latest frame wrote for the next frame's SSGI (register D51); zeros without SSGI. */
+    readonly combined: GPUTexture;
     /** Capsaicin's append counters (`COUNTER_NAMES`' order), one word each. */
     readonly counters: GPUBuffer;
     /** The history's buffers (RC4.1): last frame's probes, the off-screen cache, the empty and override tiles. */
@@ -430,8 +436,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         if (!irradiance) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         const settings = this.settings;
         const screen = frame.screen;
+        // Made in prepare when settings.ssgi was on at construction; turning it off later stops it.
+        const screenSpaceGI = settings.ssgi ? this.screenSpaceGI : null;
         const occlusion =
-            this.screenSpaceGI?.encode(encoder, {
+            screenSpaceGI?.encode(encoder, {
                 screen,
                 camera: frame.camera,
                 frame: frame.frame,
@@ -518,7 +526,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const prepared = this.prepared;
         const resources = this.screenResources;
         const irradiance = this.irradiance;
-        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance) return null;
+        if (!prepared || !resources || !irradiance?.probeSH || !irradiance.irradiance || !irradiance.filterScratch) return null;
         return {
             layout: resources.layout,
             frameIndex: this.latestFrameIndex,
@@ -531,6 +539,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             rayScratch: resources.rayScratch,
             probeSH: irradiance.probeSH,
             irradiance: irradiance.irradiance,
+            filterScratch: irradiance.filterScratch,
+            occlusion: this.screenSpaceGI?.texturesFor(resources.layout.width, resources.layout.height) ?? null,
+            combined: irradiance.combinedFor(resources.layout),
             counters: prepared.counters,
             history: resources.history,
             cachedTileListCount: resources.history.scanBuffers.cachedTileListCount,

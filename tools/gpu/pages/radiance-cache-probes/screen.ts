@@ -96,23 +96,29 @@ fn pageHash(value: u32) -> u32 {
 // The largest f32 below 1: a hit never reads as the far plane (the sky).
 const PAGE_DEPTH_BELOW_FAR: f32 = 0.99999994;
 
-@compute @workgroup_size(8, 8)
-fn main(@builtin(global_invocation_id) id: vec3u) {
+// The pixel's primary ray, from the camera through the pixel centre.
+fn pageRay(id: vec2u) -> GiRay {
     let size = pageCamera.size.xy;
-    if (any(id.xy >= size)) {
-        return;
-    }
     // Pixel centre in [-1, 1], y up; row 0 is the top.
     let ndc = vec2f((f32(id.x) + 0.5) / f32(size.x) * 2.0 - 1.0, 1.0 - (f32(id.y) + 0.5) / f32(size.y) * 2.0);
     let tanHalfFov = pageCamera.forward.w;
     let direction = normalize(pageCamera.forward.xyz + pageCamera.right.xyz * ndc.x * tanHalfFov * pageCamera.right.w + pageCamera.up.xyz * ndc.y * tanHalfFov);
-    let ray = GiRay(pageCamera.position.xyz, 0.0, direction, 1.0e27);
+    return GiRay(pageCamera.position.xyz, 0.0, direction, 1.0e27);
+}
+
+// Depth, normal and velocity (the default device has four storage textures a stage, so albedo and
+// lighting are a second entry point over the same rays).
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    if (any(id.xy >= pageCamera.size.xy)) {
+        return;
+    }
+    let ray = pageRay(id.xy);
+    let direction = ray.direction;
     let hit = giTraceClosest(ray);
     var depth = 1.0;
     var normal = vec3f(0.0);
     var velocity = vec2f(0.0);
-    var albedo = vec3f(0.0);
-    var lighting = vec3f(0.0);
     if (hit.t >= 0.0) {
         let surface = giSurfaceAt(ray, hit);
         let point = vec4f(pageCamera.position.xyz + direction * hit.t, 1.0);
@@ -121,6 +127,24 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         depth = min(clip.z / clip.w, PAGE_DEPTH_BELOW_FAR);
         velocity = clip.xy / clip.w - previousClip.xy / previousClip.w;
         normal = select(-surface.geometricNormal, surface.geometricNormal, dot(surface.geometricNormal, direction) < 0.0);
+    }
+    textureStore(pageDepth, id.xy, vec4f(depth, 0.0, 0.0, 0.0));
+    textureStore(pageNormal, id.xy, vec4f(normal, 0.0));
+    textureStore(pageVelocity, id.xy, vec4f(velocity, 0.0, 0.0));
+}
+
+@compute @workgroup_size(8, 8)
+fn shade(@builtin(global_invocation_id) id: vec3u) {
+    let size = pageCamera.size.xy;
+    if (any(id.xy >= size)) {
+        return;
+    }
+    let ray = pageRay(id.xy);
+    let hit = giTraceClosest(ray);
+    var albedo = vec3f(0.0);
+    var lighting = vec3f(0.0);
+    if (hit.t >= 0.0) {
+        let surface = giSurfaceAt(ray, hit);
         // FrameScreen.albedo and .lighting: the host's own light, emission and one sample of direct light.
         albedo = surface.albedo;
         let first = pageHash(id.x + id.y * size.x + pageHash(pageCamera.size.z));
@@ -128,9 +152,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let emission = select(vec3f(0.0), surface.emission, surface.frontFace);
         lighting = emission + surface.albedo / 3.14159265358979 * giDirectIrradiance(surface, 0xffffffffu, random);
     }
-    textureStore(pageDepth, id.xy, vec4f(depth, 0.0, 0.0, 0.0));
-    textureStore(pageNormal, id.xy, vec4f(normal, 0.0));
-    textureStore(pageVelocity, id.xy, vec4f(velocity, 0.0, 0.0));
     textureStore(pageAlbedo, id.xy, vec4f(albedo, 1.0));
     textureStore(pageLighting, id.xy, vec4f(lighting, 1.0));
 }
@@ -147,6 +168,13 @@ const SCREEN_GROUP: GPUBindGroupLayoutDescriptor = {
         { binding: 1, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'r32float' } },
         { binding: 2, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
         { binding: 3, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
+    ],
+};
+
+const SHADE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'radiance-cache-probes screen shade group 1',
+    entries: [
+        { binding: 0, visibility: STAGE_COMPUTE, buffer: { type: 'uniform' } },
         { binding: 4, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
         { binding: 5, visibility: STAGE_COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
     ],
@@ -157,6 +185,7 @@ export class PageScreen {
     readonly screen: FrameScreen;
     private readonly uniforms: GPUBuffer;
     private readonly group: GPUBindGroup;
+    private readonly shadeGroup: GPUBindGroup;
     /** The camera of the previous `encode`, for the velocity. */
     private previousViewProjection: number[] | null = null;
     /** Frames drawn: the direct light's random numbers change with it. */
@@ -165,6 +194,7 @@ export class PageScreen {
     private constructor(
         private readonly device: GPUDevice,
         private readonly kernel: ComputeKernel,
+        private readonly shadeKernel: ComputeKernel,
         width: number,
         height: number,
     ) {
@@ -183,6 +213,12 @@ export class PageScreen {
                 { binding: 1, resource: depth.createView() },
                 { binding: 2, resource: normal.createView() },
                 { binding: 3, resource: velocity.createView() },
+            ],
+        });
+        this.shadeGroup = device.createBindGroup({
+            layout: shadeKernel.ownLayouts[0],
+            entries: [
+                { binding: 0, resource: { buffer: this.uniforms } },
                 { binding: 4, resource: albedo.createView() },
                 { binding: 5, resource: lighting.createView() },
             ],
@@ -190,14 +226,10 @@ export class PageScreen {
     }
 
     static async create(platform: GIPlatformImpl, device: GPUDevice, width: number, height: number): Promise<PageScreen> {
-        const kernel = await platform.kernels.computeKernel({
-            label: 'radiance-cache-probes screen',
-            modules: [platform.shade.module],
-            code: SCREEN_WGSL,
-            entryPoint: 'main',
-            ownGroups: [SCREEN_GROUP],
-        });
-        return new PageScreen(device, kernel, width, height);
+        const make = (entryPoint: string, group: GPUBindGroupLayoutDescriptor) =>
+            platform.kernels.computeKernel({ label: `radiance-cache-probes screen ${entryPoint}`, modules: [platform.shade.module], code: SCREEN_WGSL, entryPoint, ownGroups: [group] });
+        const [kernel, shadeKernel] = await Promise.all([make('main', SCREEN_GROUP), make('shade', SHADE_GROUP)]);
+        return new PageScreen(device, kernel, shadeKernel, width, height);
     }
 
     /**
@@ -220,6 +252,9 @@ export class PageScreen {
         const pass = encoder.beginComputePass({ label: 'radiance-cache-probes screen' });
         this.kernel.bind(pass);
         pass.setBindGroup(1, this.group);
+        pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
+        this.shadeKernel.bind(pass);
+        pass.setBindGroup(1, this.shadeGroup);
         pass.dispatchWorkgroups(Math.ceil(width / 8), Math.ceil(height / 8));
         pass.end();
     }
