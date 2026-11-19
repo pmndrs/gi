@@ -21,6 +21,30 @@ Rules:
 
 ---
 
+## 2026-11-19 (late) · Follow-ups moved to GitHub issues; #3 brought to main · lead (opus)
+Did: created issues #6-#33 on pmndrs/gi from TASKS Later, the tuning pass and docs/divergence.md (labels `ddgi`, `tuning`, `needs-mac`, `needs-windows`, `chore`); TASKS Later is now an index of them; TU.5 marked done (merged in #2), TU.1 and TU.3 link their Mac issues. Merged `main` into `win-tu-checks`, because #3 had landed on `win-tu-checks` after #1 took that branch to `main`: PROGRESS and the accuracy CSV keep both sides, and TASKS takes #3's TU.4 row and #2's TU.5 row.
+Next: Dennis merges #5. The open work is the issues; the Mac half of the tuning pass is #13 and #14.
+
+## 2026-11-19 (evening) · TU.4: the door and cabinet end states, the page default, sponza-full's verdict · measurer (sonnet)
+Did: (1) `tools/gpu/pages/m4-textured-accuracy` now measures the shipping default (no GTAO); `run.ts --occlusion` opts in; files and summary keep their `-no-ao` names for the default, so earlier results stay valid; docs and `test.json` updated. (2) End states: `tools/reference/cycles/end-states.json` (door-shut, door-open, cabinet-before, cabinet-moved), `render.py --end-state` (turns an object about its pivot, or stands the cabinet box as `ddgi-move-cabinet` does), and the page's `job.endState` does the same on our side; the run.ts scene list takes the ids. (3) `--material-variant cutout|opaque` on the page: a foliage diagnostic. Commit c5f8e40.
+Verified: `pnpm typecheck` and `pnpm lint` clean; `pnpm test` 1,627 pass, but 2 timed out at 5 s while the CPU render held 12 threads (sky.test, light-grid.test); both pass when re-run alone (33 tests). Every GPU run on the RTX 3060 Laptop (nvidia/ampere), Chrome 157 headless, under `bench-lock run --no-cool-wait` (waited behind the TU.5 and rc agents). Timings not used.
+Flagged: my first cabinet render put the box behind the room's north wall (Blender's `matrix_world` was stale until a view-layer update, so the scene bounds were inflated); caught because the page logs three's bounds (min y -0.108, min z -2.539) and Cycles' differed. Fixed (`view_layer.update()`), re-rendered both cabinet states; the old numbers (−7.3%) are discarded. Cycles' box centre now equals three's to 1e-6. The render log keeps those two bad rows (2026-11-19T13:45 and 13:59).
+Numbers (mean error of the GI term; FLIP on 8x8 blocks; bar 10% and 0.15; no GTAO; reference 128 spp CPU, 1920x1080; rows in `bench/results/m4-textured-accuracy.csv`):
+| scene / camera | mean | FLIP | block err (mean / p95) |
+| --- | --- | --- | --- |
+| door-shut lit-room | +2.39% | 0.065 | 4.0 / 10% |
+| door-shut facing-the-door | +2.13% | 0.053 | 3.4 / 9% |
+| door-open lit-room | +2.79% | 0.070 | 4.5 / 11% |
+| door-open facing-the-door | +2.37% | 0.060 | 4.0 / 10% |
+| door-open dark-room-leak-view | +4.29% | 0.184 (over the bar) | 8.5 / 25%; the reference's own noise is 4.96% block (second seed) |
+| cabinet-before towards-the-cabinet | −4.38% | 0.090 | 5.2 / 12% |
+| cabinet-moved towards-the-cabinet | −4.38% | 0.090 | 5.1 / 11% |
+| sponza-full colonnade, default (earlier) | −16.21% | 0.722 | 73.3% |
+| sponza-full colonnade, `--material-variant cutout` | +47.66% | 0.567 | 57.6% |
+Render time (Cycles 4.5.0 on the CPU, 12 threads, 128 spp, 1920x1080; the CPU lock; nothing else rendering): door-open lit 368 s, door-shut lit 383 s, door-open facing 389 s, door-shut facing 393 s, door-open dark 359 s, cabinet-moved 469 s, cabinet-before 460 s, a second seed of door-open dark 341 s (for the noise); plus 510 s and 464 s for the two discarded cabinet renders. About 69 min in all, under the 90 min cap. All checks (lights-only render, 0.000% bias) passed.
+sponza-full verdict: **our side, not the reference.** Cycles keeps the glTF's own materials (`--textured`, not the GI table); the leaf is glTF BLEND, so Cycles takes the texture alpha as stochastic transparency, like our `stochastic` mode, and the reference shows lit green leaves. Ours draws the leaf cards nearly black (only the opaque mid-ribs show green). Alpha-testing our blended materials gives bright green leaves again and +47.7%. Courtyard tree is a masked file (cutouts), so this is the one blended-foliage scene. Not split yet: the composite's blended-surface path against the stochastic trace into the field. Not fixed (library code).
+Not verified: the page's `--occlusion` flag wasn't run (the change is mechanical; the default path was run). The cabinet view hides most of the cabinet behind the table, so the two end states barely differ there. No Intel or Mac run. The door-shut dark-room view wasn't rendered (the true answer is zero; `ddgi-leak` measures it). The page's results land in the shared `bench/references` junction, as before.
+Next: sponza-full's blended-foliage fix (TASKS Later), starting from a variant that keeps the trace stochastic and draws the leaves opaque.
 ## 2026-11-19 · TU.1: `low`'s warm-up batch is 1,024 · implementer (opus)
 Did: `presets.ts`: `DDGIPresetSettings` now includes `maxProbesPerFrame`; `low` 1,024, `medium` and `high` 4,096 (the default). Tests (`presets.test.ts`), the platform.md presets table, DECISIONS 2026-11-19 (a lead call under Dennis's "do the fixes"; numbers from the Intel UHD run below that day). GPU pages that update every probe every frame under `VITE_DDGI_PRESET` keep the default 4,096 (`page-preset.ts` `everyProbeEveryFrame`, also in `ddgi-presets`), as they keep their own budget: `low`'s 1,024 would cap two-room's 1,071 probes. `ddgi-low-warmup` now defaults to the preset's batch.
 Verified: `ddgi-low-warmup` with the preset's own batch (1,024): Intel UHD (gen-12lp), two-room refined to 25,194 probes: PASS, 393 warm-up frames, 5.9 s, frame median 14.4 / p90 16.2 ms, first frame 145 ms, no device loss (the morning's run at `VITE_WARMUP_MAX=1024` took 4.6 s; information only, not timed under the cool-down rule). RTX 3060, plain two-room: PASS, batch 1,024. `pnpm test` covers the preset table. Row in `bench/results/checks.csv`.

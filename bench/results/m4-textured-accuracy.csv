@@ -111,6 +111,31 @@ date,commit,device,browser,adapter,scene,camera,setting,metric,value,unit
 2026-11-19,f183fb7,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO on GI term (--no-occlusion; new default),mean_error,-16.21,percent
 2026-11-19,f183fb7,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO on GI term (--no-occlusion; new default),flip_8x8,0.722,flip
 2026-11-19,f183fb7,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO on GI term (--no-occlusion; new default),block_error_mean,73.3,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-shut,lit-room,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,2.39,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-shut,lit-room,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.065,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-shut,lit-room,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,4,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-shut,facing-the-door,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,2.13,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-shut,facing-the-door,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.053,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-shut,facing-the-door,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,3.4,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,lit-room,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,2.79,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,lit-room,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.07,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,lit-room,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,4.5,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,facing-the-door,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,2.37,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,facing-the-door,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.06,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,facing-the-door,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,4,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,dark-room-leak-view,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,4.29,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,dark-room-leak-view,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.184,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,dark-room-leak-view,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,8.5,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,cabinet-before,towards-the-cabinet,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,-4.38,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,cabinet-before,towards-the-cabinet,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.09,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,cabinet-before,towards-the-cabinet,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,5.2,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,cabinet-moved,towards-the-cabinet,no GTAO (page default); Cycles end state 128 spp CPU,mean_error,-4.38,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,cabinet-moved,towards-the-cabinet,no GTAO (page default); Cycles end state 128 spp CPU,flip_8x8,0.09,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,cabinet-moved,towards-the-cabinet,no GTAO (page default); Cycles end state 128 spp CPU,block_error_mean,5.1,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO; --material-variant cutout (blended materials alpha-tested at 0.5 on our side only; diagnostic),mean_error,47.66,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO; --material-variant cutout (blended materials alpha-tested at 0.5 on our side only; diagnostic),flip_8x8,0.567,flip
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza-full,colonnade-from-the-floor,no GTAO; --material-variant cutout (blended materials alpha-tested at 0.5 on our side only; diagnostic),block_error_mean,57.6,percent
+2026-11-19,c5f8e40,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,door-open,dark-room-leak-view,Cycles end state 128 spp; second seed,reference_noise_block8_gi,4.96,percent
 2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),mean_error,25.46,percent
 2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),flip_8x8,0.366,flip
 2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome 157.0.8103.79 headless,nvidia/ampere,sponza,colonnade-from-the-floor,no GTAO; DV-01 off (backFaceRayThreshold null: back-face rays black; the default),block_error_mean,31.0,percent

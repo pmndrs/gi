@@ -3,7 +3,7 @@
  *
  *   node tools/reference/cycles/run.ts --scene cornell-box [--camera 1 | --from-shot <cycles.json>] --samples 4096
  *        [--width 1920] [--height 1080] [--seed 0] [--name-suffix -seed1]
- *        [--device gpu|cpu] [--threads N] [--materials-json <GI material table> | --textured]
+ *        [--device gpu|cpu] [--threads N] [--materials-json <GI material table> | --textured [--end-state <id of end-states.json>]]
  *        [--pixel-filter blackman-harris|gaussian|box] [--filter-width 1.5] [--denoise]
  *   node tools/reference/cycles/run.ts --calibrate     known-answer checks of the unit conversions
  *
@@ -152,7 +152,7 @@ async function main(): Promise<void> {
     }
     await appendFile(
         renderLog,
-        `${meta.finishedAt},${logToolName(meta)},${meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
+        `${meta.finishedAt},${logToolName(meta)},${meta.endState?.id ?? meta.scene},${meta.camera.name},${meta.width},${meta.height},${meta.samplesPerPixel},${meta.seed},${meta.device},${meta.threads},${meta.loadSeconds},${meta.renderSeconds},${meta.triangles}\n`,
     );
     meta.files.push(await writeGiImage(meta.outDir, meta.giComposite));
     const metaPath = join(meta.outDir, meta.jsonFile);
