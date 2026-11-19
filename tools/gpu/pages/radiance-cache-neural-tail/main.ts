@@ -62,6 +62,13 @@
  *    ray's radiance, every tail answer and every training target finite and
  *    at least 0 after frames 1, 50 and 100, with the gate open by frame 50.
  *
+ * 6. **With DDGI stacked** (the furnace, a DDGI volume under the cache with
+ *    `setFallback`, 40 frames): with `secondBounce: 'auto'` the second bounce
+ *    comes from DDGI (P6.3, register E10), whose field already carries the
+ *    later bounces, so the tail stays off: no training step, the gate shut,
+ *    one warning naming `neuralCache`; with `secondBounce: 'gi1-rays'` the
+ *    tail runs as without DDGI (its gate opens, no warning).
+ *
  * No glossy case: the platform's materials are diffuse (register D8), so
  * GI-1.1's reflections, where the pathtracer found the network halves the
  * converged error, can't be checked here yet.
@@ -79,6 +86,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { furnaceCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
 import { NEURAL_TAIL_COUNT_WORD, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
+import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
@@ -664,6 +672,52 @@ async function scanScene(device: GPUDevice, id: string, loader: 'manifest' | 'vi
     }
 }
 
+// ---- Section 6: with DDGI stacked ------------------------------------------------------------------
+
+/** The furnace with a DDGI volume stacked under the cache (P6.3's arrangement), `frames` frames: what the tail did and what it said. */
+async function runWithDdgi(device: GPUDevice, settings: Partial<RadianceCacheSettings>, frames: number): Promise<{ inUse: string | null; steps: number; gateOpen: boolean; warnings: number }> {
+    const warnings: string[] = [];
+    const consoleWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+        warnings.push(args.map(String).join(' '));
+        consoleWarn(...args);
+    };
+    const platform = new GIPlatformImpl(device, { label: 'neural tail page ddgi' });
+    try {
+        const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
+        platform.setOutput(technique);
+        const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: [0, 1.5, -4], size: [24, 2, 24], spacing: 1 } }));
+        platform.setFallback(technique, ddgi);
+        await platform.prepare();
+        const camera = describe(platform, 'furnace');
+        const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+        try {
+            const frame = (): void => {
+                const encoder = device.createCommandEncoder({ label: 'neural tail page ddgi' });
+                platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: 2048 }, camera: frameCamera(camera, WIDTH, HEIGHT) });
+                screen.encode(encoder, camera);
+                platform.encodeScreen(encoder, screen.screen);
+                device.queue.submit([encoder.finish()]);
+            };
+            frame();
+            await platform.rays.whenBuilt();
+            for (let index = 0; index < frames; index++) {
+                frame();
+                if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
+            }
+            await device.queue.onSubmittedWorkDone();
+            const tail = technique.neuralTail;
+            return { inUse: technique.worldCache?.secondBounceInUse ?? null, steps: tail?.steps ?? -1, gateOpen: tail?.active ?? false, warnings: warnings.filter((message) => message.includes('neuralCache')).length };
+        } finally {
+            screen.dispose();
+        }
+    } finally {
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+        console.warn = consoleWarn;
+    }
+}
+
 // ---- The page ----------------------------------------------------------------------------------------
 
 const startTime = performance.now();
@@ -761,6 +815,19 @@ try {
             }
         }
         data.nanScan = scans;
+    }
+
+    // 6. With DDGI stacked: the tail only extends GI-1.2's own second-bounce rays.
+    if (runs(6)) {
+        const auto = await runWithDdgi(device, { ...TAIL, secondBounce: 'auto' }, 40);
+        const rays = await runWithDdgi(device, { ...TAIL, secondBounce: 'gi1-rays' }, 40);
+        data.withDdgi = { auto, gi1Rays: rays };
+        if (auto.inUse !== 'fallback' || auto.steps !== 0 || auto.gateOpen || auto.warnings !== 1) {
+            fail(`with DDGI stacked, 'auto': the second bounce from ${auto.inUse}, ${auto.steps} training steps, gate ${auto.gateOpen ? 'open' : 'shut'}, ${auto.warnings} warnings (expected the fallback, 0, shut, 1)`);
+        }
+        if (rays.inUse !== 'gi1-rays' || !rays.gateOpen || rays.warnings !== 0) {
+            fail(`with DDGI stacked, 'gi1-rays': the second bounce from ${rays.inUse}, gate ${rays.gateOpen ? 'open' : 'shut'}, ${rays.warnings} warnings (expected gi1-rays, open, 0)`);
+        }
     }
 
     await drainDevice(device);
