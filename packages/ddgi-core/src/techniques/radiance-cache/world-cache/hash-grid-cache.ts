@@ -24,11 +24,17 @@
  * Every pass after the purge is sized on the GPU, through the platform's
  * indirect-dispatch arguments, where Capsaicin dispatches indirectly
  * (`generateDispatch`).
+ *
+ * Lever L1 (`cellShading: 'budgeted'`, TASKS P6.2): the hits only find their
+ * cells, and `ClaimCells`, `PrioritizeCells` and `ShadeCells`
+ * (`cell-shading-wgsl.ts`) light a budget of cells between `PopulateCells`
+ * and `UpdateTiles`.
  */
 
 import type { GpuIndirectArgs, GpuWord } from '../../../platform/contract/compute.ts';
 import type { ComputeKernel } from '../../../platform/contract/wgsl.ts';
 import {
+    CELL_SHADING_BINS,
     checkHashGridCacheLimits,
     DEFAULT_HASH_GRID_CACHE_OPTIONS,
     HASH_GRID_COUNTER,
@@ -38,6 +44,18 @@ import {
     type HashGridCacheCapacity,
     type HashGridCacheOptions,
 } from './capacity.ts';
+import {
+    CELL_SHADING_ENTRY_POINT,
+    CELL_SHADING_GROUP_ENTRIES,
+    CELL_SHADING_MAX_CHANGE_BOXES,
+    CELL_SHADING_MAX_ENTRIES,
+    CELL_SHADING_UNIFORM_BYTES,
+    CELL_SHADING_WORKGROUP_SIZE,
+    claimCellsWgsl,
+    prioritizeCellsWgsl,
+    scatterCellsWgsl,
+    shadeCellsWgsl,
+} from './cell-shading-wgsl.ts';
 import { hashGridCacheCellSizeConstant, verticalFieldOfView } from './hash-grid-cpu.ts';
 import {
     generateMultibounceReservoirsWgsl,
@@ -52,6 +70,7 @@ import {
     RAY_DATA_BINDING,
     RAY_DATA_GROUP,
     RAY_DATA_GROUP_ENTRIES,
+    RAY_LISTS_CELL_SHADING_WORD,
     RAY_LISTS_UNIFORM_BYTES,
     resolveCellsWgsl,
     updateMultibounceCellsWgsl,
@@ -71,7 +90,7 @@ import {
     PURGE_TILES_WORKGROUP_SIZE,
     purgeTilesWgsl,
 } from './hash-grid-wgsl.ts';
-import type { WorldCache, WorldCacheContext, WorldCacheFrame, WorldCacheLookup, WorldCacheProbeRays } from './world-cache.ts';
+import type { WorldCache, WorldCacheChanges, WorldCacheContext, WorldCacheFrame, WorldCacheLookup, WorldCacheProbeRays } from './world-cache.ts';
 
 /** `GPUBufferUsage` bits (the global doesn't exist in Node, where the tests import this file). */
 const BUFFER_USAGE = { copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
@@ -117,7 +136,22 @@ interface PopulationPasses {
     readonly resolveCells: PopulationPass;
 }
 
+/** Lever L1's passes (cell-shading-wgsl.ts): kernels with their indirect arguments (none for the one-thread `PrioritizeCells`). */
+interface CellShadingPasses {
+    readonly claimFirstBounceCells: PopulationPass;
+    readonly claimSecondBounceCells: PopulationPass;
+    readonly prioritizeCells: Omit<PopulationPass, 'args'>;
+    readonly scatterCells: PopulationPass;
+    readonly shadeCells: PopulationPass;
+    /** `HashGridCacheCellShading`: the budget and the frame's changes. */
+    readonly uniform: GPUBuffer;
+    /** Group 3 of each kernel: the uniform. */
+    readonly groups: Readonly<Record<CellShadingPassName, GPUBindGroup>>;
+}
+
 type PopulationPassName = keyof PopulationPasses;
+type CellShadingPassName = 'claimFirstBounceCells' | 'claimSecondBounceCells' | 'prioritizeCells' | 'scatterCells' | 'shadeCells';
+type RayDataPassName = PopulationPassName | CellShadingPassName;
 
 /** What `prepare` makes. */
 interface Prepared {
@@ -132,6 +166,7 @@ interface Prepared {
     /** PurgeTiles' dispatch arguments for each value of `buffer_ping_pong`: each reads the other parity's count, last frame's. */
     readonly purgeArgs: readonly [GpuIndirectArgs, GpuIndirectArgs];
     readonly population: PopulationPasses;
+    readonly cellShading: CellShadingPasses;
     /** `HashGridCacheRayLists`: where each per-ray list starts. */
     readonly rayListsUniform: GPUBuffer;
     readonly timer: WorldCacheContext['timer'];
@@ -143,7 +178,7 @@ interface RayData {
     readonly rays: WorldCacheProbeRays;
     readonly layout: HashGridCacheRayListLayout;
     readonly listWords: GPUBuffer;
-    readonly groups: Readonly<Record<PopulationPassName, GPUBindGroup>>;
+    readonly groups: Readonly<Record<RayDataPassName, GPUBindGroup>>;
 }
 
 export class HashGridCache implements WorldCache {
@@ -277,6 +312,10 @@ export class HashGridCache implements WorldCache {
         /** A population kernel: the hash grid in group 1, the ray data in group 2, the platform's hit shading in group 0 when it shades. */
         const populationKernel = (label: string, code: string, entryPoint: string, shades: boolean): Promise<ComputeKernel> =>
             kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup] });
+        // Lever L1's kernels add its uniform in group 3.
+        const cellShadingGroup = { label: 'radiance-cache/cell shading', entries: CELL_SHADING_GROUP_ENTRIES };
+        const cellShadingKernel = (label: string, code: string, entryPoint: string, shades: boolean): Promise<ComputeKernel> =>
+            kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup, cellShadingGroup] });
         const indirectArgs = (label: string, counter: number, itemsPerWorkgroup: number): Promise<GpuIndirectArgs> =>
             compute.createIndirectArgs({ label: `radiance-cache/${label}`, count: word(counter), itemsPerWorkgroup });
 
@@ -325,6 +364,19 @@ export class HashGridCache implements WorldCache {
             indirectArgs('GenerateMultibounceReservoirs args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.generateMultibounceReservoirs),
             indirectArgs('UpdateMultibounceCells args', HASH_GRID_COUNTER.visibilityCount1, POPULATION_WORKGROUP_SIZE.updateMultibounceCells),
         ]);
+        // Lever L1 (compiled always, run only with cellShading 'budgeted').
+        const claimCode = claimCellsWgsl(layout);
+        const [claimFirstKernel, claimSecondKernel, prioritizeKernel, scatterKernel, shadeKernel, claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs] = await Promise.all([
+            cellShadingKernel('ClaimCells (first bounce)', claimCode, CELL_SHADING_ENTRY_POINT.claimFirstBounceCells, false),
+            cellShadingKernel('ClaimCells (second bounce)', claimCode, CELL_SHADING_ENTRY_POINT.claimSecondBounceCells, false),
+            cellShadingKernel('PrioritizeCells', prioritizeCellsWgsl(layout), CELL_SHADING_ENTRY_POINT.prioritizeCells, false),
+            cellShadingKernel('ScatterCells', scatterCellsWgsl(layout), CELL_SHADING_ENTRY_POINT.scatterCells, false),
+            cellShadingKernel('ShadeCells', shadeCellsWgsl(layout), CELL_SHADING_ENTRY_POINT.shadeCells, true),
+            indirectArgs('ClaimCells (first bounce) args', HASH_GRID_COUNTER.visibilityCount0, CELL_SHADING_WORKGROUP_SIZE.claimCells),
+            indirectArgs('ClaimCells (second bounce) args', HASH_GRID_COUNTER.visibilityCount1, CELL_SHADING_WORKGROUP_SIZE.claimCells),
+            indirectArgs('ScatterCells args', HASH_GRID_COUNTER.cellCandidateCount, CELL_SHADING_WORKGROUP_SIZE.scatterCells),
+            indirectArgs('ShadeCells args', HASH_GRID_COUNTER.cellShadedCount, CELL_SHADING_WORKGROUP_SIZE.shadeCells),
+        ]);
         const [populateScreenProbes, generateReservoirs, populateCells, updateTiles, resolveCells, populateMultibounceCells, generateMultibounceReservoirs, updateMultibounceCells] =
             population.slice(0, 8) as ComputeKernel[];
         const [populateArgs, reservoirArgs, cellArgs, updateArgs, resolveArgs, multibounceCellArgs, multibounceReservoirArgs, multibounceUpdateArgs] = population.slice(8) as GpuIndirectArgs[];
@@ -344,10 +396,32 @@ export class HashGridCache implements WorldCache {
             resolveCells: pass(resolveCells, resolveArgs),
         };
         const rayListsUniform = device.createBuffer({ label: 'radiance-cache/hash-grid ray lists', size: RAY_LISTS_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        const cellShadingUniform = device.createBuffer({ label: 'radiance-cache/cell shading', size: CELL_SHADING_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
+        const cellShadingGroupFor = (kernel: ComputeKernel): GPUBindGroup =>
+            device.createBindGroup({ label: `${kernel.pipeline.label} cell shading`, layout: kernel.ownLayouts[2], entries: [{ binding: 0, resource: { buffer: cellShadingUniform } }] });
+        const cellShading: CellShadingPasses = {
+            claimFirstBounceCells: pass(claimFirstKernel, claimFirstArgs),
+            claimSecondBounceCells: pass(claimSecondKernel, claimSecondArgs),
+            prioritizeCells: {
+                kernel: prioritizeKernel,
+                cacheGroup: device.createBindGroup({ label: `${prioritizeKernel.pipeline.label} hash grid`, layout: prioritizeKernel.ownLayouts[0], entries: groupEntries(buffers) }),
+            },
+            scatterCells: pass(scatterKernel, scatterArgs),
+            shadeCells: pass(shadeKernel, shadeArgs),
+            uniform: cellShadingUniform,
+            groups: {
+                claimFirstBounceCells: cellShadingGroupFor(claimFirstKernel),
+                claimSecondBounceCells: cellShadingGroupFor(claimSecondKernel),
+                prioritizeCells: cellShadingGroupFor(prioritizeKernel),
+                scatterCells: cellShadingGroupFor(scatterKernel),
+                shadeCells: cellShadingGroupFor(shadeKernel),
+            },
+        };
 
         const purgeArgs = [purgeArgs0, purgeArgs1] as const;
-        const argsBytes = [...purgeArgs, ...Object.values(populationPasses).map((populationPass) => populationPass.args)].reduce((sum, args) => sum + args.memoryBytes, 0);
-        const memoryBytes = layout.totalBytes + HASH_GRID_CONSTANTS_BYTES + RAY_LISTS_UNIFORM_BYTES + argsBytes;
+        const allArgs = [...purgeArgs, ...Object.values(populationPasses).map((populationPass) => populationPass.args), claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs];
+        const argsBytes = allArgs.reduce((sum, args) => sum + args.memoryBytes, 0);
+        const memoryBytes = layout.totalBytes + HASH_GRID_CONSTANTS_BYTES + RAY_LISTS_UNIFORM_BYTES + CELL_SHADING_UNIFORM_BYTES + argsBytes;
         this.prepared = {
             device,
             capacity,
@@ -359,6 +433,7 @@ export class HashGridCache implements WorldCache {
             purgeTilesGroup: device.createBindGroup({ label: 'radiance-cache/PurgeTiles', layout: purgeTiles.ownLayouts[0], entries: groupEntries(buffers) }),
             purgeArgs,
             population: populationPasses,
+            cellShading,
             rayListsUniform,
             timer: context.timer,
             memoryBytes,
@@ -416,6 +491,7 @@ export class HashGridCache implements WorldCache {
         }
         this.lastClearOptions = clearOptions;
         const useMultibounce = clearOptions.useMultibounce;
+        const budgeted = this.writeCellShading(encoder, prepared, rayData, frame.changes);
 
         // The probe-ray count where the insert pass's indirect arguments read it.
         encoder.copyBufferToBuffer(rays.count.buffer, rays.count.offset, prepared.buffers.tileWords, HASH_GRID_COUNTER.probeRayCount * WORD_BYTES, WORD_BYTES);
@@ -436,6 +512,7 @@ export class HashGridCache implements WorldCache {
         this.encodePopulationPass(encoder, prepared, rayData, 'generateReservoirs', 'GenerateReservoirs');
         if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'generateMultibounceReservoirs', 'GenerateMultibounceReservoirs');
         this.encodePopulationPass(encoder, prepared, rayData, 'populateCells', 'PopulateRadianceCache');
+        if (budgeted) this.encodeCellShading(encoder, prepared, rayData, useMultibounce);
         this.encodePopulationPass(encoder, prepared, rayData, 'updateTiles', 'UpdateRadianceCache');
         if (useMultibounce) this.encodePopulationPass(encoder, prepared, rayData, 'updateMultibounceCells', 'UpdateMultibounceCells');
         this.encodePopulationPass(encoder, prepared, rayData, 'resolveCells', 'ResolveCells');
@@ -454,7 +531,69 @@ export class HashGridCache implements WorldCache {
         prepared.rayListsUniform.destroy();
         for (const args of prepared.purgeArgs) args.dispose();
         for (const populationPass of Object.values(prepared.population)) populationPass.args.dispose();
+        const cellShading = prepared.cellShading;
+        cellShading.uniform.destroy();
+        for (const cellPass of [cellShading.claimFirstBounceCells, cellShading.claimSecondBounceCells, cellShading.scatterCells, cellShading.shadeCells]) cellPass.args.dispose();
         this.prepared = null;
+    }
+
+    /**
+     * Lever L1: writes this frame's way of lighting cells into the ray lists'
+     * uniform (every population pass reads it) and, when budgeted, the budget
+     * and the changes into the lever's uniform, and records clearing its
+     * per-frame counters. Returns whether the cells are lit on the budget.
+     */
+    private writeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, changes: WorldCacheChanges | undefined): boolean {
+        const { device, buffers } = prepared;
+        const options = this.options;
+        const budgeted = options.cellShading === 'budgeted';
+        if (!budgeted && options.cellShading !== 'per-hit') throw new RangeError(`@pmndrs/gi: cellShading is 'per-hit' or 'budgeted', got ${String(options.cellShading)}`);
+        device.queue.writeBuffer(prepared.rayListsUniform, RAY_LISTS_CELL_SHADING_WORD * WORD_BYTES, new Uint32Array([budgeted ? 1 : 0]));
+        if (!budgeted) return false;
+
+        const budget = options.cellShadingBudget;
+        if (!Number.isInteger(budget) || budget < 0 || budget > 0xffffffff) throw new RangeError(`@pmndrs/gi: cellShadingBudget is a whole number of cells, 0 or more, got ${budget}`);
+        // A candidate's word holds its visibility entry in 23 bits (cell-shading-wgsl.ts).
+        if (rayData.layout.maxCombinedRayCount > CELL_SHADING_MAX_ENTRIES) {
+            throw new RangeError(`@pmndrs/gi: cells lit on a budget take at most ${CELL_SHADING_MAX_ENTRIES} hits a frame; this screen can have ${rayData.layout.maxCombinedRayCount}`);
+        }
+        device.queue.writeBuffer(prepared.cellShading.uniform, 0, cellShadingWords(budget, changes));
+        // The candidate and lit counts and the priority bins start at zero (the turn period is kept).
+        encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellCandidateCount * WORD_BYTES, 2 * WORD_BYTES);
+        encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellPriorityBins * WORD_BYTES, CELL_SHADING_BINS * WORD_BYTES);
+        return true;
+    }
+
+    /** Lever L1's passes (cell-shading-wgsl.ts): claim, prioritise and scatter, light. */
+    private encodeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, useMultibounce: boolean): void {
+        const cellShading = prepared.cellShading;
+        const indirect = (pass: GPUComputePassEncoder, name: Exclude<CellShadingPassName, 'prioritizeCells'>): void => {
+            const cellPass = cellShading[name];
+            cellPass.args.encode(pass);
+            cellPass.kernel.bind(pass);
+            pass.setBindGroup(HASH_GRID_KERNEL_GROUP, cellPass.cacheGroup);
+            pass.setBindGroup(RAY_DATA_GROUP, rayData.groups[name]);
+            pass.setBindGroup(CELL_SHADING_GROUP_INDEX, cellShading.groups[name]);
+            pass.dispatchWorkgroupsIndirect(cellPass.args.buffer, 0);
+        };
+
+        const claim = this.beginPass(encoder, prepared, 'ClaimCells');
+        indirect(claim, 'claimFirstBounceCells');
+        if (useMultibounce) indirect(claim, 'claimSecondBounceCells');
+        claim.end();
+
+        const prioritize = this.beginPass(encoder, prepared, 'PrioritizeCells');
+        cellShading.prioritizeCells.kernel.bind(prioritize);
+        prioritize.setBindGroup(HASH_GRID_KERNEL_GROUP, cellShading.prioritizeCells.cacheGroup);
+        prioritize.setBindGroup(RAY_DATA_GROUP, rayData.groups.prioritizeCells);
+        prioritize.setBindGroup(CELL_SHADING_GROUP_INDEX, cellShading.groups.prioritizeCells);
+        prioritize.dispatchWorkgroups(1);
+        indirect(prioritize, 'scatterCells');
+        prioritize.end();
+
+        const shade = this.beginPass(encoder, prepared, 'ShadeCells');
+        indirect(shade, 'shadeCells');
+        shade.end();
     }
 
     /** One of Capsaicin's timed sections as a compute pass: its indirect arguments from the GPU count, then the kernel. */
@@ -505,6 +644,8 @@ export class HashGridCache implements WorldCache {
                 layout.multibounceRayBuffer,
                 layout.firstBounceBypassBuffer,
                 layout.multibounceDirectBuffer,
+                layout.cellCandidateBuffer,
+                layout.cellShadeBuffer,
             ]),
         );
         const entries: GPUBindGroupEntry[] = [
@@ -513,8 +654,9 @@ export class HashGridCache implements WorldCache {
             { binding: RAY_DATA_BINDING.radiance, resource: rays.radiance },
             { binding: RAY_DATA_BINDING.listWords, resource: { buffer: listWords } },
         ];
-        const group = (name: PopulationPassName): GPUBindGroup =>
-            device.createBindGroup({ label: `${prepared.population[name].kernel.pipeline.label} ray data`, layout: prepared.population[name].kernel.ownLayouts[1], entries });
+        const groupFor = (kernel: ComputeKernel): GPUBindGroup => device.createBindGroup({ label: `${kernel.pipeline.label} ray data`, layout: kernel.ownLayouts[1], entries });
+        const group = (name: PopulationPassName): GPUBindGroup => groupFor(prepared.population[name].kernel);
+        const cellShading = prepared.cellShading;
         const rayData: RayData = {
             rays,
             layout,
@@ -528,6 +670,11 @@ export class HashGridCache implements WorldCache {
                 updateTiles: group('updateTiles'),
                 updateMultibounceCells: group('updateMultibounceCells'),
                 resolveCells: group('resolveCells'),
+                claimFirstBounceCells: groupFor(cellShading.claimFirstBounceCells.kernel),
+                claimSecondBounceCells: groupFor(cellShading.claimSecondBounceCells.kernel),
+                prioritizeCells: groupFor(cellShading.prioritizeCells.kernel),
+                scatterCells: groupFor(cellShading.scatterCells.kernel),
+                shadeCells: groupFor(cellShading.shadeCells.kernel),
             },
         };
         this.rayData = rayData;
@@ -592,6 +739,31 @@ export function hashGridCacheClearOptions(options: HashGridCacheOptions): HashGr
 
 export function sameClearOptions(a: HashGridCacheClearOptions, b: HashGridCacheClearOptions): boolean {
     return a.cellSize === b.cellSize && a.minCellSize === b.minCellSize && a.useMultibounce === b.useMultibounce;
+}
+
+/** The group lever L1's kernels put their uniform in (cell-shading-wgsl.ts's `CELL_SHADING_GROUP`). */
+const CELL_SHADING_GROUP_INDEX = 3;
+
+/**
+ * `HashGridCacheCellShading` (cell-shading-wgsl.ts): the budget and the
+ * frame's changes, as boxes, or everywhere for a change with no bounds or
+ * more boxes than it holds.
+ */
+export function cellShadingWords(budget: number, changes: WorldCacheChanges | undefined): ArrayBuffer {
+    const bytes = new ArrayBuffer(CELL_SHADING_UNIFORM_BYTES);
+    const words = new Uint32Array(bytes);
+    const floats = new Float32Array(bytes);
+    const boxes = changes?.boxes ?? [];
+    const everything = (changes?.everything ?? false) || boxes.length > CELL_SHADING_MAX_CHANGE_BOXES;
+    words[0] = budget;
+    words[1] = everything ? 1 : 0;
+    words[2] = everything ? 0 : boxes.length;
+    if (!everything) {
+        boxes.forEach((box, index) => {
+            floats.set([box.min[0], box.min[1], box.min[2], 0, box.max[0], box.max[1], box.max[2], 0], 4 + index * 8);
+        });
+    }
+    return bytes;
 }
 
 function groupEntries(buffers: HashGridCacheBuffers): GPUBindGroupEntry[] {

@@ -251,9 +251,11 @@ describe('the multibounce kernels and lists', () => {
         expect(lists.multibounceRayBuffer).toBe(lists.multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * maxRayCount);
         expect(lists.firstBounceBypassBuffer).toBe(lists.multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * maxRayCount);
         expect(lists.multibounceDirectBuffer).toBe(lists.firstBounceBypassBuffer + maxRayCount);
-        expect(lists.bytes).toBe((lists.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount) * 4);
-        // 32 words a probe ray: 29,491,200 bytes at 1280 x 720.
-        expect(lists.bytes).toBe(32 * maxRayCount * 4);
+        // Lever L1's candidate and shade lists (one word an entry each) follow.
+        expect(lists.cellCandidateBuffer).toBe(lists.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * maxRayCount);
+        expect(lists.bytes).toBe((lists.cellCandidateBuffer + 2 * 2 * maxRayCount) * 4);
+        // 36 words a probe ray: 33,177,600 bytes at 1280 x 720.
+        expect(lists.bytes).toBe(36 * maxRayCount * 4);
     });
 
     it('declare their entry points, read the multibounce constants and the counters Capsaicin dispatches on', () => {

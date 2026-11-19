@@ -18,6 +18,7 @@
 
 import type { GpuWord } from '../../../platform/contract/compute.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
+import type { Aabb } from '../../../platform/contract/math.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 
 // ---- The probe-ray buffer ------------------------------------------------------------------------
@@ -119,6 +120,19 @@ export interface WorldCacheFrame {
     /** The render size in pixels: cells are sized by how many pixels they cover. */
     readonly width: number;
     readonly height: number;
+    /**
+     * Where the scene changed since the last frame (the platform's
+     * `SceneChanges`, as boxes, or everywhere for a change with no bounds).
+     * Optional: a cache that reacts to changes reads it (the hash grid's
+     * lever L1 lights changed cells first); none means no change.
+     */
+    readonly changes?: WorldCacheChanges;
+}
+
+/** A frame's scene changes for a world cache: the dirty regions' boxes, or everything. */
+export interface WorldCacheChanges {
+    readonly everything: boolean;
+    readonly boxes: readonly Aabb[];
 }
 
 /**
