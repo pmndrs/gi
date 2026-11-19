@@ -4,8 +4,8 @@
  * 1280 × 720 from its first bookmark, the camera still, for 60 frames, with
  * Capsaicin's default GI-1.2 multibounce on. RC3.3 adds the cells' indirect
  * values to the scan, and runs `cornell-box` and `two-room` again with
- * multibounce off: the mean probe-ray radiance after frame 60 must be higher
- * with it on in `two-room` (its closed room is lit by the second bounce; the
+ * multibounce off: the mean interpolated irradiance after frame 60 must be
+ * higher with it on in `two-room` (its closed room is lit by the second bounce; the
  * done-when's contact sheet needs the viewer, RC2.2), and is reported for
  * `cornell-box`.
  *
@@ -104,6 +104,13 @@ interface Scan {
     readonly liveTiles: number;
     readonly cellValuesBad: number;
     readonly meanRayRadiance: number;
+    /**
+     * The mean of the interpolated irradiance over the screen. The comparison
+     * reads this, not the rays' mean: since RC4.1 ray guiding sends more rays
+     * where a probe is bright, so the rays' mean follows how the rays were
+     * spread as much as the light.
+     */
+    readonly meanIrradiance: number;
     readonly firstBad: string | null;
 }
 
@@ -147,6 +154,10 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         }
     }
 
+    const irradianceBits = await readHalfTexture(device, probes.irradiance);
+    let irradianceSum = 0;
+    for (let index = 0; index < irradianceBits.length; index++) if (index % 4 !== 3) irradianceSum += halfBitsToFloat(irradianceBits[index]);
+
     return {
         frame,
         probeRays: rayCount,
@@ -155,6 +166,7 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         liveTiles,
         cellValuesBad: cellBad,
         meanRayRadiance: rays.checked > 0 ? radianceSum / rays.checked : 0,
+        meanIrradiance: irradianceSum / Math.max((irradianceBits.length / 4) * 3, 1),
         firstBad: rays.first ?? atlas.first ?? firstCell,
     };
 }
@@ -246,13 +258,13 @@ try {
         }
     }
     // The second bounce lights two-room's closed room: the mean probe radiance after frame 60 rises with it.
-    const lastMean = (id: string): number => scenes[id]?.[scenes[id].length - 1]?.meanRayRadiance ?? 0;
+    const lastMean = (id: string): number => scenes[id]?.[scenes[id].length - 1]?.meanIrradiance ?? 0;
     const multibounceGain = {
         'two-room': lastMean('two-room') / Math.max(lastMean('two-room (multibounce off)'), 1e-9),
         'cornell-box': lastMean('cornell-box') / Math.max(lastMean('cornell-box (multibounce off)'), 1e-9),
     };
     if (!(lastMean('two-room') > lastMean('two-room (multibounce off)'))) {
-        failures.push(`two-room's mean probe radiance after frame 60 is ${lastMean('two-room')} with multibounce and ${lastMean('two-room (multibounce off)')} without: the second bounce should raise it`);
+        failures.push(`two-room's mean irradiance after frame 60 is ${lastMean('two-room')} with multibounce and ${lastMean('two-room (multibounce off)')} without: the second bounce should raise it`);
     }
     await drainDevice(device);
     reportGpuTest({
