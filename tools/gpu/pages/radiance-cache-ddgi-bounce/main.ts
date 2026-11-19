@@ -424,7 +424,11 @@ const ACCURACY_CASES: readonly AccuracyCase[] = [
     { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02 },
     { name: '2 furnace, fallback, DDGI bounce off (second bounce)', strips: false, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.secondBounce, tolerance: 0.03 },
     { name: '3 furnace, fallback, DDGI bounce on (every bounce)', strips: false, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.everyBounce, tolerance: 0.03 },
-    { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: 0.02 },
+    // 4%: since register D60 the ceiling's unlit hits count, so a far strip-floor cell that shares a
+    // hash column with the ceiling reads the strips' light times its floor share, and GI-1.2's rays
+    // landing there bring less (measured 0.973 here, 0.973 in radiance-cache-world-cache's strips,
+    // whose 1% analytic gate on landings in floor tiles under 2 m holds the cells' own values).
+    { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: 0.04 },
     { name: '5 strips, fallback, DDGI bounce off (second bounce)', strips: true, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.stripsSecondBounce, tolerance: 0.03 },
     { name: '6 strips, fallback, DDGI bounce on (every bounce)', strips: true, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.stripsEveryBounce, tolerance: 0.03 },
     // Cells of 900 pixels (3.7 m a metre away, wider than the 3 m gap): nearly every probe ray is
