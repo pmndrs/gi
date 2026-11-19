@@ -330,7 +330,7 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
     } else {
         radiance = rcRadianceBackup[0]; // a fill (D47)
     }
-    textureStore(rcProbeBuffer, did, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+    textureStore(rcProbeBuffer, did, rcNearestHalf4(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
     rcCellCounts[rcAtlasIndex(did)] = count;
 }
 `;

@@ -1015,7 +1015,7 @@ fn ${ENTRY_POINT.sample}(
     }
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
 
-    textureStore(rcPreviousProbeBuffer, pos, previousRadiance);
+    textureStore(rcPreviousProbeBuffer, pos, rcNearestHalf4(previousRadiance));
     // The samples the previous radiance stands for: the contributions' mean count (D46).
     rcPreviousCellCounts[rcAtlasIndex(pos)] = select(0u, rcMeanHistoryCount(localId), totalWeight > 0.0);
     rcProbeRays.rays[did].direction = rcPackSample(direction);
@@ -1360,7 +1360,7 @@ fn ${ENTRY_POINT.blend}(
         }
         let cachedProbe = vec2u(cachedIndex % rcFrame.probeCount.x, cachedIndex / rcFrame.probeCount.x);
         let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
-        textureStore(rcCachedTileBuffer, cachedCell, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+        textureStore(rcCachedTileBuffer, cachedCell, rcNearestHalf4(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
         rcCachedCellCounts[rcAtlasIndex(cachedCell)] = count;
     }
 
@@ -1368,7 +1368,7 @@ fn ${ENTRY_POINT.blend}(
     if (cellIndex == 0u) {
         textureStore(rcProbeMaskBuffer, probe, vec4u(rcPackSeed(seed), 0u, 0u, 0u));
     }
-    textureStore(rcProbeBuffer, pos, vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF)));
+    textureStore(rcProbeBuffer, pos, rcNearestHalf4(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
     rcCellCounts[atlasIndex] = count;
 }
 `;

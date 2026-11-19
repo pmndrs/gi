@@ -128,6 +128,37 @@ fn rcF32ToF16Bits(value: f32) -> u32 {
     return pack2x16float(vec2f(clamp(value, -RC_LARGEST_HALF, RC_LARGEST_HALF), 0.0)) & 0xffffu;
 }
 
+// The half nearest a value (a tie to the even one), as an f32 that an rgba16float store keeps
+// exactly. pack2x16float and rgba16float stores truncate on our GPUs (NOTES), and the probe
+// atlas is stored, read and stored again every frame (the reprojection, the taps, the running
+// mean), so truncation would drag it down by up to a step each time (register D48; the same
+// rule as D31's HashGridCache_RoundHalfBits for the world cache).
+fn rcNearestHalf(value: f32) -> f32 {
+    let clamped = clamp(value, -RC_LARGEST_HALF, RC_LARGEST_HALF);
+    let bits = pack2x16float(vec2f(clamped, 0.0)) & 0xffffu;
+    let magnitude = abs(clamped);
+    let packedMagnitude = abs(unpack2x16float(bits).x);
+    if (magnitude == packedMagnitude) {
+        return unpack2x16float(bits).x;
+    }
+    var lower = bits;
+    var upper = bits + 1u;
+    if (packedMagnitude > magnitude) {
+        lower = bits - 1u;
+        upper = bits;
+    } else if ((bits & 0x7fffu) >= 0x7bffu) {
+        return unpack2x16float(bits).x;
+    }
+    let below = magnitude - abs(unpack2x16float(lower).x);
+    let above = abs(unpack2x16float(upper).x) - magnitude;
+    let upperIsEven = (upper & 1u) == 0u;
+    return unpack2x16float(select(lower, upper, above < below || (above == below && upperIsEven))).x;
+}
+
+fn rcNearestHalf4(value: vec4f) -> vec4f {
+    return vec4f(rcNearestHalf(value.x), rcNearestHalf(value.y), rcNearestHalf(value.z), rcNearestHalf(value.w));
+}
+
 // ---- math/color.hlsl, math/pack.hlsl --------------------------------------------------------
 
 // luminance (color.hlsl): Rec. 709 weights.

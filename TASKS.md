@@ -671,7 +671,7 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
   - GPU tests:
     - a still camera reprojects every probe to itself;
     - a camera pan marks the disoccluded tiles empty, and `PatchScreenProbes` moves probes into them;
-    - a probe that leaves the screen and comes back is found in the LRU cache;
+    - a probe displaced by an occluder is cached and its cells are reused when the surface is uncovered (*amended, RC4.1 review 2026-11-19:* Capsaicin caches only a probe displaced in its tile by another surface, gi1.comp:762-765, 863-872; a probe that scrolls off the screen is dropped);
     - with history, `SampleScreenProbes` sends rays in proportion to its CDF (a chi-square check on a probe with one bright cell).
   - From RC2.1's review: a miss stores 65,504 (D19), which the blend's ×1e4 quantised sum overflows at 7 rays in one cell. Ray guiding can pile rays into sky cells, so check the cell sum can't wrap (what Capsaicin does with `FLT_MAX` there, and clamp or count as it does), with a GPU test of a probe whose CDF sends every ray to one sky cell.
   - Flicker on Cornell and Sponza with a still camera: T1.12's measure (per-pixel frame-to-frame change of the GI term), reported against DDGI's thresholds (mean ≤ 0.1%, p95 ≤ 0.5%), as information.

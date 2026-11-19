@@ -240,7 +240,7 @@ export interface ReprojectedTile {
 
 /**
  * `ReprojectScreenProbes` (gi1.comp:292-499) for probe tile (`tileX`,
- * `tileY`), with D41's backup. Sums are exact here (the GPU's are 64-bit,
+ * `tileY`), with D41's backup and D47's fills. Sums are exact here (the GPU's are 64-bit,
  * D40), and quantised as the GPU quantises. `lane`, when given, takes that
  * pixel as the seed instead of the best one (a page comparing with the GPU
  * where f32 and f64 round a score to different halves).
@@ -315,7 +315,8 @@ export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, ti
         const reprojected: Direction = [hit[0] - seedWorld[0], hit[1] - seedWorld[1], hit[2] - seedWorld[2]];
         const length = Math.hypot(...reprojected);
         const unit: Direction = [reprojected[0] / length, reprojected[1] / length, reprojected[2] / length];
-        if (!(dot(seedNormal, unit) > 0)) continue;
+        // A fill (negative hit distance) is no history and isn't moved (D47).
+        if (radiance[3] < 0 || !(dot(seedNormal, unit) > 0)) continue;
         const [u, v] = mapToHemiOctahedronInverse(toProbeFrame(unit, seedNormal));
         const remap = Math.min(Math.trunc(u * PROBE_SIZE), PROBE_SIZE - 1) + Math.min(Math.trunc(v * PROBE_SIZE), PROBE_SIZE - 1) * PROBE_SIZE;
         const values = [radiance[0], radiance[1], radiance[2], Math.min(length, 65504)];
@@ -325,7 +326,8 @@ export function reprojectProbeTile(inputs: ReprojectionInputs, tileX: number, ti
     const reachedMeans = sums.map((sum, cell) => (counts[cell] > 0 ? sum.map((value) => value / 1e4 / counts[cell]) : null));
     const reached = reachedMeans.filter((mean) => mean !== null) as number[][];
     const backup: [number, number, number, number] = [0, 1, 2].map((channel) => reached.reduce((sum, mean) => sum + mean[channel], 0) / Math.max(reached.length, 1)) as unknown as [number, number, number, number];
-    backup[3] = 65504;
+    // The fill's hit distance (D47).
+    backup[3] = -1;
     const cells = reachedMeans.map((mean) => (mean ? ([mean[0], mean[1], mean[2], Math.min(mean[3], 65504)] as const) : backup));
     return { seed: packSeed(seedX, seedY), scores, cells, empty: false };
 }
