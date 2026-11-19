@@ -11,7 +11,7 @@
  * queries per pass; the technique's context gets this page's timer, since the
  * platform's own resolves before the screen stage). Per frame it sums the
  * world cache's passes (GI-1.2: the purge, population, multibounce, update and
- * resolve sections; SHaRC: `SharcUpdate`, `SharcResolve`, `SharcLookup`) and
+ * resolve sections; SHaRC: its update passes, `SharcResolve`, `SharcLookup`) and
  * every pass of the technique; it reports their medians, each cache pass's
  * median, and the cache's and the technique's GPU memory.
  *
@@ -69,7 +69,13 @@ const CACHE_SECTIONS = new Set([
     'UpdateRadianceCache',
     'UpdateMultibounceCells',
     'ResolveCells',
+    // Before the split (one pass), and after it (one pass per ray type).
     'SharcUpdate',
+    'SharcBegin',
+    'SharcBounce1',
+    'SharcBounce2',
+    'SharcLight',
+    'SharcCombine',
     'SharcResolve',
     'SharcLookup',
 ]);

@@ -694,7 +694,7 @@ Same rules (no timing; correctness gates; faithful port with sources cited; regi
 
 ### radiance-cache phase 6: levers, experiments and dynamic scenes
 
-Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experiments are first-class alternatives behind a setting, judged by accuracy against analytic answers and the path tracer, temporal stability, memory and GPU time (timing recorded under the bench lock, not gated); the GI-1.2 baseline stays the default. Register rows in the experiments' own series (E1 on, kind E; DECISIONS-free bookkeeping by the lead, 2026-11-19): P6.1 holds E1-E7, P6.2 starts at E8.
+Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experiments are first-class alternatives behind a setting, judged by accuracy against analytic answers and the path tracer, temporal stability, memory and GPU time (timing recorded under the bench lock, not gated); the GI-1.2 baseline stays the default. Register rows in the experiments' own series (E1 on, kind E; the lead, 2026-11-19): P6.1 holds E1-E7, P6.2 starts at E8.
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
