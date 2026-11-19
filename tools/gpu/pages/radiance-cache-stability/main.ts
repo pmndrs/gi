@@ -24,6 +24,11 @@
  * frame's E is read at the pixel the velocity points back to; a pixel whose
  * previous pixel shows another surface (a disocclusion) is left out.
  *
+ * P6.3: with `VITE_RC_SECOND_BOUNCE=ddgi-volume` a DDGI volume (the manifest's)
+ * is stacked under the radiance cache and supplies its second bounce
+ * (experiment E10), DDGI updating 2,048 probes a frame; otherwise GI-1.2's
+ * second-bounce rays, with no DDGI.
+ *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
  */
@@ -33,6 +38,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -61,6 +67,10 @@ const CONFIGURATIONS = [
 ] as const;
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
+/** P6.3: the world cache's second bounce in this run (experiment E10), from the environment. */
+const SECOND_BOUNCE = (import.meta.env as Record<string, unknown>).VITE_RC_SECOND_BOUNCE === 'ddgi-volume' ? 'ddgi-volume' : 'gi1-rays';
+/** DDGI's probes a frame when it supplies the second bounce. */
+const DDGI_UNITS = 2048;
 
 type Vector = [number, number, number];
 
@@ -200,8 +210,12 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ secondBounce: SECOND_BOUNCE }));
     platform.setOutput(technique);
+    if (SECOND_BOUNCE === 'ddgi-volume') {
+        const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
+        platform.setFallback(technique, ddgi);
+    }
     await platform.prepare();
     let beforeFrame = (): void => {};
     if (loader === 'viewer') beforeFrame = await describeLoaded(platform, device, manifest);
@@ -211,7 +225,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const frame = (): void => {
         beforeFrame();
         const encoder = device.createCommandEncoder({ label: `radiance-cache-stability ${id}` });
-        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: SECOND_BOUNCE === 'ddgi-volume' ? DDGI_UNITS : 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
         platform.encode(encoder, input);
         screen.encode(encoder, camera);
         platform.encodeScreen(encoder, screen.screen);
@@ -315,7 +329,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, scenes },
+        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, secondBounce: SECOND_BOUNCE, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

@@ -1,0 +1,4 @@
+{
+    "description": "P6.3 experiment E10: the world cache's second bounce from a DDGI volume stacked under the radiance cache (secondBounce 'ddgi-volume') against GI-1.2's second-bounce rays. Furnace and strips (half the rays miss): gi1-rays and ddgi-volume with DDGI's bounce off read the second bounce rho^2 E / pi (0.3183; strips 0.1592), ddgi-volume with DDGI's bounce on every bounce (0.4244; strips 0.1819); no second-bounce entries with ddgi-volume; without a stacked technique it warns and traces rays. Lag after the furnace's sun and two-room's lamp double (frames to within 5%), as a measurement.",
+    "timeoutMs": 1200000
+}

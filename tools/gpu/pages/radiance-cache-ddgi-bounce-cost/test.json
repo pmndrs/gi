@@ -1,0 +1,4 @@
+{
+    "description": "P6.3 experiment E10: GPU ms of the radiance cache's world cache per frame at 1280x720 on Sponza and Bistro exterior, GI-1.2's second-bounce rays against the second bounce read from a DDGI volume stacked under the cache, with DDGI's own update cost listed separately, each pass's time, the frame's counts and each technique's GPU memory. A measurement, no timing gate.",
+    "timeoutMs": 1200000
+}
