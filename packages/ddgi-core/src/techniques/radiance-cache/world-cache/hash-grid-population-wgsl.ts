@@ -379,7 +379,7 @@ fn HashGridCache_VisibilityRay(visibility_index: u32) -> WorldCacheProbeRay {
  * Capsaicin rebuilds it from its packed visibility the same way
  * (`fetchVerticesNormUV`, `interpolate`; gi1.comp:2412-2427, 2050-2062).
  */
-const PROBE_RAY_SURFACE_WGSL = /* wgsl */ `
+export const PROBE_RAY_SURFACE_WGSL = /* wgsl */ `
 fn HashGridCache_ProbeRay(probe_ray: WorldCacheProbeRay) -> GiRay {
     return GiRay(probe_ray.origin, 0.0, worldCacheProbeRayDirection(probe_ray), max(probe_ray.hitT, 0.0));
 }
@@ -398,7 +398,7 @@ fn HashGridCache_WorkgroupIndex(workgroup: vec3u, workgroups: vec3u) -> u32 {
 `;
 
 /** The shared head of every population kernel: the hash grid (group 1) and the ray data (group 2). */
-function populationHeadWgsl(layout: HashGridCacheBufferLayout): string {
+export function populationHeadWgsl(layout: HashGridCacheBufferLayout): string {
     return `${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout)}\n${RAY_DATA_WGSL}\n${LINEAR_WORKGROUP_WGSL}`;
 }
 

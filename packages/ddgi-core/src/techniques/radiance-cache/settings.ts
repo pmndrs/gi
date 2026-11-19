@@ -15,6 +15,8 @@
  * configuration").
  */
 
+import type { SecondBounceSource } from './world-cache/capacity.ts';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -75,6 +77,16 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * Experiment E10 (P6.3; not Capsaicin's): where the world cache's second
+     * bounce comes from with `useMultibounce` on. `'gi1-rays'` (default) is
+     * GI-1.2's second-bounce rays; `'ddgi-volume'` reads the irradiance of the
+     * technique stacked under this one (`gi.setFallback(radianceCache, ddgi)`)
+     * at each first-bounce hit instead, and traces no second-bounce ray
+     * (docs/design/radiance-cache.md, register E10). Changing it empties the
+     * world cache. Read every frame.
+     */
+    secondBounce: SecondBounceSource;
 }
 
 /** Capsaicin's defaults (gi1.h:48-71). */
@@ -94,6 +106,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    secondBounce: 'gi1-rays',
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

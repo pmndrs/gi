@@ -71,7 +71,22 @@ export interface HashGridCacheOptions {
      * face gives the probe ray its emission and bypasses the cache.
      */
     useDirectLighting: boolean;
+    /**
+     * Experiment E10 (P6.3, phase 6): where the indirect values come from with
+     * `useMultibounce` on. `'gi1-rays'` (the default) is GI-1.2's second-bounce
+     * ray per kept first-bounce hit. `'ddgi-volume'` traces no second-bounce
+     * ray: every first-bounce entry reads the irradiance of the technique the
+     * host stacked under the radiance cache (`GIPlatform.setFallback`, DDGI's
+     * volume in practice) at its hit, and adds albedo / π times it, the light
+     * of every later bounce (`bounce-source.ts`). Without a fallback it runs
+     * `'gi1-rays'` and warns. Single bounce stays `useMultibounce: false`.
+     * Changing it empties the cache, as changing `useMultibounce` does.
+     */
+    secondBounce: SecondBounceSource;
 }
+
+/** Experiment E10's choice of second-bounce estimator (`HashGridCacheOptions.secondBounce`). */
+export type SecondBounceSource = 'gi1-rays' | 'ddgi-volume';
 
 /** Capsaicin's defaults (gi1.h:58-65). */
 export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = Object.freeze({
@@ -85,6 +100,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     useDirectLighting: true,
+    secondBounce: 'gi1-rays',
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */
