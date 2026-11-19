@@ -22,3 +22,8 @@ __pycache__/
 /packages/ddgi/README.md
 /packages/ddgi/LICENSE
 /packages/ddgi/licenses/
+
+# GI-1.0 research: source PDFs aren't redistributable (research/gi-1.0/sources/SOURCES.md); native Capsaicin builds and captures
+research/gi-1.0/sources/*.pdf
+native/build/
+artifacts/native/
