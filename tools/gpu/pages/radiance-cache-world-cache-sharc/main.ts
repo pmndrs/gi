@@ -17,15 +17,18 @@
  *    intensity 8; GI-1.2 with multibounce off, SHaRC with `bounceRays` 0, 40
  *    frames): every hit reads albedo / π × E (E = 8 cos 45°). SHaRC: every
  *    hit ray within 2% from frame 40, its rays both read cells and their own
- *    sample (shorter than their cell), and no insert was refused.
+ *    sample (shorter than their cell), and inserts refused by a full bucket
+ *    under 0.1% of the rays (a refused ray reads its own estimate).
  * 2. **Shadow** (the corner and a level slab at y = 1.5 between it and the sun,
  *    40 frames): rays whose hit is in the slab's shadow (the floor for z in
  *    [0, 2], the wall below 0.5 m, under x in [-1, 2]) or under the slab read
  *    0, the others albedo / π × E. Judged only where the hit is further from
  *    the shadow's edges and from the slab than the coarsest cell a lookup can
- *    reach (8 cells of its own level for SHaRC, two tiles for GI-1.2): the
- *    shadowed mean below 2% of the lit value, the lit mean within 2%. A
- *    shadow ray that never hit would light the shadowed rays and fail.
+ *    reach (8 cells of its own level for SHaRC, two tiles for GI-1.2, which
+ *    leaves GI-1.2 no ray under 1 m of reach: its own page judges its shadow
+ *    cell by cell): the shadowed mean below 2% of the lit value, the lit mean
+ *    within 2%. A shadow ray that never hit would light the shadowed rays and
+ *    fail.
  * 3. **Furnace, second bounce** (a floor facing up and a ceiling facing down
  *    3 m above, 400 m wide; a sun straight down, intensity 4, that casts no
  *    shadow: it lights the floor, never the ceiling; GI-1.2 with multibounce
@@ -478,7 +481,10 @@ try {
         data.litPlane = { expected: LIT_RADIANCE, gi1: summary(gi1), sharc: summary(sharc) };
         if (sharc.withinShare[sharc.withinShare.length - 1] < 1) fail(`lit plane: ${((1 - sharc.withinShare[sharc.withinShare.length - 1]) * 100).toFixed(2)}% of SHaRC's hit rays are more than 2% off ${LIT_RADIANCE.toFixed(4)}`);
         if (!(sharc.counters.ownReads > 0 && sharc.counters.cacheReads > 0)) fail(`lit plane: SHaRC's rays should both read cells and their own samples (${sharc.counters.cacheReads} cell reads, ${sharc.counters.ownReads} own)`);
-        if (sharc.counters.droppedInserts !== 0) fail(`lit plane: ${sharc.counters.droppedInserts} SHaRC inserts refused (bucket full)`);
+        // A full bucket refuses an insert (open addressing in buckets of 8, as the pathtracer's): at a
+        // third of the slots in use a few dozen buckets of 131,072 are full, and a ray whose cell was
+        // refused reads its own estimate. Judged as a share of the rays, not as zero.
+        if (sharc.counters.droppedInserts > 1e-3 * sharc.counters.rayCount) fail(`lit plane: ${sharc.counters.droppedInserts} SHaRC inserts refused (bucket full) for ${sharc.counters.rayCount} rays, over 0.1%`);
     }
 
     // 2. Shadow.
