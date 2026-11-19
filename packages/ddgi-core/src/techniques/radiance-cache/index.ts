@@ -7,9 +7,26 @@ export {
     PROBE_SIZE,
     PROBE_SPAWN_TILE_SIZE,
     SAMPLING_MODE,
+    SCREEN_HISTORY_SETTINGS,
     screenProbeLayout,
     type RadianceCacheSettings,
     type ScreenProbeLayout,
 } from './settings.ts';
 export { RadianceCacheShadingModule } from './shading.ts';
 export { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
+export {
+    applyCompareValues,
+    capsaicinCompareValues,
+    COMPARE_GROUP_LABELS,
+    COMPARE_GROUPS,
+    COMPARE_URL_NAMES,
+    compareToggle,
+    compareTogglesIn,
+    compareValuesFromText,
+    RADIANCE_CACHE_COMPARE_TOGGLES,
+    readCompareValues,
+    writeCompareValues,
+    type CompareGroup,
+    type CompareToggle,
+    type CompareValues,
+} from './compare-toggles.ts';

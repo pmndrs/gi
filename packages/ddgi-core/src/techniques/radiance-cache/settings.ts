@@ -75,7 +75,64 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+
+    // ---- The screen probes' temporal rules (RC4.1's changes to Capsaicin, register D41-D47) ----
+    // Each has a value that brings Capsaicin's behaviour back (RC4.5, compare-toggles.ts), read
+    // every frame: no page reload. Changing one listed in SCREEN_HISTORY_SETTINGS starts the
+    // screen probes' history over at the next frame, so the old rule's cells don't linger.
+
+    /**
+     * How a probe cell carries its past (register D46). `running-mean` (ours): a cell
+     * with history moves to this frame's mean of its rays by k / n, n capped at
+     * `historySampleCap`. `capsaicin-hysteresis`: this frame's mean, then Capsaicin's
+     * biased hysteresis, which keeps the past only against a brightening of over 2×
+     * (gi1.comp:1258-1269).
+     */
+    probeBlend: 'running-mean' | 'capsaicin-hysteresis';
+    /** The most samples a cell's running mean counts (D46; 8). 1 makes every cell a one-frame estimate. */
+    historySampleCap: number;
+    /**
+     * A probe cell no ray reached this frame (register D41). `keep-previous` (ours): it
+     * keeps its previous value; only a cell with no history takes the backup, the mean of
+     * the reached cells' means. `capsaicin`: every such cell takes Capsaicin's backup, the
+     * reached cells' summed samples over their number divided again by the number of empty
+     * cells (gi1.comp:407-429, 1212-1256), which darkens the probes over time.
+     */
+    emptyCellFill: 'keep-previous' | 'capsaicin';
+    /**
+     * Whether a backup fill counts as history (register D47). False (ours): a fill is
+     * stored with a negative hit distance and the reprojection and the taps skip it.
+     * True (Capsaicin): it is stored with the largest hit distance (65,504, D19) and read
+     * later as if measured (gi1.comp:427, 1232).
+     */
+    backupFillsAsHistory: boolean;
+    /**
+     * The share of a probe's rays that sample their own cell under ray guiding
+     * (register D42; 1/8). 0 is Capsaicin's rule: every ray of a cell with history is
+     * guided by the luminance CDF, and a probe whose cells all read black sends every
+     * ray to its last cell (gi1.comp:969-973; the CDF over max(total, 1e-5)).
+     */
+    rayGuidingUniformShare: number;
+    /**
+     * Where the platform reports a scene change, a probe cell whose last ray crosses a
+     * changed box forgets its sample count, so its next ray replaces it (D46; ours).
+     * Capsaicin has no such reset (false).
+     */
+    probeChangeReset: boolean;
+    /**
+     * The screen probes keep their history from frame to frame (true, as Capsaicin).
+     * False drops it before every frame, so each frame runs as the first does: for
+     * comparing, not a product setting. The world cache keeps its cells either way.
+     */
+    probeHistory: boolean;
 }
+
+/**
+ * Settings whose change starts the screen probes' history over at the next frame:
+ * cells made under the old rule (darkened backups, fills kept as history) would
+ * otherwise linger under the new one, and the picture would show a mix of both.
+ */
+export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
 
 /** Capsaicin's defaults (gi1.h:48-71). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
@@ -94,6 +151,14 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    // Ours (RC4.1, decided: DECISIONS 2026-11-19); compare-toggles.ts lists Capsaicin's values.
+    probeBlend: 'running-mean',
+    historySampleCap: 8,
+    emptyCellFill: 'keep-previous',
+    backupFillsAsHistory: false,
+    rayGuidingUniformShare: 0.125,
+    probeChangeReset: true,
+    probeHistory: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */
