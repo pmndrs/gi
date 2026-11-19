@@ -570,6 +570,7 @@ export class HashGridCache implements WorldCache {
         floats[word.maxMultibounceSampleCount] = options.hashGridCacheMaxMultibounceSampleCount;
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
         words[word.useMultibounce] = options.useMultibounce ? 1 : 0;
+        words[word.environmentLightEnable] = options.environmentLightEnable ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }
 

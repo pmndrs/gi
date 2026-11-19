@@ -143,6 +143,23 @@ export const BYPASS_CACHE_BIT = 0x80000000;
 /** The light groups whose lights light the cache's hits: every group. */
 export const ALL_LIGHT_GROUPS = 0xf;
 
+/**
+ * The lights a cache hit draws its one light sample from, as
+ * `giDirectChooseLight`'s group mask: every light group, and the sky with
+ * `environment_light_enable` (register D33, RC3.4). Shared by
+ * `GenerateReservoirs` and `GenerateMultibounceReservoirs`.
+ */
+const LIGHT_MASK_WGSL = /* wgsl */ `
+const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
+
+// Capsaicin's light list holds the environment map when LightBuilder's environment_light_enable
+// is set (its default; light_builder.cpp:131-134, 200), so a hit can draw the sky as its light;
+// the platform's light choice takes the sky when GI_DIRECT_SKY_LIGHT_BIT is in the mask.
+fn HashGridCache_LightMask() -> u32 {
+    return HASHGRIDCACHE_LIGHT_GROUPS | select(0u, GI_DIRECT_SKY_LIGHT_BIT, g_HashGridCacheConstants.environment_light_enable != 0u);
+}
+`;
+
 /** Threads per workgroup, as Capsaicin's `[numthreads]`. */
 export const POPULATION_WORKGROUP_SIZE = {
     /** PopulateScreenProbesMain (gi1.comp:1160): 32. */
@@ -486,11 +503,13 @@ fn ${POPULATION_ENTRY_POINT.populateScreenProbes}(
  * from its light sampler grid into one reservoir (a light, a point on it and
  * its weight W); `giDirectChooseLight` draws one of the platform's candidates
  * for the hit (the directional lights, then the point and spot lights or the
- * light grid's picks for the hit's cell) in proportion to the luminance of its
- * unshadowed irradiance times its share, and its weight is share over that
+ * light grid's picks for the hit's cell, then the sky with
+ * `environment_light_enable`, register D39) in proportion to the luminance of
+ * its unshadowed irradiance times its share, and its weight is share over that
  * probability: the same role as W, `light_radiance × W` estimating the
  * candidates' sum. The point on the light is two random numbers drawn here,
- * as Capsaicin's `sampleParams` are, and used by `PopulateCells`.
+ * as Capsaicin's `sampleParams` are, and used by `PopulateCells` (for the
+ * sky, the cosine-weighted direction `giSkyLightRay` rebuilds from them).
  *
  * Built with the platform's hit-shading module (group 0).
  */
@@ -501,8 +520,7 @@ ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
 
-const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
-
+${LIGHT_MASK_WGSL}
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -537,10 +555,10 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     // off by default (gi1.h:54): not part of the baseline.
 
     // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2506-2510);
-    // the platform's materials are diffuse already (register D8). Capsaicin's light list also
-    // holds the environment map; the platform's doesn't (register D33).
+    // the platform's materials are diffuse already (register D8). The sky is one of the
+    // candidates, as Capsaicin's environment light is (register D33, D39).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
-    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
+    let reservoir = giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random));
     let sample_params = rcRand2(&random);
 
     // Without USE_MULTI_BOUNCE Capsaicin resolves the shadow-ray list (gi1.comp:2363-2368, 2514-2521),
@@ -1133,7 +1151,7 @@ fn ${POPULATION_ENTRY_POINT.populateMultibounceCells}(
     // If we hit some geometry, we append a new world-space hash-grid cache query. A kept ray that
     // hits nothing is an entry too, with no cell: it is a sample of no light that still counts
     // (register D37; Capsaicin's miss shader is empty, gi1.rt:120-123). The sky at the first hit
-    // is the first hit's light, not this bounce's (register D33).
+    // is the first hit's own light sample (the sky light, register D39), not this bounce's.
     if (hit.t >= 0.0) {
         PopulateMultibounceCellsHandleHit(did, brdf_sample.brdf, brdf_sample.pdf, ray, hit);
     } else {
@@ -1161,8 +1179,7 @@ ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
 
-const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
-
+${LIGHT_MASK_WGSL}
 @compute @workgroup_size(${size})
 fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     @builtin(workgroup_id) workgroup: vec3u,
@@ -1193,10 +1210,10 @@ fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(
     let origin = ray.origin;
 
     // Sample new lights. Capsaicin forces a diffuse material on this bounce (gi1.comp:2662-2667);
-    // the platform's materials are diffuse already (register D8). Its light list also holds the
-    // environment map; the platform's doesn't (register D33).
+    // the platform's materials are diffuse already (register D8). The sky is one of the
+    // candidates, as Capsaicin's environment light is (register D33, D39).
     var random = rcMakeRandom(did, g_HashGridCacheConstants.frame_index);
-    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_LIGHT_GROUPS, rcRand(&random));
+    let reservoir = giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random));
     let sample_params = rcRand2(&random);
 
     // The segment shorter than its cell: UpdateMultibounceCells then reads this hit's own light

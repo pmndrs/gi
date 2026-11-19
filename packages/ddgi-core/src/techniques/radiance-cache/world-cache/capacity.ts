@@ -71,6 +71,14 @@ export interface HashGridCacheOptions {
      * face gives the probe ray its emission and bypasses the cache.
      */
     useDirectLighting: boolean;
+    /**
+     * `LightBuilder`'s `environment_light_enable` (light_builder.h:63, light_builder.cpp:131-134,
+     * default true): `GenerateReservoirs` and `GenerateMultibounceReservoirs`
+     * weigh the sky as one of a hit's lights (register D33, RC3.4). Read every
+     * frame; changing it doesn't empty the cache (the cells follow within
+     * their 16-sample history, as for a change of the lights).
+     */
+    environmentLightEnable: boolean;
 }
 
 /** Capsaicin's defaults (gi1.h:58-65). */
@@ -85,6 +93,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     useDirectLighting: true,
+    environmentLightEnable: true,
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */

@@ -45,6 +45,15 @@ export interface RadianceCacheSettings {
     useTemporalFeedback: boolean;
     /** `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second-bounce cells. Phase 3. */
     useMultibounce: boolean;
+    /**
+     * `LightBuilder`'s `environment_light_enable` (light_builder.h:63, default
+     * true; light_builder.cpp:131-134): the sky is one of the lights a world-cache
+     * hit draws its one light sample from (first and second bounce), with a
+     * shadow ray, through the platform's light choice (`GI_DIRECT_SKY_LIGHT_BIT`).
+     * Off, a cache hit gets no sky light (register D33's old behaviour; the
+     * sky then reaches the probes only through rays that miss). RC3.4.
+     */
+    environmentLightEnable: boolean;
     /** `gi1_use_resampling` (gi1.h:51, default false): world-space ReSTIR of the light samples. Off in the baseline. */
     useResampling: boolean;
     /** `gi1_disable_alpha_testing` (gi1.h:52, default false). The platform's tracer honours cutouts (register D1). */
@@ -74,6 +83,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     useDirectLighting: true,
     useTemporalFeedback: false,
     useMultibounce: true,
+    environmentLightEnable: true,
     useResampling: false,
     disableAlphaTesting: false,
     hashGridCacheCellSize: 32,
