@@ -698,7 +698,7 @@ Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experime
 
 | ID | Task | Agent | Size | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| P6.1 | Experiment A: the pmndrs/pathtracer SHaRC-style hash cache as a second backend of the world-cache slot (`worldCache: 'gi1-hash-grid' \| 'sharc'`), with the GI-1.2 grid's analytic checks, an A/B table (accuracy, warm-up, stability, memory, GPU time on Sponza and Bistro exterior) and mutation checks | implementer | M | RC3.5, RC4.1 | review (2026-11-19; branch `p6-sharc`; RTX 3060; register E1-E7; update path split into one pass per ray type (Sponza 24.7 → 7.8 ms); sky on a miss automatic from RC3.4's sky light bit; pages `radiance-cache-world-cache-sharc`, `radiance-cache-sharc-timing`, `radiance-cache-stability-sharc`; see PROGRESS) |
+| P6.1 | Experiment A: the pmndrs/pathtracer SHaRC-style hash cache as a second backend of the world-cache slot (`worldCache: 'gi1-hash-grid' \| 'sharc'`), with the GI-1.2 grid's analytic checks, an A/B table (accuracy, warm-up, stability, memory, GPU time on Sponza and Bistro exterior) and mutation checks | implementer | M | RC3.5, RC4.1 | review (2026-11-19; branch `p6-sharc`; RTX 3060; register E1-E7; update path split into one pass per ray type (Sponza 24.7 → 7.8 ms); sky on a miss automatic from RC3.4's sky light bit; review fixes: lists sized by updateFraction (31 B/px), change reset (E 5% in 37 frames vs GI-1.2's 64), segment rule at every level, E7a/E7b; pages `radiance-cache-world-cache-sharc`, `radiance-cache-sharc-timing`, `radiance-cache-stability-sharc`; see PROGRESS) |
 
 ## Carried to M2 (collected during M1)
 
