@@ -23,6 +23,7 @@
  * submit order), and the word holds the latest one's.
  */
 
+import type { FrameScreen } from './frame';
 import type { WgslModule } from './wgsl';
 
 /** How a workgroup combines its threads' values: subgroup operations, or the fallback in workgroup memory. */
@@ -134,6 +135,50 @@ export interface GpuIndirectArgs {
     dispose(): void;
 }
 
+export interface ScreenHistoryOptions {
+    readonly label: string;
+}
+
+/** The previous frame's depth and normals, as {@link GpuScreenHistory.texturesFor} hands them out. */
+export interface ScreenHistoryTextures {
+    /** `r32float`: the previous frame's `FrameScreen.depth`, unchanged (the same convention, `reversedDepth` included). */
+    readonly depth: GPUTexture;
+    /** `rgba16float`: the previous frame's `FrameScreen.normal` decoded to signed floats (whatever its `normalEncoding`), w 0. */
+    readonly normal: GPUTexture;
+    /**
+     * True when a frame of this size was copied in since the textures were
+     * made: false on the first frame and after a resize, when they hold zeros.
+     */
+    readonly valid: boolean;
+}
+
+/**
+ * A copy of the previous frame's depth and normals (RC4.1), for techniques
+ * that reproject (the radiance cache's `ReprojectScreenProbes` reads
+ * Capsaicin's `g_PreviousDepthBuffer` and `g_PreviousNormalBuffer`).
+ * `FrameScreen` carries only the current frame, and a host's render targets
+ * are its own, so the platform keeps the copy: one small pass at the end of
+ * the frame, after the last read.
+ */
+export interface GpuScreenHistory {
+    /**
+     * The textures holding the frame copied last, `TEXTURE_BINDING` usage.
+     * A size other than the last one makes new textures (zeros, `valid`
+     * false); the old ones are destroyed, so bind groups over them must be
+     * rebuilt when the textures change.
+     */
+    texturesFor(width: number, height: number): ScreenHistoryTextures;
+    /**
+     * Records the copy of `screen`'s depth and normals into the history, as a
+     * compute pass of its own in `encoder`. Call it after every pass of the
+     * frame that reads the history.
+     */
+    encode(encoder: GPUCommandEncoder, screen: FrameScreen): void;
+    /** GPU bytes of the two textures (0 before the first {@link texturesFor}). */
+    readonly memoryBytes: number;
+    dispose(): void;
+}
+
 /** The platform's GPU utilities, on `TechniqueContext.compute`. */
 export interface GpuComputeUtilities {
     /** The path the utilities take on this device: `subgroups` where the device has them. */
@@ -156,4 +201,6 @@ export interface GpuComputeUtilities {
     createPrefixScan(options: PrefixScanOptions): Promise<GpuPrefixScan>;
     createCompaction(options: CompactionOptions): Promise<GpuCompaction>;
     createIndirectArgs(options: IndirectArgsOptions): Promise<GpuIndirectArgs>;
+    /** The copy kernel compiles on the first history made; later ones reuse it. */
+    createScreenHistory(options: ScreenHistoryOptions): Promise<GpuScreenHistory>;
 }

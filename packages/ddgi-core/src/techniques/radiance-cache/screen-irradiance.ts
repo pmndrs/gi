@@ -142,6 +142,15 @@ export class ScreenIrradiance {
     }
 
     /**
+     * The SH texture for `layout`, made when the size changes. The screen
+     * probes' reprojection (RC4.1) copies last frame's SH into it before
+     * {@link encode} projects this frame's probes.
+     */
+    probeSHFor(layout: ScreenProbeLayout): GPUTexture {
+        return this.sizedFor(layout).probeSH;
+    }
+
+    /**
      * Records the three passes, after `BlendScreenProbes` in the same
      * encoder. `camera` is the frame's (`TechniqueScreenFrame.camera`): its
      * projection sizes the interpolation's cells, its view gives the axis
@@ -207,7 +216,7 @@ export class ScreenIrradiance {
             label: `${TECHNIQUE_ID} probe SH`,
             size: shSize,
             format: 'rg32uint',
-            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc,
+            usage: TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst,
         });
         const irradiance = device.createTexture({
             label: `${TECHNIQUE_ID} irradiance`,

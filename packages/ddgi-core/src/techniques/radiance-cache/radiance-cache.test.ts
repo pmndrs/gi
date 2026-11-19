@@ -24,7 +24,7 @@ describe('settings (gi1.h)', () => {
         const technique = new RadianceCacheTechnique({ useDirectLighting: false });
         expect(technique.settings.useDirectLighting).toBe(false);
         expect(technique.settings.useMultibounce).toBe(true);
-        expect(technique.requirements).toEqual({ queries: ['rays'], screen: true });
+        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true } });
     });
 
     it('size the probes as Capsaicin does (gi1.cpp:113-129)', () => {

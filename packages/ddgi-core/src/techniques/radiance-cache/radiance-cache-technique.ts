@@ -5,26 +5,31 @@
  * projected to SH and interpolated per pixel into irradiance the shading
  * module reads by screen position (RC2.2, screen-irradiance.ts), with their
  * debug views. The world cache (phase 3, RC3.2) lights the probe rays' hits;
- * history is phase 4.
+ * the probes carry over from frame to frame (RC4.1, screen-probe-history.ts).
  *
  * Per frame, in `encodeScreen` (after the host's `encode` and its depth and
  * normal pass), the passes Capsaicin runs for the screen probes
- * (`GI1::render`, gi1.cpp:2250-2542), as far as phases 2 and 3 have them:
+ * (`GI1::render`, gi1.cpp:2250-2557):
  *
- * 1. `ClearCounters` (gi1.comp:163), and `ClearProbeMask` (gi1.comp:243), which
- *    stands in for reprojection's clearing until phase 4;
- * 2. `SpawnScreenProbes` (gi1.comp:555), the platform's stream compaction
+ * 1. `ClearCounters` (gi1.comp:163);
+ * 2. `ReprojectScreenProbes` (gi1.comp:292), then the off-screen cache's
+ *    lookup: `CountScreenProbes` (gi1.comp:502), the platform's scan and
+ *    `ScatterScreenProbes` (gi1.comp:542);
+ * 3. `SpawnScreenProbes` (gi1.comp:555), the platform's stream compaction
  *    (Capsaicin's `gfxCommandScanSum`, gi1.cpp:2305) and `CompactScreenProbes`
- *    (gi1.comp:581), dispatched indirectly on the kept count;
- * 3. `SampleScreenProbes` (gi1.comp:646) and `PopulateScreenProbesMain`
+ *    (gi1.comp:581), dispatched indirectly on the kept count, then
+ *    `PatchScreenProbes` (gi1.comp:616) on the empty tiles;
+ * 4. `SampleScreenProbes` (gi1.comp:646) and `PopulateScreenProbesMain`
  *    (gi1.comp:1160);
- * 4. the world cache (`world-cache/`, RC3.2): Capsaicin's hash grid inserts
+ * 5. the world cache (`world-cache/`, RC3.2): Capsaicin's hash grid inserts
  *    the hits' cells, lights one light sample per hit, updates its tiles and
  *    resolves its radiance into the probe rays (gi1.cpp:2238-2253 and
  *    2335-2528, here after the trace: `encodeWorldCache`);
- * 5. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas and the mask;
- * 6. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
- *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts (RC2.2).
+ * 6. `BlendScreenProbes` (gi1.comp:1167) into the probe atlas, the mask and
+ *    the cache, then `ReorderScreenProbes` (gi1.comp:1334) of the cache's LRU;
+ * 7. `FilterProbeMask` (gi1.comp:249), `ProjectScreenProbes` (gi1.comp:1446)
+ *    and `InterpolateScreenProbes` (gi1.comp:1515): screen-irradiance.ts (RC2.2);
+ * 8. the screen's depth and normals copied for the next frame's reprojection.
  *
  * Capsaicin dispatches the per-ray passes over every possible ray
  * (`max_ray_count`, gi1.cpp:2323-2542) with an early return past the probe
@@ -43,8 +48,9 @@ import type { RayScratch } from '../../platform/contract/shade.ts';
 import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, TechniqueScreenFrame } from '../../platform/contract/technique.ts';
 import type { ComputeKernel, WgslModule } from '../../platform/contract/wgsl.ts';
-import { cameraRelativeInverseViewProjection } from './camera.ts';
-import { ScreenIrradiance } from './screen-irradiance.ts';
+import { cameraRelativeInverseViewProjection, cameraRelativeViewProjection } from './camera.ts';
+import { ScreenIrradiance, screenProbeCellSize } from './screen-irradiance.ts';
+import { ScreenProbeHistory, type HistoryResources } from './screen-probe-history.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
@@ -55,8 +61,6 @@ import {
     BLEND_WGSL,
     CLEAR_COUNTERS_GROUP,
     CLEAR_COUNTERS_WGSL,
-    CLEAR_PROBE_MASK_GROUP,
-    CLEAR_PROBE_MASK_WGSL,
     COMPACT_GROUP,
     COMPACT_WGSL,
     COUNTERS_BYTES,
@@ -109,12 +113,18 @@ export interface RadianceCacheProbes {
     readonly probeSH: GPUTexture;
     /** The interpolated irradiance, screen-sized `rgba16float`: rgb E, alpha Capsaicin's denoiser hint. */
     readonly irradiance: GPUTexture;
+    /** Capsaicin's append counters (`COUNTER_NAMES`' order), one word each. */
+    readonly counters: GPUBuffer;
+    /** The history's buffers (RC4.1): last frame's probes, the off-screen cache, the empty and override tiles. */
+    readonly history: HistoryResources;
+    /** The cache's per-tile list counts and the LRU flags (the scans' inputs, sized for the largest screen). */
+    readonly cachedTileListCount: GPUBuffer;
+    readonly cachedTileLRUFlags: GPUBuffer;
 }
 
 /** Kernels compiled in `prepare`. */
 interface Kernels {
     readonly clearCounters: ComputeKernel;
-    readonly clearProbeMask: ComputeKernel;
     readonly spawn: ComputeKernel;
     readonly compact: ComputeKernel;
     readonly sample: ComputeKernel;
@@ -136,8 +146,9 @@ interface Prepared {
     readonly compaction: GpuCompaction;
     readonly compactArgs: GpuIndirectArgs;
     readonly clearCountersGroup: GPUBindGroup;
-    readonly compactGroup: GPUBindGroup;
     readonly debugUniforms: GPUBuffer;
+    /** The probes' history: reprojection, the off-screen cache, the patch, the reorder (RC4.1). */
+    readonly history: ScreenProbeHistory;
     readonly bytes: number;
 }
 
@@ -149,8 +160,16 @@ interface ScreenResources {
     readonly probeMaskLevel0: GPUTextureView;
     readonly probeRays: GPUBuffer;
     readonly rayScratch: RayScratch;
-    readonly clearProbeMaskGroup: GPUBindGroup;
+    readonly history: HistoryResources;
+    readonly probeSH: GPUTexture;
+    readonly compactGroup: GPUBindGroup;
     readonly bytes: number;
+}
+
+/** The previous frame's camera, for the reprojection (`g_PreviousViewProjectionInverse`, `g_PreviousEye`). */
+interface PreviousCamera {
+    readonly inverseViewProjection: number[];
+    readonly eye: readonly [number, number, number];
 }
 
 /** Bind groups over the host's screen textures, rebuilt when the host hands over other textures. */
@@ -168,8 +187,12 @@ interface ScreenInputGroups {
 
 export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings> {
     readonly id = TECHNIQUE_ID;
-    /** Rays through the platform's tracer; the host's depth and normals every frame (`encodeScreen`). */
-    readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: true };
+    /**
+     * Rays through the platform's tracer; the host's depth, normals and
+     * motion every frame (`encodeScreen`): the probes are reprojected by
+     * `FrameScreen.velocity` (RC4.1).
+     */
+    readonly requirements: TechniqueRequirements = { queries: ['rays'], screen: { velocity: true } };
     readonly settings: RadianceCacheSettings;
     /** Reads the interpolated irradiance by screen position (shading.ts). */
     readonly shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() });
@@ -205,6 +228,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /** SH projection and per-pixel interpolation (RC2.2): made in `prepare`. */
     private irradiance: ScreenIrradiance | null = null;
     private latestFrameIndex = 0;
+    /** The camera of the latest `encodeScreen`, which the next one reprojects from. */
+    private previousCamera: PreviousCamera | null = null;
     private readonly frameWords = new ArrayBuffer(FRAME_UNIFORM_BYTES);
     private disposed = false;
 
@@ -231,9 +256,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const workList = context.shade.direct.defaultWorkList;
         const kernel = (label: string, code: string, entryPoint: string, group: GPUBindGroupLayoutDescriptor, modules: readonly WgslModule[] = []) =>
             context.kernels.computeKernel({ label: `${TECHNIQUE_ID}/${label}`, modules, code, entryPoint, ownGroups: [group] });
-        const [clearCounters, clearProbeMask, spawn, compact, sample, populate, blend, debug] = await Promise.all([
+        const [clearCounters, spawn, compact, sample, populate, blend, debug] = await Promise.all([
             kernel('ClearCounters', CLEAR_COUNTERS_WGSL, ENTRY_POINT.clearCounters, CLEAR_COUNTERS_GROUP),
-            kernel('ClearProbeMask', CLEAR_PROBE_MASK_WGSL, ENTRY_POINT.clearProbeMask, CLEAR_PROBE_MASK_GROUP),
             kernel('SpawnScreenProbes', SPAWN_WGSL, ENTRY_POINT.spawn, SPAWN_GROUP),
             // The platform's GiIndirectArgs and giIndirectItemIndex (code only, nothing bound).
             kernel('CompactScreenProbes', COMPACT_WGSL, ENTRY_POINT.compact, COMPACT_GROUP, [context.compute.indirectModule]),
@@ -243,7 +267,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             kernel('BlendScreenProbes', BLEND_WGSL, ENTRY_POINT.blend, BLEND_GROUP),
             kernel('debug-view', DEBUG_WGSL, DEBUG_ENTRY_POINT, DEBUG_GROUP),
         ]);
-        const kernels: Kernels = { clearCounters, clearProbeMask, spawn, compact, sample, populate, blend, debug };
+        const kernels: Kernels = { clearCounters, spawn, compact, sample, populate, blend, debug };
         const irradiance = await ScreenIrradiance.create(context);
 
         // The spawn tiles of the largest screen the device can draw: a few MB at most, so a
@@ -264,11 +288,13 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             count: compaction.count,
             itemsPerWorkgroup: WORKGROUP_SIZE.spawn,
         });
+        const history = await ScreenProbeHistory.create(context, counters);
 
         this.releaseScreen();
         this.releasePrepared();
         this.irradiance = irradiance;
         this.cache = cache;
+        this.previousCamera = null;
         this.prepared = {
             kernels,
             spawnTileCapacity,
@@ -280,17 +306,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             compaction,
             compactArgs,
             clearCountersGroup: device.createBindGroup({ label: `${TECHNIQUE_ID}/ClearCounters`, layout: clearCounters.ownLayouts[0], entries: [{ binding: 0, resource: { buffer: counters } }] }),
-            compactGroup: device.createBindGroup({
-                label: `${TECHNIQUE_ID}/CompactScreenProbes`,
-                layout: compact.ownLayouts[0],
-                entries: [
-                    { binding: 0, resource: { buffer: compactArgs.buffer } },
-                    { binding: 1, resource: { buffer: compaction.indices } },
-                    { binding: 2, resource: { buffer: spawnSeeds } },
-                    { binding: 3, resource: { buffer: probeSpawn } },
-                ],
-            }),
             debugUniforms,
+            history,
             bytes: spawnFlags.size + spawnSeeds.size + probeSpawn.size + counters.size + frameUniforms.size + debugUniforms.size,
         };
     }
@@ -319,32 +336,45 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         }
         this.latestFrameIndex = frame.frame >>> 0;
         this.writeFrameUniforms(context.device, prepared, layout, frame);
-        const { kernels } = prepared;
+        const { kernels, history } = prepared;
         const timer = context.timer;
         const maxPerDimension = context.device.limits.maxComputeWorkgroupsPerDimension;
 
-        // 1-2: a fresh frame, the spawn, its compaction.
+        // 1: a fresh frame (ClearCounters, gi1.cpp:2250-2251).
+        const clearPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/clear-counters` });
+        kernels.clearCounters.bind(clearPass);
+        clearPass.setBindGroup(1, prepared.clearCountersGroup);
+        clearPass.dispatchWorkgroups(1);
+        clearPass.end();
+
+        // 2: last frame's probes moved to this frame, and the cache's tiles on the screen (RC4.1).
+        history.encodeReprojection(encoder, {
+            frameUniforms: prepared.frameUniforms,
+            counters: prepared.counters,
+            screen,
+            probeAtlas: resources.probeAtlas,
+            probeMask: resources.probeMask,
+            probeSH: resources.probeSH,
+            probeSpawn: prepared.probeSpawn,
+        });
+
+        // 3: the spawn and its compaction.
         const spawnPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/spawn`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/spawn`) });
-        kernels.clearCounters.bind(spawnPass);
-        spawnPass.setBindGroup(1, prepared.clearCountersGroup);
-        spawnPass.dispatchWorkgroups(1);
-        kernels.clearProbeMask.bind(spawnPass);
-        spawnPass.setBindGroup(1, resources.clearProbeMaskGroup);
-        spawnPass.dispatchWorkgroups(Math.ceil(layout.probeCount[0] / WORKGROUP_SIZE.clearProbeMask), Math.ceil(layout.probeCount[1] / WORKGROUP_SIZE.clearProbeMask));
         kernels.spawn.bind(spawnPass);
         spawnPass.setBindGroup(1, groups.spawn);
         spawnPass.dispatchWorkgroups(Math.ceil(layout.maxProbeSpawnCount / WORKGROUP_SIZE.spawn));
         prepared.compaction.encode(spawnPass, layout.maxProbeSpawnCount);
         prepared.compactArgs.encode(spawnPass);
         kernels.compact.bind(spawnPass);
-        spawnPass.setBindGroup(1, prepared.compactGroup);
+        spawnPass.setBindGroup(1, resources.compactGroup);
         spawnPass.dispatchWorkgroupsIndirect(prepared.compactArgs.buffer, 0);
         spawnPass.end();
         // The probe count in front of the list, where the per-ray kernels read it.
         encoder.copyBufferToBuffer(prepared.compaction.count.buffer, prepared.compaction.count.offset, prepared.probeSpawn, 0, WORD_BYTES);
 
-        // 3: a direction per ray, then the rays.
+        // 3-4: the empty tiles take rays from tiles that have history, then a direction per ray, then the rays.
         const tracePass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/sample-populate`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/sample-populate`) });
+        history.encodePatch(tracePass);
         kernels.sample.bind(tracePass);
         tracePass.setBindGroup(1, groups.sample);
         dispatchSplit(tracePass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
@@ -353,18 +383,22 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         dispatchSplit(tracePass, layout.maxRayCount / WORKGROUP_SIZE.populate, maxPerDimension);
         tracePass.end();
 
-        // 4: the world cache lights the rays' hits.
+        // 5: the world cache lights the rays' hits.
         this.encodeWorldCache(encoder, frame, resources);
 
-        // 5: the rays into the probe atlas and the mask.
+        // 6: the rays into the probe atlas, the mask and the off-screen cache.
         const blendPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/blend`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/blend`) });
         kernels.blend.bind(blendPass);
         blendPass.setBindGroup(1, groups.blend);
         dispatchSplit(blendPass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
         blendPass.end();
 
-        // 6: the mask's mips, the SH and the irradiance per pixel (RC2.2).
+        // 7: the mask's mips, the SH and the irradiance per pixel (RC2.2).
         this.encodeIrradiance(encoder, frame, prepared, resources);
+
+        // 6 and 8: the cache's LRU order for the next frame, and this frame's depth and normals kept.
+        history.encodeReorder(encoder, screen);
+        this.previousCamera = { inverseViewProjection: cameraRelativeInverseViewProjection(frame.camera), eye: [frame.camera.position[0], frame.camera.position[1], frame.camera.position[2]] };
     }
 
     /** The passes after the blend (screen-irradiance.ts), on this frame's probes and screen. */
@@ -460,6 +494,10 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             rayScratch: resources.rayScratch,
             probeSH: irradiance.probeSH,
             irradiance: irradiance.irradiance,
+            counters: prepared.counters,
+            history: resources.history,
+            cachedTileListCount: prepared.history.scanBuffers.cachedTileListCount,
+            cachedTileLRUFlags: prepared.history.scanBuffers.cachedTileLRUFlags,
         };
     }
 
@@ -480,17 +518,28 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     get memoryBytes(): number {
         const prepared = this.prepared;
         if (!prepared) return 0;
-        const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + (this.screenResources?.bytes ?? 0);
+        const screenProbes = prepared.bytes + prepared.compaction.memoryBytes + prepared.compactArgs.memoryBytes + prepared.history.memoryBytes + (this.screenResources?.bytes ?? 0);
         const screenIrradiance = this.irradiance?.memoryBytes ?? 0;
         return screenProbes + screenIrradiance + (this.cache?.memoryBytes ?? 0);
     }
 
     /**
-     * Forgets the world cache's cells (at the next `encodeScreen`). The
-     * screen probes keep nothing between frames until phase 4.
+     * Forgets everything kept between frames, at the next `encodeScreen`: the
+     * world cache's cells and the screen probes' history.
      */
     resetHistory(): void {
         this.worldCacheResetPending = true;
+        this.resetScreenHistory();
+    }
+
+    /**
+     * Forgets the screen probes' history at the next `encodeScreen` (a cut):
+     * no probe is reprojected and the off-screen cache is emptied, so the
+     * frame runs as the first one does. The world cache keeps its cells.
+     */
+    resetScreenHistory(): void {
+        this.prepared?.history.reset();
+        this.previousCamera = null;
     }
 
     dispose(): void {
@@ -542,7 +591,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const device = context.device;
         const layout = screenProbeLayout(screen.width, screen.height);
         this.releaseScreen();
-        // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by RC2.2's projection and the debug view, copied by tests.
+        // g_ScreenProbes_ProbeBuffer (gi1.cpp:131-144): read by RC2.2's projection, SampleScreenProbes' taps and
+        // the debug view; copied by tests and, as last frame's, by the history.
         const probeAtlas = device.createTexture({
             label: `${TECHNIQUE_ID} probe atlas`,
             size: [layout.atlasSize[0], layout.atlasSize[1]],
@@ -567,6 +617,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // cache lights the hits), so it has no room.
         const rayScratch = context.shade.direct.createScratch({ label: `${TECHNIQUE_ID} probe rays`, rays: layout.maxRayCount, workItems: 0 });
         const maskBytes = mipChainTexels(layout.probeCount[0], layout.probeCount[1], layout.probeMaskMipCount) * WORD_BYTES;
+        // The history of this size (empty: the first frame runs without one), and the SH the
+        // reprojection copies into.
+        const history = prepared.history.resourcesFor(layout);
+        const probeSH = this.irradiance?.probeSHFor(layout);
+        if (!probeSH) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         const resources: ScreenResources = {
             layout,
             probeAtlas,
@@ -574,12 +629,19 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             probeMaskLevel0,
             probeRays,
             rayScratch,
-            clearProbeMaskGroup: device.createBindGroup({
-                label: `${TECHNIQUE_ID}/ClearProbeMask`,
-                layout: prepared.kernels.clearProbeMask.ownLayouts[0],
+            history,
+            probeSH,
+            compactGroup: device.createBindGroup({
+                label: `${TECHNIQUE_ID}/CompactScreenProbes`,
+                layout: prepared.kernels.compact.ownLayouts[0],
                 entries: [
-                    { binding: 0, resource: { buffer: prepared.frameUniforms } },
-                    { binding: 1, resource: probeMaskLevel0 },
+                    { binding: 0, resource: { buffer: prepared.compactArgs.buffer } },
+                    { binding: 1, resource: { buffer: prepared.compaction.indices } },
+                    { binding: 2, resource: { buffer: prepared.spawnSeeds } },
+                    { binding: 3, resource: { buffer: prepared.probeSpawn } },
+                    { binding: 4, resource: probeMaskLevel0 },
+                    { binding: 5, resource: { buffer: prepared.counters } },
+                    { binding: 6, resource: { buffer: history.overrideTiles } },
                 ],
             }),
             bytes: layout.atlasSize[0] * layout.atlasSize[1] * 8 + maskBytes + probeRays.size + rayScratch.bytes,
@@ -598,6 +660,9 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const normal = screenTextureView(screen.normal);
         const uniforms = { buffer: prepared.frameUniforms };
         const { kernels } = prepared;
+        const { history } = resources;
+        const scanBuffers = prepared.history.scanBuffers;
+        const counters = { buffer: prepared.counters };
         const group = (label: string, kernel: ComputeKernel, entries: GPUBindingResource[]): GPUBindGroup =>
             device.createBindGroup({ label: `${TECHNIQUE_ID}/${label}`, layout: kernel.ownLayouts[0], entries: entries.map((resource, binding) => ({ binding, resource })) });
         const groups: ScreenInputGroups = {
@@ -606,7 +671,26 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             normalUnorm,
             resources,
             spawn: group('SpawnScreenProbes', kernels.spawn, [uniforms, depth, normal, { buffer: prepared.spawnSeeds }, { buffer: prepared.spawnFlags }]),
-            sample: group('SampleScreenProbes', kernels.sample, [uniforms, normal, { buffer: prepared.probeSpawn }, { buffer: resources.probeRays }]),
+            sample: group('SampleScreenProbes', kernels.sample, [
+                uniforms,
+                normal,
+                { buffer: prepared.probeSpawn },
+                { buffer: resources.probeRays },
+                depth,
+                resources.probeAtlas.createView(),
+                resources.probeMaskLevel0,
+                history.previousProbeAtlas.createView(),
+                { buffer: scanBuffers.cachedTileListCount },
+                { buffer: scanBuffers.cachedTileListIndex },
+                { buffer: history.cachedTileList },
+                { buffer: history.cachedTileLRU },
+                { buffer: history.cachedTileIndex },
+                history.cachedTileAtlas.createView(),
+                { buffer: scanBuffers.cachedTileLRUFlags },
+                counters,
+                { buffer: history.spawnProbe },
+                { buffer: history.evictedRadiance },
+            ]),
             populate: group('PopulateScreenProbes', kernels.populate, [
                 uniforms,
                 depth,
@@ -623,6 +707,16 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 resources.rayScratch.rayResults,
                 resources.probeAtlas.createView(),
                 resources.probeMaskLevel0,
+                depth,
+                history.previousProbeAtlas.createView(),
+                { buffer: history.spawnProbe },
+                { buffer: history.evictedRadiance },
+                counters,
+                { buffer: history.cachedTileLRU },
+                { buffer: scanBuffers.cachedTileLRUFlags },
+                { buffer: history.cachedTileMRU },
+                { buffer: history.cachedTileIndex },
+                history.cachedTileAtlas.createView(),
             ]),
         };
         this.inputGroups = groups;
@@ -645,6 +739,12 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         uints[word('normalUnorm')] = frame.screen.normalEncoding === 'unorm' ? 1 : 0;
         uints[word('reversedDepth')] = frame.screen.reversedDepth === true ? 1 : 0;
         uints[word('useDirectLighting')] = this.settings.useDirectLighting ? 1 : 0;
+        // The camera the history was made with; with none (the first frame), this one.
+        const previous = this.previousCamera;
+        floats.set(previous?.inverseViewProjection ?? cameraRelativeInverseViewProjection(frame.camera), word('previousInverseViewProjection'));
+        floats.set(cameraRelativeViewProjection(frame.camera), word('viewProjection'));
+        floats.set(previous?.eye ?? frame.camera.position, word('previousEye'));
+        floats[word('cellSize')] = screenProbeCellSize(frame.camera, layout.width, layout.height);
         device.queue.writeBuffer(prepared.frameUniforms, 0, words);
     }
 
@@ -665,6 +765,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         for (const buffer of [prepared.frameUniforms, prepared.counters, prepared.spawnFlags, prepared.spawnSeeds, prepared.probeSpawn, prepared.debugUniforms]) buffer.destroy();
         prepared.compaction.dispose();
         prepared.compactArgs.dispose();
+        prepared.history.dispose();
         this.irradiance?.dispose();
         this.irradiance = null;
         this.prepared = null;

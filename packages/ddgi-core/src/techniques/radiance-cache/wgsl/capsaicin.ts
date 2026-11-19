@@ -123,6 +123,30 @@ fn rcRecoverRadiance(quantized: vec4u) -> vec4f {
     return vec4f(quantized) / RC_FLOAT_QUANTIZE;
 }
 
+// f32tof16 (HLSL): the half's bits in the low 16 bits, for a value within the half range.
+fn rcF32ToF16Bits(value: f32) -> u32 {
+    return pack2x16float(vec2f(clamp(value, -RC_LARGEST_HALF, RC_LARGEST_HALF), 0.0)) & 0xffffu;
+}
+
+// ---- math/color.hlsl, math/pack.hlsl --------------------------------------------------------
+
+// luminance (color.hlsl): Rec. 709 weights.
+fn rcLuminance(color: vec3f) -> f32 {
+    return dot(color, vec3f(0.2126, 0.7152, 0.0722));
+}
+
+// packNormal (pack.hlsl): three 10-bit snorms in one word.
+fn rcPackNormal(value: vec3f) -> u32 {
+    let packedValue = vec3u(vec3i(clamp(value, vec3f(-1.0), vec3f(1.0)) * 511.0 + 0.5 * sign(value))) & vec3u(0x3ffu);
+    return packedValue.x | (packedValue.y << 10u) | (packedValue.z << 20u);
+}
+
+// unpackNormal (pack.hlsl): the three 10-bit snorms back, sign-extended.
+fn rcUnpackNormal(packedValue: u32) -> vec3f {
+    let value = vec3i(bitcast<i32>(packedValue << 22u), bitcast<i32>(packedValue << 12u), bitcast<i32>(packedValue << 2u)) >> vec3u(22u);
+    return vec3f(value) * (1.0 / 511.0);
+}
+
 // ---- math/sampling.hlsl ---------------------------------------------------------------------
 
 // mapToHemiOctahedron (sampling.hlsl:61-83): a point of the unit square to a +z-hemisphere
@@ -210,6 +234,11 @@ fn rcRandInt(random: ptr<function, RcRandom>) -> u32 {
     var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     word = (word >> 22u) ^ word;
     return word;
+}
+
+// Random::randInt(max) (random_number_generator.hlsl:48-56): with its slight modulo bias.
+fn rcRandIntBelow(random: ptr<function, RcRandom>, maximum: u32) -> u32 {
+    return rcRandInt(random) % maximum;
 }
 
 // Random::rand (random_number_generator.hlsl:62-67): the upper 24 bits, so the float is exact.

@@ -28,7 +28,10 @@ import type {
     GpuWord,
     IndirectArgsOptions,
     PrefixScanOptions,
+    GpuScreenHistory,
+    ScreenHistoryOptions,
 } from '../contract/compute.ts';
+import { compileScreenHistoryKernel, ScreenHistory, type ScreenHistoryKernel } from '../screen/screen-history.ts';
 import type { WgslModule } from '../contract/wgsl.ts';
 import {
     COMPACTION_IO,
@@ -112,6 +115,7 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
     private readonly label: string;
     private readonly scanKernels = new Map<ScanVariant, Promise<ScanKernels>>();
     private writerKernel: Promise<WriterKernel> | null = null;
+    private screenHistoryKernel: Promise<ScreenHistoryKernel> | null = null;
 
     constructor(device: GPUDevice, options: PlatformGpuComputeOptions = {}) {
         this.device = device;
@@ -179,6 +183,11 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
         checkStorageBuffer(count.buffer, count.offset + WORD_BYTES, 'the count', label);
         const kernel = await this.writerKernelFor();
         return new IndirectArgsWriter(this.device, kernel, options);
+    }
+
+    async createScreenHistory(options: ScreenHistoryOptions): Promise<GpuScreenHistory> {
+        this.screenHistoryKernel ??= compileScreenHistoryKernel(this.device, this.label);
+        return new ScreenHistory(this.device, await this.screenHistoryKernel, options);
     }
 
     /** At least one item, and no more than one storage binding holds. */
