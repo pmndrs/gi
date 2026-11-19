@@ -42,6 +42,7 @@
  */
 
 import type { GpuCompaction, GpuIndirectArgs } from '../../platform/contract/compute.ts';
+import { ChangeEventTracker } from '../../platform/contract/change-events.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import type { FrameScreen } from '../../platform/contract/frame.ts';
 import type { RayScratch } from '../../platform/contract/shade.ts';
@@ -50,13 +51,13 @@ import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequiremen
 import type { ComputeKernel, WgslModule } from '../../platform/contract/wgsl.ts';
 import { cameraRelativeInverseViewProjection, cameraRelativeViewProjection } from './camera.ts';
 import { ScreenIrradiance, screenProbeCellSize } from './screen-irradiance.ts';
-import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES, ScreenProbeHistory, type HistoryChanges, type HistoryResources } from './screen-probe-history.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
+import { historyChangesFromEvents, historyChangesWords, ScreenProbeHistory, type HistoryResources } from './screen-probe-history.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, SCREEN_HISTORY_SETTINGS, screenProbeLayout, type RadianceCacheSettings, type ScreenProbeLayout } from './settings.ts';
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import { SharcCache } from './world-cache/sharc/sharc-cache.ts';
 import { NeuralTail } from './neural-cache/neural-tail.ts';
-import type { WorldCache, WorldCacheProbeRays } from './world-cache/world-cache.ts';
+import type { WorldCache, WorldCacheChanges, WorldCacheProbeRays } from './world-cache/world-cache.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
 import {
     BLEND_GROUP,
@@ -85,6 +86,9 @@ import {
 const BUFFER_USAGE = { storage: 0x80, copySrc: 0x04, copyDst: 0x08, uniform: 0x40 } as const;
 const TEXTURE_USAGE = { copySrc: 0x01, textureBinding: 0x04, storageBinding: 0x08 } as const;
 const WORD_BYTES = 4;
+/** A backup fill's hit distance, never history (D47), and the largest half (Capsaicin's MAX_HIT_DISTANCE as stored, D19). */
+const FILL_HIT_DISTANCE = -1;
+const LARGEST_HALF = 65504;
 
 /** The technique's id: its passes are timed as `radiance-cache/<pass>`. */
 const TECHNIQUE_ID = 'radiance-cache';
@@ -238,8 +242,16 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /** The camera of the latest `encodeScreen`, which the next one reprojects from. */
     private previousCamera: PreviousCamera | null = null;
     private readonly frameWords = new ArrayBuffer(FRAME_UNIFORM_BYTES);
-    /** Scene changes since the last screen stage, for the running means (D46). */
-    private pendingChanges: HistoryChanges = NO_HISTORY_CHANGES;
+    /**
+     * The scene's changes as events (platform contract): the world cache's
+     * cells (E8, E9) and the screen probes' running means (D46) forget their
+     * history once per epoch of an event, not on every frame of a change that
+     * goes on. Fed in `encode`, read in `encodeScreen`. 15 events with a box
+     * at most, plus one with none: the world cache's uniform holds 16.
+     */
+    private readonly changeEvents = new ChangeEventTracker({ maxEvents: 15 });
+    /** The SCREEN_HISTORY_SETTINGS values the history was made under (null before the first frame). */
+    private historyRules: string | null = null;
     private disposed = false;
 
     constructor(settings: Partial<RadianceCacheSettings> = {}) {
@@ -327,13 +339,14 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     /**
      * No world-space work: the world cache runs in `encodeScreen`, where the
      * probe rays are (Capsaicin updates it from the screen probes' hits), so
-     * every unit is left unused. The frame's scene changes are kept for the
-     * screen stage, whose frame carries none: where they are, the probe
-     * cells' running means start over (D46).
+     * every unit is left unused. The frame's scene changes go into the change
+     * events for the screen stage, whose frame carries none: where they are,
+     * the world cells (E8, E9) and the probe cells' running means (D46) start
+     * over once per epoch.
      */
     encode(encoder: GPUCommandEncoder, frame: TechniqueFrame): number {
         void encoder;
-        this.pendingChanges = mergeHistoryChanges(this.pendingChanges, frame.changes);
+        this.changeEvents.update(frame.frame, frame.changes);
         return 0;
     }
 
@@ -349,11 +362,13 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             throw new GILimitError('maxTextureDimension2D', Math.max(screen.width, screen.height), context.device.limits.maxTextureDimension2D);
         }
         this.latestFrameIndex = frame.frame >>> 0;
+        this.resetHistoryForSettings();
         this.writeFrameUniforms(context.device, prepared, layout, frame);
-        context.device.queue.writeBuffer(prepared.historyChanges, 0, historyChangesWords(this.pendingChanges));
-        // The world cache gets the same changes (P6.1: the SHaRC cache lets go of its history there).
-        const changes = this.pendingChanges;
-        this.pendingChanges = NO_HISTORY_CHANGES;
+        // D46 and the world cache's per-frame view (P6.1: the SHaRC cache lets go of its history
+        // there): the events armed this frame. E8 and E9 read every event with its epoch.
+        const armed = historyChangesFromEvents(this.changeEvents.armedEvents(frame.frame));
+        context.device.queue.writeBuffer(prepared.historyChanges, 0, historyChangesWords(armed));
+        const changes: WorldCacheChanges = { events: this.changeEvents.events(frame.frame), everything: armed.everything, boxes: armed.boxes };
         const { kernels, history } = prepared;
         const timer = context.timer;
         const maxPerDimension = context.device.limits.maxComputeWorkgroupsPerDimension;
@@ -420,6 +435,20 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // 6 and 8: the cache's LRU order for the next frame, and this frame's depth and normals kept.
         history.encodeReorder(encoder, screen);
         this.previousCamera = { inverseViewProjection: cameraRelativeInverseViewProjection(frame.camera), eye: [frame.camera.position[0], frame.camera.position[1], frame.camera.position[2]] };
+    }
+
+    /**
+     * The settings are read every frame (RC4.5): a change of a rule in
+     * SCREEN_HISTORY_SETTINGS starts the screen probes' history over, so cells
+     * made under the old rule don't linger; `probeHistory` off drops the
+     * history before every frame.
+     */
+    private resetHistoryForSettings(): void {
+        const settings = this.settings;
+        const rules = JSON.stringify(SCREEN_HISTORY_SETTINGS.map((name) => settings[name]));
+        if (this.historyRules !== null && rules !== this.historyRules) this.resetScreenHistory();
+        this.historyRules = rules;
+        if (!settings.probeHistory) this.resetScreenHistory();
     }
 
     /** The passes after the blend (screen-irradiance.ts), on this frame's probes and screen. */
@@ -628,7 +657,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * their radiance slots (docs/design/radiance-cache.md, "The world-cache
      * interface"), and first, after `resetHistory`, its `reset`.
      */
-    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources, changes: HistoryChanges): void {
+    private encodeWorldCache(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, resources: ScreenResources, changes: WorldCacheChanges): void {
         const cache: WorldCache | null = this.cache;
         if (!cache) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         if (this.worldCacheResetPending) {
@@ -815,6 +844,14 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         floats.set(cameraRelativeViewProjection(frame.camera), word('viewProjection'));
         floats.set(previous?.eye ?? frame.camera.position, word('previousEye'));
         floats[word('cellSize')] = screenProbeCellSize(frame.camera, layout.width, layout.height);
+        // The temporal rules, each with Capsaicin's way as a value (settings.ts, RC4.5).
+        const rules = temporalRuleUniforms(this.settings);
+        uints[word('historySampleCap')] = rules.historySampleCap;
+        floats[word('rayGuidingUniformShare')] = rules.rayGuidingUniformShare;
+        uints[word('capsaicinHysteresis')] = rules.capsaicinHysteresis;
+        uints[word('capsaicinEmptyCells')] = rules.capsaicinEmptyCells;
+        floats[word('fillHitDistance')] = rules.fillHitDistance;
+        uints[word('probeChangeReset')] = rules.probeChangeReset;
         device.queue.writeBuffer(prepared.frameUniforms, 0, words);
     }
 
@@ -840,6 +877,25 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.irradiance = null;
         this.prepared = null;
     }
+}
+
+/** The temporal rules as `RcFrame` holds them (wgsl/screen-probes.ts), from the settings (RC4.5). */
+export function temporalRuleUniforms(settings: Readonly<RadianceCacheSettings>): {
+    historySampleCap: number;
+    rayGuidingUniformShare: number;
+    capsaicinHysteresis: number;
+    capsaicinEmptyCells: number;
+    fillHitDistance: number;
+    probeChangeReset: number;
+} {
+    return {
+        historySampleCap: Math.max(1, Math.round(settings.historySampleCap)),
+        rayGuidingUniformShare: Math.min(Math.max(settings.rayGuidingUniformShare, 0), 1),
+        capsaicinHysteresis: settings.probeBlend === 'capsaicin-hysteresis' ? 1 : 0,
+        capsaicinEmptyCells: settings.emptyCellFill === 'capsaicin' ? 1 : 0,
+        fillHitDistance: settings.backupFillsAsHistory ? LARGEST_HALF : FILL_HIT_DISTANCE,
+        probeChangeReset: settings.probeChangeReset ? 1 : 0,
+    };
 }
 
 /**

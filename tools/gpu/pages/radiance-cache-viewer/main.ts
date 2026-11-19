@@ -19,12 +19,31 @@
  *   image's texel at the same pixel (RC2.2 review: a flipped or offset
  *   `screenUV` fails).
  *
+ * - RC4.5, the compare toggles, through the panel's own section
+ *   (`RcCompareControls`, apps/viewer/src/ui/rc-compare-controls.ts) shown
+ *   beside the picture and clicked as a user would (checkbox clicks, select
+ *   and slider change events): each toggle set to Capsaicin's value (or, where
+ *   that is ours, to its other value) from ours, `COMPARE_FRAMES` frames
+ *   drawn, then back to ours; and "All Capsaicin". Each must reach the core
+ *   technique's settings, leave no NaN, infinite or negative value in the
+ *   irradiance and probe atlas, and log no error; the change of the picture
+ *   against ours is recorded beside ours against itself a few frames later
+ *   (the noise), and "All Capsaicin" must change it by more than that noise.
+ *   The panel's readout (GI change per frame, frames since a toggle changed)
+ *   is recorded too.
+ *
+ * - RC4.6: the radiance cache starts with a DDGI volume stacked under it (what
+ *   ships); "Run the cache alone" makes it again without, and back.
+ *
  * The page ends on the last scene's radiance cache, GI on, for the runner's
- * screenshot. The composited picture's values are checked by the adapter
+ * screenshot, with the compare section beside it: at ours, or with
+ * `VITE_RC_VIEWER_END=capsaicin` at every Capsaicin value (a before/after
+ * pair: two runs). The composited picture's values are checked by the adapter
  * page (radiance-cache-three) too; this one checks the viewer's wiring.
  *
  * `VITE_RC_VIEWER_SCENES` picks the scenes (comma-separated; default all
- * three), so a run per scene leaves a screenshot per scene.
+ * three), so a run per scene leaves a screenshot per scene. `VITE_RC_VIEWER_COMPARE=0`
+ * skips the compare toggles.
  *
  * Correctness only (DECISIONS 2026-11-09), through the lock, e.g.:
  * `VITE_RC_VIEWER_SCENES=sponza node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-viewer --out bench/screenshots/rc2.2/sponza`.
@@ -40,6 +59,8 @@ import { ViewerCore, type ViewLayout } from '../../../../apps/viewer/src/core/vi
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { GiMode } from '../../../../apps/viewer/src/scene/layers.ts';
+import { RcCompareControls } from '../../../../apps/viewer/src/ui/rc-compare-controls.ts';
+import { compareSettingValue, isHostToggle, RADIANCE_CACHE_COMPARE_TOGGLES, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -52,6 +73,10 @@ const SCAN_FRAMES = [1, 30, 60];
 const FRAMES_PER_VIEW = 4;
 /** How long the techniques get to start, per scene. */
 const START_TIMEOUT_MS = 180000;
+/** RC4.5: frames drawn after each toggle before its picture is read, and between the two reads of ours (the noise). */
+const COMPARE_FRAMES = 30;
+const COMPARE = env.VITE_RC_VIEWER_COMPARE !== '0';
+const END_AT_CAPSAICIN = env.VITE_RC_VIEWER_END === 'capsaicin';
 
 const startTime = performance.now();
 const logLines: string[] = [];
@@ -148,6 +173,141 @@ async function checkComposite(core: ViewerCore, technique: RadianceCacheViewerTe
     }
 }
 
+/** The compare section beside the picture, wired to the viewer core as the viewer app wires it. */
+function showCompareControls(core: ViewerCore): RcCompareControls {
+    const controls = new RcCompareControls({ onCompare: (values: CompareValues) => core.configureRadianceCache({ screenView: null, compare: values }) });
+    // Beside the picture, as the viewer's panel is: fixed, never wider than the window, its own vertical scroll.
+    const style = document.createElement('style');
+    style.textContent = `
+        html, body { overflow: hidden; background: #0b0d10; }
+        .rc-compare-box { position: fixed; top: 0; right: 0; bottom: 0; width: min(300px, 100vw); box-sizing: border-box; overflow-y: auto; overflow-x: hidden;
+            padding: 6px 10px; background: #10141a; color: #d8dee6; font: 12px/1.4 system-ui, sans-serif; }
+        .rc-compare-box h2 { font-size: 13px; margin: 4px 0 6px; }
+        .rc-compare-box select, .rc-compare-box input[type='range'], .rc-compare-box button { width: 100%; box-sizing: border-box; }
+        .rc-compare-box .button-row { display: flex; gap: 4px; }
+        .rc-compare-box .label { margin: 6px 0 2px; color: #8f9bab; }
+        .rc-compare-box label.inline { display: inline-flex; align-items: center; gap: 4px; margin: 2px 0; }
+        .rc-compare-box .muted { color: #8f9bab; }
+        .rc-compare-box .changed { border-left: 2px solid #4da3ff; padding-left: 4px; }`;
+    document.head.append(style);
+    const box = document.createElement('div');
+    box.className = 'rc-compare-box';
+    box.append(controls.section);
+    document.body.append(box);
+    return controls;
+}
+
+/** The value a toggle is clicked to: Capsaicin's, or where that is ours, the other one. */
+function compareValueOf(entry: CompareToggle): boolean | number | string {
+    if (entry.capsaicin !== undefined && entry.capsaicin !== entry.defaultValue) return entry.capsaicin;
+    if (entry.kind === 'boolean') return !entry.defaultValue;
+    if (entry.kind === 'number') return entry.defaultValue === entry.min ? entry.max : entry.min;
+    return entry.choices.find((choice) => choice.value !== entry.defaultValue)!.value;
+}
+
+/** Sets a toggle in the compare section the way a user does: a click on a checkbox, a change of a select or slider. */
+function clickToggle(section: HTMLElement, entry: CompareToggle, value: boolean | number | string): void {
+    const row = section.querySelector<HTMLElement>(`[data-compare-setting="${entry.setting}"]`);
+    const control = row?.querySelector<HTMLInputElement | HTMLSelectElement>('input, select');
+    if (!row || !control) throw new Error(`the compare section has no control for ${entry.setting}`);
+    if (control instanceof HTMLInputElement && control.type === 'checkbox') {
+        if (control.checked !== value) control.click();
+        return;
+    }
+    control.value = String(value);
+    control.dispatchEvent(new Event('input', { bubbles: true }));
+    control.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function clickButton(section: HTMLElement, name: 'all-capsaicin' | 'all-ours'): void {
+    const button = section.querySelector<HTMLButtonElement>(`button[data-compare="${name}"]`);
+    if (!button) throw new Error(`the compare section has no ${name} button`);
+    button.click();
+}
+
+/** The interpolated irradiance's mean over rgb per pixel. */
+async function irradianceImage(core: ViewerCore, technique: RadianceCacheViewerTechnique): Promise<Float32Array> {
+    const probes = technique.radianceCache?.probes;
+    if (!probes) throw new Error('no probes');
+    const values = halves(await readTexture(core.device, probes.irradiance, 8, probes.irradiance.width, probes.irradiance.height));
+    const image = new Float32Array(values.length / 4);
+    for (let pixel = 0; pixel < image.length; pixel++) image[pixel] = (values[pixel * 4] + values[pixel * 4 + 1] + values[pixel * 4 + 2]) / 3;
+    return image;
+}
+
+/** Sum |a - b| / sum a over pixels, and sum b / sum a. */
+function imageChange(a: Float32Array, b: Float32Array): { change: number; ratio: number } {
+    let difference = 0;
+    let sumA = 0;
+    let sumB = 0;
+    for (let pixel = 0; pixel < a.length; pixel++) {
+        difference += Math.abs(a[pixel] - b[pixel]);
+        sumA += a[pixel];
+        sumB += b[pixel];
+    }
+    return { change: Number((difference / Math.max(sumA, 1e-30)).toFixed(4)), ratio: Number((sumB / Math.max(sumA, 1e-30)).toFixed(4)) };
+}
+
+/** RC4.5: every compare toggle clicked in the panel section, its picture against ours (the page comment). */
+async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls, sceneId: string): Promise<Record<string, unknown>> {
+    const section = controls.section;
+    // The radiance cache on screen: a toggle read at prepare (the world-cache backend) makes a new one.
+    const rc = (): RadianceCacheViewerTechnique => core.getTechnique('rc') as RadianceCacheViewerTechnique;
+    const valueOf = (entry: CompareToggle): unknown => {
+        // The host's choice: whether a DDGI volume is stacked under the cache (RC4.6).
+        if (isHostToggle(entry)) return rc().stackedDdgi === null;
+        const settings = rc().radianceCache?.settings;
+        return settings ? compareSettingValue(settings, entry.setting) : undefined;
+    };
+    // After a click: a restarted radiance cache prepares again before frames are drawn.
+    const settle = async (): Promise<void> => {
+        await showReady(core, { left: 'rc', right: null, giMode: 'on' });
+        if (rc().failed) failures.push(`${sceneId}: the radiance cache failed: ${rc().failed}`);
+    };
+    clickButton(section, 'all-ours');
+    await drawFrames(core, COMPARE_FRAMES);
+    const ours = await irradianceImage(core, rc());
+    await drawFrames(core, COMPARE_FRAMES);
+    const noise = imageChange(ours, await irradianceImage(core, rc()));
+    const results: Record<string, unknown> = { noise };
+    const scan = async (name: string): Promise<void> => {
+        const probes = rc().radianceCache?.probes;
+        if (!probes) throw new Error('no probes');
+        for (const [label, texture] of [['irradiance', probes.irradiance], ['probe atlas', probes.probeAtlas]] as const) {
+            const values = await scanHalves(core.device, texture);
+            if (values.nonFinite > 0 || values.negative > 0) failures.push(`${sceneId}, ${name}: the ${label} has ${values.nonFinite} values not finite and ${values.negative} negative`);
+        }
+    };
+    for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
+        const value = compareValueOf(entry);
+        clickToggle(section, entry, value);
+        await settle();
+        if (valueOf(entry) !== value) failures.push(`${sceneId}: clicking ${entry.setting} to ${String(value)} left the technique at ${String(valueOf(entry))}`);
+        await drawFrames(core, COMPARE_FRAMES);
+        const image = await irradianceImage(core, rc());
+        await scan(`${entry.setting} = ${String(value)}`);
+        results[`${entry.setting}=${String(value)}`] = { ...imageChange(ours, image), readout: rc().changeReadout };
+        clickToggle(section, entry, entry.defaultValue);
+        await settle();
+        if (valueOf(entry) !== entry.defaultValue) failures.push(`${sceneId}: clicking ${entry.setting} back left the technique at ${String(valueOf(entry))}`);
+        await drawFrames(core, COMPARE_FRAMES);
+    }
+    clickButton(section, 'all-capsaicin');
+    await settle();
+    for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
+        if (entry.capsaicin !== undefined && valueOf(entry) !== entry.capsaicin) failures.push(`${sceneId}: "All Capsaicin" left ${entry.setting} at ${String(valueOf(entry))}`);
+    }
+    await drawFrames(core, COMPARE_FRAMES);
+    const capsaicin = imageChange(ours, await irradianceImage(core, rc()));
+    await scan('all Capsaicin');
+    results.allCapsaicin = { ...capsaicin, readout: rc().changeReadout };
+    if (!(capsaicin.change > 2 * noise.change)) failures.push(`${sceneId}: "All Capsaicin" changed the picture by ${capsaicin.change} of ours, not over twice the noise ${noise.change}`);
+    clickButton(section, 'all-ours');
+    await settle();
+    await drawFrames(core, COMPARE_FRAMES);
+    return results;
+}
+
 const failures: string[] = [];
 const data: Record<string, unknown> = {};
 let core: ViewerCore | null = null;
@@ -157,20 +317,22 @@ try {
     canvas.height = HEIGHT;
     // Drawn at 1280 × 720 (resize below); shown scaled to fit the runner's window, so the screenshot holds all of it.
     canvas.style.display = 'block';
-    canvas.style.width = `min(100vw, calc(100vh * ${WIDTH} / ${HEIGHT}))`;
+    // Left of the compare section (300 px), as the viewer draws beside its panel.
+    canvas.style.width = `min(calc(100vw - min(300px, 100vw)), calc(100vh * ${WIDTH} / ${HEIGHT}))`;
     canvas.style.aspectRatio = `${WIDTH} / ${HEIGHT}`;
     document.body.style.margin = '0';
     document.body.style.overflow = 'hidden';
     document.body.append(canvas);
     core = await ViewerCore.create(canvas);
     core.resize(WIDTH, HEIGHT);
+    const compareControls = showCompareControls(core);
     const manifests = loadAllManifests();
 
     for (const sceneId of SCENES) {
         const manifest = manifests.find((candidate) => candidate.id === sceneId);
         if (!manifest) throw new Error(`no manifest '${sceneId}'`);
         core.layout = { left: 'rc', right: null, giMode: 'on', split: 0.5 };
-        core.configureRadianceCache({ screenView: null });
+        core.configureRadianceCache({ screenView: null, compare: {} });
         await core.loadScene(manifest, () => {});
         const bookmark = manifest.cameras[0];
         core.camera.position.set(...bookmark.position);
@@ -181,8 +343,11 @@ try {
         const errorsBefore = core.gpuErrors.length;
 
         await showReady(core, { left: 'rc', right: null, giMode: 'on' });
-        const technique = core.getTechnique('rc');
-        if (!(technique instanceof RadianceCacheViewerTechnique)) throw new Error('the rc technique is not the radiance cache');
+        const started = core.getTechnique('rc');
+        if (!(started instanceof RadianceCacheViewerTechnique)) throw new Error('the rc technique is not the radiance cache');
+        let technique: RadianceCacheViewerTechnique = started;
+        // RC4.6: what ships has a DDGI volume under the cache for its later bounces.
+        if (!technique.stackedDdgi) failures.push(`${sceneId}: no DDGI volume is stacked under the radiance cache`);
 
         // The scan: frames 1, 30 and 60 after the start, GI on.
         const scans: Record<string, unknown>[] = [];
@@ -217,11 +382,14 @@ try {
             views.push(`gi ${mode}`);
         }
         for (const view of Object.keys(RADIANCE_CACHE_SCREEN_VIEWS) as RadianceCacheScreenView[]) {
-            core.configureRadianceCache({ screenView: view });
+            core.configureRadianceCache({ screenView: view, compare: {} });
             await drawFrames(core, FRAMES_PER_VIEW);
             views.push(view);
         }
-        core.configureRadianceCache({ screenView: null });
+        core.configureRadianceCache({ screenView: null, compare: {} });
+        const compare = COMPARE ? await checkCompareToggles(core, compareControls, sceneId) : null;
+        // A restart toggle made a new radiance cache: check that one from here on.
+        technique = core.getTechnique('rc') as RadianceCacheViewerTechnique;
         await showReady(core, { left: 'rc', right: 'ddgi', giMode: 'on', split: 0.5 });
         await drawFrames(core, FRAMES_PER_VIEW);
         views.push('wipe rc | ddgi');
@@ -230,14 +398,17 @@ try {
         if (newErrors.length > 0) failures.push(`${sceneId}: device errors: ${newErrors.slice(0, 3).join(' | ')}`);
         if (technique.failed) failures.push(`${sceneId}: the radiance cache failed: ${technique.failed}`);
         const status = core.statusLines();
-        data[sceneId] = { views, scans, composite, status, gpuErrors: newErrors.length };
+        data[sceneId] = { views, scans, composite, compare, status, gpuErrors: newErrors.length };
         log(`${sceneId}: ${status.join(' / ')}`);
         if (sceneId !== SCENES[SCENES.length - 1]) {
             core.unloadScene();
         } else {
-            // The radiance cache alone, GI on, for the runner's screenshot.
+            // The radiance cache alone, GI on, for the runner's screenshot: at ours, or at Capsaicin's values.
             core.setLayout({ left: 'rc', right: null, giMode: 'on' });
-            await drawFrames(core, FRAMES_PER_VIEW);
+            clickButton(compareControls.section, END_AT_CAPSAICIN ? 'all-capsaicin' : 'all-ours');
+            await drawFrames(core, END_AT_CAPSAICIN ? 2 * COMPARE_FRAMES : FRAMES_PER_VIEW);
+            compareControls.setReadout(technique.changeReadout);
+            data.endedAt = END_AT_CAPSAICIN ? 'all Capsaicin' : 'ours';
         }
     }
     if (consoleErrors.length > 0) failures.push(`logged errors: ${consoleErrors.slice(0, 3).join(' | ')}`);

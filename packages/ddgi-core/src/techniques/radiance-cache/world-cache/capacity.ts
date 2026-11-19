@@ -53,6 +53,27 @@ export interface HashGridCacheOptions {
     /** `gi1_hash_grid_cache_max_sample_count` (gi1.h:63, default 16): a cell's temporal sample cap; below it the resolve reads a coarser level. */
     hashGridCacheMaxSampleCount: number;
     /**
+     * Lever E8 (TASKS P6.2, id Tech 8's "shade cells, not hits"): `'per-hit'`
+     * lights every hit (GI-1.2, the default); `'budgeted'` lights at most
+     * `cellShadingBudget` cells a frame, one light sample each, chosen by
+     * priority (`cell-shading-wgsl.ts`). Read every frame; switching doesn't
+     * empty the cache (a cell's value is the same estimate either way).
+     */
+    cellShading: 'per-hit' | 'budgeted';
+    /** Cells lit a frame when `cellShading` is `'budgeted'`: a whole number, 0 or more. Read every frame. */
+    cellShadingBudget: number;
+    /**
+     * Experiment E9 (TASKS P6.2b): per hit, a cell hit near a change event,
+     * once per epoch of the event (`ChangeEventTracker`, platform contract),
+     * takes that frame's samples with at most `cellChangeResetHistory` samples of its history, and its
+     * indirect history is cut to one sample. On by default, dropping the history; no
+     * effect with `cellShading: 'budgeted'`, which marks changed cells
+     * itself. Read every frame.
+     */
+    cellChangeReset: boolean;
+    /** With `cellChangeReset`: samples of a marked cell's history kept (default 0, dropped; at most 15). Read every frame. */
+    cellChangeResetHistory: number;
+    /**
      * `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second bounce.
      * With it, `PopulateMultibounceCells`, `GenerateMultibounceReservoirs` and
      * `UpdateMultibounceCells` run and the indirect values are read; without
@@ -116,6 +137,10 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheNumBuckets: 14,
     hashGridCacheNumTilesPerBucket: 4,
     hashGridCacheMaxSampleCount: 16,
+    cellShading: 'per-hit',
+    cellShadingBudget: 20000,
+    cellChangeReset: true,
+    cellChangeResetHistory: 0,
     useMultibounce: true,
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
@@ -223,7 +248,37 @@ export const HASH_GRID_COUNTER = {
      * insert pass (made once, at `prepare`) can read it.
      */
     probeRayCount: 8,
+    /**
+     * Lever E8 (`cellShading: 'budgeted'`, cell-shading-wgsl.ts): the cells
+     * hit this frame, each listed once as a candidate for lighting. Cleared
+     * by the cache's encoder at the start of a budgeted frame.
+     */
+    cellCandidateCount: 9,
+    /** Lever E8: the candidates listed to be lit this frame, counted by `ScatterCells` (`ShadeCells` reads up to the target). */
+    cellShadedCount: 10,
+    /**
+     * Lever E8: frames between a settled cell's turns, for the next frame
+     * (`PrioritizeCells` writes it from this frame's counts). Kept across
+     * frames; 0 (an empty cache) reads as 1.
+     */
+    cellSchedulePeriod: 11,
+    /** Lever E8: the cells to light this frame, min(candidates, budget), written by `PrioritizeCells` (the lit count can fall a little short of it). */
+    cellShadedTarget: 12,
 } as const;
+
+/** Lever E8's priority classes: new or changed, still converging, its turn, the rest (cell-shading-wgsl.ts). */
+export const CELL_SHADING_CLASSES = 4;
+/**
+ * Random sub-bins per class, so the class the budget cuts through is cut at
+ * random: only the one sub-bin the budget ends in is lit in the order the
+ * claims happened to run (which leans toward lower entries, so toward the
+ * hits drawn from them). With 8 the lit cells' drawn hits sat at 0.482 of
+ * their cells' entries on the GPU, against 1/2 for an even draw; 64 leaves
+ * a 64th of the class to that order.
+ */
+export const CELL_SHADING_SUB_BINS = 64;
+/** Priority bins: class × sub-bin (a candidate's word keeps the bin in 8 bits), in the per-ray lists (`cellPriorityBins`). */
+export const CELL_SHADING_BINS = CELL_SHADING_CLASSES * CELL_SHADING_SUB_BINS;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
 export interface HashGridCacheBufferLayout {

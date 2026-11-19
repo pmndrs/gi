@@ -30,6 +30,9 @@
  * second-bounce rays, with no DDGI. `VITE_RC_INDIRECT_CAP` sets
  * the fallback's `fallbackIndirectSampleCount` (default 4).
  *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts),
+ * for example Capsaicin's empty-cell rule: `VITE_RC_COMPARE=emptyCellFill=capsaicin`.
+ *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
  */
@@ -40,7 +43,6 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { WorldCacheKind } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -48,6 +50,7 @@ import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -219,7 +222,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, fallbackIndirectSampleCount: INDIRECT_CAP }));
+    const technique = platform.addTechnique(pageRadianceCache({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, fallbackIndirectSampleCount: INDIRECT_CAP }));
     platform.setOutput(technique);
     if (SECOND_BOUNCE === 'fallback') {
         const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
@@ -262,7 +265,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         const results: Record<string, Measurement> = {};
         for (const jitter of [true, false]) {
             for (const [motion, history] of CONFIGURATIONS) {
-                technique.settings.interpolationJitter = jitter;
+                technique.settings.interpolationJitter = (PAGE_COMPARE_VALUES.interpolationJitter as boolean | undefined) ?? jitter;
                 technique.resetScreenHistory();
                 let step = 0;
                 const advance = (): void => {
@@ -308,7 +311,6 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 };
             }
         }
-        technique.settings.interpolationJitter = true;
         return results;
     } finally {
         screen.dispose();
@@ -338,7 +340,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { worldCache: WORLD_CACHE, width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, secondBounce: SECOND_BOUNCE, indirectCap: INDIRECT_CAP, scenes },
+        data: { worldCache: WORLD_CACHE, width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, secondBounce: SECOND_BOUNCE, indirectCap: INDIRECT_CAP, compare: PAGE_COMPARE_VALUES, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

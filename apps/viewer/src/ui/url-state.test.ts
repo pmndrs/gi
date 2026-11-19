@@ -1,7 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState } from './url-state';
+import { capsaicinCompareValues, RADIANCE_CACHE_COMPARE_TOGGLES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles';
 
 describe('url state', () => {
+    it("keeps each radiance-cache compare toggle (RC4.5) through a link, and doesn't take it for a scene setting", () => {
+        for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
+            if (entry.capsaicin === undefined || entry.capsaicin === entry.defaultValue) continue;
+            const state = { ...DEFAULT_URL_STATE, technique: 'rc' as const, rcCompare: { [entry.setting]: entry.capsaicin } };
+            const link = serializeUrlState(state);
+            expect(link).toContain(`${entry.urlName}=`);
+            const read = parseUrlState(`?${link}`);
+            expect(read.rcCompare).toEqual(state.rcCompare);
+            expect(read.sceneSettings).toEqual({});
+        }
+        const all = { ...DEFAULT_URL_STATE, rcCompare: capsaicinCompareValues() };
+        expect(parseUrlState(`?${serializeUrlState(all)}`).rcCompare).toEqual(all.rcCompare);
+        // Ours is the default: nothing written.
+        expect(serializeUrlState({ ...DEFAULT_URL_STATE, rcCompare: { probeBlend: 'running-mean' } })).toBe('');
+    });
+
     it('reads the documented parameters', () => {
         const state = parseUrlState('?scene=sponza&camera=2&technique=vxgi&gi=only&wipe=lpg,vxgi&split=0.25&ev=-1.5&tone=agx&nav=fly&upscale=quality');
         expect(state).toMatchObject({
