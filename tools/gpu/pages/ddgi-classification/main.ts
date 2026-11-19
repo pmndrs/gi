@@ -24,13 +24,23 @@
  *    states and offsets on the same probes (when the device has subgroups);
  * 7. relocation and classification settle: SETTLE_FRAMES more all-probe
  *    frames change no probe's state or offset.
+ * 8. `resetProbes` (DV-12), on the settled field of the first reduction's
+ *    run: `{}`, `{ offsets }`, `{ states }` and both, in turn. Each is
+ *    followed by one frame that updates no probe, after which every probe's
+ *    offset and state are what the rule says (`resetProbeDataTexel`: offsets
+ *    to 0, off probes to state 3, the rest kept), the irradiance and
+ *    distance atlases are byte for byte what they were, and the points view
+ *    agrees with the probe data. Then FRAMES all-probe frames let relocation
+ *    and classification find the probes again; how many end where they were
+ *    before the reset is reported, not judged (the path back can differ).
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { createDdgiScene, readProbeData, readTextureBytes, runFrames, type ProbeRecord, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { createDdgiScene, readProbeData, readTextureBytes, runFrames, type DdgiScene, type ProbeRecord, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
-import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
+import { BYTES_PER_TEXEL, PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
 import { AUTO_MIN_FRONT_FACE_SHARE, resolveBias } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { probeResetFlags, resetProbeDataTexel, type ProbeResetRequest } from '../../../../packages/ddgi-core/src/techniques/ddgi/probe-reset.ts';
 import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
 import { CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from '../../../../scenes/src/procedural/cornell-box.ts';
 import { CABINET_ROOM_SIZE_M } from '../../../../scenes/src/procedural/cabinet-row.ts';
@@ -178,6 +188,110 @@ function cannotEscape(gridPoint: Vec3, spacing: Vec3, meshes: readonly Triangle[
     return true;
 }
 
+/** The resets checked in turn (8.), by name. */
+const RESETS: readonly { readonly name: string; readonly what: ProbeResetRequest }[] = [
+    { name: 'nothing ({})', what: {} },
+    { name: 'offsets', what: { offsets: true } },
+    { name: 'states', what: { states: true } },
+    { name: 'offsets and states', what: { offsets: true, states: true } },
+];
+
+interface ResetResult {
+    /** Probes with an offset, and probes off, before the reset. */
+    readonly movedBefore: number;
+    readonly offBefore: number;
+    /** Probes whose texel isn't what the rule says after the reset frame (0 to pass). */
+    readonly wrongTexels: number;
+    /** Bytes of the irradiance and distance atlases that changed in the reset frame (0 to pass). */
+    readonly irradianceBytesChanged: number;
+    readonly distanceBytesChanged: number;
+    /** Points that disagree with the probe data after the reset frame (0 to pass). */
+    readonly pointsWrong: number;
+    /** Probes moved, off, and not updated yet right after the reset. */
+    readonly movedAfter: number;
+    readonly offAfter: number;
+    readonly notUpdatedYetAfter: number;
+    /** After FRAMES more all-probe frames: probes back at their offset and state from before the reset, and probes moved and off (reported). */
+    readonly resettledSame: number;
+    readonly resettledMoved: number;
+    readonly resettledOff: number;
+}
+
+function changedBytes(before: Uint8Array, after: Uint8Array): number {
+    let changed = 0;
+    for (let index = 0; index < before.length; index++) if (before[index] !== after[index]) changed++;
+    return changed;
+}
+
+const isOff = (record: ProbeRecord): boolean => record.state === PROBE_STATE.offInsideGeometry || record.state === PROBE_STATE.offNoSurfaceNearby;
+const isMoved = (record: ProbeRecord): boolean => record.offset.some((value) => value !== 0);
+
+/** 8. Every reset in turn on the settled field (the file comment). */
+async function checkResets(device: GPUDevice, scene: DdgiScene, fail: (message: string) => void): Promise<Record<string, ResetResult>> {
+    const field = scene.ddgi.field;
+    assert(field, 'no field after prepare');
+    const { origin, spacing, counts, probeCount } = field.grid;
+    const pointsView = scene.ddgi.debugViews.find((view) => view.kind === 'points');
+    assert(pointsView && pointsView.kind === 'points', 'no points debug view');
+    const distanceBytes = BYTES_PER_TEXEL[field.layout.distanceFormat];
+    const results: Record<string, ResetResult> = {};
+    for (const reset of RESETS) {
+        const before = await readProbeData(device, field);
+        const irradianceBefore = await readTextureBytes(device, field.layeredIrradiance, 8);
+        const distanceBefore = await readTextureBytes(device, field.distance, distanceBytes);
+        scene.ddgi.resetProbes(reset.what);
+        // One frame that updates no probe: only the reset changes anything.
+        await runFrames(device, scene.platform, 1, 0);
+        const after = await readProbeData(device, field);
+        const irradianceAfter = await readTextureBytes(device, field.layeredIrradiance, 8);
+        const distanceAfter = await readTextureBytes(device, field.distance, distanceBytes);
+        const points = new Float32Array((await readTextureBytes(device, pointsView.texture(), 16)).buffer);
+
+        const flags = probeResetFlags(reset.what);
+        let wrongTexels = 0;
+        let pointsWrong = 0;
+        after.forEach((record, probeIndex) => {
+            const expected = flags ? resetProbeDataTexel(before[probeIndex], flags) : before[probeIndex];
+            const wrong = record.state !== expected.state || record.offset.some((value, axis) => value !== expected.offset[axis]);
+            if (wrong) {
+                wrongTexels++;
+                if (wrongTexels <= 4) fail(`reset ${reset.name}: probe ${probeIndex} reads ${record.state}@${record.offset.join(',')}, expected ${expected.state}@${expected.offset.join(',')}`);
+            }
+            // Both cases are fixed volumes, so a slot is its window probe (a camera-following one would need its window here).
+            const grid = [probeIndex % counts[0], Math.floor(probeIndex / (counts[0] * counts[2])), Math.floor(probeIndex / counts[0]) % counts[2]];
+            const position = [0, 1, 2].map((axis) => origin[axis] + (grid[axis] + record.offset[axis]) * spacing[axis]);
+            const point = points.subarray(probeIndex * 4, probeIndex * 4 + 4);
+            if ([0, 1, 2].some((axis) => Math.abs(point[axis] - position[axis]) > 1e-3) || point[3] !== record.state) pointsWrong++;
+        });
+        const irradianceBytesChanged = changedBytes(irradianceBefore, irradianceAfter);
+        const distanceBytesChanged = changedBytes(distanceBefore, distanceAfter);
+        if (wrongTexels > 0) fail(`reset ${reset.name}: ${wrongTexels} of ${probeCount} probes not as the rule says`);
+        if (irradianceBytesChanged > 0) fail(`reset ${reset.name}: ${irradianceBytesChanged} irradiance bytes changed in the reset frame`);
+        if (distanceBytesChanged > 0) fail(`reset ${reset.name}: ${distanceBytesChanged} distance bytes changed in the reset frame`);
+        if (pointsWrong > 0) fail(`reset ${reset.name}: ${pointsWrong} points disagree with the probe data`);
+
+        // Relocation and classification find the probes again over their usual updates.
+        await runFrames(device, scene.platform, FRAMES, probeCount);
+        const resettled = await readProbeData(device, field);
+        const same = resettled.filter((record, index) => record.state === before[index].state && record.offset.every((value, axis) => value === before[index].offset[axis])).length;
+        results[reset.name] = {
+            movedBefore: before.filter(isMoved).length,
+            offBefore: before.filter(isOff).length,
+            wrongTexels,
+            irradianceBytesChanged,
+            distanceBytesChanged,
+            pointsWrong,
+            movedAfter: after.filter(isMoved).length,
+            offAfter: after.filter(isOff).length,
+            notUpdatedYetAfter: after.filter((record) => record.state === PROBE_STATE.notUpdatedYet).length,
+            resettledSame: same,
+            resettledMoved: resettled.filter(isMoved).length,
+            resettledOff: resettled.filter(isOff).length,
+        };
+    }
+    return results;
+}
+
 interface CaseResult {
     readonly records: ProbeRecord[];
     readonly points: Float32Array;
@@ -187,9 +301,12 @@ interface CaseResult {
     readonly minFrontFaceDistance: number;
     /** Probes whose state or offset still changed in the SETTLE_FRAMES after FRAMES, with what they did. */
     readonly unsettled: string[];
+    /** 8., on the run that checks the resets (null on the others), and what it found wrong. */
+    readonly resets: Record<string, ResetResult> | null;
+    readonly resetFailures: string[];
 }
 
-async function runCase(device: GPUDevice, testCase: Case, reduction: PhaseBReduction): Promise<CaseResult> {
+async function runCase(device: GPUDevice, testCase: Case, reduction: PhaseBReduction, checkReset: boolean): Promise<CaseResult> {
     const scene = await createDdgiScene(device, testCase.scene, {}, { technique: { reduction } });
     try {
         const field = scene.ddgi.field;
@@ -214,7 +331,11 @@ async function runCase(device: GPUDevice, testCase: Case, reduction: PhaseBReduc
         const points = new Float32Array((await readTextureBytes(device, pointsView.texture(), 16)).buffer);
         // minFrontFaceDistance 'auto' is a share of the smallest spacing.
         const minFrontFaceDistance = resolveBias(scene.ddgi.settings.minFrontFaceDistance, field.grid, AUTO_MIN_FRONT_FACE_SHARE);
-        return { records, points, grid: field.grid, data: scene.data, counters: scene.ddgi.counters, minFrontFaceDistance, unsettled };
+        const counters = scene.ddgi.counters;
+        // 8. After everything above has been read: the resets change the field.
+        const resetFailures: string[] = [];
+        const resets = checkReset ? await checkResets(device, scene, (message) => resetFailures.push(message)) : null;
+        return { records, points, grid: field.grid, data: scene.data, counters, minFrontFaceDistance, unsettled, resets, resetFailures };
     } finally {
         scene.platform.dispose();
     }
@@ -229,7 +350,7 @@ await runGpuTest(
 
         for (const testCase of CASES) {
             const runs = new Map<PhaseBReduction, CaseResult>();
-            for (const reduction of reductions) runs.set(reduction, await runCase(device, testCase, reduction));
+            for (const reduction of reductions) runs.set(reduction, await runCase(device, testCase, reduction, reduction === reductions[0]));
             const result = runs.get(reductions[0])!;
             const meshes = instanceTriangles(result.data);
             const { origin, spacing, counts } = result.grid;
@@ -301,8 +422,22 @@ await runGpuTest(
                 if (reductionMismatches > 0) fail(`${reductionMismatches} probes differ between the subgroup reduction and the fallback`);
             }
 
-            results[testCase.scene] = { probes: result.records.length, frames: FRAMES, settleFrames: SETTLE_FRAMES, unsettled: result.unsettled.length, reductions, reductionMismatches, ...tally, counters: result.counters };
+            // 8. resetProbes.
+            for (const message of result.resetFailures) fail(message);
+
+            results[testCase.scene] = {
+                probes: result.records.length,
+                frames: FRAMES,
+                settleFrames: SETTLE_FRAMES,
+                unsettled: result.unsettled.length,
+                reductions,
+                reductionMismatches,
+                ...tally,
+                resets: result.resets,
+                counters: result.counters,
+            };
             log(`${testCase.scene}: ${JSON.stringify(tally)}; subgroups vs fallback mismatches ${reductionMismatches}`);
+            for (const [name, reset] of Object.entries(result.resets ?? {})) log(`${testCase.scene}: reset ${name}: ${JSON.stringify(reset)}`);
         }
         assert(failures.length === 0, `${failures.length} problems:\n${failures.slice(0, 12).join('\n')}`);
         return results;

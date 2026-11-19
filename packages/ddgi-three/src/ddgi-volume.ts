@@ -14,7 +14,7 @@
  * device, warms the probes up, and switches on the render-time update: from
  * then on GI updates itself inside `renderer.render`, with no per-frame
  * call. `recalibrate()` measures the GPU budget again; `restart()` starts
- * the probes over; `dispose()` removes the GI light and frees the platform. Hosts that want control (several
+ * the probes over; `resetProbes()` resets their offsets or states only; `dispose()` removes the GI light and frees the platform. Hosts that want control (several
  * techniques, a shared platform) still build it by hand: `ddgiVolume()`
  * gives the DDGI settings, and `ThreeGI` takes `{ volume }`.
  *
@@ -37,7 +37,7 @@
  */
 
 import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
-import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform, type LoadedField, type LoadFieldOptions, type Vec3 } from '@pmndrs/ddgi-core';
+import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform, type LoadedField, type LoadFieldOptions, type ProbeResetRequest, type Vec3 } from '@pmndrs/ddgi-core';
 import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
 import type { ThreeGI } from './three-gi.ts';
 import { toLightProbeGrid, type ExportedLightProbeGrid, type ToLightProbeGridOptions } from './light-probe-grid.ts';
@@ -177,6 +177,31 @@ export class DDGIVolume extends Light {
     restart(options: Pick<DDGIVolumeStartOptions, 'budget' | 'warmUp' | 'camera'> = {}): Promise<void> {
         if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before restarting it.');
         return restartVolume(this, this.started, options);
+    }
+
+    /**
+     * Resets the probes' relocation offsets, their classification states, or
+     * both, keeping what they have learned (irradiance, distances, history):
+     * for after the geometry around the probes changed in a way relocation
+     * or classification won't undo by itself. Lighter than {@link restart},
+     * which forgets everything and warms up again.
+     *
+     * - `offsets: true`: every probe goes back to its grid point; relocation
+     *   moves it again over its usual updates.
+     * - `states: true`: every probe that was switched off (inside geometry,
+     *   or no surface nearby) comes back on; classification decides again at
+     *   its next update, and a probe that stays on is used once it has fresh
+     *   light (two updates).
+     * - `{}` or no argument: nothing happens. Each flag defaults to false.
+     *
+     * Takes effect in the next render. Throws before `start` has finished,
+     * like {@link restart} (the technique itself ignores a call before
+     * `prepare`). `DDGITechnique.resetProbes` in
+     * ddgi-core says exactly what happens to each probe.
+     */
+    resetProbes(what: ProbeResetRequest = {}): void {
+        if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before resetting its probes.');
+        this.started.technique.resetProbes(what);
     }
 
     /** Whether `start` has finished. */

@@ -444,7 +444,8 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 
 | Name | What it is |
 | --- | --- |
-| `DDGITechnique` | DDGI. `new DDGITechnique(settings)`; then `settings` (live), `field`, `counters`, `debugViews`, `shading`, `setGroupWeight`, `setEnvironmentWeight`, `resetHistory`. |
+| `DDGITechnique` | DDGI. `new DDGITechnique(settings)`; then `settings` (live), `field`, `counters`, `debugViews`, `shading`, `setGroupWeight`, `setEnvironmentWeight`, `resetHistory`, `resetProbes` ("Resetting offsets and states" below). |
+| `ProbeResetRequest` | What `DDGITechnique.resetProbes` takes: `{ offsets?: boolean; states?: boolean }`, each false unless given. |
 | `DDGISettings` | Every DDGI setting. Most are read every frame; the volumes, tile sizes, `maxProbesPerFrame`, `lightGroups.count` and `sunLayer` need a new `prepare`. |
 | `DDGISettingsInput` | What the constructor takes: a `volume` or `volumes`, and any other settings. |
 | `DDGILightGroups` | The type of `DDGISettings.lightGroups`: how many groups get a layer of their own (a new `prepare` when it changes), and their live weights. |
@@ -649,7 +650,29 @@ if (loaded.stale) console.log('the scene changed since:', loaded.changedParts);
 
 Each part is order-free, so two loads that create objects in another order agree. Bump `FINGERPRINT_VERSION` when what a part covers changes.
 
+## Resetting offsets and states (DDGI, DV-12)
+
+`resetHistory()` forgets everything: every probe starts again from its grid point, unlit, and the warm-up runs again. DDGI also has a lighter reset for the two things relocation and classification decide, for when the geometry around the probes changed in a way they won't undo by themselves. It is DDGI's, not the platform's: `DDGITechnique.resetProbes(what)`. The probes keep their irradiance, distances and history, and there is no warm-up.
+
+```ts
+ddgi.resetProbes({ offsets: true });                // every probe back to its grid point
+ddgi.resetProbes({ states: true });                 // every probe that was switched off comes back on
+ddgi.resetProbes({ offsets: true, states: true });  // both
+ddgi.resetProbes({});                               // nothing: each flag is false unless given
+```
+
+- **Offsets:** each probe's relocation offset goes back to 0 and its state stays. Relocation moves it again over its usual updates. A probe that relocation had moved out of geometry is inside it again until its next update, is switched off for that update (as at the start), and comes back on from where relocation moves it. A probe that is off for being inside geometry stays put, since relocation has had its go at it; reset the states too to give it another.
+- **States:** each probe that classification switched off ("inside geometry" or "no surface nearby") becomes "not updated yet", which is how an off probe always comes back on. Its next update traces all its rays and classification decides again; if it stays on, it starts its light from nothing and shading uses it after two blended updates. Active probes and probes not updated yet keep their state, since classification looks at them at every update anyway. Offsets stay. RTXGI's reset makes every probe active instead; ours goes through "not updated yet" so shading never reads an off probe's stale tiles or a tile that was never blended. So in the frame of a states-only reset, nothing renderers see changes.
+- **When:** in the next `encode`, before any update, as one small GPU pass (`ddgi/reset-probes`). The offset and the state share each probe's probe-data texel and the CPU knows neither, so the pass reads a copy of that texture and writes it back with the `points` debug view. The copy (8 bytes a probe) is made at the first reset and kept until the next `prepare`. Calls before a frame add up (`{ offsets }` then `{ states }` is both); a `resetHistory` or `loadField` after the call, before the frame, replaces it. Before `prepare` it does nothing.
+- **A camera-following volume:** its planes count as warm only when few of their probes are "not updated yet", so after a states reset the valid extent waits for those probes' next update before it grows over them.
+
+Through three, `volume.resetProbes(what)` (three.md).
+
 ## Revisions
+
+### Issue #20, 2026-11-19
+
+- **Host-facing through DDGI (DV-12; Dennis, 2026-11-19: "yes build it"): `DDGITechnique.resetProbes(what)` and `ProbeResetRequest`** ("Resetting offsets and states" above), and three's `DDGIVolume.resetProbes`. The engine-neutral `resetHistory()` is unchanged. Implementation-only: the `ddgi/reset-probes` kernel, compiled at `prepare` with the others, and its timed pass of that name in frames with a reset.
 
 ### After the M3-M4 questions, 2026-11-18
 
