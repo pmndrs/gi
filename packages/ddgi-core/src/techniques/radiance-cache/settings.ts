@@ -82,15 +82,16 @@ export interface RadianceCacheSettings {
      */
     denoiser: boolean;
     /**
-     * The denoiser's history clamp (register D50): `'neighbourhood'` clips the reprojected
-     * history to this frame's irradiance around the pixel, so a lighting change is followed
-     * within a few frames; `'none'` is Capsaicin's unclipped history (45-160 frames to follow
-     * a step change). Default `'neighbourhood'`. Read every frame.
+     * The denoiser's history clamp (register D50): `'neighbourhood'` clips the long history to
+     * a short one (about 4 frames) ± a few standard deviations, spatial or temporal, so a
+     * lighting change is followed within a few frames; `'none'` is Capsaicin's unclipped
+     * history (45-160 frames to follow a step change). Default `'neighbourhood'`. Read every frame.
      */
     denoiserHistoryClamp: 'neighbourhood' | 'none';
     /**
-     * The denoiser drops its history where the frame's scene changes are (`SceneChanges`, the
-     * boxes D46 uses; register D50). Default true. Read every frame.
+     * The denoiser's soft reset where the frame's scene changes are (`SceneChanges`, the boxes
+     * D46 uses, or everywhere for a global change; register D50): a short history there for
+     * 8 frames. Default true. Read every frame.
      */
     denoiserChangeReset: boolean;
 }

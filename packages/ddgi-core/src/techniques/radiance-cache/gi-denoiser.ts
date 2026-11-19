@@ -14,16 +14,14 @@
  * `FrameScreen`'s depth, normal and velocity, and the platform's screen history for the
  * previous depth and normals (`GpuScreenHistory`, the copy `ReprojectScreenProbes` reads too),
  * and the frame's scene changes (`SceneChanges`, as the probes' running means take them, D46):
- * no history is reprojected inside a changed region (register D50).
+ * inside a changed region, and everywhere for a global change (the sun, the sky), the
+ * denoiser keeps a short history for a few frames (its soft reset, register D50).
  */
 
 import { Gi1Denoiser } from '@pmndrs/denoiser-ffx';
 import type { ScreenHistoryTextures } from '../../platform/contract/compute.ts';
 import type { FrameCamera, FrameScreen } from '../../platform/contract/frame.ts';
 import type { HistoryChanges } from './screen-probe-history.ts';
-
-/** Bytes per pixel the denoiser allocates: two r32f depths, two rgba16f normals, two rgba32f sums, two r32f deltas, the r32f mask, the rgba16f output. */
-const DENOISER_BYTES_PER_PIXEL = 2 * 4 + 2 * 8 + 2 * 16 + 2 * 4 + 4 + 8;
 
 /** The camera the denoiser saw last frame: its `prevView` and `prevProjection` next frame. */
 interface PreviousCamera {
@@ -48,8 +46,9 @@ export class RadianceCacheDenoiser {
         return this.latestOutput;
     }
 
+    /** 48 bytes a pixel: the platform's screen history stands in for the denoiser's own previous depth and normals. */
     get memoryBytes(): number {
-        return this.width * this.height * DENOISER_BYTES_PER_PIXEL;
+        return this.denoiser.memoryBytes;
     }
 
     /** Forget the history at the next frame (a cut, or the screen probes' history reset). */
