@@ -335,19 +335,19 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
     let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, candidate & HASHGRIDCACHE_CELL_ENTRY_MASK);
     let first = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_priority_bins, bin);
     let count = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_priority_bins, HASHGRIDCACHE_CELL_BINS + bin);
-    let target = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDTARGET]);
+    let lit_target = atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDTARGET]);
 
     // A bin wholly under the target is lit; the one bin the target cuts is thinned by a hash of the
     // cell, each lit with the share of the bin the target leaves (lighting it in claim order leaned
     // the drawn hits toward lower entries); the lit list takes them up to the target.
-    var lit = first + count <= target;
-    if (!lit && first < target) {
-        let share = f32(target - first) / f32(count);
+    var lit = first + count <= lit_target;
+    if (!lit && first < lit_target) {
+        let share = f32(lit_target - first) / f32(count);
         lit = f32(rcPcgHash(rcPcgHash(cell_index ^ HASHGRIDCACHE_CELL_THIN_SALT) + rcPcgHash(g_HashGridCacheConstants.frame_index)) >> 8u) * (1.0 / 16777216.0) < share;
     }
     if (lit) {
         let slot = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], 1u);
-        if (slot < target) {
+        if (slot < lit_target) {
             HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_shade_buffer, slot, candidate);
             return;
         }

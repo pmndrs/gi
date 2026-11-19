@@ -201,7 +201,7 @@ export class HashGridCache implements WorldCache {
     /**
      * Per finest-level cell, the frame it last forgot its history after a
      * scene change (16 bits each, two to a word; `HashGridCache_ClaimChangeReset`),
-     * made the first frame E8 or E9 is used: 64 MiB at default capacity / 2.
+     * made the first frame E8 or E9 is used: 32 MiB at default capacity.
      */
     private resetFrames: GPUBuffer | null = null;
 
