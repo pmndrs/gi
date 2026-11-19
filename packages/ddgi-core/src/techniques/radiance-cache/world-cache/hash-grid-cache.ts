@@ -166,8 +166,8 @@ interface Prepared {
     readonly rayListsUniform: GPUBuffer;
     /** `HashGridCacheCellShading` (E8's budget and the change events, read by E8 and E9). */
     readonly cellShadingUniform: GPUBuffer;
-    /** Bound where E8's lists or the cells' last reset frames go while they aren't made (4 words). */
-    readonly placeholder: GPUBuffer;
+    /** Bound where the cells' last reset frames and E8's lists go while they aren't made (4 words each; two, since writable bindings mustn't alias). */
+    readonly placeholders: readonly [GPUBuffer, GPUBuffer];
     readonly timer: WorldCacheContext['timer'];
     readonly memoryBytes: number;
 }
@@ -409,7 +409,10 @@ export class HashGridCache implements WorldCache {
         };
         const rayListsUniform = device.createBuffer({ label: 'radiance-cache/hash-grid ray lists', size: RAY_LISTS_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         const cellShadingUniform = device.createBuffer({ label: 'radiance-cache/cell shading', size: CELL_SHADING_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        const placeholder = device.createBuffer({ label: 'radiance-cache/cell shading placeholder', size: 16, usage: BUFFER_USAGE.storage });
+        const placeholders = [
+            device.createBuffer({ label: 'radiance-cache/cells last reset placeholder', size: 16, usage: BUFFER_USAGE.storage }),
+            device.createBuffer({ label: 'radiance-cache/cell shading lists placeholder', size: 16, usage: BUFFER_USAGE.storage }),
+        ] as const;
         const cellShading: CellShadingPasses = {
             claimFirstBounceCells: pass(claimFirstKernel, claimFirstArgs),
             claimSecondBounceCells: pass(claimSecondKernel, claimSecondArgs),
@@ -439,7 +442,7 @@ export class HashGridCache implements WorldCache {
             cellShading,
             rayListsUniform,
             cellShadingUniform,
-            placeholder,
+            placeholders,
             timer: context.timer,
             memoryBytes,
         };
@@ -538,7 +541,7 @@ export class HashGridCache implements WorldCache {
         for (const populationPass of Object.values(prepared.population)) populationPass.args.dispose();
         const cellShading = prepared.cellShading;
         prepared.cellShadingUniform.destroy();
-        prepared.placeholder.destroy();
+        for (const placeholder of prepared.placeholders) placeholder.destroy();
         this.resetFrames?.destroy();
         this.resetFrames = null;
         for (const cellPass of [cellShading.claimFirstBounceCells, cellShading.claimSecondBounceCells, cellShading.scatterCells, cellShading.shadeCells]) cellPass.args.dispose();
@@ -688,8 +691,8 @@ export class HashGridCache implements WorldCache {
             { binding: RAY_DATA_BINDING.radiance, resource: rays.radiance },
             { binding: RAY_DATA_BINDING.listWords, resource: { buffer: rayData.listWords } },
             { binding: CELL_CHANGES_BINDING.uniform, resource: { buffer: prepared.cellShadingUniform } },
-            { binding: CELL_CHANGES_BINDING.resetFrames, resource: { buffer: this.resetFrames ?? prepared.placeholder } },
-            { binding: CELL_CHANGES_BINDING.cellLists, resource: { buffer: rayData.cellLists ?? prepared.placeholder } },
+            { binding: CELL_CHANGES_BINDING.resetFrames, resource: { buffer: this.resetFrames ?? prepared.placeholders[0] } },
+            { binding: CELL_CHANGES_BINDING.cellLists, resource: { buffer: rayData.cellLists ?? prepared.placeholders[1] } },
         ];
         const groupFor = (kernel: ComputeKernel): GPUBindGroup => device.createBindGroup({ label: `${kernel.pipeline.label} ray data`, layout: kernel.ownLayouts[1], entries });
         const population = prepared.population;
