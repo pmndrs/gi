@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-19 · TU.1: `low`'s warm-up batch is 1,024 · implementer (opus)
+Did: `presets.ts`: `DDGIPresetSettings` now includes `maxProbesPerFrame`; `low` 1,024, `medium` and `high` 4,096 (the default). Tests (`presets.test.ts`), the platform.md presets table, DECISIONS 2026-11-19 (a lead call under Dennis's "do the fixes"; numbers from the Intel UHD run below that day). GPU pages that update every probe every frame under `VITE_DDGI_PRESET` keep the default 4,096 (`page-preset.ts` `everyProbeEveryFrame`, also in `ddgi-presets`), as they keep their own budget: `low`'s 1,024 would cap two-room's 1,071 probes. `ddgi-low-warmup` now defaults to the preset's batch.
+Verified: `ddgi-low-warmup` with the preset's own batch (1,024): Intel UHD (gen-12lp), two-room refined to 25,194 probes: PASS, 393 warm-up frames, 5.9 s, frame median 14.4 / p90 16.2 ms, first frame 145 ms, no device loss (the morning's run at `VITE_WARMUP_MAX=1024` took 4.6 s; information only, not timed under the cool-down rule). RTX 3060, plain two-room: PASS, batch 1,024. `pnpm test` covers the preset table. Row in `bench/results/checks.csv`.
+Not verified: the iPad half of TU.1 (no iPad here); `low` furnace and leak weren't re-run (their pages keep the default batch, so they run as before).
+Next: TU.1's iPad half.
+
 ## 2026-11-19 · TU.5 DV-01: RTXGI's back-face rule, built and measured, off by default · implementer (opus)
 Did: worktree `gi-tu5`, branch `tu5-divergence` (from `win-tu-checks` 4198c6c). New setting `backFaceRayThreshold` (settings.ts; `null` default = our old rule, back-face rays are black samples; a number = RTXGI's `probeRandomRayBackfaceThreshold`, `RTXGI_BACK_FACE_RAY_THRESHOLD` 0.1). `wgsl/blend.ts`: back-face blended rays leave the irradiance average; an update with at least ⌊N × t⌋ (min 1) blended back faces is `DDGI_UPDATE_SKIPPED`: old irradiance tiles and history kept, distances blend, a state-3 probe stays in state 3, one owed update taken off (as RTXGI's early `return`, `ProbeBlendingCS.hlsl:417-465`). Uniform word 97 (`layout.ts`, `wgsl/common.ts`); census word "updates skipped for back faces (total)". Unit test for the setting's mapping (ddgi.test.ts). Rows in `bench/results/checks.csv` and `m4-textured-accuracy.csv`.
 Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, bench lock; A/B = same code, default off vs on):

@@ -1243,3 +1243,7 @@ date,commit,device,browser,scene,metric,value
 2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,thin-wall,tu5/dv01-on/leak/percent,0.603
 2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,closed-door,tu5/dv01-on/leak/percent,0.06
 2026-11-19,4198c6c+tu5,RTX 3060 Laptop,Chrome headless,furnace,tu5/dv01-on/furnace/e_over_pi,0.49925
+2026-11-19,4198c6c+tu5,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,tu1/low_warmup/preset_default_1024/warm_up_frames,393
+2026-11-19,4198c6c+tu5,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,tu1/low_warmup/preset_default_1024/total_s,5.9
+2026-11-19,4198c6c+tu5,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,tu1/low_warmup/preset_default_1024/median_frame_ms,14.4
+2026-11-19,4198c6c+tu5,Intel UHD (gen-12lp),Chrome headless,two-room-div3-25194-probes,tu1/low_warmup/preset_default_1024/p90_frame_ms,16.2
