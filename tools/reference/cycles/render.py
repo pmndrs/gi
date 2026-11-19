@@ -48,6 +48,7 @@ sha256) and run.ts adds the sha256 of every image it wrote (`outputSha256`).
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -57,6 +58,7 @@ import time
 
 import bmesh
 import bpy
+import mathutils
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -93,6 +95,12 @@ def parse_arguments():
     )
     parser.add_argument('--tone-mapping', default='aces', help="the viewer's tone mapper for this reference (stored, not applied to the EXRs)")
     parser.add_argument('--exposure-ev', type=float, default=None, help="the viewer's exposure for it; default the manifest's exposureEv")
+    parser.add_argument(
+        '--end-state',
+        default=None,
+        help='an entry of end-states.json: the scene with objects turned or a box added (TU.4); needs --textured. '
+        'Output goes to bench/references/<end state>/<camera name>, and the end state may bring its own cameras',
+    )
     parser.add_argument('--out-dir', default=None, help='default bench/references/<scene>/<camera name>')
     parser.add_argument('--name-suffix', default='', help='added to file names, e.g. -seed1')
     parser.add_argument('--threads', type=int, default=0, help='CPU threads; 0 means all')
@@ -112,8 +120,8 @@ def parse_arguments():
     return parser.parse_args(argv)
 
 
-def pick_camera(manifest, wanted):
-    cameras = manifest['cameras']
+def pick_camera(manifest, wanted, extra_cameras=()):
+    cameras = list(manifest['cameras']) + list(extra_cameras)
     if wanted.isdigit():
         index = int(wanted) - 1
         if not 0 <= index < len(cameras):
@@ -137,6 +145,72 @@ def camera_from_shot(path):
         camera['width'],
         camera['height'],
     )
+
+
+def load_end_state(name):
+    """An entry of end-states.json (the m4-textured-accuracy page reads the same file)."""
+    states = bs.read_json(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'end-states.json'))
+    if name not in states:
+        raise SystemExit(f'no end state {name!r}; known: {[key for key in states if not key.startswith("$")]}')
+    return states[name]
+
+
+def srgb_to_linear(value):
+    return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+
+
+def add_end_state_boxes(state):
+    """
+    The end state's boxes, as the ddgi-move-cabinet page stands its cabinet (manifest space, Y up): centred at x,
+    its bottom floorGap above the scene's lowest y and its back wallGap in front of the scene's lowest z
+    (bounds of every mesh so far, as three's Box3 over the content). Diffuse, roughness 1, like three's material.
+    """
+    boxes = state.get('boxes') or []
+    if not boxes:
+        return []
+    # The importer parents objects to the model transform after creating them: matrix_world is stale until this.
+    bpy.context.view_layer.update()
+    corners = [obj.matrix_world @ mathutils.Vector(corner) for obj in bpy.data.objects if obj.type == 'MESH' for corner in obj.bound_box]
+    # Blender (x, y, z) is manifest (x, z, -y).
+    min_y = min(corner.z for corner in corners)
+    min_z = min(-corner.y for corner in corners)
+    placed = []
+    for box in boxes:
+        sx, sy, sz = box['size']
+        centre = (box['x'], min_y + sy / 2 + box['floorGap'], min_z + sz / 2 + box['wallGap'])
+        bpy.ops.mesh.primitive_cube_add(size=1, location=bs.to_blender_space(centre))
+        obj = bpy.context.active_object
+        obj.name = box['name']
+        obj.scale = (sx, sz, sy)
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        hexcode = box['color']
+        rgb = [srgb_to_linear(int(hexcode[index:index + 2], 16) / 255) for index in (0, 2, 4)]
+        material = bpy.data.materials.new(box['name'])
+        material.use_nodes = True
+        principled = next(node for node in material.node_tree.nodes if node.type == 'BSDF_PRINCIPLED')
+        principled.inputs['Base Color'].default_value = (*rgb, 1.0)
+        principled.inputs['Roughness'].default_value = 1.0
+        obj.data.materials.append(material)
+        placed.append({'name': box['name'], 'centre': list(centre), 'size': box['size'], 'linearColor': rgb, 'sceneMinY': min_y, 'sceneMinZ': min_z})
+    return placed
+
+
+def apply_end_state_moves(state):
+    """Turns the named objects about their pivots (viewer motion drivers: pivot x turn x pivot^-1 x rest)."""
+    done = []
+    for move in state.get('moves') or []:
+        targets = [obj for obj in bpy.data.objects if obj.type == 'MESH' and (obj.name == move['object'] or obj.name.startswith(move['object'] + '.'))]
+        if not targets:
+            raise SystemExit(f"end state: no mesh object named {move['object']!r}; have {[o.name for o in bpy.data.objects if o.type == 'MESH']}")
+        ax, ay, az = [math.radians(value) for value in move['rotationDeg']]
+        turn = mathutils.Matrix.Rotation(ax, 3, 'X') @ mathutils.Matrix.Rotation(ay, 3, 'Y') @ mathutils.Matrix.Rotation(az, 3, 'Z')
+        converted = bs.AXIS_CHANGE @ turn @ bs.AXIS_CHANGE.inverted()
+        pivot = mathutils.Vector(bs.to_blender_space(move['pivot']))
+        matrix = mathutils.Matrix.Translation(pivot) @ converted.to_4x4() @ mathutils.Matrix.Translation(-pivot)
+        for obj in targets:
+            obj.matrix_world = matrix @ obj.matrix_world
+        done.append({'object': move['object'], 'meshObjects': [obj.name for obj in targets], 'pivot': move['pivot'], 'rotationDeg': move['rotationDeg']})
+    return done
 
 
 def file_sha256(path):
@@ -638,15 +712,23 @@ def render_with_gi_parts(scene, directory, prefix, suffix, denoise=False):
 
 def main():
     args = parse_arguments()
+    end_state = None
+    end_state_id = args.end_state
+    if end_state_id:
+        end_state = load_end_state(end_state_id)
+        if args.scene != end_state['scene']:
+            raise SystemExit(f"end state {end_state_id!r} is of scene {end_state['scene']!r}, not {args.scene!r}")
+        if not args.textured:
+            raise SystemExit('--end-state is supported with --textured only')
     manifest = bs.read_json(os.path.join(REPO_ROOT, 'scenes', 'manifests', f'{args.scene}.json'))
     width, height = args.width, args.height
     if args.from_shot:
         camera, width, height = camera_from_shot(args.from_shot)
     else:
-        camera = pick_camera(manifest, args.camera)
+        camera = pick_camera(manifest, args.camera, (end_state or {}).get('cameras', ()))
     bookmark_number = next((index + 1 for index, bookmark in enumerate(manifest['cameras']) if bookmark['name'] == camera['name']), None)
 
-    out_dir = os.path.abspath(args.out_dir or os.path.join(REPO_ROOT, 'bench', 'references', manifest['id'], camera['name']))
+    out_dir = os.path.abspath(args.out_dir or os.path.join(REPO_ROOT, 'bench', 'references', end_state_id or manifest['id'], camera['name']))
     gi_table = None
     gi_table_info = None
     if args.materials_json:
@@ -680,6 +762,10 @@ def main():
     load_started = time.time()
     model_parts = gi_table.get('parts') if gi_table else None
     imported_by_part = load_geometry(manifest, model_parts)
+    end_state_applied = None
+    if end_state:
+        end_state_applied = {'id': end_state_id, 'moves': apply_end_state_moves(end_state), 'boxes': add_end_state_boxes(end_state)}
+        print('END_STATE ' + json.dumps(end_state_applied))
     # Before make_materials_diffuse_only, which unlinks the Metallic and Transmission it reads.
     textured_materials = bs.apply_textured_material_model() if args.textured else None
     materials_changed, texture_links_removed = bs.make_materials_diffuse_only()
@@ -759,6 +845,7 @@ def main():
         'environment': manifest['environment'],
         'skyFile': sky_file,
         'camera': camera,
+        'endState': end_state_applied,
         'shot': shot,
         'width': width,
         'height': height,
