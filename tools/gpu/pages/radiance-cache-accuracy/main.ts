@@ -45,6 +45,18 @@
  * much of the error is the cache's resolution). The differences between
  * them say what each part contributes.
  *
+ * **Experiment E10 settings** (P6.3, picked by name only: not in the default
+ * list): `ddgi <units>` and `ddgi cap4 <units>` stack a DDGI volume (the
+ * manifest's) under the radiance cache and read the second bounce from it
+ * (`secondBounce: 'ddgi-volume'`, the cells' indirect cap 16 or 4, DDGI
+ * updating 256 or 512 probes a frame); `ddgi cap4 512 no env` sets DDGI's
+ * environment layer (the sky and emissive surfaces, and their bounces) to 0,
+ * so its difference from `ddgi cap4 512` is the light the cache's own lights
+ * lack (registers D21, D33). DDGI is attached only when one of these is
+ * picked; it runs at 0 probes a frame in the other settings (its field stays
+ * as it was) and keeps its field across settings and views (it is warm, as
+ * in an application, rather than restarted per setting).
+ *
  * **Picking scenes, settings and frame counts** (vite env, as other pages):
  * `VITE_RC_ACCURACY_SCENES=two-room,sponza`, `VITE_RC_ACCURACY_CONFIGS=default,history off`,
  * `VITE_RC_ACCURACY_WARM_FRAMES`, `VITE_RC_ACCURACY_MEASURE_FRAMES`.
@@ -62,6 +74,7 @@
 import { FloatType, NodeMaterial, PerspectiveCamera, QuadMesh, RenderTarget, type Mesh, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
@@ -99,6 +112,10 @@ interface Configuration {
     readonly name: string;
     readonly settings: Partial<RadianceCacheSettings>;
     readonly history: boolean;
+    /** E10: DDGI stacked under the cache, updating this many probes a frame; absent for none. */
+    readonly ddgiUnits?: number;
+    /** E10: DDGI's environment layer (sky, emitters) on; default true. */
+    readonly ddgiEnvironment?: boolean;
 }
 
 const ALL_CONFIGURATIONS: readonly Configuration[] = [
@@ -107,8 +124,28 @@ const ALL_CONFIGURATIONS: readonly Configuration[] = [
     { name: 'multibounce off', settings: { useMultibounce: false }, history: true },
     { name: 'cells 16 px', settings: { hashGridCacheCellSize: 16 }, history: true },
 ];
+/** Experiment E10 (P6.3): the second bounce from a DDGI volume; run only when named. */
+const E10_CONFIGURATIONS: readonly Configuration[] = [
+    ...[256, 512].map((units) => ({ name: `ddgi ${units}`, settings: { secondBounce: 'ddgi-volume' as const }, history: true, ddgiUnits: units })),
+    ...[256, 512].map((units) => ({
+        name: `ddgi cap4 ${units}`,
+        settings: { secondBounce: 'ddgi-volume' as const, hashGridCacheMaxMultibounceSampleCount: 4 },
+        history: true,
+        ddgiUnits: units,
+    })),
+    {
+        name: 'ddgi cap4 512 no env',
+        settings: { secondBounce: 'ddgi-volume', hashGridCacheMaxMultibounceSampleCount: 4 },
+        history: true,
+        ddgiUnits: 512,
+        ddgiEnvironment: false,
+    },
+];
 const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
-const CONFIGURATIONS = configurationNames ? ALL_CONFIGURATIONS.filter((configuration) => configurationNames.includes(configuration.name)) : ALL_CONFIGURATIONS;
+const CONFIGURATIONS = configurationNames
+    ? [...ALL_CONFIGURATIONS, ...E10_CONFIGURATIONS].filter((configuration) => configurationNames.includes(configuration.name))
+    : ALL_CONFIGURATIONS;
+const NEEDS_DDGI = CONFIGURATIONS.some((configuration) => configuration.ddgiUnits !== undefined);
 
 /** Contact-sheet thumbnails, pixels across: four fit the runner's window (about 1,258 CSS pixels, NOTES). */
 const THUMBNAIL_WIDTH = 300;
@@ -271,6 +308,16 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-accuracy ${sceneId}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique());
     platform.setOutput(technique);
+    // E10: DDGI stacked under the cache, with one light group so its environment layer can be weighed.
+    const ddgiTechnique = NEEDS_DDGI
+        ? platform.addTechnique(
+              new DDGITechnique({
+                  volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing },
+                  lightGroups: { count: 1, weights: [[1, 1, 1]], environmentWeight: [1, 1, 1] },
+              }),
+          )
+        : null;
+    if (ddgiTechnique) platform.setFallback(technique, ddgiTechnique);
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
     // No world-space budget: all of the radiance cache's work is its screen stage.
@@ -331,6 +378,9 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
             const pictures: Record<string, RgbImage> = {};
             for (const configuration of CONFIGURATIONS) {
                 Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, configuration.settings);
+                threeGI.budget = { units: configuration.ddgiUnits ?? 0 };
+                const environmentWeight = configuration.ddgiEnvironment === false ? 0 : 1;
+                ddgiTechnique?.setEnvironmentWeight([environmentWeight, environmentWeight, environmentWeight]);
                 // An emptied world cache and probe history: each setting starts as a camera cut does.
                 technique.resetHistory();
                 const step = (): void => {
@@ -341,6 +391,8 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
                     step();
                     if (frame % 4 === 3) await device.queue.onSubmittedWorkDone();
                 }
+                const asked = configuration.settings.useMultibounce === false ? null : (configuration.settings.secondBounce ?? 'gi1-rays');
+                assert(technique.worldCache?.secondBounceInUse === asked, `${sceneId}/${view.camera}, ${configuration.name}: the cache ran ${technique.worldCache?.secondBounceInUse}, not ${asked}`);
                 accumulator.clear();
                 for (let frame = 0; frame < MEASURE_FRAMES; frame++) {
                     step();
