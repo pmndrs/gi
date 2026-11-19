@@ -84,6 +84,9 @@ export function buildChromeArgs(options: ChromeLaunchOptions): string[] {
         '--window-size=1280,720',
         '--force-device-scale-factor=1',
     ];
+    if (process.env.VITE_RC_REFLECTION_CADENCE === 'uncapped' && process.env.VITE_RC_REFLECTION_PAIR) {
+        args.push('--disable-frame-rate-limit', '--disable-gpu-vsync');
+    }
     if (options.luid) args.push(`--use-adapter-luid=${options.luid.high},${options.luid.low}`);
     if (options.withoutGpu) args.push('--disable-gpu');
     args.push('about:blank');

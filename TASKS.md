@@ -567,7 +567,7 @@ _Historical: each item was done in M2 or M3, or is now an issue (see Later)._
 
 | Task | Status | Scope |
 | --- | --- | --- |
-| SRC.1 | active (Codex, 2026-11-19) | [Reference solver, architectural rail and interval consumer](docs/radiance-cascades/SPEC.md). [Native WebGPU solver, gallery A/B, moving shutter and temporal reconstruction](docs/radiance-cascades/PLAN.md). |
+| SRC.1 | active (Windows measured, [Metal run pending](docs/radiance-cascades/metal.md)) | [Reference solver, architectural rail and interval consumer](docs/radiance-cascades/SPEC.md). [Native WebGPU solver, gallery A/B, moving shutter and temporal reconstruction](docs/radiance-cascades/PLAN.md). |
 | SRC.2 | done | [Build the pinned Chandra renderer and compare Sponza at matched camera, lights and exposure](docs/radiance-cascades/chandra.md). |
 | SRC.3 | done | [Rough reflections on the polished gallery rail, floor roughness sweep and offscreen emitter](research/radiance-cascades/reflections.md). |
 

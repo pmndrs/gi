@@ -7,6 +7,8 @@ type Capture = RailCapture & { reflection: { gathered: boolean; enabled: boolean
     measurement?: NonNullable<RailCapture['measurement']> & { threeTimestampPools: number } };
 type Control = { prepare(): Promise<void>; render(options: Parameters<RailControl['render']>[0]): Promise<Capture> };
 const width = 960, height = 540, startingTick = 80, warmFrames = 48, measuredFrames = 60;
+const uncapped = import.meta.env.VITE_RC_REFLECTION_CADENCE === 'uncapped';
+const windows = uncapped ? 8 : 1;
 const pair = Number(import.meta.env.VITE_RC_REFLECTION_PAIR ?? 1);
 const order: State[] = pair === 2 ? ['off', 'on'] : ['on', 'off'];
 const progress = document.querySelector('output')!;
@@ -59,9 +61,26 @@ async function arm(state: State) {
             'timed rail or history mismatch: tick=' + end.frame + ', draws=' + (end.renderedFrames - warm.renderedFrames) +
             ', cascade updates=' + (end.reconstruction.updates - warm.reconstruction.updates) +
             ', resets=' + (end.reconstruction.historyResets - warm.reconstruction.historyResets));
-        return { end, timing: { ...timing(m.gpuFrameMs, measuredFrames),
+        const stats = { ...timing(m.gpuFrameMs, measuredFrames),
             animationIntervals: timing(m.frameIntervalsMs, measuredFrames - 1), cascadeUpdates: end.reconstruction.updates - warm.reconstruction.updates,
-            threeTimestampPools: m.threeTimestampPools } };
+            threeTimestampPools: m.threeTimestampPools };
+        if (!uncapped) return { end, timing: stats };
+        // Keep the matched first 60 samples and the image from that same tick.
+        // Continue on the unmodified rail so the clock sampler can see a sustained draw workload.
+        const durations = [...m.gpuFrameMs], intervals = [...m.frameIntervalsMs];
+        for (let window = 1; window < windows; window++) {
+            const next = await control.render({frames: measuredFrames, advance: true, measure: true});
+            const nextTiming = next.measurement;
+            const count = (window + 1) * measuredFrames;
+            assert(nextTiming && nextTiming.threeTimestampPools === 0 && next.frame === startingTick + warmFrames + count - 1 &&
+                next.reconstruction.updates - warm.reconstruction.updates === count && next.renderedFrames - warm.renderedFrames === count &&
+                next.reconstruction.historyResets === warm.reconstruction.historyResets && next.reflection.gathered === (state === 'on'),
+                'sustained window changed rail ticks, gather, timestamp instrumentation, or temporal state');
+            durations.push(...nextTiming.gpuFrameMs);
+            intervals.push(...nextTiming.frameIntervalsMs);
+        }
+        return { end, timing: { ...stats, sustained: { ...timing(durations, measuredFrames * windows),
+            animationIntervals: timing(intervals, (measuredFrames - 1) * windows), cascadeUpdates: measuredFrames * windows } } };
     } finally {
         const unloaded = new Promise(resolve => iframe.addEventListener('load', resolve, { once: true }));
         iframe.src = 'about:blank';
@@ -74,7 +93,11 @@ const startTime = performance.now();
 let adapter: AdapterSummary | null = null;
 const data: Record<string, unknown> = { pair, order, resolution: [width,height], internal: [640,360], ratio: 1.5,
     warmFrames, measuredFrames, measuredTicks: [startingTick + warmFrames, startingTick + warmFrames + measuredFrames - 1],
-    pacing: 'one complete gallery draw per normal browser animation frame', scope: 'GPU queue span from before G-buffer to after temporal resolve and canvas blit' };
+    sustainedTicks: uncapped ? [startingTick + warmFrames, startingTick + warmFrames + measuredFrames * windows - 1] : null,
+    pacing: uncapped
+        ? 'one draw per genuine browser animation frame, Chrome frame limit and GPU vsync disabled'
+        : 'one complete gallery draw per normal browser animation frame',
+    scope: 'GPU queue span from before G-buffer to after temporal resolve and canvas blit' };
 try {
     assert(Number.isInteger(pair) && pair >= 1 && pair <= 3, 'VITE_RC_REFLECTION_PAIR must be 1, 2 or 3');
     const gpu = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });

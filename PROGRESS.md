@@ -21,6 +21,18 @@ Rules:
 
 ---
 
+## 2026-11-20 · SRC.1 · Idle reflection timing and Apple Silicon handoff
+
+**RTX 3060 Laptop** · Chrome 157.0.8103.79, native interval solver, 640 × 360 internal and 960 × 540 display, 1.5× temporal reconstruction. The final run supersedes a pass that overlapped unit tests. Three pairs toggled the reflection gather at the same 60 moving rail ticks after shader preparation and 48 warmup draws. Each arm advanced transport once per draw. All 15 prelaunch GPU readings were 0–1%. Both GPU and CPU reservations were held throughout. Starting temperatures were 61, 60 and 57°C. [Individual frames](bench/results/radiance-cascades-polished-frames.csv) · [Summary and conditions](bench/results/radiance-cascades.csv)
+
+**Timing** · At normal cadence the 180 frames per setting gave on/off whole-frame queue medians of 6.289 and 3.613 ms, with p95 7.830 and 4.405 ms. The paired median differences were +2.543, +2.532 and +2.634 ms. The floor changed by 22.86–22.87 RGB levels out of 255. At normal 16.7 ms presentation intervals, all three runs stayed below the clock sampler’s 70% sustained-load threshold.
+
+**Sustained load** · A separate uncapped run retained one actual cascade update per animation frame. On the same rail ticks (128–187), pooled median and p95 on/off were 2.186 / 2.785 and 1.893 / 2.385 ms. Over ticks 128–607 (1,440 frames per setting), on/off were 2.113 / 2.627 and 1.758 / 2.218 ms. All three pairs passed the sustained clock check. They started at 58, 66 and 68°C with 11, 10 and 10 loaded samples, and zero thermal throttling. These timings measure the whole queue from G-buffer through final canvas blit.
+
+**Mac** · The [portable test](docs/radiance-cascades/metal.md) runs the same gallery with Apple-device checks, image comparisons, idle sampling and three reflection pairs. A fresh checkout installed the 79-file tracer pin from the included pnpm seed with HTTPS Git disabled. Public npm supplied the other 185 packages. Phase five awaits the returned Apple hardware evidence.
+
+**Integration** · Merged upstream main at `93176bb` into the RC branch. The clean source checkout built the gallery and npm package, and both packed-consumer tests passed. The public CI workflow still needs a way to install the private pathtracer pin on a cold checkout. The internal Mac dependency seed is for this handoff.
+
 ## 2026-11-19 · SRC.1 · Web performance and image quality
 
 **Phase review** · Four of the five original phases pass. The shared transport passes its analytical lighting and moving-blocker checks and runs through the native gallery adapter. Chandra and S5 remain useful for inspecting an image or tracing an unexpected lighting result. The open phase covers reconstruction and hardware. [Acceptance decision](docs/DECISIONS.md#2026-11-19) · [Phase tracker](docs/radiance-cascades/PLAN.md)

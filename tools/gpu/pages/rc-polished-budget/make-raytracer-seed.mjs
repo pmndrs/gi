@@ -22,6 +22,7 @@ if (!inputIndex) throw new Error('The pinned raytracer package is missing from t
 const input = JSON.parse(readFileSync(inputIndex, 'utf8'));
 if (input.name !== '@pmndrs/raytracer' || input.version !== '0.0.0' || input.requiresBuild) throw new Error('Unexpected package metadata.');
 const stage = mkdtempSync(join(tmpdir(), 'gi-rc-store-export-'));
+if (dirname(resolve(stage)) !== resolve(tmpdir())) throw new Error('Unexpected temporary export directory.');
 const outputStore = join(stage, 'pnpm-store', 'v10');
 function blobPath(root, digest) { return join(root, 'files', digest.slice(0, 2), digest.slice(2)); }
 
@@ -73,6 +74,5 @@ try {
     execFileSync('tar', ['-czf', out, '-C', stage, 'pnpm-store', 'licenses', 'README.txt']);
     console.log(`${out}\n${gitBlobs.length} files from the pinned package. SHA-256 ${hash('sha256', readFileSync(out))}`);
 } finally {
-    if (dirname(resolve(stage)) !== resolve(tmpdir())) throw new Error('Unexpected temporary export directory.');
     rmSync(stage, { recursive: true, force: true });
 }

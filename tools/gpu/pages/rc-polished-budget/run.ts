@@ -33,6 +33,8 @@ if (process.argv[2] === '--inside-lock') {
     process.exit(child.status ?? 1);
 }
 
+if (process.argv[3] && process.argv[3] !== '--uncapped') throw new Error('Usage: run.ts [output-directory] [--uncapped]');
+const cadence = process.argv[3] === '--uncapped' ? 'uncapped' : 'normal';
 const directory = resolve(process.argv[2] ?? 'bench/screenshots/rc-polished-budget');
 const gallery = readFileSync('examples/dist/11-radiance-cascades/index.html', 'utf8');
 if (!gallery.includes('src="/gi/assets/')) throw new Error('Build examples with --base /gi/ before running the GPU harness.');
@@ -43,10 +45,11 @@ function measurePair(pair: number, ownerPid: number) {
     const clockFile = join(directory, 'pair-' + pair + '-clocks.json');
     const idleFile = join(directory, 'pair-' + pair + '-idle.json');
     const child = spawnSync(process.execPath, [
-        'tools/reference/bench-lock.ts', 'run', '--what', 'polished rail pair ' + pair,
+        'tools/reference/bench-lock.ts', 'run', '--cpu-timed', '--what', 'polished rail pair ' + pair,
         '--cool-below', '70', '--cool-wait-max-minutes', '2', '--clock-file', clockFile, '--',
         process.execPath, process.argv[1], '--inside-lock', resultFile, idleFile,
-    ], { stdio:'inherit', env:{ ...process.env, [LOCK_HELD_ENV]:String(ownerPid), VITE_RC_REFLECTION_PAIR:String(pair) } });
+    ], { stdio:'inherit', env:{ ...process.env, [LOCK_HELD_ENV]:[process.env[LOCK_HELD_ENV], ownerPid].filter(Boolean).join(','),
+        VITE_RC_REFLECTION_PAIR:String(pair), VITE_RC_REFLECTION_CADENCE:cadence } });
     if (child.error) throw child.error;
     if (child.status !== 0) throw new Error('Polished rail pair ' + pair + ' failed (exit ' + child.status + ')');
     const result = JSON.parse(readFileSync(resultFile, 'utf8'));
@@ -69,7 +72,12 @@ function distribution(samples: number[]) {
     return { count:n, medianMs:(sorted[(n-1)>>1] + sorted[n>>1])/2, p95Ms:sorted[Math.ceil(n*0.95)-1] };
 }
 const on = distribution(pairs.flatMap(p => p.on.samplesMs)), off = distribution(pairs.flatMap(p => p.off.samplesMs));
-const summary = { allPairsQualified:pairs.every(p => p.preflightQuiet && p.timing.kind === 'valid'), on, off,
+const sustained = cadence === 'uncapped' ? {
+    on: distribution(pairs.flatMap(p => p.on.sustained.samplesMs)),
+    off: distribution(pairs.flatMap(p => p.off.sustained.samplesMs)),
+} : null;
+const summary = { cadence, allPairsQualified:pairs.every(p => p.preflightQuiet && p.timing.kind === 'valid'), on, off,
+    sustained,
     pooledMedianDeltaMs:on.medianMs-off.medianMs, pooledP95DeltaMs:on.p95Ms-off.p95Ms,
     pairs:pairs.map(({on,off,...p}) => ({...p, on:{count:on.count,medianMs:on.medianMs,p95Ms:on.p95Ms},
         off:{count:off.count,medianMs:off.medianMs,p95Ms:off.p95Ms}})) };
