@@ -21,7 +21,7 @@
  * The upscaler is a devDependency of the workspace root, for these pages.
  */
 
-import { HalfFloatType, Node, NodeMaterial, NodeUpdateType, QuadMesh, RenderTarget, type Camera, type NodeFrame, type PassNode, type Texture, type TextureNode, type WebGPURenderer } from 'three/webgpu';
+import { HalfFloatType, Node, NodeMaterial, NodeUpdateType, QuadMesh, RenderTarget, type Camera, type Layers, type NodeFrame, type PassNode, type Texture, type TextureNode, type WebGPURenderer } from 'three/webgpu';
 import { mix, mrt, normalView, output, packNormalToRGB, pass, passTexture, rtt, sample, texture, uniform, unpackRGBToNormal, uv, velocity, vec4 } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import type GTAONode from 'three/addons/tsl/display/GTAONode.js';
@@ -162,20 +162,36 @@ export interface UpscaledComposite {
  * composite's own GTAO, its `resolutionScale` relative to the reduced pass (the
  * composite's GTAO sizes itself from the pass), or false for none. `giTermOnly`
  * feeds the upscaler the composite minus the pass's own colour, for the
- * accuracy check of the GI term at output resolution.
+ * accuracy check of the GI term at output resolution: the composite's term
+ * alone. With `giTermBaselineLayers` it subtracts instead the colour of a
+ * second pass of the scene, at the same scale and jitter, drawn with those
+ * camera layers, which the caller picks to leave the GI light out: the term
+ * then also holds the GI three shades per fragment on surfaces the
+ * composite doesn't take (blended ones), still linear in GI when the
+ * upscaler sees it (issue #6).
  */
 export function upscaledComposite(
     scene: Parameters<typeof pass>[0],
     camera: Camera,
     source: CompositeGISource,
     preset: UpscalePreset,
-    options: { readonly occlusion: false | { readonly resolutionScale: number; readonly samples?: number; readonly radius?: number }; readonly giTermOnly?: boolean },
+    options: {
+        readonly occlusion: false | { readonly resolutionScale: number; readonly samples?: number; readonly radius?: number };
+        readonly giTermOnly?: boolean;
+        readonly giTermBaselineLayers?: Layers;
+    },
 ): UpscaledComposite {
     const scale = renderScale(preset);
     const scenePass = compositePassAt(scene, camera, scale, true);
     const composite = new DDGICompositeNode(scenePass, source, { occlusion: options.occlusion === false ? false : { ...options.occlusion } });
-    const passColor = scenePass.getTextureNode('output');
-    const color = options.giTermOnly ? vec4((composite as unknown as ReturnType<typeof vec4>).rgb.sub(passColor.rgb), 1) : composite;
+    let baselineColor = scenePass.getTextureNode('output');
+    if (options.giTermBaselineLayers) {
+        const baselinePass = pass(scene, camera);
+        baselinePass.setLayers(options.giTermBaselineLayers);
+        if (scale !== 1) baselinePass.setResolutionScale(scale);
+        baselineColor = baselinePass.getTextureNode('output');
+    }
+    const color = options.giTermOnly ? vec4((composite as unknown as ReturnType<typeof vec4>).rgb.sub(baselineColor.rgb), 1) : composite;
     const atRenderScale = rtt(color as never, null, null, { type: HalfFloatType, resolutionScale: scale } as never);
     const node = upscale(atRenderScale as never, scenePass.getTextureNode('depth') as never, scenePass.getTextureNode('velocity') as never, camera as never, {
         quality: UPSCALE_PRESETS[preset],
