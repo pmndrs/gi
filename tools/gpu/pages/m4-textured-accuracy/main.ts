@@ -15,7 +15,11 @@
  * reference; since T4.1 and T4.3 GI samples the textures itself, and the
  * textured references (T4.4) render the glTF's own materials the way GI
  * reads them. So the GI term here is three's `giAlbedo` (the material's
- * diffuse colour, textures included) × the field's E/π × GTAO.
+ * diffuse colour, textures included) × the field's E/π × GTAO, plus the GI
+ * three shades per fragment on surfaces the composite doesn't take (blended
+ * ones, glass): since 2026-11-20 (issue #6) the term is everything GI adds to
+ * the colour (`giTerm`). Until then it was the composite's term alone, in
+ * which sponza-full's blended cypress leaves read black.
  *
  * Steps (the job comes from run.ts, `window.m4TexturedAccuracyJob`):
  * 1. Load the scene with the viewer's loader (Bistro with T2.17's texture
@@ -27,7 +31,9 @@
  *    average, then `passes` at the normal hysteresis; then frozen.
  * 3. For each view: the GI term through the upscaler, `upscaleFrames`
  *    frames on a still camera (its jitter and history), read back in linear
- *    HDR, before tone mapping.
+ *    HDR, before tone mapping. The term is the composite minus a second pass
+ *    of the scene drawn without the GI light (a camera layer leaves it out),
+ *    taken before the upscaler, so the upscaler sees a term linear in GI.
  *
  * Each view's GI term (rgb floats, rows as read back) is posted to the
  * runner's server (`UPLOAD_PATH`), not put in the report: three 1920 × 1080
@@ -40,17 +46,18 @@
  * Not a shading path: everything here is measurement.
  */
 
-import { Box3, BoxGeometry, Euler, FloatType, Matrix4, Mesh as ThreeMesh, MeshStandardMaterial, PerspectiveCamera, RenderPipeline, RenderTarget, Vector3, type Mesh, type Node, type Object3D } from 'three/webgpu';
+import { Box3, BoxGeometry, Euler, FloatType, Layers, Matrix4, Mesh as ThreeMesh, MeshStandardMaterial, PerspectiveCamera, RenderPipeline, RenderTarget, Vector3, type Mesh, type Node, type Object3D, type Scene, type WebGPURenderer } from 'three/webgpu';
+import { vec4 } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { DEFAULT_GI_OCCLUSION_RADIUS } from '../../../../packages/ddgi-three/src/composite.ts';
+import { DDGICompositeNode, DEFAULT_GI_OCCLUSION_RADIUS, type GIOcclusionSettings } from '../../../../packages/ddgi-three/src/composite.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { runSteps, runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { advanceThreeFrame, findManifest, SHOT_FAR, SHOT_NEAR } from '../three-composite-shared/composite-check.ts';
-import { upscaledComposite, type UpscalePreset } from '../three-composite-shared/variants.ts';
+import { compositePassAt, upscaledComposite, type UpscalePreset } from '../three-composite-shared/variants.ts';
 import endStates from '../../../reference/cycles/end-states.json';
 import { UPLOAD_PATH } from './upload-path.ts';
 
@@ -94,6 +101,22 @@ export interface TexturedAccuracyJob {
     readonly occlusionSamples: number;
     /** Frames on a still camera through the upscaler before the read-back. */
     readonly upscaleFrames: number;
+    /**
+     * What the GI term is (issue #6). 'everything' (the default): the composite minus the colour of the scene
+     * drawn without the GI light, fed to the upscaler, so it holds the GI the composite adds and the GI three
+     * shades per fragment on surfaces the composite doesn't take (blended ones: foliage, decals), as Cycles'
+     * diffuse-indirect pass holds both. 'composite': the composite's own term only (the composite minus the
+     * pass's colour), the definition until 2026-11-20, which drops blended surfaces' GI.
+     */
+    readonly giTerm: 'everything' | 'composite';
+    /**
+     * A diagnostic (issue #6): besides the GI term, read back at full resolution without the upscaler
+     * (a) the composite's own term (composite minus the pass's colour, `giTerm` 'composite') and
+     * (b) everything GI adds (the composite with GI minus the composite with the GI light at intensity 0),
+     * which also holds the GI shaded per fragment on surfaces the composite doesn't take (blended ones).
+     * Posted as `<view>~composite-term`, `<view>~gi-difference` and `<view>~colour` (the final colour).
+     */
+    readonly diagnose: boolean;
 }
 
 const DEFAULT_JOB: TexturedAccuracyJob = {
@@ -111,6 +134,8 @@ const DEFAULT_JOB: TexturedAccuracyJob = {
     occlusionScale: 0.5,
     occlusionSamples: 16,
     upscaleFrames: 32,
+    giTerm: 'everything',
+    diagnose: false,
 };
 
 declare global {
@@ -120,6 +145,9 @@ declare global {
 }
 
 const job: TexturedAccuracyJob = { ...DEFAULT_JOB, ...window.m4TexturedAccuracyJob };
+
+/** The camera layer the GI light is moved to while the views are measured (`giTerm` 'everything'); nothing else in the scenes uses it. */
+const GI_TERM_LIGHT_LAYER = 31;
 
 /** The DDGI technique's default `maxProbesPerFrame`: whole passes are split into frames of at most this many probes. */
 const MAX_PROBES_PER_FRAME = 4096;
@@ -169,6 +197,61 @@ function rgbOf(rgba: Float32Array): Float32Array<ArrayBuffer> {
     const rgb = new Float32Array((rgba.length / 4) * 3);
     for (let pixel = 0; pixel < rgba.length / 4; pixel++) for (let channel = 0; channel < 3; channel++) rgb[pixel * 3 + channel] = rgba[pixel * 4 + channel];
     return rgb;
+}
+
+/** Posts one rgba read-back's rgb to the runner under `name`. */
+async function postImage(name: string, rgba: Float32Array): Promise<void> {
+    let nonFinite = 0;
+    for (const value of rgba) if (!Number.isFinite(value)) nonFinite++;
+    assert(nonFinite === 0, `${name}: ${nonFinite} non-finite values`);
+    const response = await fetch(`${UPLOAD_PATH}?view=${encodeURIComponent(name)}`, { method: 'POST', body: rgbOf(rgba) });
+    assert(response.ok, `${name}: the upload failed (${response.status})`);
+}
+
+/**
+ * The `diagnose` read-backs of one view (job comment), at full resolution with no upscaler, so the
+ * three images differ only in what they leave out. Returns the names posted.
+ */
+async function diagnoseView(
+    renderer: WebGPURenderer,
+    view: AccuracyView,
+    scene: Scene,
+    camera: PerspectiveCamera,
+    threeGI: ThreeGI,
+    target: RenderTarget,
+    occlusion: false | GIOcclusionSettings,
+): Promise<string[]> {
+    const readBack = async (pipeline: RenderPipeline): Promise<Float32Array> => {
+        advanceThreeFrame(renderer);
+        renderer.setRenderTarget(target);
+        pipeline.render();
+        renderer.setRenderTarget(null);
+        return new Float32Array((await renderer.readRenderTargetPixelsAsync(target, 0, 0, job.width, job.height)) as Float32Array);
+    };
+    const scenePass = compositePassAt(scene, camera, 1, false);
+    const composite = new DDGICompositeNode(scenePass, threeGI, { occlusion });
+    const passColor = scenePass.getTextureNode('output');
+    const termNode = vec4((composite as unknown as ReturnType<typeof vec4>).rgb.sub(passColor.rgb), 1);
+    const colourPipeline = new RenderPipeline(renderer, composite as unknown as Node);
+    colourPipeline.outputColorTransform = false;
+    const termPipeline = new RenderPipeline(renderer, termNode as unknown as Node);
+    termPipeline.outputColorTransform = false;
+    const light = threeGI.light;
+    const intensity = light.intensity;
+    const withGI = await readBack(colourPipeline);
+    const term = await readBack(termPipeline);
+    light.intensity = 0;
+    const withoutGI = await readBack(colourPipeline);
+    light.intensity = intensity;
+    const difference = new Float32Array(withGI.length);
+    for (let index = 0; index < withGI.length; index++) difference[index] = withGI[index] - withoutGI[index];
+    const names = [`${view.name}~composite-term`, `${view.name}~gi-difference`, `${view.name}~colour`];
+    await postImage(names[0], term);
+    await postImage(names[1], difference);
+    await postImage(names[2], withGI);
+    colourPipeline.dispose();
+    termPipeline.dispose();
+    return names;
 }
 
 async function measure(context: ThreePageContext): Promise<void> {
@@ -261,10 +344,23 @@ async function measure(context: ThreePageContext): Promise<void> {
     const target = new RenderTarget(job.width, job.height, { type: FloatType, depthBuffer: false });
     const occlusion = job.occlusion ? { resolutionScale: job.occlusionScale, radius: DEFAULT_GI_OCCLUSION_RADIUS, samples: job.occlusionSamples } : false;
     const uploaded: string[] = [];
+    // Everything GI adds (`giTerm`): the GI light goes on a layer of its own, which the composite's pass sees and
+    // the baseline pass (upscaledComposite's `giTermBaselineLayers`) doesn't. ThreeGI puts its light on every layer.
+    const light = threeGI.light;
+    const baselineLayers = new Layers();
+    baselineLayers.mask = camera.layers.mask & ~(1 << GI_TERM_LIGHT_LAYER);
+    if (job.giTerm === 'everything') {
+        light.layers.set(GI_TERM_LIGHT_LAYER);
+        camera.layers.enable(GI_TERM_LIGHT_LAYER);
+    }
     for (const view of job.views) {
         placeCamera(view);
         // A fresh pipeline per view: the upscaler's history starts at this camera.
-        const built = upscaledComposite(scene, camera, threeGI, job.preset, { occlusion, giTermOnly: true });
+        const built = upscaledComposite(scene, camera, threeGI, job.preset, {
+            occlusion,
+            giTermOnly: true,
+            giTermBaselineLayers: job.giTerm === 'everything' ? baselineLayers : undefined,
+        });
         const pipeline = new RenderPipeline(renderer, built.node as unknown as Node);
         // Linear HDR out: the read-back compares radiance, not a tone-mapped picture.
         pipeline.outputColorTransform = false;
@@ -276,15 +372,16 @@ async function measure(context: ThreePageContext): Promise<void> {
             if (frame % 4 === 3) await device.queue.onSubmittedWorkDone();
         }
         const pixels = new Float32Array((await renderer.readRenderTargetPixelsAsync(target, 0, 0, job.width, job.height)) as Float32Array);
-        let nonFinite = 0;
-        for (const value of pixels) if (!Number.isFinite(value)) nonFinite++;
-        assert(nonFinite === 0, `${view.name}: ${nonFinite} non-finite values in the GI term`);
-        const response = await fetch(`${UPLOAD_PATH}?view=${encodeURIComponent(view.name)}`, { method: 'POST', body: rgbOf(pixels) });
-        assert(response.ok, `${view.name}: the upload failed (${response.status})`);
-        uploaded.push(view.name);
-        log(`${view.name}: GI term through the upscaler (${job.preset}, ${job.occlusion ? `GTAO at ${job.occlusionScale}` : 'no occlusion'}), ${job.upscaleFrames} frames`);
         pipeline.dispose();
+        await postImage(view.name, pixels);
+        uploaded.push(view.name);
+        log(
+            `${view.name}: ${job.giTerm === 'composite' ? "the composite's GI term" : 'everything GI adds'} through the upscaler (${job.preset}, ${job.occlusion ? `GTAO at ${job.occlusionScale}` : 'no occlusion'}), ${job.upscaleFrames} frames`,
+        );
+        if (job.diagnose) uploaded.push(...(await diagnoseView(renderer, view, scene, camera, threeGI, target, occlusion)));
     }
+    light.layers.enableAll();
+    camera.layers.disable(GI_TERM_LIGHT_LAYER);
     target.dispose();
     data.uploadedViews = uploaded;
     data.recompilesAfter = platform.stats.recompiles;
