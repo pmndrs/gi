@@ -88,7 +88,10 @@
  *    (register D33), so GI-1.2's hit rays read 0, and so must the tail's: its
  *    screen records take only what the cache holds at a ray's hit, and a
  *    miss is a 0 (a target with the sky in it would light the second hits).
- *    Hit rays' mean under 1% of the lit value.
+ *    Hit rays' mean under 1% of the lit value, and the screen records'
+ *    training targets' mean too (the rays alone wouldn't show a sky in the
+ *    targets: the network tells the screen records' view directions apart
+ *    from the second hits').
  * 11. **Nothing to learn from** (the lit plane with the camera looking up at
  *    the black sky, 40 frames): no surface on the screen, so no probe rays,
  *    no cell records and no screen records. The gate counts the steps the
@@ -1013,9 +1016,16 @@ try {
         const [gi1] = await runScenario(device, 'skyCorner', GI1, 120, [hitJudge]);
         const [tail] = await runScenario(device, 'skyCorner', TAIL, 120, [hitJudge]);
         // meanError is the hit rays' mean over the lit value (0.9): a sky of 1 counted at the second hits would give tenths.
-        data.skyOnly = { gi1HitMeanOverLit: Number(final(gi1).toFixed(5)), tail: summary(tail), judged: tail.judged };
+        // The training targets themselves: a screen record's target is albedo × the cache's value at its ray's hit, 0 on a miss,
+        // and the cache holds nothing here. The rays alone don't show a sky in them: the network can tell the screen records'
+        // view directions from the second hits' (mutation M7, the sky on a miss: targets 0.25-0.31, answers at the hits 0.005).
+        const groups = Object.values(tail.tailBySurface ?? {});
+        const screenRecords = groups.reduce((sum, group) => sum + group.screenRecords, 0);
+        const screenTargetMean = groups.reduce((sum, group) => sum + group.meanScreenTarget * group.screenRecords, 0) / Math.max(screenRecords, 1);
+        data.skyOnly = { gi1HitMeanOverLit: Number(final(gi1).toFixed(5)), tail: summary(tail), judged: tail.judged, screenRecords, screenTargetMean };
         if (!(final(tail) < 0.01)) fail(`sky only: the tail's hit rays read ${(final(tail) * LIT_RADIANCE).toFixed(4)} on average (expected 0: a cell has no sky light before RC3.4, so the tail must bring none)`);
         if (tail.judged < 1000 || !tail.tailGateOpen) fail(`sky only: ${tail.judged} judged rays, gate ${tail.tailGateOpen ? 'open' : 'shut'}`);
+        if (screenRecords < 1000 || !(screenTargetMean < 0.01 * LIT_RADIANCE)) fail(`sky only: ${screenRecords} screen records with a mean target of ${screenTargetMean.toFixed(4)} (expected 0: a miss brings no sky into a target)`);
     }
 
     // 11. Nothing on the screen: no records, so no step the GPU counts, and the gate stays shut.
