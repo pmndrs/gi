@@ -333,7 +333,7 @@ fn ${NEURAL_TAIL_ENTRY_POINT.gatherScreenRecords}(@builtin(global_invocation_id)
     let direction = NeuralTail_CosineDirection(side, rcRand2(&random));
     let ray = GiRay(giShadeOffsetRayOrigin(surface.position, side), 0.0, direction, RC_MAX_HIT_DISTANCE);
     let hit = giTraceClosest(ray);
-    var target_value = vec3f(0.0);
+    var target_value = surface.albedo * giSkyRadiance(direction); // MUTATION M7: the sky on a miss
     if (hit.t >= 0.0) {
         let lookup = worldCacheLookup(ray.origin + hit.t * ray.direction, vec3f(0.0), ray.direction);
         if (lookup.w <= 0.0) {
