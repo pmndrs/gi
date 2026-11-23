@@ -24,9 +24,12 @@
  * error (the harness). The sheet shows frame 60.
  *
  * And per pixel, at frame 60: the radiance cache's picture minus its pass's
- * own colour (GI off) equals `giAlbedo × E / π` with E the irradiance image's
- * texel at the same pixel, so a flipped or offset `screenUV`, a lost π or a
- * wrong weight fails (RC2.2 review).
+ * own colour (GI off) equals `giAlbedo × E / π` with E the texel at the same
+ * pixel of the term the composite reads: the GI denoiser's output when it runs
+ * (RC4.3, the default; it must exist at the screen's size), else the
+ * interpolated irradiance. A flipped or offset `screenUV`, a lost π, a wrong
+ * weight, or a stale or doubled denoised term fails (RC2.2 review). The
+ * denoised term is scanned for NaN, infinite and negative values too.
  *
  * The contact sheet the runner's screenshot captures: per scene, DDGI, the
  * radiance cache, the radiance cache's E / π (what a white surface would
@@ -173,12 +176,24 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
         const scans: SceneResult['scans'][number][] = [];
         let picture: Float32Array = new Float32Array(0);
         let irradiance: Float32Array = new Float32Array(0);
+        let composited: Float32Array = new Float32Array(0);
         for (let rcFrame = 1; rcFrame <= SCAN_FRAMES[SCAN_FRAMES.length - 1]; rcFrame++) {
             picture = await frame(rcComposite);
             if (!(SCAN_FRAMES as readonly number[]).includes(rcFrame)) continue;
             const probes = radianceCache.probes;
             if (!probes) throw new Error(`${sceneId}: the radiance cache has no probes after its screen stages`);
             irradiance = halves(await readTexture(device, probes.irradiance, 8, SIZE.width, SIZE.height));
+            // The term the composite reads (RC4.3): the denoiser's output, on by default.
+            const denoised = probes.denoisedIrradiance;
+            if (radianceCache.settings.denoiser) {
+                assert(denoised !== null, `${sceneId} frame ${rcFrame}: the denoiser is on but has no output`);
+                assert(denoised!.width === SIZE.width && denoised!.height === SIZE.height, `${sceneId} frame ${rcFrame}: the denoised term is ${denoised!.width} x ${denoised!.height}, not the screen's ${SIZE.width} x ${SIZE.height}`);
+            }
+            composited = denoised ? halves(await readTexture(device, denoised, 8, SIZE.width, SIZE.height)) : irradiance;
+            if (denoised) {
+                const denoisedBad = countBad(composited);
+                assert(denoisedBad.nonFinite === 0 && denoisedBad.negative === 0, `${sceneId} frame ${rcFrame}: the denoised term has ${denoisedBad.nonFinite} values not finite and ${denoisedBad.negative} negative`);
+            }
             const pictureBad = countBad(picture);
             const irradianceBad = countBad(irradiance);
             scans.push({ frame: rcFrame, meanIrradiance: irradianceBad.meanRgb, pictureNonFinite: pictureBad.nonFinite, pictureNegative: pictureBad.negative, irradianceNonFinite: irradianceBad.nonFinite, irradianceNegative: irradianceBad.negative });
@@ -210,7 +225,7 @@ async function renderScene(context: ThreePageContext, sceneId: string, sheet: HT
             let bad = false;
             for (let channel = 0; channel < 3; channel++) {
                 const index = pixel * 4 + channel;
-                const expected = (passAlbedo[index] * irradiance[index]) / Math.PI;
+                const expected = (passAlbedo[index] * composited[index]) / Math.PI;
                 const added = picture[index] - passColor[index];
                 const error = Math.abs(added - expected);
                 giSum += expected;
