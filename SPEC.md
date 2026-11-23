@@ -267,7 +267,7 @@ DDGI is diffuse-only by design. Its probes store very blurred light (about 8x8 t
 - The three.js adapter plays correctly with three's reflection probes and env maps:
   - env-map *diffuse* is switched off where GI covers it, so it isn't counted twice;
   - env-map and probe *specular* stay on.
-- ~~DDGI's rough-only `giRadiance` fallback is available.~~ Moved after v1 (DECISIONS 2026-11-18): it isn't built, and it is only right at roughness 1.
+- ~~DDGI's rough-only `giRadiance` fallback is available.~~ Moved after v1 (DECISIONS 2026-11-18): it isn't built yet, and it is only right at roughness 1 ([issue #31](https://github.com/pmndrs/gi/issues/31)).
 
 A ray-traced reflections technique is the first candidate after v1.
 
@@ -494,7 +494,7 @@ This can overlap M2 and M3.
 ### After v1
 
 - Ray-traced glossy reflections as the first new technique.
-- DDGI's rough-only `giRadiance` fallback, with the three adapter's environment-specular blend (moved from v1, DECISIONS 2026-11-18).
+- DDGI's rough-only `giRadiance` fallback, with the three adapter's environment-specular blend (moved from v1, DECISIONS 2026-11-18; [issue #31](https://github.com/pmndrs/gi/issues/31)).
 - Voxel, SDF, surfel and radiance-cascade experiments on the same platform.
 - react-three-fiber bindings, Babylon adapter, then Pixi: after v1 is validated on three.js (M5 or later). The contract is checked against Babylon only as of the T0.9 snapshot until then.
 - Room-shaped volumes and multi-level cascades.

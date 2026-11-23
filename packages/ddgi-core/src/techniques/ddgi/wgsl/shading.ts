@@ -6,6 +6,7 @@
  * fn giIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f, screenUV: vec2f, <resources>) -> vec3f
  * fn giCoverage(position: vec3f, normal: vec3f, <resources>) -> f32
  * fn giDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f, <resources>) -> vec3f
+ * fn giProbeIrradiance(point: u32, direction: vec3f, <resources>) -> vec3f
  * ```
  *
  * `<resources>` are the module's parameters in order
@@ -25,12 +26,19 @@
  * bounce light, so renderers and the update share one code path; one volume
  * goes through it as several do. No `giRadiance`: the module says
  * `provides.radiance = false`.
+ *
+ * `giProbeIrradiance` is DDGI's own, for the `points` debug view's
+ * `irradianceFunction` (TU.5, DV-03 in docs/divergence.md): one probe's light
+ * from its own tile, so an adapter can shade each probe's sphere with it.
  */
 
 import { DDGI_SAMPLE_WGSL } from './sample.ts';
 
 // The coverage numbers live with the volume blend now (volumes.ts); exported here too, where checks found them first.
 export { COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT } from '../volumes.ts';
+
+/** The shading module's function that gives one probe's own light (the `points` view's `irradianceFunction`). */
+export const DDGI_PROBE_IRRADIANCE_FUNCTION = 'giProbeIrradiance';
 
 /** Ids of DDGI's screen debug views, the `view` argument of `giDebugColor` (id 0 is the `points` view). */
 export const DDGI_DEBUG_VIEW = {
@@ -121,6 +129,61 @@ fn ddgiShownVolume(volumeTable: texture_2d<f32>, position: vec3f) -> DdgiVolume 
         nearest = ddgiNearerVolume(nearest, index, volume, position);
     }
     return ddgiTableVolume(volumeTable, nearest.index);
+}
+
+// The probe that point 'point' of the points debug view shows: its volume
+// and its slot there. The view lists every volume's probes one after another
+// in priority order, which is the table's row order (volumes.ts, probeBase),
+// and a probe's point is its slot index, x + nx * (z + nz * y) (ddgiProbeIndex
+// in common.ts). 'found' is false past the last volume's probes.
+struct DdgiPointProbe {
+    volume: DdgiVolume,
+    slot: vec3i,
+    found: bool,
+}
+
+fn ddgiPointProbe(volumeTable: texture_2d<f32>, point: u32) -> DdgiPointProbe {
+    var first = 0u;
+    let count = ddgiVolumeCount(volumeTable);
+    for (var index = 0u; index < count; index++) {
+        let volume = ddgiTableVolume(volumeTable, index);
+        let counts = vec3u(volume.counts);
+        let probes = counts.x * counts.y * counts.z;
+        if (point < first + probes) {
+            let local = point - first;
+            let slot = vec3u(local % counts.x, local / (counts.x * counts.z), (local / counts.x) % counts.z);
+            return DdgiPointProbe(volume, vec3i(slot), true);
+        }
+        first += probes;
+    }
+    return DdgiPointProbe(ddgiTableVolume(volumeTable, 0u), vec3i(0), false);
+}
+
+// The irradiance E one probe holds for a surface facing 'direction', from
+// its own tile alone: read bilinearly where the direction lands in the tile,
+// with no blending between probes and no visibility test. RTXGI's standard
+// probe view draws each probe's sphere with it (the sphere's normal as the
+// direction), so a probe's light can be checked against the probes around
+// it, and a dark, stale or leaking probe stands out. With light groups the
+// tile is the composed one, the light the picture is lit by. 'point' is the
+// probe's index in the points debug view; one past the last gives black.
+fn giProbeIrradiance(
+    point: u32,
+    direction: vec3f,
+    ddgiIrradiance: texture_2d_array<f32>,
+    ddgiIrradianceSampler: sampler,
+    ddgiDistance: texture_2d_array<f32>,
+    ddgiDistanceSampler: sampler,
+    ddgiProbeData: texture_2d_array<f32>,
+    ddgiVolumeTable: texture_2d<f32>,
+) -> vec3f {
+    let probe = ddgiPointProbe(ddgiVolumeTable, point);
+    if (!probe.found) {
+        return vec3f(0.0);
+    }
+    let atlas = ddgiAtlasScale(probe.volume, probe.volume.irradianceTexels);
+    let uv = ddgiTileUv(ddgiTileTexel(normalize(direction), probe.volume.irradianceTexels), probe.slot, atlas);
+    return textureSampleLevel(ddgiIrradiance, ddgiIrradianceSampler, uv, ddgiAtlasLayer(probe.volume, probe.slot), 0.0).rgb;
 }
 
 // Irradiance E at a surface point (the renderer applies albedo / pi), every

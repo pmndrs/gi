@@ -11,7 +11,9 @@
  *   may allow none in fragment shaders (NOTES). 4 textures, within the rule
  *   of at most 6 (docs/api/platform.md, walk-through gap 1).
  * - **Code:** `giIrradiance`, `giCoverage` and `giDebugColor` (wgsl/shading.ts),
- *   on `ddgiSampleVolumes`, the blend the update kernel uses for bounce light.
+ *   on `ddgiSampleVolumes`, the blend the update kernel uses for bounce light;
+ *   and `giProbeIrradiance`, one probe's own light, for the `points` debug
+ *   view (DV-03).
  * - **No `giRadiance` yet** (`provides.radiance` is false). A rough-only
  *   fallback (the irradiance in the reflected direction ÷ π) is only right at
  *   roughness 1; anything smoother needs a blend with the host's environment
@@ -85,6 +87,14 @@ const ENTRY_POINTS: readonly { readonly name: string; readonly arguments: readon
         ],
         returns: 'vec3f',
     },
+    {
+        name: 'giProbeIrradiance',
+        arguments: [
+            ['point', 'u32'],
+            ['direction', 'vec3f'],
+        ],
+        returns: 'vec3f',
+    },
 ];
 
 /** The uniform struct and variable `globalsCode` declares for `vec4f` parameters, when there are any. */
@@ -141,7 +151,8 @@ export class DDGIShadingModule implements ShadingModule {
     /**
      * `code`, then the resources as globals at `group`, then the wrappers
      * `giIrradianceAt(position, normal, viewDirection, screenUV)`,
-     * `giCoverageAt(position, normal)` and `giDebugColorAt(position, normal, view, screenUV)`.
+     * `giCoverageAt(position, normal)`, `giDebugColorAt(position, normal, view, screenUV)`
+     * and `giProbeIrradianceAt(point, direction)`.
      *
      * Bindings: every texture and sampler parameter in order from 0, then one
      * uniform buffer holding the `vec4f` parameters in order, when there are

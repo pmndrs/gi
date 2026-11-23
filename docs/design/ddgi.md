@@ -78,7 +78,7 @@ State 3 is the starting state, so the first frames show partial GI instead of bl
 ## Rays
 
 - **Count:** `raysPerProbe`, default 256, a multiple of 32, from 64 to 512. The first 32 are the **fixed rays**.
-- **Fixed rays:** 32 spherical-Fibonacci directions, never rotated. Used for relocation and classification only, never blended. That's what native does too, so ray counts match (NOTES "Native ray counts").
+- **Fixed rays:** 32 spherical-Fibonacci directions, never rotated. Used for relocation and classification only, never blended. That's what native does too, so ray counts match (NOTES "Native ray counts"). As in native, they are set aside only while `relocation` or `classification` is on; with both off there are no fixed rays and all `raysPerProbe` rays turn and are blended (DV-07, 2026-11-19; `ddgiSetAsideRays`).
 - **Blended rays:** `raysPerProbe − 32` spherical-Fibonacci directions, rotated by one random rotation per frame (shared by all probes that frame). The rotation comes from the CPU: a uniform random quaternion from a seeded generator, seeded by the frame number. Not byte-identical across runs, and nothing should require it.
 - **Range:** rays are traced to `maxRayDistance`, default unlimited (`tMax` = 1e27), so a miss sees the sky. Distances written to the distance atlas are clamped to `1.5 × length(spacing)`.
 
@@ -104,8 +104,8 @@ One workgroup per probe in this frame's update list. Workgroup size 256 (the def
   - **Miss:** radiance = `giSkyRadiance(direction)`, distance = the clamp value.
   - **Back-face hit:** radiance 0. Distance = `−0.2 × t`. The negative sign marks a back face for classification; the distance atlas uses `0.2 × t`, which pulls the probe's mean distance short in that direction so the Chebyshev test sees it as blocked. This is the "double-sided distance" leak fix, measured as the largest single fix (84×, NOTES).
   - **Front-face hit:** `s = giSurfaceAt(ray, hit)`, then
-    `radiance = s.emission + s.albedo / π × (giDirectIrradiance(s, groupMask, random) + bounceEnergy × ddgiSampleIrradiance(s.position, s.normal, ray.direction, ...))`,
-    where `ddgiSampleIrradiance` reads the **current** atlases (the field from earlier updates) for unlimited bounces. Hit-shading's `bounceAlbedoCap` applies to `s.albedo`.
+    `radiance = s.emission + s.albedo / π × giDirectIrradiance(s, groupMask, random) + giBounceAlbedo(s) / π × bounceEnergy × ddgiSampleIrradiance(s.position, s.normal, ray.direction, ...)`,
+    where `ddgiSampleIrradiance` reads the **current** atlases (the field from earlier updates) for unlimited bounces. Hit-shading's `bounceAlbedoCap` applies to the bounce term only (`giBounceAlbedo`), as native RTXGI's sample does (DV-08; it applied to both terms before 2026-11-19).
 - Results go to workgroup memory: rgb radiance and signed distance per ray (16 bytes × 256 = 4 KB). **Rays never touch device memory.**
 
 **Phase B: classification and relocation**, over the 32 fixed rays. Workgroup reductions:
@@ -391,6 +391,7 @@ Given a surface point `P`, its normal `N` and the direction `V` it's seen from:
      - HomeFig's trap: a crush threshold equal to the direction-weight floor (both 0.2) let fully back-facing exterior probes leak, because their weight sat exactly at the threshold and was never crushed.
      - Here a fully back-facing probe also carries the Chebyshev factor, which is at most 1 and drops to 0.05 when it's occluded, so its weight lands below 0.2 and gets crushed. The leak tests (two-room, thin wall, closed door) watch this.
    - multiply by the trilinear weight;
+   - with `samplingWeightFloors` (off by default; DV-06, DECISIONS 2026-11-19), RTXGI's floors: the weight before the crush is at least 1e-6, and each axis of the trilinear weight at least 0.001 (`Irradiance.hlsl`), so a point on a probe plane gives the far plane's probes a tiny weight;
    - sample irradiance bilinearly at `octahedral(N)` in the probe's tile.
 4. Return `Σ w·E / Σ w`, or 0 when `Σ w` is 0.
 
@@ -428,6 +429,7 @@ interface DDGISettings {
     warmUpMaxSeconds: number;        // 8
     warmUpMinPasses: number;         // 2
     maxBrightnessChange: number;     // 2.0
+    samplingWeightFloors: boolean;   // false (DV-06): RTXGI's floors on the sampling weights; live, through the volume table
     distanceSharpness: number;       // 50
     normalBias: number | 'auto';     // auto = 0.1 × min spacing
     viewBias: number | 'auto';

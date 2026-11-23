@@ -458,6 +458,148 @@ Verified (Windows laptop, headless Chrome 157): `pnpm lint`, `pnpm typecheck`, `
 Not verified: `three-screen-inputs-cost` (timing only, deferred); the viewer by eye; the Mac; `rc2-2` and `rc3-2` (not merged here). Timing deferred: the trace-bench pages' Mrays/s are in the logs, not judged (Sponza VALID; Bistro interior and exterior INVALID, throttling and hot start).
 Next (lead): decide whether `fingerprintDifferences` and `halfToFloat` go through `platform/contract` (then drop `KNOWN_TECHNIQUE_IMPORTS`). RC's platform additions (GPU compute utilities, screen inputs and their views, `screenNeeds`) are now public in `/core` and `/three`. RC changed `packages/bvh`'s scans (RC1.3), which main says isn't changed here since the BVH moved to pmndrs/bvh. In Git Bash, `verify:packed`'s `tar` fails on `C:` paths (PowerShell's tar works); `--prefer-offline` npm installs can hit stale cache metadata (`npm view <pkg>` refreshed it). Merge `rc-main-merge` into `radiance-cache` when accepted; rebase `rc2-2`/`rc3-2` on it.
 
+## 2026-11-19 · Issue #20: DV-12, resetProbes · implementer (opus)
+Did: worktree `gi-dv12`, branch `dv12-reset-probes` (from `gfi-divergence-xs`). `DDGITechnique.resetProbes({ offsets?, states? })` (ddgi-technique.ts; CPU half `probe-reset.ts`, kernel `wgsl/probe-reset.ts`) and `DDGIVolume.resetProbes` (three; throws before `start`). Offsets go to 0; off probes (1, 2) go to state 3 as the blend kernel's own way back on; active and state-3 probes, irradiance, distances and history are kept; `{}` does nothing (DECISIONS 2026-11-19). One GPU pass in the next encode (a copy of the probe data, then a dispatch per volume, also writing the points view); `resetHistory`, `loadField` and `prepare` cancel a waiting reset. Docs: JSDoc, platform.md "Resetting offsets and states", three.md, divergence row 12, NOTES. The `ddgi-classification` page gains check 8. An Opus review (read-only) found no bugs; its two nits fixed.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome headless, bench lock): `ddgi-classification` PASS, with checks 1-7 as before. Check 8, Cornell / cabinet row: 0 wrong texels, 0 irradiance and 0 distance bytes changed, 0 points wrong, for `{}`, offsets, states and both; numbers in `bench/results/checks.csv` (`dv12/`). `pnpm typecheck`, `pnpm lint` clean; `pnpm test` 1,651 pass (an earlier run had page discovery and bench-lock clock sampling fail under load, both passing alone, issue #8).
+Not verified: Intel; the Mac; a camera-following volume on the GPU (its window handling is covered by unit tests and the review, not a page); three's `resetProbes` in a browser (unit test only).
+Next: none for DV-12. A reset per volume, or RTXGI's exact "every probe active", only if a host asks.
+
+## 2026-11-19 · Issue #20: DV-06, DV-07, DV-08, DV-12 and the §6 doc errors · implementer (opus)
+Did: worktree `gi-gfi`, branch `gfi-divergence-xs` (from `win-tu-checks` 6bbde56). **DV-06** (0044acb): `samplingWeightFloors`, RTXGI's 0.001 trilinear-axis and 1e-6 pre-crush floors (`Irradiance.hlsl`), live through the volume table's fade texel w; **off by default** (DECISIONS 2026-11-19). **DV-07** (8e52417): `ddgiSetAsideRays()` / `setAsideRays()`: the 32 fixed rays are set aside only while relocation or classification is on; the direct-light work list sizes from it; the furnace page takes `VITE_DDGI_PROBE_RULES=off`. **DV-08 + §6** (c3330f8): `GiSurface.albedo` is uncapped and the new `giBounceAlbedo(surface)` carries `bounceAlbedoCap` for the bounce term only (DDGI's three trace paths), as `ProbeTraceRGS.hlsl:236-243`; SPEC and platform.md point to #31 and #29; the register marks §6 fixed (the 0.95 comments were already fixed on 2026-11-18). **DV-12: not built** (needs an API call; proposal in docs/divergence.md row 12). Unit tests for each; numbers in `bench/results/checks.csv`.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome headless, bench lock): DV-06 A/B (same code, default flipped): leak two-room / thin-wall / closed-door 0.83616 / 0.60279 / 0.060412% off, 0.83679 / 0.60277 / 0.060414% on; a repeat of off gave two-room 0.83616% exactly, thin-wall 0.60277% (its own spread); `ddgi-shading-consistency` PASS both (raster pixels off by >1%: 1 off, 2 on). DV-07: furnace with both off E/π 0.49687 → 0.49686, mean error 0.626 → 0.628%, worst 6.36 → 5.99%, PASS both. Default path after DV-07 and DV-08: furnace E/π 0.4992514 (as DV-01's 0.49925) and leak identical to the baseline to every printed digit; `hit-shading-lights`, `hit-shading-deferred`, `ddgi-direct`, `ddgi-shading-consistency` PASS (test-view mean 0.08867256, as before). `pnpm typecheck`, `pnpm lint`, `pnpm test` (1,635 pass) clean.
+Not verified: Intel; the Mac; native parity with `bounceAlbedoCap` 0.9 (T3.17); a scene with lights under both rules off (the work-list sizing is covered by unit tests only).
+Next: DV-12 waits for the lead's call on `resetProbes`. The radiance-cache branch, if its bounce reads `GiSurface.albedo`, should switch to `giBounceAlbedo` when it merges. The reference path tracer (`ddgi-shared/path-tracer.ts`) now ignores `bounceAlbedoCap` (it read the capped albedo before); only matters if someone sets the cap for a native comparison.
+
+## 2026-11-19 (late) · Follow-ups moved to GitHub issues; #3 brought to main · lead (opus)
+Did: created issues #6-#33 on pmndrs/gi from TASKS Later, the tuning pass and docs/divergence.md (labels `ddgi`, `tuning`, `needs-mac`, `needs-windows`, `chore`); TASKS Later is now an index of them; TU.5 marked done (merged in #2), TU.1 and TU.3 link their Mac issues. Merged `main` into `win-tu-checks`, because #3 had landed on `win-tu-checks` after #1 took that branch to `main`: PROGRESS and the accuracy CSV keep both sides, and TASKS takes #3's TU.4 row and #2's TU.5 row.
+Next: Dennis merges #5. The open work is the issues; the Mac half of the tuning pass is #13 and #14.
+
+## 2026-11-19 (evening) · TU.4: the door and cabinet end states, the page default, sponza-full's verdict · measurer (sonnet)
+Did: (1) `tools/gpu/pages/m4-textured-accuracy` now measures the shipping default (no GTAO); `run.ts --occlusion` opts in; files and summary keep their `-no-ao` names for the default, so earlier results stay valid; docs and `test.json` updated. (2) End states: `tools/reference/cycles/end-states.json` (door-shut, door-open, cabinet-before, cabinet-moved), `render.py --end-state` (turns an object about its pivot, or stands the cabinet box as `ddgi-move-cabinet` does), and the page's `job.endState` does the same on our side; the run.ts scene list takes the ids. (3) `--material-variant cutout|opaque` on the page: a foliage diagnostic. Commit c5f8e40.
+Verified: `pnpm typecheck` and `pnpm lint` clean; `pnpm test` 1,627 pass, but 2 timed out at 5 s while the CPU render held 12 threads (sky.test, light-grid.test); both pass when re-run alone (33 tests). Every GPU run on the RTX 3060 Laptop (nvidia/ampere), Chrome 157 headless, under `bench-lock run --no-cool-wait` (waited behind the TU.5 and rc agents). Timings not used.
+Flagged: my first cabinet render put the box behind the room's north wall (Blender's `matrix_world` was stale until a view-layer update, so the scene bounds were inflated); caught because the page logs three's bounds (min y -0.108, min z -2.539) and Cycles' differed. Fixed (`view_layer.update()`), re-rendered both cabinet states; the old numbers (−7.3%) are discarded. Cycles' box centre now equals three's to 1e-6. The render log keeps those two bad rows (2026-11-19T13:45 and 13:59).
+Numbers (mean error of the GI term; FLIP on 8x8 blocks; bar 10% and 0.15; no GTAO; reference 128 spp CPU, 1920x1080; rows in `bench/results/m4-textured-accuracy.csv`):
+| scene / camera | mean | FLIP | block err (mean / p95) |
+| --- | --- | --- | --- |
+| door-shut lit-room | +2.39% | 0.065 | 4.0 / 10% |
+| door-shut facing-the-door | +2.13% | 0.053 | 3.4 / 9% |
+| door-open lit-room | +2.79% | 0.070 | 4.5 / 11% |
+| door-open facing-the-door | +2.37% | 0.060 | 4.0 / 10% |
+| door-open dark-room-leak-view | +4.29% | 0.184 (over the bar) | 8.5 / 25%; the reference's own noise is 4.96% block (second seed) |
+| cabinet-before towards-the-cabinet | −4.38% | 0.090 | 5.2 / 12% |
+| cabinet-moved towards-the-cabinet | −4.38% | 0.090 | 5.1 / 11% |
+| sponza-full colonnade, default (earlier) | −16.21% | 0.722 | 73.3% |
+| sponza-full colonnade, `--material-variant cutout` | +47.66% | 0.567 | 57.6% |
+Render time (Cycles 4.5.0 on the CPU, 12 threads, 128 spp, 1920x1080; the CPU lock; nothing else rendering): door-open lit 368 s, door-shut lit 383 s, door-open facing 389 s, door-shut facing 393 s, door-open dark 359 s, cabinet-moved 469 s, cabinet-before 460 s, a second seed of door-open dark 341 s (for the noise); plus 510 s and 464 s for the two discarded cabinet renders. About 69 min in all, under the 90 min cap. All checks (lights-only render, 0.000% bias) passed.
+sponza-full verdict: **our side, not the reference.** Cycles keeps the glTF's own materials (`--textured`, not the GI table); the leaf is glTF BLEND, so Cycles takes the texture alpha as stochastic transparency, like our `stochastic` mode, and the reference shows lit green leaves. Ours draws the leaf cards nearly black (only the opaque mid-ribs show green). Alpha-testing our blended materials gives bright green leaves again and +47.7%. Courtyard tree is a masked file (cutouts), so this is the one blended-foliage scene. Not split yet: the composite's blended-surface path against the stochastic trace into the field. Not fixed (library code).
+Not verified: the page's `--occlusion` flag wasn't run (the change is mechanical; the default path was run). The cabinet view hides most of the cabinet behind the table, so the two end states barely differ there. No Intel or Mac run. The door-shut dark-room view wasn't rendered (the true answer is zero; `ddgi-leak` measures it). The page's results land in the shared `bench/references` junction, as before.
+Next: sponza-full's blended-foliage fix (TASKS Later), starting from a variant that keeps the trace stochastic and draws the leaves opaque.
+## 2026-11-19 · TU.1: `low`'s warm-up batch is 1,024 · implementer (opus)
+Did: `presets.ts`: `DDGIPresetSettings` now includes `maxProbesPerFrame`; `low` 1,024, `medium` and `high` 4,096 (the default). Tests (`presets.test.ts`), the platform.md presets table, DECISIONS 2026-11-19 (a lead call under Dennis's "do the fixes"; numbers from the Intel UHD run below that day). GPU pages that update every probe every frame under `VITE_DDGI_PRESET` keep the default 4,096 (`page-preset.ts` `everyProbeEveryFrame`, also in `ddgi-presets`), as they keep their own budget: `low`'s 1,024 would cap two-room's 1,071 probes. `ddgi-low-warmup` now defaults to the preset's batch.
+Verified: `ddgi-low-warmup` with the preset's own batch (1,024): Intel UHD (gen-12lp), two-room refined to 25,194 probes: PASS, 393 warm-up frames, 5.9 s, frame median 14.4 / p90 16.2 ms, first frame 145 ms, no device loss (the morning's run at `VITE_WARMUP_MAX=1024` took 4.6 s; information only, not timed under the cool-down rule). RTX 3060, plain two-room: PASS, batch 1,024. `pnpm test` covers the preset table. Row in `bench/results/checks.csv`.
+Not verified: the iPad half of TU.1 (no iPad here); `low` furnace and leak weren't re-run (their pages keep the default batch, so they run as before).
+Next: TU.1's iPad half.
+
+## 2026-11-19 · TU.5 DV-03: probes shaded by their own light (RTXGI's probe view) · implementer (opus)
+Did: core: `giProbeIrradiance(point, direction, <resources>)` in DDGI's shading module (`wgsl/shading.ts`; `giProbeIrradianceAt` in `globalsCode`): one probe's irradiance for a direction, bilinear in its own tile, no blend or visibility; the probe found from its points-view index through the volume table. The contract's `points` `DebugView` gains an optional `irradianceFunction` (`stats.ts`); DDGI sets it (`DDGI_PROBE_IRRADIANCE_FUNCTION`). Viewer: `probe-spheres.ts` colours by `'irradiance'`: E/π for the sphere's normal, the state colour on the rim where |n·v| < 0.45 (as RTXGI's `ProbesRGS.hlsl`); the rim now uses the direction to the eye, not the view axis. Panel choice "Its own light (RTXGI view)", link `probecolor=irradiance`, help text, legend, viewer README; a url-state test.
+Verified (RTX 3060, Chrome 157 headless): the viewer opened at `probes=1&probecolor=irradiance` on two-room (lit room, dark room) and Sponza (colonnade, upper gallery) with a one-off screenshot script (recompiles 0, no errors), then again with the contact sheet (`contact-sheet.ts --only two-room,sponza --query "probes=1&probecolor=irradiance"`, 0 errors; it does the same, so the script wasn't kept). I looked at each picture: lit-room probes bright and dark-room probes dark grey, lit probes seen through the doorway from the dark room bright, off probes black with their state rim, Sponza's shadowed probes dark blue (sky light). Pictures in `bench/screenshots/tu5-dv03/` and `tu5-dv03-sheet/` (gitignored). `ddgi-shading-consistency`, `three-neutrality`, `platform-recompiles` PASS with the module's new function. Unit tests for the entry point.
+Not verified: Intel; Safari; the Mac. On Sponza the rim colours are washed out by the scene's high exposure, as the state view's colours already were.
+Next: none for DV-03.
+
+## 2026-11-19 · TU.5 DV-01: RTXGI's back-face rule, built and measured, off by default · implementer (opus)
+Did: worktree `gi-tu5`, branch `tu5-divergence` (from `win-tu-checks` 4198c6c). New setting `backFaceRayThreshold` (settings.ts; `null` default = our old rule, back-face rays are black samples; a number = RTXGI's `probeRandomRayBackfaceThreshold`, `RTXGI_BACK_FACE_RAY_THRESHOLD` 0.1). `wgsl/blend.ts`: back-face blended rays leave the irradiance average; an update with at least ⌊N × t⌋ (min 1) blended back faces is `DDGI_UPDATE_SKIPPED`: old irradiance tiles and history kept, distances blend, a state-3 probe stays in state 3, one owed update taken off (as RTXGI's early `return`, `ProbeBlendingCS.hlsl:417-465`). Uniform word 97 (`layout.ts`, `wgsl/common.ts`); census word "updates skipped for back faces (total)". Unit test for the setting's mapping (ddgi.test.ts). Rows in `bench/results/checks.csv` and `m4-textured-accuracy.csv`.
+Verified (RTX 3060 Laptop, nvidia/ampere, Chrome 157 headless, bench lock; A/B = same code, default off vs on):
+| check | rule off (default) | rule on |
+|---|---|---|
+| `ddgi-leak` two-room / thin-wall / closed-door | 0.836 / 0.603 / 0.060% PASS | 0.836 / 0.603 / 0.060% PASS (all within 1e-6) |
+| `ddgi-furnace` E/π (mean err, worst) | 0.49925 (0.15%, 3.7%) PASS | the same PASS |
+| `ddgi-change-still` | PASS, 0 skips | PASS; Cornell identical, two-room atlas mean +0.015%; 0 updates skipped on either |
+| Sponza textured, no GTAO vs Cycles: colonnade / upper gallery | +25.46% (FLIP 0.366) / +21.77% (0.394) | +31.50% (0.402) / +22.99% (0.400) |
+On against off, Sponza's GI term is +4.8% (colonnade) and +1.0% (gallery), mostly on the curtains. So the rule takes Sponza further from Cycles and is not the cause of its +22–25%. **Default: off** (DECISIONS 2026-11-19); the setting stays for native parity. Reviewer (Opus, read-only `claude -p` with `.claude/agents/reviewer.md`): pass with notes; its one note (a skipped update keeps `lastUpdateSeconds`) checked: only the hysteresis fade reads it, so the next blended update fades over the time since the last real one, as intended.
+Not verified: the untextured Sponza page (`ddgi-sponza-accuracy/run.ts`): the page passed but the runner timed out reading its 1920×1080 report both times (NOTES); its reference is older than the manifest anyway. Baseline means from its screenshot: indirect 0.001686, full 0.013974. Not run on the Intel (correctness unchanged with the rule off, which is the default). `ddgi-door-swing` and the furnished room (the register's other checks) not run.
+Next: nothing for DV-01 unless Sponza's overshoot is fixed elsewhere (then try the rule again).
+
+## 2026-11-19 · Windows checks ported onto pmndrs/gi; TASKS TU.1, TU.2, TU.4 · implementer (opus)
+Did: cherry-picked the three Windows entries below, their CSV rows (`bench/results/m4-textured-accuracy.csv`, `bench/results/checks.csv`) and `tools/gpu/pages/ddgi-low-warmup` from the old repo's `m34-win` (7375729, 8bd3493, 18b5cac, a0cc24d; not a18be01, whose GTAO-off change `main` already has). Their commit IDs (e6d0d21, f183fb7) are the old repo's. Entries moved to the top, as this log orders them. `docs/milestones/M3-M4.md`: one accuracy table, without GTAO (the default) first and with GTAO second, plus the sponza-full verdict; the "not run on the Mac" lines say what ran. TASKS: TU.2 done; TU.1's Intel half and TU.4's table recorded in their status; Later drops the finished items and gains the 2nd-page Intel hang and the out-of-bar scenes. NOTES: the Intel hang note.
+Verified: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm lint`, `pnpm test` (1,617 pass, 13 skipped) pass; `ddgi-low-warmup` type-checks and builds with vite against this code (paths and harness exports unchanged). No GPU run: the numbers are the Windows sessions'.
+Not verified: `ddgi-low-warmup` wasn't run on this tree.
+Next: TU.1's iPad half and then the `low` batch change; TU.4's door and cabinet, sponza-full's foliage, and switching `m4-textured-accuracy` to no GTAO by default.
+
+## 2026-11-19 (later) · Windows RTX: M4 accuracy without GTAO, and sponza-full's -30% · measurer
+Did: worktree `webgpu-ddgi-win-m34`, `m34-win` at f183fb7 (GTAO off by default), `run.ts --gpu nvidia --no-occlusion` over all 10 scenes under `bench-lock run --no-cool-wait`; no code changes. Thermal verdict INVALID (42% throttled), no timing used. Rows added to `bench/results/m4-textured-accuracy.csv` (setting "no GTAO"), full table in `docs/milestones/M3-M4.md`.
+| scene | cameras | mean error without GTAO | FLIP 8x8 |
+|---|---|---|---|
+| textured-furnace | corner / opposite / overview | -0.86 / -1.14 / -0.48% | 0.029 / 0.028 / 0.022 |
+| uv-board | front / ground / top-row | -3.51 / -3.81 / -1.53% | 0.046 / 0.053 / 0.052 |
+| alpha-checker | lit / dark / dark-floor | +2.25 / +7.71 / +10.78% | 0.051 / 0.204 / 0.204 |
+| glass-wall | lit / dark / dark-floor | -0.31 / -26.66 / -31.37% | 0.101 / 0.168 / 0.173 |
+| sponza | colonnade / gallery | +25.46 / +21.77% | 0.366 / 0.394 |
+| furnished-room | corner / window | -6.10 / -5.39% | 0.085 / 0.088 |
+| courtyard-tree | gateway / SE / under | -1.45 / -2.71 / -2.57% | 0.083 / 0.083 / 0.110 |
+| bistro-exterior | across / street | +10.40 / +4.41% | 0.278 / 0.301 |
+| bistro-interior | bar / dining | -1.71 / +0.71% | 0.301 / 0.261 |
+| sponza-full | colonnade | -16.21% | 0.722 |
+Out of the +-10% bar without GTAO: Sponza, alpha-checker dark floor (+10.8%), Bistro across-the-street (+10.4%), glass-wall dark views (the known composite gap), sponza-full.
+**sponza-full verdict (looked, not fixed):** not reference noise. The reference's 8x8 block noise is 6.9%, its top 1% of pixels hold 7.8% of its light (no firefly bias), and the error is colour-systematic. Per channel, ours/reference (no GTAO) is R 0.85, G 0.62, B 1.47: the reference is green (lit leaves), ours is blue-shifted. By image third the ratio is 0.52 left, 0.34 centre (where the cypress foliage fills the view), 1.22 right. With GTAO the mean was -30%, so GTAO had hidden part of it. This points at the foliage materials: the cypress leaves are BLEND (stochastic) in our walk, so the sky comes through leaf gaps and the green bounce from leaves is weaker than in the reference, where the leaf is a solid green surface or differently alpha'd. Whether the reference or our alpha handling is the odd one out needs a check of how the Cycles materials treat the cypress alpha (its json lists 46 metallic-folded materials, IvyLeaf among them); a spot to start is a `--no-cutouts` variant of the page or the cypress-only comparison. Not our GI field in general: the same field is within 3% on courtyard-tree, which has stochastic foliage too.
+
+## 2026-11-19 · Windows Intel UHD: tracer re-check, M3's checks, `low` preset, textured furnace · measurer
+Did: worktree `webgpu-ddgi-win-m34`, branch `m34-win` from e6d0d21, no library changes. Intel UHD (vendor intel, architecture gen-12lp), headless Chrome 157.0.8103.79, each command under `bench-lock run --no-cool-wait`, at most 2 pages a command, `trace-materials` and `ddgi-leak`'s re-run alone. Correctness gates only; no timings judged. Rows in `bench/results/checks.csv`. New page `tools/gpu/pages/ddgi-low-warmup` (manual, a measurement, not a gate).
+
+| check | result |
+|---|---|
+| `trace-oracle` (after the shared-edge fix) | PASS 84-89 s: 0 slipped rays in all 8 variants, 2M shared-edge rays each |
+| `trace-materials` (alone) | PASS 19 s: 0 mismatches in all 12 cases (agreement 1; checker cutout 0.99962 of all rays, stochastic quad 0.626 all ambiguous, as on the RTX) |
+| `trace-bench-quick` | PASS 8.6 s: all 4 pairs agree on 133,120 closest rays (0 mismatches); ours-tinybvh closest 17.9 ms median (information only) |
+| `ddgi-furnace` | PASS: E/pi 0.4986, mean error 0.28% (worst 3.8%) |
+| `ddgi-leak` | PASS alone (222 s): two-room 0.83%, thin-wall 0.60%, closed-door 0.06% |
+| `ddgi-change-still`, `ddgi-flicker`, `ddgi-warmup` | PASS (warm-up 16 frames, host = viewer value for value) |
+| `three-neutrality` | PASS (mean difference 5e-9 on Cornell) |
+| `platform-recompiles`, `ddgi-session-recompiles` | PASS, recompiles 0 |
+| `trace-runtime-trees`, `scene-deformed-positions`, `three-wind-tree-gi` | PASS (484 s, 125 s, 54 s) |
+| `three-change-tracking`, `three-deforming-gi` | PASS (76 s, 59 s) |
+| `ddgi-volumes`, `ddgi-camera-volume` | PASS (78 s, 202 s) |
+| `ddgi-wake-air-probes`, `ddgi-deforming-marks` | PASS (35 s, 11 s) |
+| `ddgi-door-swing` | PASS (270 s): open leak 7.5% falling to 0.19% after the swing |
+| `ddgi-textured-furnace` | PASS: flat 0.4986, textured +0.121%, textures-off -0.373% against the 0.5% limit (the limit was raised from 0.1%; the number is the same -0.37% M4 saw) |
+| `low`: `ddgi-furnace`, `platform-recompiles`, `ddgi-leak` (`VITE_DDGI_PRESET=low`) | PASS: furnace 0.4985 (0.30% low, 128 rays), recompiles 0, leak two-room 0.87% |
+| `ddgi-presets` | PASS 115 s (low / medium / high update 13.9 / 19.9 / 27.8 ms on Cornell, 12.9 / 18.3 / 26.1 on two-room; Intel is slower than the RTX, information only) |
+
+**Hang:** one. `ddgi-leak` as the second page of a batch with `ddgi-change-still` (which passed first) hit `DXGI_ERROR_DEVICE_HUNG` (0x887A0006) at 15 s and reported "the GPU device was lost", with a "GPU mesh tree build failed: mapAsync" warning after it. The same page run alone passed. This is the T3.19 batch-hang pattern again, on the 2nd page this time, not the 3rd. No other hang or device loss in about 30 page runs. Pairs after it were fine.
+
+**`low` warm-up (T5.1 leftover).** The harness builds procedural scenes only (sponza and Bistro come out empty there: atlas 0, 5-7 ms frames, so my first runs on them are not valid and are left out), so `ddgi-low-warmup` refines two-room's grid: 25,194 probes, `low` rays and tiles, the technique's own warm-up (16 passes), every frame waited on. 3 runs at the default 4,096 probes a frame: 98 warm-up frames, 3.5-3.7 s, first frame 221-224 ms (pipeline build), then 70 ms for 4 frames, about 47-50 ms after, median 25-26 ms, p90 54-55 ms. No hang, no device loss. Other sizes, one run each:
+| maxProbesPerFrame | warm-up frames | total | frame median / p90 / max |
+|---|---|---|---|
+| 8192 | 49 | 3.8 s | 52 / 113 / 407 ms |
+| 4096 (3 runs) | 98 | 3.5-3.7 s | 25-26 / 54-55 / 221-224 ms |
+| 2048 | 196 | 5.6 s | 28 / 32 / 158 ms |
+| 1024 | 393 | 4.6 s | 9 / 17 / 142 ms |
+| 512 | 787 | 7.9 s | 10 / 12 / 144 ms |
+Frame cost is not linear in probes (probes in empty air are cheap), so per-frame times are rough. The cost of the first frame is the shader build, whatever the batch.
+**Proposed batch for `low`: `maxProbesPerFrame` 1,024** (warm-up frames about 20 ms, so a page keeps turning, in about 4-5 s here; 4,096 gives 50-70 ms hitches for 3.6 s and 8,192 over 100 ms). The Intel did not hang at 4,096 on this scene, so it is a smoothness proposal, not a hang fix; the iPad is slower than this Intel and wants the same or lower. Not changed in code.
+
+Flagged: the `ddgi-leak` hang above. Nothing black, NaN, or on the wrong adapter. Not done: nothing from the list.
+
+## 2026-11-19 · Windows RTX: tracer re-check and M4's remaining accuracy runs · measurer
+Did: worktree `webgpu-ddgi-win-m34`, branch `m34-win` at e6d0d21 (no code changes). RTX 3060 Laptop (nvidia, ampere), headless Chrome 157.0.8103.79, each command under `bench-lock run --no-cool-wait`. Correctness only; timings not judged.
+**Tracer after the Metal shared-edge fix:** `trace-oracle` PASS (75.8 s; 0 mismatches, 0 slipped rays in all 8 variants, 2M shared-edge rays each), `trace-materials` PASS (14.3 s), `trace-bench-quick` PASS (4.6 s; all four tracers agree). No pre-fix RTX numbers in PROGRESS beyond the standing "0 slipped", which still holds.
+**M4 accuracy** (`node tools/gpu/pages/m4-textured-accuracy/run.ts --gpu nvidia --scenes ...`, GTAO on the GI term, Bistro with three's textures capped at 1024; rows in `bench/results/m4-textured-accuracy.csv`; table filled in `docs/milestones/M3-M4.md`). Recompiles 0 on every scene.
+| scene | camera | mean error | FLIP 8x8 | block err | ref noise px | store MB | probes |
+|---|---|---|---|---|---|---|---|
+| bistro-exterior | across-the-street | +2.20% | 0.263 | 17.0% | 9.6% | 48.3 | 28952 |
+| bistro-exterior | street | -3.81% | 0.282 | 23.0% | 11.2% | 48.3 | 28952 |
+| bistro-interior | bar | -9.47% | 0.310 | 20.3% | 29.2% | 25.0 | 19200 |
+| bistro-interior | dining-room | -9.16% | 0.283 | 17.8% | 32.3% | 25.0 | 19200 |
+| courtyard-tree | from-the-gateway | -4.29% | 0.097 | 5.9% | 3.4% | 2.0 | 4840 |
+| courtyard-tree | from-the-south-east | -5.52% | 0.098 | 6.0% | n/m | 2.0 | 4840 |
+| courtyard-tree | under-the-tree | -4.65% | 0.130 | 4.9% | n/m | 2.0 | 4840 |
+| alpha-checker | lit-room | -6.16% | 0.103 | 8.7% | 4.0% | 0.7 | 1071 |
+| alpha-checker | dark-room | -2.35% | 0.260 | 27.9% | n/m | 0.7 | 1071 |
+| alpha-checker | dark-room-floor | +3.64% | 0.251 | 28.2% | n/m | 0.7 | 1071 |
+| sponza-full | colonnade-from-the-floor | -30.42% | 0.703 | 66.7% | 50.3% | 19.7 | 19425 |
+Bistro side street: GI's mean is -3.8% against Cycles (inside the +-10% bar); in the side-by-side both are equally dark, so GI is not too dark there. FLIP 0.28 is detail, not level.
+Flagged: sponza-full is -30.4% (FLIP 0.70), out of the bar; cause not investigated. Bistro interior sits near the bar. FLIP is over 0.15 on both Bistros and the dark alpha-checker views. Thermal verdict INVALID (62% throttled samples); no timing used. A lock held by another process ("intel t1 oracle+quick", pid 65268) was waited on, not touched.
+Not done: the GTAO on/off A/B (skipped on Dennis's word; the Mac turned GTAO off by default), FLIP summary of the older scenes, the door and cabinet end states.
+
 ## 2026-11-18 · handoff from pmndrs/pathtracer: tracing for Split Radiance Cascades · pathtracer lead (opus)
 Did: nothing in this repo except this note. pmndrs/pathtracer main (commit 63134b5, pushed) now has interval tracing in `@pmndrs/raytracer` for a Split RC technique here: inline WGSL `rtClosestInterval(origin, dir, t0, t1, mask)` (enable with `rtModuleWgsl(caps, { intervals: true })`), and a batched `RtIntervalTracer` (ray sources `rays` and `probes`; outputs `hit`, `distance`, `visible`, `shaded`). Design and API: `docs/design/split-rc-tracing.md` in the pathtracer repo; read it first.
 Verified (in pathtracer, Apple M5 Pro, headless Chrome 157): intervals are half-open and exact on the f32 `t`: `(t0, t1]` by default (the paper's convention), `[t0, t1)` with `convention: 'closed-low'`. 1.03 million interval and boundary rays against the CPU walk: 0 mismatches. One ray traced through every cascade gives the same answer as the unbounded ray (75,264 cells, 0 differ).

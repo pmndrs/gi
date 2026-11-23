@@ -131,6 +131,7 @@ Other members:
 
 - `volume.recalibrate()` measures again how much probe work fits the budget, over the next frames. Use it after a big scene change.
 - `await volume.restart({ budget, warmUp, camera })` starts the probes over: it forgets the field and the calibration and runs the warm-up again, for after the scene changed a lot. `volume.isStarted` says whether `start` has finished.
+- `volume.resetProbes({ offsets, states })` is the lighter reset: `offsets: true` puts every probe back at its grid point for relocation to move again, `states: true` brings back every probe classification switched off for classification to decide again, and both together do both. The probes keep what they have learned, and there is no warm-up. `{}` does nothing (each flag is false unless given). It takes effect in the next render, and throws before `start` has finished. platform.md, "Resetting offsets and states", says exactly what happens to each probe.
 - `volume.threeGI` (budget, `markChanged`, timings) and `volume.platform` (stats, debug views, `hitShadingSettings`) are there after `start`. `volume.platform.hitShadingSettings.sampleTextures = false` makes GI's rays see each texture's mean colour instead of the texel they hit, for comparisons (platform.md, "Materials and textures").
 - `volume.light` is the GI light (`ddgi()` reads it).
 - `await volume.exportLightProbeGrid()` gives a snapshot of the GI as three's `LightProbeGrid` ("Exporting a `LightProbeGrid`" below).

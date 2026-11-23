@@ -16,7 +16,7 @@ import {
 } from './layout.ts';
 import { borderSource, octDecode, octEncode, texelDirection } from './octahedral.ts';
 import { frameRayRotation, quaternionToMatrix, seededRandom, uniformRandomQuaternion } from './ray-rotation.ts';
-import { blendSettings, CHANGE_RULE_OFF, clockStep, FIXED_RAYS, MAX_CLOCK_STEP_SECONDS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
+import { blendedRaysPerProbe, blendSettings, CHANGE_RULE_OFF, clockStep, FIXED_RAYS, MAX_CLOCK_STEP_SECONDS, distanceClamp, effectiveMaxRayDistance, effectiveRaysPerProbe, probeGrid, resolveBias, RTXGI_BACK_FACE_RAY_THRESHOLD, setAsideRays, UNBOUNDED_RAY_DISTANCE, withDefaults } from './settings.ts';
 import { cameraWeight, frustumPlanes } from './camera.ts';
 import { priorityBucket, priorityCount, scheduleOnCpu, scrambleStride } from './schedule.ts';
 import { scheduleKernelWgsl } from './wgsl/schedule.ts';
@@ -74,6 +74,17 @@ describe('settings', () => {
         expect(blendSettings({ ...settings, irradianceChangeThreshold: Number.NaN }).irradianceChangeThreshold).toBe(CHANGE_RULE_OFF);
     });
 
+    it("gives the kernel RTXGI's back-face threshold as a share, or a negative value for the old black-sample rule", () => {
+        const settings = withDefaults({ volume: { center: [0, 0, 0], size: [1, 1, 1], spacing: 1 } });
+        expect(blendSettings({ ...settings, backFaceRayThreshold: null }).backFaceRayThreshold).toBeLessThan(0);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: RTXGI_BACK_FACE_RAY_THRESHOLD }).backFaceRayThreshold).toBe(0.1);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: 0.25 }).backFaceRayThreshold).toBe(0.25);
+        // A share: kept to 0..1, and nonsense falls back to RTXGI's default rather than switching the rule off.
+        expect(blendSettings({ ...settings, backFaceRayThreshold: 3 }).backFaceRayThreshold).toBe(1);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: -0.5 }).backFaceRayThreshold).toBe(0);
+        expect(blendSettings({ ...settings, backFaceRayThreshold: Number.NaN }).backFaceRayThreshold).toBe(RTXGI_BACK_FACE_RAY_THRESHOLD);
+    });
+
     it('gives the kernel 1 / tau for the memory time, 0 for never forgetting, and the default for nonsense', () => {
         const settings = withDefaults({ volume: { center: [0, 0, 0], size: [1, 1, 1], spacing: 1 } });
         expect(blendSettings({ ...settings, hysteresisMemorySeconds: 4 }).inverseMemorySeconds).toBe(0.25);
@@ -109,6 +120,17 @@ describe('settings', () => {
         expect(effectiveRaysPerProbe(10)).toBe(64);
         expect(effectiveRaysPerProbe(4000)).toBe(512);
         expect(effectiveRaysPerProbe(Number.NaN)).toBe(256);
+    });
+
+    it('sets the 32 fixed rays aside only while relocation or classification is on (DV-07)', () => {
+        const defaults = withDefaults({ volume: { center: [0, 0, 0], size: [2, 2, 2], spacing: 1 } });
+        expect(setAsideRays(defaults)).toBe(FIXED_RAYS);
+        expect(blendedRaysPerProbe(256, defaults)).toBe(256 - FIXED_RAYS);
+        expect(setAsideRays({ relocation: true, classification: false })).toBe(FIXED_RAYS);
+        expect(setAsideRays({ relocation: false, classification: true })).toBe(FIXED_RAYS);
+        expect(setAsideRays({ relocation: false, classification: false })).toBe(0);
+        expect(blendedRaysPerProbe(256, { relocation: false, classification: false })).toBe(256);
+        expect(blendedRaysPerProbe(64, { relocation: true, classification: true })).toBe(32);
     });
 
     it('resolves auto biases to 0.1 of the smallest spacing', () => {
@@ -403,6 +425,17 @@ describe('the WGSL', () => {
             writeKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, distanceFormat: 'rg16float' }),
         ];
         for (const code of kernels) expect(code.match(/@group\((\d)\)/g)?.every((match: string) => match === '@group(1)')).toBe(true);
+    });
+
+    it('blends from the first ray after the set-aside ones, and turns the rays the same way (DV-07)', () => {
+        const blend = blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch, reduction: 'subgroups' });
+        // The set-aside count follows relocation and classification, as RTXGI's DDGIGetProbeRayDirection.
+        expect(DDGI_COMMON_WGSL).toMatch(/fn ddgiSetAsideRays\(\) -> u32 \{\s*return select\(0u, DDGI_FIXED_RAYS, ddgi\.relocation != 0u \|\| ddgi\.classification != 0u\);/);
+        expect(DDGI_COMMON_WGSL).toContain('ddgiSphericalFibonacci(index - setAside, ddgi.raysPerProbe - setAside)');
+        expect(blend).toContain('let blendedRays = ddgi.raysPerProbe - setAsideRays;');
+        // No blended-ray loop starts at the constant.
+        expect(blend).not.toMatch(/DDGI_FIXED_RAYS \+ blended/);
+        expect(DDGI_TRACE_WGSL).toContain('let isFixed = rayIndex < ddgiSetAsideRays();');
     });
 
     it('builds phase B subgroups first, with the declared fallback free of subgroup calls', () => {

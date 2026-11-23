@@ -5,6 +5,7 @@
  * ```wgsl
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
  * fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface   // textures at a ray cone's footprint
+ * fn giBounceAlbedo(surface: GiSurface) -> vec3f   // the albedo for bounce light: capped at bounceAlbedoCap
  * fn giDirectIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> vec3f
  * fn giDirectGroupIrradiance(surface: GiSurface, groupMask: u32, random: vec2f) -> GiDirectGroups  // the same, split by light group 0-3
  * fn giDirectSplitIrradiance(surface: GiSurface, groupMask: u32, sunApart: bool, random: vec2f) -> GiDirectGroups  // and the sun apart, in white
@@ -111,7 +112,7 @@ struct GiSurface {
     normal: vec3f,          // shading normal: the interpolated vertex normal if the mesh has normals, facing the ray's side
     geometricNormal: vec3f, // the triangle's own unit normal, out of the authored front side (for front/back decisions)
     uv: vec2f,              // uv set 0, interpolated; (0, 0) without uvs
-    albedo: vec3f,          // diffuse albedo: colour x albedo texture x (1 - metalness x metalness texture), capped per channel at bounceAlbedoCap
+    albedo: vec3f,          // diffuse albedo: colour x albedo texture x (1 - metalness x metalness texture); bounce light uses giBounceAlbedo
     emission: vec3f,        // emitted radiance: emissive x intensity x emissive texture
     material: u32,
     instance: u32,
@@ -241,12 +242,23 @@ fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface {
         normal,
         geometricNormal,
         giInstanceUvAt(hit.instance, hit.triangle, hit.barycentrics, 0u),
-        min(albedo, vec3f(giShade.bounceAlbedoCap)),
+        albedo,
         emission,
         materialIndex,
         hit.instance,
         hit.frontFace,
     );
+}
+
+// The albedo a technique multiplies its bounce light by: the surface's,
+// capped per channel at bounceAlbedoCap. Only the bounce term is capped,
+// as in native RTXGI's sample (ProbeTraceRGS.hlsl: radiance = diffuse +
+// min(albedo, 0.9) / pi x irradiance, where diffuse already holds the
+// direct light times the full albedo), which caps it to stand for the
+// energy a real surface loses at each bounce. Direct light (gi/direct,
+// giDirectIrradiance's callers) uses surface.albedo as it is (DV-08).
+fn giBounceAlbedo(surface: GiSurface) -> vec3f {
+    return min(surface.albedo, vec3f(giShade.bounceAlbedoCap));
 }
 
 // ---- Textures at a hit --------------------------------------------------------------------

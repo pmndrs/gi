@@ -148,6 +148,7 @@ const PRESET_LABELS: Record<DDGIPresetName, string> = {
 const PROBE_COLOR_LABELS: Record<ProbeColorName, string> = {
     state: 'State (active, off, not updated yet)',
     history: 'How settled (updates averaged)',
+    irradiance: 'Its own light (RTXGI view)',
 };
 
 const ATLAS_LABELS: Record<AtlasName | 'none', string> = {

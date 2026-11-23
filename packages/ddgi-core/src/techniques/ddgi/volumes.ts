@@ -97,7 +97,8 @@ export const MAX_BLENDED_VOLUMES = 2;
  *   follow from it;
  * - `fade`: xyz how wide the fade band is on each axis, in spacings
  *   (COVERAGE_FADE_SPACINGS for a fixed volume, scroll.ts's
- *   `cameraFadeSpacings` for a camera-following one), w unused;
+ *   `cameraFadeSpacings` for a camera-following one); w 1 when the sampling
+ *   weights have RTXGI's floors (`samplingWeightFloors`, DV-06), else 0;
  * - `validMin`, `validMax`: xyz the valid extent's low and high sides in
  *   lattice units, where coverage fades (scroll.ts), w unused. For a fixed
  *   volume its first and last probes. **Written by the GPU** for a
@@ -250,9 +251,9 @@ export function writeVolumeParameters(
 /**
  * The rest of a volume-table row after the sampling `vec4f`s, into `target`
  * from `offset` (the row's start): the window's first probe in lattice units,
- * the fade's width per axis, and the valid extent (VOLUME_TABLE_TEXEL). A
- * fixed volume: window 0, fade FIXED_VOLUME_FADE, the extent its first and
- * last probes.
+ * the fade's width per axis, whether the sampling weights have RTXGI's
+ * floors, and the valid extent (VOLUME_TABLE_TEXEL). A fixed volume: window
+ * 0, fade FIXED_VOLUME_FADE, the extent its first and last probes.
  */
 export function writeVolumeWindow(
     target: Float32Array,
@@ -260,9 +261,10 @@ export function writeVolumeWindow(
     window: readonly [number, number, number],
     fade: readonly [number, number, number],
     extent: ValidExtent,
+    samplingWeightFloors: boolean,
 ): void {
     target.set([...window, 0], offset + VOLUME_TABLE_TEXEL.window * 4);
-    target.set([...fade, 0], offset + VOLUME_TABLE_TEXEL.fade * 4);
+    target.set([...fade, samplingWeightFloors ? 1 : 0], offset + VOLUME_TABLE_TEXEL.fade * 4);
     target.set([...extent.min, 0], offset + VOLUME_TABLE_TEXEL.validMin * 4);
     target.set([...extent.max, 0], offset + VOLUME_TABLE_TEXEL.validMax * 4);
 }

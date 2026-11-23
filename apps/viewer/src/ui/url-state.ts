@@ -26,7 +26,8 @@
  * - `rcblend`, `rcfill`, `rccap`, ... the radiance cache's compare toggles (RC4.5), each under its
  *                registry entry's `urlName` (packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts),
  *                written only when it differs from ours: `rcblend=capsaicin-hysteresis&rcfill=capsaicin`
- * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
+ * - `probecolor` `history` colours DDGI's probe spheres by how settled they are, `irradiance` by each
+ *                probe's own light (RTXGI's probe view) (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
  * - `atlasev`    extra exposure for the irradiance atlas, in stops
@@ -79,7 +80,7 @@ export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only',
 export type RadianceCacheScreenViewName = 'probe-atlas' | 'probe-mask' | 'probe-sh';
 export const RADIANCE_CACHE_SCREEN_VIEW_NAMES: readonly RadianceCacheScreenViewName[] = ['probe-atlas', 'probe-mask', 'probe-sh'];
 
-export type ProbeColorName = 'state' | 'history';
+export type ProbeColorName = 'state' | 'history' | 'irradiance';
 export type AtlasName = 'irradiance' | 'distance';
 const ATLAS_NAMES: readonly AtlasName[] = ['irradiance', 'distance'];
 
@@ -290,7 +291,8 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
     state.rcDebug = RADIANCE_CACHE_SCREEN_VIEW_NAMES.find((name) => name === params.get('rcdebug')) ?? null;
     state.rcCompare = readCompareValues(params);
-    if (params.get('probecolor') === 'history') state.probeColor = 'history';
+    const probeColor = params.get('probecolor');
+    if (probeColor === 'history' || probeColor === 'irradiance') state.probeColor = probeColor;
     state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
     state.atlasFill = params.get('atlasfill') === '1';
     const atlasEv = finiteNumber(params.get('atlasev'));

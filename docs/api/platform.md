@@ -68,7 +68,7 @@ gi.encode(encoder, { deltaTime, budget: preset.budget, camera });
 
 A preset has four parts:
 
-- `ddgi`: the DDGI settings it changes (rays per probe and the two tile sizes). Every other setting keeps its default. Spread it before your own settings, so yours win.
+- `ddgi`: the DDGI settings it changes (rays per probe, the two tile sizes and the warm-up batch). Every other setting keeps its default. Spread it before your own settings, so yours win.
 - `budget`: the per-frame budget to pass as `frame.budget`.
 - `textureLayerSize`: `createGI`'s option for the texture store, the platform's own copy of every material texture that rays read.
 - `probeSpacing`: metres between probes, for hosts that don't set a spacing themselves (three: a `DDGIVolume` made without probe counts). A host that sets one keeps it.
@@ -81,6 +81,7 @@ A preset has four parts:
 | Budget (`budget.gpuMs`) | 1 ms | 1.5 ms | 2 ms | Fewer probes updated a frame, so light follows changes more slowly. The platform's floor still sweeps every probe within a few seconds. |
 | Texture store (`textureLayerSize`) | 128² | 256² | 256² | Only rays hitting a texture up close see fewer texels: GI rays mostly read coarse mips. A quarter of the memory. |
 | Spacing when the host sets none (`probeSpacing`) | 2 m | 1.5 m | 1 m | Light that changes over less than the spacing (a doorway, a corner) blurs. 2 m has an eighth of 1 m's probes. |
+| Warm-up batch (`maxProbesPerFrame`) | 1,024 | 4,096 | 4,096 | The warm-up takes a little longer, in shorter frames. On the Intel UHD (two-room refined to 25,194 probes, `ddgi-low-warmup`): 4,096 gave 47–70 ms frames for 3.6 s, 1,024 about 20 ms frames for 4.6 s (TU.1, DECISIONS 2026-11-19). It is also the most probes any frame may update. |
 
 `high` is exactly the defaults: what M1 to M4 were checked with on the RTX 3060, and what the M5 Pro runs. A unit test holds it to that (`presets.test.ts`). `low` is for the correctness devices (the Intel UHD, the iPad, older iOS). Values are from the settings' own ranges, not tuned (DECISIONS 2026-11-10, "Feature coverage before tuning").
 
@@ -143,7 +144,7 @@ gi.scene.destroyLight(spot);
 
 A light change re-traces only the probes the light reaches (its influence radius: where its light falls below 1/1,000 of the scene's brightest), nearest the camera first. Hundreds of lights are fine: past 8 point and spot lights, rays pick from a grid of nearby lights instead of testing every one (`HitShadingSettings`, below).
 
-**Emissive surfaces aren't light sources to hit shading.** Their light reaches the GI only when a probe's ray happens to hit them, so a small, bright emitter is noisy in the probes. Sampling emitters directly (next-event estimation, promised for M2 in DECISIONS 2026-11-05) wasn't built; area lights, which would cover it, are in TASKS Later.
+**Emissive surfaces aren't light sources to hit shading.** Their light reaches the GI only when a probe's ray happens to hit them, so a small, bright emitter is noisy in the probes. Sampling emitters directly (next-event estimation, promised for M2 in DECISIONS 2026-11-05) wasn't built; area lights, which would cover it, are [issue #29](https://github.com/pmndrs/gi/issues/29).
 
 **Light groups** let a host dim or recolour a whole group of lights in GI in the same frame, with no rays traced again and no noise (T2.5). A light's group (0 to 3) is scene data, on the light. The weights belong to DDGI, and are turned on in its settings:
 
@@ -405,7 +406,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | --- | --- |
 | `ShadingModule` | `gi.shading`: the WGSL, its `parameters`, `globalsCode(group)`, `writeUniforms`, `version` ([the adapter guide, step 9](../guides/adapter.md#step-9-sampling-gi-in-your-shaders)). |
 | `ShadingParameter` | One resource the module's functions take: a texture, a sampler or a `vec4f`. |
-| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture. |
+| `DebugView` | A debug view a technique offers: a screen view by id, or points (probes) in a texture, optionally with the shading-module function that gives each point's own light (`irradianceFunction`). |
 
 ### Stats and GPU timing
 
@@ -463,7 +464,8 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 
 | Name | What it is |
 | --- | --- |
-| `DDGITechnique` | DDGI. `new DDGITechnique(settings)`; then `settings` (live), `field`, `counters`, `debugViews`, `shading`, `setGroupWeight`, `setEnvironmentWeight`, `resetHistory`. |
+| `DDGITechnique` | DDGI. `new DDGITechnique(settings)`; then `settings` (live), `field`, `counters`, `debugViews`, `shading`, `setGroupWeight`, `setEnvironmentWeight`, `resetHistory`, `resetProbes` ("Resetting offsets and states" below). |
+| `ProbeResetRequest` | What `DDGITechnique.resetProbes` takes: `{ offsets?: boolean; states?: boolean }`, each false unless given. |
 | `DDGISettings` | Every DDGI setting. Most are read every frame; the volumes, tile sizes, `maxProbesPerFrame`, `lightGroups.count` and `sunLayer` need a new `prepare`. |
 | `DDGISettingsInput` | What the constructor takes: a `volume` or `volumes`, and any other settings. |
 | `DDGILightGroups` | The type of `DDGISettings.lightGroups`: how many groups get a layer of their own (a new `prepare` when it changes), and their live weights. |
@@ -484,6 +486,7 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 | `DDGI_SHADING_PARAMETER_NAMES` | The names of DDGI's shading parameters. |
 | `DDGI_SAMPLE_WGSL` | The one WGSL function that samples DDGI's field, for engine-free test views. |
 | `DDGI_DEBUG_VIEW` | DDGI's debug view ids: `points`, `giOnly`, `coverage`, `probeStates`. |
+| `DDGI_PROBE_IRRADIANCE_FUNCTION` | `'giProbeIrradiance'`, the shading-module function the `points` view names for each probe's own light. |
 | `DDGI_DEBUG_COLORS` | The colours its debug views use, for checks. |
 
 ### Quality presets
@@ -532,7 +535,7 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 - **`SceneChanges`** lists the dirty world-space boxes since the last frame, with a reason: geometry, material or light. A moved object gives two boxes, where it was and where it is now. Changes with no useful box (the sun, the environment) are flagged as global. This is what lets a technique update "probes near a change first".
   - *Since T2.4a* it also lists every changed light, `lights: LightChange[]`: the light before and after (`null` for created or destroyed), its index in the light table, and its **influence radius** on each side: where its irradiance, without three's range window, falls below 1/1,000 of the scene's reference (the brightest directional light's, or the brightest local light's at 1 m), capped by `range`. A light's box is that radius, so a light with `range: 0` is local now, not global. The light table starts with room for 64 lights and doubles as it fills (4,096 is 256 KB); growing rebuilds bind groups, never pipelines (T2.1, `platform-recompiles`). Up to 1,024 a frame; past that the list is empty, `lightsOverflowed` is true and the frame counts as global (`'lights'`). Several edits of a light in one frame arrive as one change, and a light that ends where it began is left out. Technique-facing; hosts never see it.
 - **Scene queries are a backend, not a BVH.** v1 has `rays`: `giTraceClosest(ray) -> GiHit` and `giTraceAny(ray) -> bool`. Techniques can call them inside their own kernels, or run a batch from buffers. A host could swap in another tracer that keeps the same WGSL signatures.
-- **Hit shading** is shared: `giSurfaceAt(ray, hit)`, `giDirectIrradiance(surface, groupMask, random)`, `giSkyRadiance(direction)`. Direct light caps the number of shadowed lights per hit and picks the rest stochastically, so hit cost stays flat as the light count rises toward the 32-light minimum. `bounceAlbedoCap` exists so we can match native RTXGI (0.9) when comparing.
+- **Hit shading** is shared: `giSurfaceAt(ray, hit)`, `giDirectIrradiance(surface, groupMask, random)`, `giSkyRadiance(direction)`. Direct light caps the number of shadowed lights per hit and picks the rest stochastically, so hit cost stays flat as the light count rises toward the 32-light minimum. `bounceAlbedoCap` exists so we can match native RTXGI (0.9) when comparing; like native's, it caps the albedo of the bounce term only (`giBounceAlbedo`), not of direct light.
 - **The sky** (T1.4; re-baked on the GPU since T2.6a, `platform/sky/`): `setEnvironment` is baked into a 256 × 128 radiance map for rays that miss, and the sky's harmonics integrated over that map: irradiance SH (bands 0, 1, 2, 4) for `giSkyIrradiance`, and radiance SH (bands 0-2) for techniques that follow the sky's shape. A `procedural` sky is evaluated on the GPU (Preetham, calibrated against open ground as the sky files are), so time of day can re-bake it every frame: it re-bakes when the sun has turned more than 0.05° since the last bake, or turbidity, `intensity` or `sunIlluminance` changed (its cost: PROGRESS, T2.6a). Other sources re-bake on every `setEnvironment`. `HitShading.skyChange` gives kernels the radiance SH now and when the techniques were last handed an environment change, so a technique can size a sky change on the GPU (DDGI's mark does).
 - **Bounce light comes from a bounce source,** which is any technique's shading module. For DDGI it's its own previous field (unlimited bounces). For a stacked technique it's the fallback technique below it.
 
@@ -556,8 +559,9 @@ The functions are:
 - `giIrradiance(position, normal, viewDirection, screenUV, ...)` returns irradiance E. The renderer applies albedo/π.
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
 - `provides.worldSpaceIrradiance` (P6.3) says `giIrradiance` answers at any world point from the position and normal alone, `screenUV` unused (DDGI: true; the radiance cache: false). A technique that reads another as its bounce source in compute (the radiance cache's `secondBounce`) requires it.
-- `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It is on SPEC's after-v1 list.
+- `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It isn't built yet: it is on SPEC's after-v1 list, as [issue #31](https://github.com/pmndrs/gi/issues/31).
 - `giDebugColor(position, normal, view, screenUV, ...)` drives the debug views.
+- A technique may add its own functions. DDGI's `giProbeIrradiance(point, direction, ...)` returns the irradiance one probe holds for a surface facing `direction`, from that probe's tile alone (`point` is its index in the `points` debug view). The `points` view names it in `irradianceFunction`, so an adapter can shade each probe's sphere by its own light, RTXGI's standard probe view (TU.5, DV-03).
 
 `screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it. `giDebugColor` got it in RC2.2 (revision below), so the radiance cache can draw its probe atlas, probe mask and SH views by the pixel's place.
 
@@ -668,12 +672,34 @@ if (loaded.stale) console.log('the scene changed since:', loaded.changedParts);
 
 Each part is order-free, so two loads that create objects in another order agree. Bump `FINGERPRINT_VERSION` when what a part covers changes.
 
+## Resetting offsets and states (DDGI, DV-12)
+
+`resetHistory()` forgets everything: every probe starts again from its grid point, unlit, and the warm-up runs again. DDGI also has a lighter reset for the two things relocation and classification decide, for when the geometry around the probes changed in a way they won't undo by themselves. It is DDGI's, not the platform's: `DDGITechnique.resetProbes(what)`. The probes keep their irradiance, distances and history, and there is no warm-up.
+
+```ts
+ddgi.resetProbes({ offsets: true });                // every probe back to its grid point
+ddgi.resetProbes({ states: true });                 // every probe that was switched off comes back on
+ddgi.resetProbes({ offsets: true, states: true });  // both
+ddgi.resetProbes({});                               // nothing: each flag is false unless given
+```
+
+- **Offsets:** each probe's relocation offset goes back to 0 and its state stays. Relocation moves it again over its usual updates. A probe that relocation had moved out of geometry is inside it again until its next update, is switched off for that update (as at the start), and comes back on from where relocation moves it. A probe that is off for being inside geometry stays put, since relocation has had its go at it; reset the states too to give it another.
+- **States:** each probe that classification switched off ("inside geometry" or "no surface nearby") becomes "not updated yet", which is how an off probe always comes back on. Its next update traces all its rays and classification decides again; if it stays on, it starts its light from nothing and shading uses it after two blended updates. Active probes and probes not updated yet keep their state, since classification looks at them at every update anyway. Offsets stay. RTXGI's reset makes every probe active instead; ours goes through "not updated yet" so shading never reads an off probe's stale tiles or a tile that was never blended. So in the frame of a states-only reset, nothing renderers see changes.
+- **When:** in the next `encode`, before any update, as one small GPU pass (`ddgi/reset-probes`). The offset and the state share each probe's probe-data texel and the CPU knows neither, so the pass reads a copy of that texture and writes it back with the `points` debug view. The copy (8 bytes a probe) is made at the first reset and kept until the next `prepare`. Calls before a frame add up (`{ offsets }` then `{ states }` is both); a `resetHistory` or `loadField` after the call, before the frame, replaces it. Before `prepare` it does nothing.
+- **A camera-following volume:** its planes count as warm only when few of their probes are "not updated yet", so after a states reset the valid extent waits for those probes' next update before it grows over them.
+
+Through three, `volume.resetProbes(what)` (three.md).
+
 ## Revisions
 
 ### Radiance-cache phase 2, 2026-11-19 (RC2.2)
 
 - **Host- and technique-facing: `giDebugColor(position, normal, view, screenUV, ...)`.** The debug colour takes the pixel's screen position (0..1, top left 0), as `giIrradiance` has it, so a screen-space technique can draw its views by the pixel's place (the radiance cache's probe atlas, probe mask and SH). `globalsCode` writes `giDebugColorAt(position, normal, view, screenUV)`. DDGI's module takes the argument and ignores it; the viewer's debug material passes three's `screenUV`.
 - **Host-facing: `FrameCamera.jitter`** (optional): this frame's sub-pixel jitter as an NDC offset (x right, y up), when the host draws its screen buffers with a jittered projection; the jittered projection is `translate(jitter, 0) × projection`. Screen techniques rebuild positions from `FrameScreen.depth` with it, so they land where the depth was drawn (RC2.1 found half a pixel's error without it). `projection` stays the unjittered one. World-space techniques ignore it. The three adapter fills it, and `projection`, from `ThreeGI.jitter`, a source the host sets when it jitters, giving the NDC jitter and the unjittered projection (for `@pmndrs/upscaler`, `upscalerJitter` after `beginFrame`: `Upscaler.jitter` of `(x, y)` pixels is `(−2x / width, +2y / height)`, as three's `setViewOffset` moves points).
+
+### Issue #20, 2026-11-19
+
+- **Host-facing through DDGI (DV-12; Dennis, 2026-11-19: "yes build it"): `DDGITechnique.resetProbes(what)` and `ProbeResetRequest`** ("Resetting offsets and states" above), and three's `DDGIVolume.resetProbes`. The engine-neutral `resetHistory()` is unchanged. Implementation-only: the `ddgi/reset-probes` kernel, compiled at `prepare` with the others, and its timed pass of that name in frames with a reset.
 
 ### After the M3-M4 questions, 2026-11-18
 

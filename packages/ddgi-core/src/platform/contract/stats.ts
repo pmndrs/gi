@@ -82,4 +82,13 @@ export type DebugView =
           readonly count: () => number;
           /** Meaning of each state value in w, for the legend: `{ 0: 'active', 1: 'inside geometry' }`. */
           readonly states: Readonly<Record<number, string>>;
+          /**
+           * Optional: the name of a function in the technique's shading
+           * module code, `fn <name>(point: u32, direction: vec3f, <the
+           * module's resources>) -> vec3f`, the irradiance E point `point`
+           * (its texel index here) holds for a surface facing `direction`.
+           * Adapters can shade each point's sphere with it, the sphere's
+           * normal as the direction: RTXGI's standard probe view.
+           */
+          readonly irradianceFunction?: string;
       };

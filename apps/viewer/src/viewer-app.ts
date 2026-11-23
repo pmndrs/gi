@@ -947,7 +947,8 @@ export class ViewerApp {
 
     /**
      * The probe legend. By state: each state's colour and, once the GPU has counted them, how many
-     * probes are in it. By history: the colour scale from a few updates to the full count.
+     * probes are in it. By history: the colour scale from a few updates to the full count. By its own
+     * light: the state colours again, which only the rims show.
      */
     private probeLegend(): ProbeLegendEntry[] {
         const ddgi = this.core.ddgi;
@@ -961,9 +962,11 @@ export class ViewerApp {
                 { color: HISTORY_COLORS.notActive, label: 'not active (off, or not updated yet)', count: null },
             ];
         }
+        // By its own light, the ball shows the probe's light and only the rim its state (RTXGI's probe view).
+        const rim = this.url.probeColor === 'irradiance' ? 'rim: ' : '';
         return Object.entries(PROBE_STATE_LABELS).map(([state, label]) => ({
             color: PROBE_STATE_COLORS[Number(state)],
-            label,
+            label: `${rim}${label}`,
             count: ddgi?.probeStateCount(Number(state)) ?? null,
         }));
     }

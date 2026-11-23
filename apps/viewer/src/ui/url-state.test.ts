@@ -85,6 +85,10 @@ describe('url state', () => {
         expect(parseUrlState(serializeUrlState(state))).toEqual(state);
         // The screen-input views (RC1.1) are debug views too.
         expect(parseUrlState('?debug=screen-instance').debug).toBe('screen-instance');
+        // The probes by their own light (DV-03, RTXGI's probe view).
+        const ownLight = parseUrlState('?probes=1&probecolor=irradiance');
+        expect(ownLight.probeColor).toBe('irradiance');
+        expect(serializeUrlState(ownLight)).toContain('probecolor=irradiance');
         // Only the offered scales; anything else is off. The atlas exposure is clamped to the slider.
         const nonsense = parseUrlState('?probecolor=rainbow&atlas=normals&atlasfill=yes&atlasev=99&change=3');
         expect(nonsense).toMatchObject({ probeColor: 'state', atlas: null, atlasFill: false, atlasEv: 10, change: null });
