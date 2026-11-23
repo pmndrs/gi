@@ -10,7 +10,9 @@
  * Scenes as radiance-cache-stability loads them, at 1280 × 720 from their
  * first bookmark, the camera still, screen-probe history on, the
  * interpolation jitter off. Per surface pixel of the interpolated irradiance
- * E (the image the composite reads; no denoiser yet):
+ * E, the raw image before the GI denoiser (RC4.3; the composite reads the
+ * denoiser's output, which this page doesn't measure, and the denoiser feeds
+ * nothing back into E):
  *
  * - **noise:** |E_t − (E_t−1 + E_t+1) / 2| / max(E_t, 5% of the frame's mean),
  *   the second difference, which a steady rise doesn't move;
@@ -35,6 +37,11 @@
  *
  * Only NaN, infinite or negative values and the gates fail.
  *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts);
+ * the E9 settings of each case are set over them. Since RC4.2 the probe filter and the ray-guiding
+ * correction (D64) take most of the noise E9 off shows, but not E9's own, so two-room's ratio rose
+ * from 1.34 to about 1.8 (PROGRESS 2026-11-24, E9's noise gate after RC4.2).
+ *
  * Through the lock: `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-change-noise --gpu nvidia`.
  */
 
@@ -43,7 +50,7 @@ import type { InstanceHandle, LightHandle } from '../../../../packages/ddgi-core
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -51,6 +58,7 @@ import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -161,7 +169,7 @@ async function load(device: GPUDevice, id: string): Promise<Loaded> {
     const bookmark = manifest.cameras[0];
     const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-change-noise ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ interpolationJitter: false }));
+    const technique = platform.addTechnique(pageRadianceCache({ interpolationJitter: false }));
     platform.setOutput(technique);
     await platform.prepare();
     let beforeFrame = (): void => {};
@@ -419,7 +427,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, steps, motions },
+        data: { width: WIDTH, height: HEIGHT, compare: PAGE_COMPARE_VALUES, steps, motions },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
