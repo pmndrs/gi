@@ -3,7 +3,7 @@ import { hashGridTailRuns } from '../world-cache/hash-grid-cache.ts';
 import { hashGridCacheRayListLayout, MULTIBOUNCE_DIRECT_WORDS, NEURAL_TAIL_WORDS, RAY_LISTS_UNIFORM_BYTES } from '../world-cache/hash-grid-population-wgsl.ts';
 import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD } from '../world-cache/hash-grid-wgsl.ts';
 import { loadMlp, type MlpModule } from './mlp-loader.ts';
-import { furnaceCeiling, neuralTailAngles, neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailPosition, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
+import { furnaceCeiling, skyStripsCeiling, neuralTailAngles, neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailPosition, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
 import { DEFAULT_NEURAL_TAIL_SETTINGS, neuralTailSettings } from './neural-tail-settings.ts';
 import {
     gatherCellRecordsWgsl,
@@ -30,6 +30,14 @@ describe('the neural tail (P6.4, register E11)', () => {
         // The every-bounce answer is the fixed point L = ρ fill (L_f + ρ L).
         const ceiling = furnaceCeiling(0.3, 2, 'every-bounce', 0.7);
         expect(ceiling).toBeCloseTo(0.3 * 0.7 * ((0.3 * 2) / Math.PI + 0.3 * ceiling), 12);
+    });
+
+    it('reads the strips under a sky the GPU page judges against (RC3.4)', () => {
+        expect(skyStripsCeiling(0.5, 1, 'second-bounce')).toBeCloseTo(0.125, 12);
+        expect(skyStripsCeiling(0.5, 1, 'every-bounce')).toBeCloseTo(1 / 7, 12);
+        // The fixed point: L_c = ρ L_f with L_f = ρ ((1 − fill) L + fill L_c).
+        const ceiling = skyStripsCeiling(0.3, 2, 'every-bounce', 0.4);
+        expect(ceiling).toBeCloseTo(0.3 * 0.3 * (0.6 * 2 + 0.4 * ceiling), 12);
     });
 
     it('gives each direction two angles in [0, 1]', () => {

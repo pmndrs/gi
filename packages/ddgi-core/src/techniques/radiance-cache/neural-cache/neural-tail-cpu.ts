@@ -89,3 +89,21 @@ export function furnaceCeiling(albedo: number, irradiance: number, mode: 'second
     if (mode === 'second-bounce') return albedo * fill * floor;
     return (albedo * fill * floor) / (1 - albedo * albedo * fill);
 }
+
+/**
+ * A full floor under a ceiling of strips (share `fill` of it, facing down),
+ * albedo ρ, under a constant sky of radiance L and no sun (P6.4 with RC3.4's
+ * sky light): the light leaving the strips. A ray up from the floor finds a
+ * strip with probability `fill` at any angle (thin strips, a fine period) and
+ * the sky otherwise; a strip sees only the floor. So L_f = ρ ((1 − fill) L +
+ * fill L_c) and L_c = ρ L_f.
+ *
+ * - `second-bounce`: GI-1.2's estimate with the sky among the cache's lights,
+ *   ρ × the floor's direct light ρ (1 − fill) L (0.125 at ρ 0.5, L 1, fill 1/2).
+ * - `every-bounce`: ρ × ρ (1 − fill) L / (1 − ρ² fill) (0.1429 there).
+ */
+export function skyStripsCeiling(albedo: number, sky: number, mode: 'second-bounce' | 'every-bounce', fill = 0.5): number {
+    const floorDirect = albedo * (1 - fill) * sky;
+    if (mode === 'second-bounce') return albedo * floorDirect;
+    return (albedo * floorDirect) / (1 - albedo * albedo * fill);
+}

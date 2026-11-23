@@ -86,15 +86,25 @@
  *    and screen records' mean targets and the share of screen records with a
  *    zero target (rays that missed: no sky in the targets).
  *
- * 10. **A sky and no sun** (the corner, floor and wall albedo 0.5, a sky of
- *    radiance 1, 120 frames): before RC3.4 a cache cell gets no sky light
- *    (register D33), so GI-1.2's hit rays read 0, and so must the tail's: its
+ * 10. **A sky and no sun, the sky not a cache light** (the corner, floor and
+ *    wall albedo 0.5, a sky of radiance 1, `environmentLightEnable: false`,
+ *    120 frames): a cache cell then gets no sky light (register D33, as
+ *    before RC3.4), so GI-1.2's hit rays read 0, and so must the tail's: its
  *    screen records take only what the cache holds at a ray's hit, and a
  *    miss is a 0 (a target with the sky in it would light the second hits).
  *    Hit rays' mean under 1% of the lit value, and the screen records'
  *    training targets' mean too (the rays alone wouldn't show a sky in the
  *    targets: the network tells the screen records' view directions apart
  *    from the second hits').
+ * 13. **Strips under a sky, the sky a cache light** (RC3.4, D62: a full
+ *    floor, a ceiling of 5 cm strips every 10 cm facing down 3 m above, albedo
+ *    0.5, a sky of radiance 1, no sun, `environmentLightEnable` on; 300
+ *    frames): a cell's direct value holds the sky now, and a screen record
+ *    takes what the cache holds at its ray's hit (0 on a miss), so the sky is
+ *    counted once. The strips' rays read every bounce, rho * rho (1 - f) L /
+ *    (1 - rho^2 f) = 0.1429 (`skyStripsCeiling`; GI-1.2 0.125): within 2% at
+ *    8 px cells, 6% at Capsaicin's 32 px (the furnace's column tiles). A sky
+ *    in the screen records' misses would read about twice that.
  * 11. **Nothing to learn from** (the lit plane with the camera looking up at
  *    the black sky, 40 frames): no surface on the screen, so no probe rays,
  *    no cell records and no screen records. The gate counts the steps the
@@ -124,7 +134,7 @@ import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { furnaceCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
+import { furnaceCeiling, skyStripsCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
 import { NEURAL_TAIL_COUNT_WORD, NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
@@ -178,6 +188,10 @@ const EVERY_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'every-bounc
 const STRIPS = { width: 0.05, period: 0.1, halfLength: 100, fill: 0.5 } as const;
 const STRIPS_SECOND_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'second-bounce', STRIPS.fill);
 const STRIPS_EVERY_BOUNCE = furnaceCeiling(ALBEDO, FURNACE_SUN_IRRADIANCE, 'every-bounce', STRIPS.fill);
+/** Section 13: a sky of radiance 1 over a full floor and a ceiling of strips. */
+const SKY_RADIANCE = 1;
+const SKY_STRIPS_SECOND_BOUNCE = skyStripsCeiling(ALBEDO, SKY_RADIANCE, 'second-bounce', STRIPS.fill);
+const SKY_STRIPS_EVERY_BOUNCE = skyStripsCeiling(ALBEDO, SKY_RADIANCE, 'every-bounce', STRIPS.fill);
 
 /** The GI-1.2 grid's cell-size constant at Capsaicin's defaults (32 px, min 0.1 m, tiles of 8 cells), for the judged-ray filters. */
 const GI1_CELL_CONSTANTS = { cellSize: hashGridCacheCellSizeConstant(verticalFieldOfView(frameCamera(CORNER_CAMERA, WIDTH, HEIGHT).projection), WIDTH, HEIGHT, 32), minCellSize: 0.1 };
@@ -187,7 +201,7 @@ const GI1: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache:
 const TAIL: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail' };
 const TAIL_NO_SCREEN: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail', neural: { screenStride: 0 } };
 
-type SceneKind = 'litPlane' | 'skyward' | 'corner' | 'skyCorner' | 'furnace' | 'strips';
+type SceneKind = 'litPlane' | 'skyward' | 'corner' | 'skyCorner' | 'furnace' | 'strips' | 'skyStrips';
 type Surface = 'floor' | 'wall' | 'ceiling' | 'other';
 
 interface ProbeRay {
@@ -206,8 +220,11 @@ function quad(platform: GIPlatformImpl, label: string, corners: readonly Vec3[],
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
 }
 
-function stripFloor(platform: GIPlatformImpl): void {
+/** The strips: at y = 0 facing up (the floor, section 3), or at the ceiling's height facing down (section 13). */
+function stripFloor(platform: GIPlatformImpl, ceiling = false): void {
     const { width, period, halfLength } = STRIPS;
+    const y = ceiling ? CEILING_Y : 0;
+    const ny = ceiling ? -1 : 1;
     const count = Math.round((2 * halfLength) / period);
     const positions: number[] = [];
     const normals: number[] = [];
@@ -216,18 +233,26 @@ function stripFloor(platform: GIPlatformImpl): void {
         const z0 = -halfLength + strip * period;
         const z1 = z0 + width;
         const base = strip * 4;
-        positions.push(-halfLength, 0, z1, halfLength, 0, z1, halfLength, 0, z0, -halfLength, 0, z0);
-        normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
-        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        positions.push(-halfLength, y, z1, halfLength, y, z1, halfLength, y, z0, -halfLength, y, z0);
+        normals.push(0, ny, 0, 0, ny, 0, 0, ny, 0, 0, ny, 0);
+        if (ceiling) indices.push(base, base + 2, base + 1, base, base + 3, base + 2);
+        else indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
     }
     const scene = platform.scene;
-    const mesh = scene.createMesh({ positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices), label: 'strip floor' });
-    const material = scene.createMaterial({ albedo: [ALBEDO, ALBEDO, ALBEDO], label: 'strip floor' });
-    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'strip floor' });
+    const label = ceiling ? 'strip ceiling' : 'strip floor';
+    const mesh = scene.createMesh({ positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices), label });
+    const material = scene.createMaterial({ albedo: [ALBEDO, ALBEDO, ALBEDO], label });
+    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
 }
 
 function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
     const half = 200;
+    if (kind === 'skyStrips') {
+        quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
+        stripFloor(platform, true);
+        platform.scene.setEnvironment({ type: 'color', color: [SKY_RADIANCE, SKY_RADIANCE, SKY_RADIANCE], intensity: 1 });
+        return FURNACE_CAMERA;
+    }
     if (kind === 'furnace' || kind === 'strips') {
         if (kind === 'furnace') quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
         else stripFloor(platform);
@@ -249,7 +274,7 @@ function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
 }
 
 function classify(hit: Vec3, kind: SceneKind): Surface {
-    if (kind === 'furnace' || kind === 'strips') return Math.abs(hit[1] - CEILING_Y) < 1e-3 ? 'ceiling' : Math.abs(hit[1]) < 1e-3 ? 'floor' : 'other';
+    if (kind === 'furnace' || kind === 'strips' || kind === 'skyStrips') return Math.abs(hit[1] - CEILING_Y) < 1e-3 ? 'ceiling' : Math.abs(hit[1]) < 1e-3 ? 'floor' : 'other';
     if (Math.abs(hit[1]) < 1e-3) return 'floor';
     if (Math.abs(hit[2]) < 1e-3) return 'wall';
     return 'other';
@@ -1084,8 +1109,9 @@ try {
     // 10. A sky and no sun: the tail brings no sky (screen records are the hits only).
     if (runs(10)) {
         const hitJudge: Judge = (ray) => (ray.hitT >= 0 && (ray.surface === 'floor' || ray.surface === 'wall') ? 0 : null);
-        const [gi1] = await runScenario(device, 'skyCorner', GI1, 120, [hitJudge]);
-        const [tail] = await runScenario(device, 'skyCorner', TAIL, 120, [hitJudge]);
+        // The sky not among the cache's lights (RC3.4's switch off): cells hold no sky, so the tail must bring none.
+        const [gi1] = await runScenario(device, 'skyCorner', { ...GI1, environmentLightEnable: false }, 120, [hitJudge]);
+        const [tail] = await runScenario(device, 'skyCorner', { ...TAIL, environmentLightEnable: false }, 120, [hitJudge]);
         // meanError is the hit rays' mean over the lit value (0.9): a sky of 1 counted at the second hits would give tenths.
         // The training targets themselves: a screen record's target is albedo × the cache's value at its ray's hit, 0 on a miss,
         // and the cache holds nothing here. The rays alone don't show a sky in them: the network can tell the screen records'
@@ -1097,6 +1123,18 @@ try {
         if (!(final(tail) < 0.01)) fail(`sky only: the tail's hit rays read ${(final(tail) * LIT_RADIANCE).toFixed(4)} on average (expected 0: a cell has no sky light before RC3.4, so the tail must bring none)`);
         if (tail.judged < 1000 || !tail.tailGateOpen) fail(`sky only: ${tail.judged} judged rays, gate ${tail.tailGateOpen ? 'open' : 'shut'}`);
         if (screenRecords < 1000 || !(screenTargetMean < 0.01 * LIT_RADIANCE)) fail(`sky only: ${screenRecords} screen records with a mean target of ${screenTargetMean.toFixed(4)} (expected 0: a miss brings no sky into a target)`);
+    }
+
+    // 13. Strips under a sky with the sky a cache light (RC3.4): the sky counted once, every bounce analytic.
+    if (runs(13)) {
+        const sky = { environmentLightEnable: true } as const;
+        const [gi1] = await runScenario(device, 'skyStrips', { ...GI1, ...sky }, CHECK_FRAMES, [ceilingJudge(SKY_STRIPS_SECOND_BOUNCE)]);
+        const [tail] = await runScenario(device, 'skyStrips', { ...TAIL, ...sky }, CHECK_FRAMES, [ceilingJudge(SKY_STRIPS_EVERY_BOUNCE)]);
+        const [fineCells] = await runScenario(device, 'skyStrips', { ...TAIL, ...sky, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(SKY_STRIPS_EVERY_BOUNCE)]);
+        data.skyStrips = { secondBounce: SKY_STRIPS_SECOND_BOUNCE, everyBounce: SKY_STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail), tailWithCellsOf8Pixels: summary(fineCells) };
+        if (Math.abs(final(fineCells)) > TOLERANCE) fail(`sky strips (8 px cells): the tail's strip rays average ${(final(fineCells) * 100).toFixed(2)}% off ${SKY_STRIPS_EVERY_BOUNCE.toFixed(4)} (a sky counted twice reads about +100%)`);
+        if (Math.abs(final(tail)) > COLUMN_TOLERANCE) fail(`sky strips (32 px cells): the tail's strip rays average ${(final(tail) * 100).toFixed(2)}% off ${SKY_STRIPS_EVERY_BOUNCE.toFixed(4)} (over ${COLUMN_TOLERANCE * 100}%)`);
+        if (fineCells.judged < 1000 || !fineCells.tailGateOpen) fail(`sky strips: ${fineCells.judged} judged rays, gate ${fineCells.tailGateOpen ? 'open' : 'shut'}`);
     }
 
     // 11. Nothing on the screen: no records, so no step the GPU counts, and the gate stays shut.
