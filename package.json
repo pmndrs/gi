@@ -7,6 +7,8 @@
     "type": "module",
     "packageManager": "pnpm@10.23.0",
     "scripts": {
+        "preinstall": "node tools/linked-siblings.ts",
+        "siblings:fetch": "node tools/linked-siblings.ts --fetch",
         "dev": "pnpm --filter @pmndrs/ddgi-viewer dev",
         "build": "pnpm --filter @pmndrs/gi build",
         "verify:packed": "node tools/release/verify-packed.ts",
@@ -23,9 +25,24 @@
         "bvh:wasm": "node packages/bvh/native/build-wasm.ts",
         "scenes:export": "pnpm --filter @pmndrs/ddgi-scenes export"
     },
+    "linkedSiblings": {
+        "@pmndrs/denoiser-ffx": {
+            "repo": "https://github.com/pmndrs/denoiser.git",
+            "commit": "022e02b3c1417f9d2011f90824f932afd8430d60",
+            "clone": "../pmndrs-denoiser",
+            "path": "packages/denoiser-ffx",
+            "built": ["dist/index.mjs", "dist/index.d.ts"],
+            "build": [
+                ["corepack", "yarn", "install"],
+                ["corepack", "yarn", "workspace", "@pmndrs/denoiser-core", "build"],
+                ["corepack", "yarn", "workspace", "@pmndrs/denoiser-ffx", "build"]
+            ]
+        }
+    },
     "devDependencies": {
         "@babylonjs/core": "9.33.2",
         "@eslint/js": "^9.18.0",
+        "@pmndrs/denoiser-ffx": "link:../pmndrs-denoiser/packages/denoiser-ffx",
         "@pmndrs/upscaler": "0.5.0",
         "@types/node": "24.19.2",
         "@types/three": "0.187.0",

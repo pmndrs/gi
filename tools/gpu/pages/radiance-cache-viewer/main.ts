@@ -15,9 +15,11 @@
  *   viewer's own path: the world cache lights the probe rays since RC3.2);
  * - per pixel, on one more frame drawn by hand (the viewer's loop stopped so
  *   every readback is that frame's): the technique's GI picture minus its
- *   scene pass's own colour equals `giAlbedo × E / π` with E the irradiance
- *   image's texel at the same pixel (RC2.2 review: a flipped or offset
- *   `screenUV` fails).
+ *   scene pass's own colour equals `giAlbedo × E / π` with E the texel at the
+ *   same pixel of the term the composite reads: the GI denoiser's output when
+ *   it runs (RC4.3, the default), else the interpolated irradiance (RC2.2
+ *   review: a flipped or offset `screenUV` fails). The denoised term is
+ *   scanned for NaN, infinite and negative values beside the irradiance.
  *
  * - RC4.5, the compare toggles, through the panel's own section
  *   (`RcCompareControls`, apps/viewer/src/ui/rc-compare-controls.ts) shown
@@ -148,7 +150,9 @@ async function checkComposite(core: ViewerCore, technique: RadianceCacheViewerTe
         const albedo = await reader.read(nodes.scenePass.getTextureNode(GI_ALBEDO_OUTPUT) as unknown as Node, false);
         const surfaceNode = vec4(isBackgroundDepth(nodes.scenePass.getTextureNode('depth').sample(uv()).r).select(0, 1), 0, 0, 1) as unknown as Node;
         const surfaces = await reader.read(surfaceNode, false);
-        const irradiance = halves(await readTexture(core.device, probes()!.irradiance, 8, WIDTH, HEIGHT));
+        // The term the composite reads: the denoiser's output when it runs (RC4.3), else E itself.
+        const composited = probes()!.denoisedIrradiance ?? probes()!.irradiance;
+        const irradiance = halves(await readTexture(core.device, composited, 8, WIDTH, HEIGHT));
         let pixels = 0;
         let outliers = 0;
         let worstRelative = 0;
@@ -273,7 +277,9 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
     const scan = async (name: string): Promise<void> => {
         const probes = rc().radianceCache?.probes;
         if (!probes) throw new Error('no probes');
-        for (const [label, texture] of [['irradiance', probes.irradiance], ['probe atlas', probes.probeAtlas]] as const) {
+        const textures: [string, GPUTexture][] = [['irradiance', probes.irradiance], ['probe atlas', probes.probeAtlas]];
+        if (probes.denoisedIrradiance) textures.push(['denoised irradiance', probes.denoisedIrradiance]);
+        for (const [label, texture] of textures) {
             const values = await scanHalves(core.device, texture);
             if (values.nonFinite > 0 || values.negative > 0) failures.push(`${sceneId}, ${name}: the ${label} has ${values.nonFinite} values not finite and ${values.negative} negative`);
         }
@@ -362,8 +368,11 @@ try {
             }
             const irradiance = await scanHalves(core.device, probes.irradiance);
             const atlas = await scanHalves(core.device, probes.probeAtlas);
-            scans.push({ frame, frameIndex: probes.frameIndex, irradiance, probeAtlas: atlas });
-            for (const [name, scan] of [['irradiance', irradiance], ['probe atlas', atlas]] as const) {
+            const denoised = probes.denoisedIrradiance ? await scanHalves(core.device, probes.denoisedIrradiance) : null;
+            scans.push({ frame, frameIndex: probes.frameIndex, irradiance, probeAtlas: atlas, denoised });
+            const scanned: [string, typeof irradiance][] = [['irradiance', irradiance], ['probe atlas', atlas]];
+            if (denoised) scanned.push(['denoised irradiance', denoised]);
+            for (const [name, scan] of scanned) {
                 if (scan.nonFinite > 0 || scan.negative > 0) failures.push(`${sceneId} frame ${frame}: the ${name} has ${scan.nonFinite} values not finite and ${scan.negative} negative`);
             }
             if (!(irradiance.meanRgb > 0)) failures.push(`${sceneId} frame ${frame}: no irradiance anywhere`);

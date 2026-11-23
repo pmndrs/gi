@@ -3,10 +3,10 @@
  * TypeScript (including the shared client helper) with no build step.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, relative, resolve, sep } from 'node:path';
 import type { ServerResponse } from 'node:http';
-import { createServer, type Connect, type ViteDevServer } from 'vite';
+import { createServer, searchForWorkspaceRoot, type Connect, type ViteDevServer } from 'vite';
 import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES, REFERENCE_FILES } from './contract.ts';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
@@ -17,6 +17,16 @@ export interface TestSiteServer {
     origin: string;
     close(): Promise<void>;
 }
+
+/**
+ * Sibling libraries linked from a local clone for development (root package.json `link:`;
+ * the radiance cache's GI denoiser, RC4.3). They live outside this repo, so vite serves their
+ * real folders only when they are listed in `server.fs.allow`.
+ */
+const LINKED_SIBLINGS = ['@pmndrs/denoiser-ffx']
+    .map((name) => resolve(SITE_ROOT, '../../node_modules', name))
+    .filter((path) => existsSync(path))
+    .map((path) => realpathSync(path));
 
 /** Where `pnpm examples:build` writes the examples site. */
 const EXAMPLES_DIST = resolve(SITE_ROOT, '../../examples/dist');
@@ -94,6 +104,7 @@ export async function startTestSite(): Promise<TestSiteServer> {
             strictPort: false,
             // Pages are reloaded by the runner; hot reload would only add noise.
             hmr: false,
+            fs: { allow: [searchForWorkspaceRoot(SITE_ROOT), ...LINKED_SIBLINGS] },
             watch: null,
         },
         plugins: [

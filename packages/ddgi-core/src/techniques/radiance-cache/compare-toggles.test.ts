@@ -62,6 +62,16 @@ describe('the compare toggles (RC4.5)', () => {
         expect(RADIANCE_CACHE_COMPARE_TOGGLES.map((entry) => entry.setting)).toEqual(expect.arrayContaining(['interpolationJitter', 'probeHistory']));
     });
 
+    it("covers RC4.3's denoiser: on/off, its history clamp and clip, its change reset (D65, D66)", () => {
+        const byName = new Map(RADIANCE_CACHE_COMPARE_TOGGLES.map((entry) => [entry.setting, entry]));
+        expect(byName.get('denoiser')).toMatchObject({ group: 'denoiser', defaultValue: true, capsaicin: true, register: 'D65' });
+        expect(byName.get('denoiserHistoryClamp')).toMatchObject({ group: 'denoiser', defaultValue: 'neighbourhood', capsaicin: 'none', register: 'D66' });
+        expect(byName.get('denoiserHistoryClip')).toMatchObject({ group: 'denoiser', defaultValue: 2, register: 'D66' });
+        expect(byName.get('denoiserHistoryClip')!.capsaicin).toBeUndefined();
+        expect(byName.get('denoiserChangeReset')).toMatchObject({ group: 'denoiser', defaultValue: true, capsaicin: false, register: 'D66' });
+        expect(capsaicinCompareValues()).toMatchObject({ denoiserHistoryClamp: 'none', denoiserChangeReset: false });
+    });
+
     it('round-trips every value through link parameters, writing only what differs from the defaults', () => {
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
             for (const value of [entry.capsaicin ?? entry.defaultValue, otherValue(entry)]) {
