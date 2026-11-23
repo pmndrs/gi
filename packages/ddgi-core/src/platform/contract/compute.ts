@@ -23,7 +23,7 @@
  * submit order), and the word holds the latest one's.
  */
 
-import type { FrameScreen } from './frame';
+import type { FrameCamera, FrameScreen } from './frame';
 import type { WgslModule } from './wgsl';
 
 /** How a workgroup combines its threads' values: subgroup operations, or the fallback in workgroup memory. */
@@ -189,6 +189,103 @@ export interface GpuScreenHistory {
     dispose(): void;
 }
 
+/**
+ * Capsaicin's SSGI options (`SSGI::RenderOptions`, ssgi.h:47-51), with its
+ * defaults: one slice and two steps a side per pixel per frame, within 0.2
+ * scene units of the pixel, fading out over the last 5% of that radius.
+ */
+export interface ScreenSpaceGISettings {
+    /** `ssgi_slice_count_` (default 1): directions around the view axis per pixel per frame. */
+    readonly sliceCount: number;
+    /** `ssgi_step_count_` (default 2): depth samples on each side of a slice. */
+    readonly stepCount: number;
+    /** `ssgi_view_radius_` (default 0.2): how far from the pixel occluders count, in scene units. */
+    readonly viewRadius: number;
+    /** `ssgi_falloff_range_` (default 0.05): the share of the radius over which an occluder fades out. */
+    readonly falloffRange: number;
+    /**
+     * Frames the slices' sums are kept over, as running means reprojected
+     * from frame to frame (register D60; Capsaicin uses one frame's, which
+     * `1` gives back). Default 16.
+     */
+    readonly historyFrames: number;
+}
+
+/** Capsaicin's defaults (ssgi.h:47-50). */
+export const DEFAULT_SCREEN_SPACE_GI_SETTINGS: Readonly<ScreenSpaceGISettings> = Object.freeze({
+    sliceCount: 1,
+    stepCount: 2,
+    viewRadius: 0.2,
+    falloffRange: 0.05,
+    historyFrames: 16,
+});
+
+/** What {@link GpuScreenSpaceGI.encode} reads. */
+export interface ScreenSpaceGIInputs {
+    readonly screen: FrameScreen;
+    /** The camera the screen was drawn with (`jitter` included). */
+    readonly camera: FrameCamera;
+    /** The frame number: the per-pixel random slices and steps change with it. */
+    readonly frame: number;
+    /**
+     * The light leaving each pixel's surface towards the camera, linear
+     * radiance in rgb, the size of the screen (Capsaicin reads last frame's
+     * combined image, `PrevCombinedIllumination`), or null for none: the
+     * near-field light is then zero and only the occlusion is made.
+     */
+    readonly lighting: GPUTexture | null;
+    readonly settings: ScreenSpaceGISettings;
+    /**
+     * The previous frame's depth and normals (`createScreenHistory`), for
+     * carrying the running means over (D60); null keeps none.
+     */
+    readonly history: ScreenHistoryTextures | null;
+    /** Timestamps for the pass (`TechniqueContext.timer.computePass`). */
+    readonly timestampWrites?: GPUComputePassTimestampWrites;
+}
+
+/** The two images {@link GpuScreenSpaceGI} makes, `rgba16float`, the screen's size. */
+export interface ScreenSpaceGITextures {
+    /**
+     * Capsaicin's `OcclusionAndBentNormal`: the bent normal (the mean
+     * unoccluded direction, world space, unit length, signed: not 0..1
+     * encoded) in xyz and the ambient visibility in w (cosine-weighted, 1 for
+     * nothing in the way, 0.5 at the foot of a wall). Zero for sky pixels.
+     */
+    readonly occlusion: GPUTexture;
+    /**
+     * Capsaicin's `NearFieldGlobalIllumination`: the irradiance the nearby
+     * occluders' `lighting` gives the pixel through the part of its hemisphere
+     * they cover, in rgb. Zero for sky pixels and without `lighting`.
+     */
+    readonly nearField: GPUTexture;
+}
+
+/**
+ * Screen-space GI from the depth buffer (RC4.2): Capsaicin's SSGI technique
+ * (`render_techniques/ssgi`, a horizon-based ambient occlusion with h3r2tic's
+ * near-field light), engine-free and technique-neutral. A technique reads its
+ * occlusion and bent normal to narrow its own irradiance lookup to the
+ * unoccluded cone, and adds the near-field light for the part that cone
+ * leaves out (the radiance cache's `InterpolateScreenProbes`). One compute
+ * pass per frame; the two images are the platform's, one pair per size.
+ */
+export interface GpuScreenSpaceGI {
+    /** The images for a `width` × `height` screen; a new size makes new ones (the old ones are destroyed). */
+    texturesFor(width: number, height: number): ScreenSpaceGITextures;
+    /** Records the pass into `encoder`, its own compute pass, and returns the images it writes. */
+    encode(encoder: GPUCommandEncoder, inputs: ScreenSpaceGIInputs): ScreenSpaceGITextures;
+    /** Drops the running means: the next encode starts from that frame alone (a cut). */
+    reset(): void;
+    /** GPU bytes of the two images and the uniforms. */
+    readonly memoryBytes: number;
+    dispose(): void;
+}
+
+export interface ScreenSpaceGIOptions {
+    readonly label: string;
+}
+
 /** The platform's GPU utilities, on `TechniqueContext.compute`. */
 export interface GpuComputeUtilities {
     /** The path the utilities take on this device: `subgroups` where the device has them. */
@@ -213,4 +310,6 @@ export interface GpuComputeUtilities {
     createIndirectArgs(options: IndirectArgsOptions): Promise<GpuIndirectArgs>;
     /** The copy kernel compiles on the first history made; later ones reuse it. */
     createScreenHistory(options: ScreenHistoryOptions): Promise<GpuScreenHistory>;
+    /** The SSGI kernel compiles on the first one made; later ones reuse it. */
+    createScreenSpaceGI(options: ScreenSpaceGIOptions): Promise<GpuScreenSpaceGI>;
 }

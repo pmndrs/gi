@@ -43,6 +43,7 @@ export interface ScreenNeeds {
     readonly velocity: boolean;
     readonly albedo: boolean;
     readonly instance: boolean;
+    readonly lighting: boolean;
 }
 
 export interface GIPlatformOptions {

@@ -29,9 +29,12 @@ import type {
     IndirectArgsOptions,
     PrefixScanOptions,
     GpuScreenHistory,
+    GpuScreenSpaceGI,
     ScreenHistoryOptions,
+    ScreenSpaceGIOptions,
 } from '../contract/compute.ts';
 import { compileScreenHistoryKernel, ScreenHistory, type ScreenHistoryKernel } from '../screen/screen-history.ts';
+import { compileScreenSpaceGIKernel, ScreenSpaceGI, type ScreenSpaceGIKernel } from '../screen/ssgi.ts';
 import type { WgslModule } from '../contract/wgsl.ts';
 import {
     COMPACTION_IO,
@@ -116,6 +119,7 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
     private readonly scanKernels = new Map<ScanVariant, Promise<ScanKernels>>();
     private writerKernel: Promise<WriterKernel> | null = null;
     private screenHistoryKernel: Promise<ScreenHistoryKernel> | null = null;
+    private screenSpaceGIKernel: Promise<ScreenSpaceGIKernel> | null = null;
 
     constructor(device: GPUDevice, options: PlatformGpuComputeOptions = {}) {
         this.device = device;
@@ -198,6 +202,11 @@ export class PlatformGpuCompute implements GpuComputeUtilities {
     async createScreenHistory(options: ScreenHistoryOptions): Promise<GpuScreenHistory> {
         this.screenHistoryKernel ??= compileScreenHistoryKernel(this.device, this.label);
         return new ScreenHistory(this.device, await this.screenHistoryKernel, options);
+    }
+
+    async createScreenSpaceGI(options: ScreenSpaceGIOptions): Promise<GpuScreenSpaceGI> {
+        this.screenSpaceGIKernel ??= compileScreenSpaceGIKernel(this.device, this.label);
+        return new ScreenSpaceGI(this.device, await this.screenSpaceGIKernel, options);
     }
 
     /** At least one item, and no more than one storage binding holds. */

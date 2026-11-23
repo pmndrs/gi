@@ -422,16 +422,22 @@ export interface InterpolationInputs {
     normal(x: number, y: number): Direction;
     /** The probe mask's `level` at a texel (a packed seed, or {@link INVALID_ID}). */
     probeMask(level: number, x: number, y: number): number;
-    /** The irradiance probe tile `(tileX, tileY)`'s SH gives along `normal`, never negative ({@link shIrradiance}, ao 1). */
-    probeIrradiance(tileX: number, tileY: number, normal: Direction): number;
+    /** The irradiance probe tile `(tileX, tileY)`'s SH gives along `normal` through the cone `ao` leaves open, never negative ({@link shIrradiance}). */
+    probeIrradiance(tileX: number, tileY: number, normal: Direction, ao: number): number;
+    /**
+     * SSGI's output at a pixel (RC4.2: the `HAS_OCCLUSION` branch), or
+     * absent to run the `#ifndef HAS_OCCLUSION` branch: the visibility, the
+     * bent normal and the near-field irradiance (one channel).
+     */
+    occlusion?(x: number, y: number): { ao: number; bentNormal: Direction; nearField: number };
 }
 
 const dot3 = (a: Direction, b: Direction): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const sub3 = (a: Direction, b: Direction): Direction => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 
 /**
- * `InterpolateScreenProbes` (gi1.comp:1514-1625, the `#ifndef HAS_OCCLUSION`
- * branch) for one pixel, as `wgsl/screen-irradiance.ts` runs it: the jitter
+ * `InterpolateScreenProbes` (gi1.comp:1514-1633; with `inputs.occlusion` the
+ * `HAS_OCCLUSION` branch, else the `#ifndef` one) for one pixel, as `wgsl/screen-irradiance.ts` runs it: the jitter
  * from the PCG (register D27), `FindClosestProbe` up the mask's mips, the
  * three neighbours by offset, the plane, depth and normal weights to the 8th
  * power, the backup when all are 0. Returns E (one channel) and the
@@ -496,11 +502,129 @@ export function interpolateScreenProbes(inputs: InterpolationInputs, x: number, 
     }
     const total = weights.reduce((sum, w) => sum + w, 0);
     weights = weights.map((w) => w / total);
+    // gi1.comp:1617-1627: without SSGI ao 1, no near-field light and the pixel's normal; with it,
+    // SSGI's visibility and bent normal for the cone, and its near-field light to start from.
+    let ao = 1;
+    let lookupNormal = normal;
     let irradiance = 0;
+    const occlusion = inputs.occlusion?.(x, y);
+    if (occlusion) {
+        ao = occlusion.ao;
+        const length = Math.hypot(...occlusion.bentNormal);
+        lookupNormal = [occlusion.bentNormal[0] / length, occlusion.bentNormal[1] / length, occlusion.bentNormal[2] / length];
+        irradiance = occlusion.nearField;
+    }
     probes.forEach((probe, index) => {
         if (!(weights[index] > 0)) return;
         const [px, py] = unpackSeed(probe);
-        irradiance += weights[index] * inputs.probeIrradiance(Math.floor(px / PROBE_SIZE), Math.floor(py / PROBE_SIZE), normal);
+        irradiance += weights[index] * inputs.probeIrradiance(Math.floor(px / PROBE_SIZE), Math.floor(py / PROBE_SIZE), lookupNormal, ao);
     });
     return { irradiance, hint, probes, weights };
+}
+
+/**
+ * `ScreenProbes_FindClosestProbe(pos, offset)` (screen_probes.hlsl:110-166) on
+ * the CPU: the probe of `pos`'s tile (with `offset` tiles added at every
+ * level), else the first one found going up the mask's mips, or
+ * {@link INVALID_ID}. With no offset, the plain search.
+ */
+export function findClosestProbe(
+    inputs: Pick<InterpolationInputs, 'width' | 'height' | 'probeMaskMipCount' | 'probeMask'>,
+    pos: readonly [number, number],
+    offset: readonly [number, number] | null,
+): number {
+    let dims = [Math.ceil(inputs.width / PROBE_SIZE), Math.ceil(inputs.height / PROBE_SIZE)];
+    let tile = [Math.min(Math.floor(pos[0] / PROBE_SIZE), dims[0] - 1), Math.min(Math.floor(pos[1] / PROBE_SIZE), dims[1] - 1)];
+    for (let level = 0; level < inputs.probeMaskMipCount; level++) {
+        let loc = tile;
+        if (offset) {
+            loc = [tile[0] + offset[0], tile[1] + offset[1]];
+            if (loc[0] < 0 || loc[1] < 0 || loc[0] >= dims[0] || loc[1] >= dims[1]) break;
+        }
+        const probe = inputs.probeMask(level, loc[0], loc[1]);
+        if (probe !== INVALID_ID) return probe;
+        dims = [Math.max(dims[0] >> 1, 1), Math.max(dims[1] >> 1, 1)];
+        tile = [Math.min(tile[0] >> 1, dims[0] - 1), Math.min(tile[1] >> 1, dims[1] - 1)];
+    }
+    return INVALID_ID;
+}
+
+/** What {@link filterScreenProbesCell} reads: the interpolation's screen accessors and the pass's input atlas. */
+export interface ProbeFilterInputs extends Pick<InterpolationInputs, 'width' | 'height' | 'cellSize' | 'eye' | 'viewForward' | 'probeMaskMipCount' | 'worldPosition' | 'normal' | 'probeMask'> {
+    /** The pass's input atlas at a texel: radiance and hit distance (negative for a backup fill, D47). */
+    atlas(x: number, y: number): readonly [number, number, number, number];
+}
+
+/** `kGI1_AngleThreshold` (screen_probes.hlsl:30). */
+export const PROBE_FILTER_ANGLE_THRESHOLD = Math.cos(2e-2 * Math.PI);
+
+/**
+ * One cell of one pass of `FilterScreenProbes` (gi1.comp:1356-1442) as
+ * `wgsl/screen-irradiance.ts` runs it: up to six neighbour probes along
+ * `blurDirection` (nearest first, alternating sides), each kept if its plane
+ * is within a cell, its hemisphere holds the cell's direction, its hit seen
+ * from this probe is within 3.6° of that direction, and is no backup fill
+ * (D50); weighted by linear depth to the 8th power. Non-finite and negative
+ * neighbour radiance reads 0 (D49). Returns the filtered texel and how many
+ * neighbours each test refused.
+ */
+export function filterScreenProbesCell(
+    inputs: ProbeFilterInputs,
+    seed: readonly [number, number],
+    cell: number,
+    blurDirection: readonly [number, number],
+): { value: [number, number, number, number]; taps: number; planeRefused: number; angleRefused: number } {
+    const dot = (a: Direction, b: Direction): number => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const sub = (a: Direction, b: Direction): Direction => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const linearDepth = (p: Direction): number => dot(sub(p, inputs.eye), inputs.viewForward);
+    const pos: [number, number] = [Math.floor(seed[0] / PROBE_SIZE) * PROBE_SIZE + (cell % PROBE_SIZE), Math.floor(seed[1] / PROBE_SIZE) * PROBE_SIZE + Math.floor(cell / PROBE_SIZE)];
+    const normal = inputs.normal(seed[0], seed[1]);
+    const world = inputs.worldPosition(seed[0], seed[1]);
+    const depth = linearDepth(world);
+    const cellSize = Math.hypot(...sub(world, inputs.eye)) * inputs.cellSize;
+    const centre = inputs.atlas(pos[0], pos[1]);
+    const isFill = centre[3] < 0;
+    let hitDistance = isFill ? 65504 : centre[3];
+    const radiance = [centre[0], centre[1], centre[2], hitDistance];
+    let totalWeight = 1;
+    let taps = 0;
+    let planeRefused = 0;
+    let angleRefused = 0;
+    const direction = probeCellDirection(cell, normal);
+    for (let i = 0; i < 6; i++) {
+        const step = ((i & 1) * 2 - 1) * ((i >> 1) + 1);
+        const probe = findClosestProbe(inputs, seed, [step * blurDirection[0], step * blurDirection[1]]);
+        if (probe === INVALID_ID) continue;
+        const probeSeed = unpackSeed(probe);
+        const probeNormal = inputs.normal(probeSeed[0], probeSeed[1]);
+        const probeWorld = inputs.worldPosition(probeSeed[0], probeSeed[1]);
+        if (Math.abs(dot(sub(probeWorld, world), normal)) > cellSize) {
+            planeRefused++;
+            continue;
+        }
+        if (dot(direction, probeNormal) < 0) continue;
+        const probeCell = probeCellOf(direction, probeNormal);
+        const probePos = [Math.floor(probeSeed[0] / PROBE_SIZE) * PROBE_SIZE + (probeCell % PROBE_SIZE), Math.floor(probeSeed[1] / PROBE_SIZE) * PROBE_SIZE + Math.floor(probeCell / PROBE_SIZE)];
+        const neighbour = inputs.atlas(probePos[0], probePos[1]);
+        if (neighbour[3] < 0) continue;
+        const probeDirection = probeCellDirection(probeCell, probeNormal);
+        const probeHitDistance = Math.min(neighbour[3], hitDistance);
+        const toHit = sub([probeWorld[0] + probeDirection[0] * probeHitDistance, probeWorld[1] + probeDirection[1] * probeHitDistance, probeWorld[2] + probeDirection[2] * probeHitDistance], world);
+        const length = Math.hypot(...toHit);
+        if (dot(direction, [toHit[0] / length, toHit[1] / length, toHit[2] / length]) < PROBE_FILTER_ANGLE_THRESHOLD) {
+            angleRefused++;
+            continue;
+        }
+        const weight = Math.min(Math.max(1 - Math.abs(linearDepth(probeWorld) - depth) / depth, 0), 1) ** 8;
+        for (let channel = 0; channel < 3; channel++) {
+            const value = neighbour[channel];
+            radiance[channel] += weight * (Number.isFinite(value) && value > 0 ? value : 0);
+        }
+        radiance[3] += weight * probeHitDistance;
+        totalWeight += weight;
+        taps++;
+        if (!isFill) hitDistance = radiance[3] / totalWeight;
+    }
+    const value: [number, number, number, number] = [radiance[0] / totalWeight, radiance[1] / totalWeight, radiance[2] / totalWeight, isFill ? -1 : radiance[3] / totalWeight];
+    return { value, taps, planeRefused, angleRefused };
 }

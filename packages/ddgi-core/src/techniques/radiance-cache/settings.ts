@@ -15,6 +15,7 @@
  * configuration").
  */
 
+import { DEFAULT_SCREEN_SPACE_GI_SETTINGS } from '../../platform/contract/compute.ts';
 import type { SecondBounceSource } from './world-cache/capacity.ts';
 import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
 
@@ -95,6 +96,47 @@ export interface RadianceCacheSettings {
      * Read every frame.
      */
     interpolationJitter: boolean;
+    /**
+     * `FilterScreenProbes` (gi1.comp:1356-1442; RC4.2): each probe's cells
+     * averaged with up to three neighbour probes on each side, across then
+     * down, before the SH projection. Capsaicin always runs it (default true);
+     * off only to measure it. Read every frame.
+     */
+    probeFilter: boolean;
+    /**
+     * Whether the filtered probes become next frame's history (register D59).
+     * False (ours): the projection reads a filtered copy and the blended probes
+     * stay the history. True (Capsaicin): the filter writes back into the atlas,
+     * which under the running mean (D46) compounds frame after frame. Read every
+     * frame.
+     */
+    probeFilterHistory: boolean;
+    /**
+     * Capsaicin's SSGI technique feeding `InterpolateScreenProbes` (its
+     * `HAS_OCCLUSION` branch; RC4.2), through the platform's `gi/ssgi`: the
+     * probes' SH read through the cone around the bent normal that the
+     * ambient visibility leaves open, plus the near-field light from the
+     * occluding pixels. Capsaicin's GI-1 renderer always runs it; ours is
+     * off by default (Dennis, 2026-11-19: its noise outweighs it; register
+     * D61), on to opt in. On, the technique asks the host for `FrameScreen.lighting` and
+     * `FrameScreen.albedo` (the lit image SSGI reads, register D51). Fixed at
+     * construction for the screen channels it asks for; turned off later,
+     * SSGI stops (to measure it). Read every frame.
+     */
+    ssgi: boolean;
+    /** `ssgi_slice_count_` (ssgi.h:47, default 1). Read every frame. */
+    ssgiSliceCount: number;
+    /** `ssgi_step_count_` (ssgi.h:48, default 2). Read every frame. */
+    ssgiStepCount: number;
+    /** `ssgi_view_radius_` (ssgi.h:49, default 0.2 scene units). Read every frame. */
+    ssgiViewRadius: number;
+    /** `ssgi_falloff_range_` (ssgi.h:50, default 0.05 of the radius). Read every frame. */
+    ssgiFalloffRange: number;
+    /**
+     * Frames SSGI's slice sums are kept over, as running means reprojected with the screen
+     * history (register D60; 1 is Capsaicin's one frame). Default 16. Read every frame.
+     */
+    ssgiHistoryFrames: number;
     /**
      * How the world cache lights its cells (lever E8, TASKS P6.2; id Tech 8's
      * "shade cells, not hits"). `'per-hit'` (default) is GI-1.2's: every probe
@@ -190,6 +232,15 @@ export interface RadianceCacheSettings {
      */
     rayGuidingUniformShare: number;
     /**
+     * Ray guiding draws a cell by its own estimate, so under the running mean a cell
+     * that read low gets fewer rays and stays low longer, and the mean reads dark
+     * (register D64). True (ours): each frame's step is weighted by the rays the cell
+     * got over the rays it expected, so its expected step doesn't depend on what it
+     * reads. False: the step is its rays over its sample count (RC4.1's). Capsaicin
+     * has no running mean. Read every frame.
+     */
+    rayGuidingCorrection: boolean;
+    /**
      * Where the platform reports a scene change, a probe cell whose last ray crosses a
      * changed box forgets its sample count, so its next ray replaces it (D46; ours).
      * Capsaicin has no such reset (false).
@@ -211,9 +262,9 @@ export interface RadianceCacheSettings {
 export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
 
 /** Settings read at `prepare` only: changing one makes the technique again (the viewer restarts it; compare-toggles.ts). */
-export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache'];
+export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'ssgi'];
 
-/** Capsaicin's defaults (gi1.h:48-71). */
+/** Capsaicin's defaults (gi1.h:48-71, and SSGI's, ssgi.h:47-50). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
     useTemporalFeedback: false,
@@ -231,6 +282,14 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     hashGridCacheMaxMultibounceSampleCount: 16,
     reservoirCacheCellSize: 16,
     interpolationJitter: true,
+    probeFilter: true,
+    probeFilterHistory: false,
+    ssgi: false,
+    ssgiSliceCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.sliceCount,
+    ssgiStepCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.stepCount,
+    ssgiViewRadius: DEFAULT_SCREEN_SPACE_GI_SETTINGS.viewRadius,
+    ssgiFalloffRange: DEFAULT_SCREEN_SPACE_GI_SETTINGS.falloffRange,
+    ssgiHistoryFrames: DEFAULT_SCREEN_SPACE_GI_SETTINGS.historyFrames,
     cellShading: 'per-hit',
     cellShadingBudget: 20000,
     cellChangeReset: true,
@@ -245,6 +304,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     emptyCellFill: 'keep-previous',
     backupFillsAsHistory: false,
     rayGuidingUniformShare: 0.125,
+    rayGuidingCorrection: true,
     probeChangeReset: true,
     probeHistory: true,
 });

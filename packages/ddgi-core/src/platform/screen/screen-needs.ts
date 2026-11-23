@@ -9,16 +9,22 @@ import type { ScreenNeeds } from '../contract/platform.ts';
 import type { TechniqueRequirements } from '../contract/technique.ts';
 
 /** The optional channels, in the order messages list them. */
-export const OPTIONAL_SCREEN_CHANNELS: readonly OptionalScreenChannel[] = ['velocity', 'albedo', 'instance'];
+export const OPTIONAL_SCREEN_CHANNELS: readonly OptionalScreenChannel[] = ['velocity', 'albedo', 'instance', 'lighting'];
 
-export const NO_SCREEN_NEEDS: ScreenNeeds = { screen: false, velocity: false, albedo: false, instance: false };
+export const NO_SCREEN_NEEDS: ScreenNeeds = { screen: false, velocity: false, albedo: false, instance: false, lighting: false };
 
 /** One technique's screen requirement as a `ScreenNeeds`. */
 export function screenNeedsOf(requirements: TechniqueRequirements): ScreenNeeds {
     const screen = requirements.screen;
     if (screen === undefined || screen === false) return NO_SCREEN_NEEDS;
-    if (screen === true) return { screen: true, velocity: false, albedo: false, instance: false };
-    return { screen: true, velocity: screen.velocity === true, albedo: screen.albedo === true, instance: screen.instance === true };
+    if (screen === true) return { ...NO_SCREEN_NEEDS, screen: true };
+    return {
+        screen: true,
+        velocity: screen.velocity === true,
+        albedo: screen.albedo === true,
+        instance: screen.instance === true,
+        lighting: screen.lighting === true,
+    };
 }
 
 /** The union of several techniques' screen requirements. */
@@ -31,6 +37,7 @@ export function mergeScreenNeeds(all: readonly TechniqueRequirements[]): ScreenN
             velocity: merged.velocity || needs.velocity,
             albedo: merged.albedo || needs.albedo,
             instance: merged.instance || needs.instance,
+            lighting: merged.lighting || needs.lighting,
         };
     }
     return merged;

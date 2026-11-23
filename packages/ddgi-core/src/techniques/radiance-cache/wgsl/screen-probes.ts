@@ -140,6 +140,7 @@ struct RcFrame {
     capsaicinEmptyCells: u32,        // 1: Capsaicin's backup in every cell no ray reached (D41)
     fillHitDistance: f32,            // a backup fill's hit distance: -1 (never history, D47) or 65,504 (Capsaicin)
     probeChangeReset: u32,           // 1: a scene change on a cell's last ray resets its count (D46)
+    rayGuidingCorrection: u32,       // 1: a cell's step is weighted by its rays over the rays it expected (D64)
 }
 @group(1) @binding(0) var<uniform> rcFrame: RcFrame;
 `;
@@ -170,6 +171,7 @@ export const FRAME_UNIFORM_OFFSETS = {
     capsaicinEmptyCells: 268,
     fillHitDistance: 272,
     probeChangeReset: 276,
+    rayGuidingCorrection: 280,
 } as const;
 
 /** The host's depth (`FrameScreen.depth`) and the reads Capsaicin makes of its own depth buffer. */
@@ -644,6 +646,7 @@ export const SAMPLE_GROUP: GPUBindGroupLayoutDescriptor = {
         storage(18, 'read-only-storage'),
         storage(19, 'storage'),
         storage(20, 'read-only-storage'),
+        storage(21, 'storage'),
     ],
 };
 
@@ -706,6 +709,8 @@ ${PROBE_SPAWN_PROBE_WGSL}
 @group(1) @binding(18) var<storage, read> rcCellCounts: array<u32>;
 @group(1) @binding(19) var<storage, read_write> rcPreviousCellCounts: array<u32>;
 @group(1) @binding(20) var<storage, read> rcCachedCellCounts: array<u32>;
+// The rays each cell can expect this frame under ray guiding, for the blend's weight (register D64).
+@group(1) @binding(21) var<storage, read_write> rcExpectedRays: array<f32>;
 // The probe rays: this kernel writes their count and directions.
 @group(1) @binding(3) var<storage, read_write> rcProbeRays: RcProbeRays;
 // g_ScreenProbes_ProbeBuffer: the atlas as ReprojectScreenProbes left it (last frame's probes, moved).
@@ -735,6 +740,8 @@ var<workgroup> rcRadianceReuseSampleCount: atomic<u32>;
 // lds_ScreenProbes_Radiance: the cells' sampling CDF (exclusive sums over the total).
 var<workgroup> rcCellCdf: array<f32, 64>;
 var<workgroup> rcCellCdfTotal: f32;
+// The probe's rays that follow the CDF when guiding: those whose own cell has history (D64).
+var<workgroup> rcGuidedRayCount: atomic<u32>;
 
 // A cell of a nearby or cached probe, moved into this probe's frame (gi1.comp:725-756 and
 // 819-843): the point its ray hit, seen from this probe, lands in one of this probe's cells,
@@ -1004,6 +1011,9 @@ fn ${ENTRY_POINT.sample}(
         previousRadiance.w = -1.0;
     }
     let cellDirection = rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE));
+    if (totalWeight > 0.0) {
+        atomicAdd(&rcGuidedRayCount, 1u);
+    }
     rcScanCellRadiance(localId, rcLuminance(previousRadiance.xyz) * cellDirection.z);
 
     if (!isProbe) {
@@ -1034,6 +1044,19 @@ fn ${ENTRY_POINT.sample}(
         sampledCell = vec2u(sampledCellIndex % RC_PROBE_SIZE, sampledCellIndex / RC_PROBE_SIZE);
     }
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
+
+    // How many of the probe's rays this cell can expect, by the draws above (register D64): its own
+    // ray if that one isn't guided (or with the uniform share), plus each guided ray's chance of
+    // landing in it, the CDF step to the next cell (rcFindCellIndex takes the last cell to 1).
+    let guidedRays = f32(atomicLoad(&rcGuidedRayCount));
+    let cdfStep = max(select(1.0, rcCellCdf[min(localId + 1u, RC_PROBE_CELLS - 1u)], localId + 1u < RC_PROBE_CELLS) - rcCellCdf[localId], 0.0);
+    var expectedRays = 1.0;
+    if (uniformShare <= 0.0) {
+        expectedRays = select(1.0, 0.0, totalWeight > 0.0) + guidedRays * cdfStep;
+    } else if (rcCellCdfTotal > 0.0 && uniformShare < 1.0) {
+        expectedRays = select(1.0, uniformShare, totalWeight > 0.0) + guidedRays * (1.0 - uniformShare) * cdfStep;
+    }
+    rcExpectedRays[did] = expectedRays;
 
     textureStore(rcPreviousProbeBuffer, pos, rcNearestHalf4(previousRadiance));
     // The samples the previous radiance stands for: the contributions' mean count (D46).
@@ -1167,6 +1190,7 @@ export const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         storage(18, 'storage'),
         storage(19, 'read-only-storage'),
         storage(20, 'storage'),
+        storage(21, 'read-only-storage'),
     ],
 };
 
@@ -1260,6 +1284,8 @@ ${HISTORY_CHANGES_WGSL}
 @group(1) @binding(18) var<storage, read_write> rcCellCounts: array<u32>;
 @group(1) @binding(19) var<storage, read> rcPreviousCellCounts: array<u32>;
 @group(1) @binding(20) var<storage, read_write> rcCachedCellCounts: array<u32>;
+// The rays each cell expected this frame (SampleScreenProbes, register D64).
+@group(1) @binding(21) var<storage, read> rcExpectedRays: array<f32>;
 
 // BlendScreenProbes (gi1.comp:1166-1331), each cell a running mean (register D46).
 //
@@ -1339,14 +1365,28 @@ fn ${ENTRY_POINT.blend}(
     if (sampleCount > 0u) {
         let frameMean = rcRecoverRadianceSum(localId) / f32(sampleCount);
         count = min(historyCount + sampleCount, historySampleCap);
+        var weight = min(f32(sampleCount) / f32(count), 1.0);
+        if (rcFrame.rayGuidingCorrection != 0u && historySampleCap > 1u) {
+            // Register D64: ray guiding draws a cell by its own estimate, so with weight k / n a cell
+            // that read low gets fewer rays, moves less, and stays low; the mean comes out dark. Over
+            // the rays it expected, E[k] / E[k] = 1, the step is 1 / n whatever the cell reads, and the
+            // mean is the radiance's. n counts the frames since the cell's history began, up to the cap.
+            count = min(historyCount + 1u, historySampleCap);
+            weight = min(f32(sampleCount) / (max(rcExpectedRays[did], 1e-6) * f32(count)), 1.0);
+        }
         if (rcFrame.capsaicinHysteresis != 0u) {
             radiance = frameMean; // the hysteresis below (gi1.comp:1249-1254)
         } else {
-            radiance = select(mix(previousRadiance, frameMean, min(f32(sampleCount) / f32(count), 1.0)), frameMean, historyCount == 0u);
+            radiance = select(mix(previousRadiance, frameMean, weight), frameMean, historyCount == 0u);
         }
     } else if (hasHistory && rcFrame.capsaicinEmptyCells == 0u) {
         radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D41)
         count = historyCount;
+        // Under D64 the count is frames since the history began, reached or not: if it only grew when
+        // guiding sent a ray, a dark cell would keep a smaller count and take bigger steps.
+        if (rcFrame.rayGuidingCorrection != 0u && historySampleCap > 1u && historyCount > 0u) {
+            count = min(historyCount + 1u, historySampleCap);
+        }
     } else {
         // A fill, with the fill hit distance (D47); Capsaicin's rule gives every unreached cell
         // its backup, history or not (gi1.comp:1250-1256).

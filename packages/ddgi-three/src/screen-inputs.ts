@@ -22,7 +22,9 @@
  *   Physical materials; `diffuseColor` for the rest), linear, 8-bit;
  * - `instance`: `giInstance`, the platform instance index + 1 (0 for
  *   objects GI doesn't mirror, {@link InstanceIdTable}), written as three
- *   bytes and turned into `r32uint` by a small pass (instance-id-resolve.ts).
+ *   bytes and turned into `r32uint` by a small pass (instance-id-resolve.ts);
+ * - `lighting`: no output of its own, the pass's `output` (its lit colour
+ *   before the composite adds GI, linear HDR) handed over as it is.
  * Depth is the pass's own depth buffer.
  *
  * **The opaque surface under the depth sample** (RC1.1 review). three gives
@@ -113,6 +115,8 @@ import { threeGpuTexture } from './three-gpu-texture.ts';
 /** MRT output names (`mrt({ ...screen.outputs })` uses them; three-composite's `giAlbedo` and `normal` are separate). */
 export const GI_SCREEN_NORMAL_OUTPUT = 'giNormal';
 export const GI_SCREEN_ALBEDO_OUTPUT = 'giDiffuseAlbedo';
+/** `FrameScreen.lighting` is the pass's own colour output, which the host's MRT always has (three's `output`): no extra target. */
+export const GI_SCREEN_LIGHTING_OUTPUT = 'output';
 export const GI_SCREEN_VELOCITY_OUTPUT = 'velocity';
 export const GI_SCREEN_INSTANCE_OUTPUT = 'giInstance';
 
@@ -319,6 +323,7 @@ function channelsFor(needs: ScreenNeeds, extra: ScreenChannelRequest | undefined
         velocity: needs.velocity || extra?.velocity === true,
         albedo: needs.albedo || extra?.albedo === true,
         instance: needs.instance || extra?.instance === true,
+        lighting: needs.lighting || extra?.lighting === true,
     };
 }
 
@@ -546,7 +551,7 @@ export class ScreenInputsNode extends Node {
 
     /** The platform's techniques read only channels this pass renders; warns once if not. */
     private covers(needs: ScreenNeeds): boolean {
-        const missing = (['velocity', 'albedo', 'instance'] as const).filter((channel) => needs[channel] && !this.channels[channel]);
+        const missing = (['velocity', 'albedo', 'instance', 'lighting'] as const).filter((channel) => needs[channel] && !this.channels[channel]);
         if (missing.length === 0) return true;
         this.warnOnce(
             `a GI technique reads the screen's ${missing.join(', ')}, which this pass doesn't render (screenInputs was made before that technique was added): make the screen inputs again and rebuild the pipeline. Screen techniques are skipped until then.`,
@@ -579,6 +584,8 @@ export class ScreenInputsNode extends Node {
                 normalEncoding: 'snorm-float',
                 velocity: optional(this.channels.velocity, GI_SCREEN_VELOCITY_OUTPUT),
                 albedo: optional(this.channels.albedo, GI_SCREEN_ALBEDO_OUTPUT),
+                // The pass's own colour, before the composite adds GI (FrameScreen.lighting).
+                lighting: optional(this.channels.lighting, GI_SCREEN_LIGHTING_OUTPUT),
                 reversedDepth: (renderer as { reversedDepthBuffer?: boolean }).reversedDepthBuffer === true,
             },
             encodedInstance: optional(this.channels.instance, GI_SCREEN_INSTANCE_OUTPUT) ?? null,
