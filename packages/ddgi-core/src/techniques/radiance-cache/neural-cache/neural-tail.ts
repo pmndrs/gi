@@ -16,15 +16,19 @@
  * carries every bounce in expectation (the furnace: ρ (ρE/π) / (1 − ρ²) =
  * 0.4244 where two bounces read 0.3183).
  *
- * Per frame, all inside the hash grid's frame (its `HashGridTail` slot, after
- * `UpdateTiles`, with GI-1.2's own second-bounce rays only): the counts
- * cleared; cell and screen records gathered (`neural-tail-wgsl.ts`); the
- * frame's training steps over them; then, once the gate is open, the queries
- * gathered and answered into the grid's `neural_tail_buffer` list.
+ * Per frame, inside the hash grid's frame (its `HashGridTail` slot, with
+ * GI-1.2's own second-bounce rays only): `beginFrame` before the grid writes
+ * its constants (the box centred again and the network started over there, so
+ * `active`, which sets `use_neural_tail`, holds for the whole frame); then,
+ * after `UpdateTiles`, `encode`: the counts cleared; cell and screen records
+ * gathered (`neural-tail-wgsl.ts`); the frame's training steps over them;
+ * then, once the gate is open, the queries gathered and answered into the
+ * grid's `neural_tail_buffer` list.
  *
  * The gate opens once the GPU has taken `warmupSteps` training steps (steps
  * with no records don't count; the count is read back a frame or two late,
- * never waited on). Until then the grid runs as GI-1.2, and the network
+ * never waited on, and a count copied before a restart is dropped:
+ * `step-readback.ts`). Until then the grid runs as GI-1.2, and the network
  * trains at `warmupStepsPerFrame`, as it does again for `changeBoostFrames`
  * after a change with no bounds (the sun, the sky).
  *
@@ -41,11 +45,13 @@ import type { ComputeKernel } from '../../../platform/contract/wgsl.ts';
 import { cameraRelativeInverseViewProjection } from '../camera.ts';
 import { HASH_GRID_COUNTER } from '../world-cache/capacity.ts';
 import type { HashGridCache, HashGridTail, HashGridTailFrame } from '../world-cache/hash-grid-cache.ts';
+import type { WorldCacheFrame } from '../world-cache/world-cache.ts';
 import { RAY_DATA_GROUP_ENTRIES } from '../world-cache/hash-grid-population-wgsl.ts';
 import { HASH_GRID_CACHE_GROUP_ENTRIES } from '../world-cache/hash-grid-wgsl.ts';
 import type { MlpModule } from './mlp-loader.ts';
 import { neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
 import { neuralTailSettings, type NeuralTailSettings } from './neural-tail-settings.ts';
+import { StepReadback } from './step-readback.ts';
 import {
     gatherCellRecordsWgsl,
     gatherQueriesWgsl,
@@ -70,7 +76,6 @@ import {
 
 /** `GPUBufferUsage` and `GPUMapMode` bits (the globals don't exist in Node, where the tests import this file). */
 const BUFFER_USAGE = { mapRead: 0x1, copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
-const MAP_MODE_READ = 0x1;
 const VEC4_BYTES = 16;
 const WORD_BYTES = 4;
 /** Timed as `radiance-cache/<section>`, beside the hash grid's sections. */
@@ -109,6 +114,8 @@ interface Prepared {
     readonly set: GPUBuffer;
     readonly setCapacity: number;
     readonly stepReadback: GPUBuffer;
+    /** The step count's readback over `stepReadback`. */
+    readonly steps: StepReadback;
     readonly tileWords: GPUBuffer;
     readonly trainGroup: GPUBindGroup;
     readonly cellGroup: GPUBindGroup;
@@ -134,12 +141,6 @@ export class NeuralTail implements HashGridTail {
     private prepared: Prepared | null = null;
     private screenData: ScreenData | null = null;
     private context: TechniqueContext | null = null;
-    /** Training steps the GPU has taken since the network (re)started, as last read back. */
-    private gpuSteps = 0;
-    /** The step readback: `copied` once its copy is encoded, `mapping` once its map is asked for. */
-    private readbackState: 'idle' | 'copied' | 'mapping' = 'idle';
-    /** Bumped on every restart, so a readback from before it is dropped. */
-    private generation = 0;
     /** Frames left at the warm-up training rate after a change with no bounds. */
     private boostFramesLeft = 0;
     /** The default box's centre: the camera where the network (re)started, taken at its first frame. */
@@ -152,12 +153,12 @@ export class NeuralTail implements HashGridTail {
 
     /** The gate is open: the network has trained `warmupSteps` steps, and the grid adds its answers. */
     get active(): boolean {
-        return this.prepared !== null && neuralTailGateOpen(this.gpuSteps, this.settings.warmupSteps);
+        return this.prepared !== null && neuralTailGateOpen(this.prepared.steps.steps, this.settings.warmupSteps);
     }
 
     /** Training steps the GPU has taken since the network was (re)started (read back a frame or two late). */
     get steps(): number {
-        return this.gpuSteps;
+        return this.prepared?.steps.steps ?? 0;
     }
 
     /** The network, for tests and the timing page. */
@@ -183,7 +184,7 @@ export class NeuralTail implements HashGridTail {
         const prepared = this.prepared;
         if (!prepared) return {};
         return {
-            'training steps': this.gpuSteps,
+            'training steps': this.steps,
             'gate open': this.active ? 1 : 0,
             'network weights': prepared.mlp.weightCount,
             'GPU memory (bytes)': this.memoryBytes,
@@ -274,6 +275,7 @@ export class NeuralTail implements HashGridTail {
             set,
             setCapacity: capacity,
             stepReadback,
+            steps: new StepReadback(stepReadback),
             tileWords,
             trainGroup,
             cellGroup,
@@ -289,16 +291,27 @@ export class NeuralTail implements HashGridTail {
         if (this.prepared && this.freshWeights) this.restartNetwork(this.freshWeights());
     }
 
-    /** Inside the hash grid's frame (`HashGridTail`): this frame's records, training, then the queries and their answers once the gate is open. */
+    /**
+     * Before the grid writes the frame's constants (`HashGridTail`): the
+     * default box follows the camera, centred again and the network started
+     * over when the camera leaves its middle half. Here, not in `encode`, so
+     * the `active` the constants read (`use_neural_tail`) is the frame's own:
+     * a restart after them would leave `UpdateMultibounceCells` adding last
+     * frame's answers, indexed by last frame's entries (P6.4's review).
+     */
+    beginFrame(frame: WorldCacheFrame): void {
+        const prepared = this.require();
+        const settings = this.settings;
+        if (!settings.bounds && this.boxCentre && neuralTailNeedsRecentre(frame.camera.position, this.boxCentre, settings.boundsHalfSize)) this.reset();
+        prepared.steps.poll();
+    }
+
+    /** Inside the hash grid's frame after `UpdateTiles` (`HashGridTail`): this frame's records, training, then the queries and their answers once the gate is open. */
     encode(encoder: GPUCommandEncoder, tailFrame: HashGridTailFrame): void {
         const prepared = this.require();
         const context = this.context;
         if (!context) throw new Error('@pmndrs/gi: the neural tail is used before prepare()');
         const settings = this.settings;
-        const camera = tailFrame.frame.camera.position;
-        // The default box follows the camera: centred again, and the network started over, when it leaves the middle half.
-        if (!settings.bounds && this.boxCentre && neuralTailNeedsRecentre(camera, this.boxCentre, settings.boundsHalfSize)) this.reset();
-        this.pollSteps(prepared);
         // A change with no bounds (the sun, the sky) starts its epoch: train at the warm-up rate for a while.
         const frameIndex = tailFrame.frame.frame;
         if (tailFrame.frame.changes?.events.some((event) => event.box === null && event.epoch === frameIndex)) this.boostFramesLeft = settings.changeBoostFrames;
@@ -324,14 +337,14 @@ export class NeuralTail implements HashGridTail {
         gather.end();
 
         // The frame's training steps (a step with no records is skipped on the GPU and not counted).
-        const steps = neuralTailStepsThisFrame(this.gpuSteps, settings, this.boostFramesLeft > 0);
+        const steps = neuralTailStepsThisFrame(prepared.steps.steps, settings, this.boostFramesLeft > 0);
         for (let step = 0; step < steps; step++) {
             prepared.mlp.encodeTrainStep(encoder, prepared.counts, NEURAL_TAIL_COUNT_WORD.records, prepared.trainGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailTraining`));
         }
         if (this.boostFramesLeft > 0) this.boostFramesLeft--;
-        if (this.readbackState === 'idle') {
+        if (prepared.steps.wantsCopy) {
             encoder.copyBufferToBuffer(prepared.mlp.trainState, TRAIN_STATE_STEP_BYTE, prepared.stepReadback, 0, WORD_BYTES);
-            this.readbackState = 'copied';
+            prepared.steps.copied();
         }
 
         if (this.active) {
@@ -353,8 +366,6 @@ export class NeuralTail implements HashGridTail {
         const prepared = this.prepared;
         this.screenData?.queries.destroy();
         this.screenData = null;
-        this.generation++;
-        this.readbackState = 'idle';
         if (!prepared) return;
         prepared.mlp.destroy();
         for (const buffer of [prepared.params, prepared.counts, prepared.set, prepared.stepReadback]) buffer.destroy();
@@ -368,33 +379,9 @@ export class NeuralTail implements HashGridTail {
     private restartNetwork(weights: Float32Array): void {
         const prepared = this.require();
         prepared.mlp.uploadWeights(weights);
-        this.gpuSteps = 0;
-        this.generation++;
+        prepared.steps.restart();
         this.boostFramesLeft = 0;
         this.boxCentre = null;
-    }
-
-    /**
-     * The step count, read back without waiting: the copy encoded last frame
-     * is mapped now (its frame is submitted), and the value lands a frame or
-     * two later. A restart in between drops it.
-     */
-    private pollSteps(prepared: Prepared): void {
-        if (this.readbackState !== 'copied') return;
-        this.readbackState = 'mapping';
-        const generation = this.generation;
-        const buffer = prepared.stepReadback;
-        buffer.mapAsync(MAP_MODE_READ).then(
-            () => {
-                const steps = new Uint32Array(buffer.getMappedRange())[0] ?? 0;
-                buffer.unmap();
-                if (generation === this.generation) this.gpuSteps = steps;
-                if (this.prepared?.stepReadback === buffer) this.readbackState = 'idle';
-            },
-            () => {
-                // Destroyed or lost: nothing to read.
-            },
-        );
     }
 
     private writeParams(prepared: Prepared, tailFrame: HashGridTailFrame, queryCapacity: number): void {
