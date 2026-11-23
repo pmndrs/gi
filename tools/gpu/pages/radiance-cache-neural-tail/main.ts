@@ -795,7 +795,7 @@ async function runWithDdgi(device: GPUDevice, settings: Partial<RadianceCacheSet
 
 // ---- Section 12: the box centred again ---------------------------------------------------------------
 
-async function runRecentre(device: GPUDevice): Promise<{ gateOpenBefore: boolean; stepsBefore: number; useNeuralTailOnRecentre: number; gateAfter: boolean[]; stepsAfter: number[]; reopenedAfter: number | null; finalMeanError: number }> {
+async function runRecentre(device: GPUDevice): Promise<{ gateOpenBefore: boolean; stepsBefore: number; useNeuralTailBefore: number; useNeuralTailOnRecentre: number; gateAfter: boolean[]; stepsAfter: number[]; reopenedAfter: number | null; finalMeanError: number }> {
     const platform = new GIPlatformImpl(device, { label: 'neural tail page recentre' });
     const technique = platform.addTechnique(new RadianceCacheTechnique({ ...TAIL, neural: { boundsHalfSize: 4 } }));
     platform.setOutput(technique);
@@ -818,10 +818,12 @@ async function runRecentre(device: GPUDevice): Promise<{ gateOpenBefore: boolean
         const tail = technique.neuralTail;
         const grid = technique.worldCache;
         if (!tail || !grid) throw new Error('recentre: no tail or no hash grid');
+        const useNeuralTail = async (): Promise<number> => new Uint32Array(await readRange(device, grid.buffers.constants, HASH_GRID_CONSTANTS_WORD.useNeuralTail * 4, 4))[0];
         const gateOpenBefore = tail.active;
         const stepsBefore = tail.steps;
+        const useNeuralTailBefore = await useNeuralTail();
         await frame(moved);
-        const useNeuralTailOnRecentre = new Uint32Array(await readRange(device, grid.buffers.constants, HASH_GRID_CONSTANTS_WORD.useNeuralTail * 4, 4))[0];
+        const useNeuralTailOnRecentre = await useNeuralTail();
         const gateAfter: boolean[] = [];
         const stepsAfter: number[] = [];
         let reopenedAfter: number | null = null;
@@ -843,7 +845,7 @@ async function runRecentre(device: GPUDevice): Promise<{ gateOpenBefore: boolean
                 finalMeanError = count > 0 ? sum / count / EVERY_BOUNCE - 1 : Number.NaN;
             }
         }
-        return { gateOpenBefore, stepsBefore, useNeuralTailOnRecentre, gateAfter: gateAfter.slice(0, 12), stepsAfter: stepsAfter.slice(0, 20), reopenedAfter, finalMeanError: Number(finalMeanError.toFixed(4)) };
+        return { gateOpenBefore, stepsBefore, useNeuralTailBefore, useNeuralTailOnRecentre, gateAfter: gateAfter.slice(0, 12), stepsAfter: stepsAfter.slice(0, 20), reopenedAfter, finalMeanError: Number(finalMeanError.toFixed(4)) };
     } finally {
         screen.dispose();
         platform.dispose();
@@ -1110,7 +1112,7 @@ try {
     if (runs(12)) {
         const recentre = await runRecentre(device);
         data.recentre = recentre;
-        if (!recentre.gateOpenBefore) fail(`recentre: the gate wasn't open after 40 frames (${recentre.stepsBefore} steps), so nothing was checked`);
+        if (!recentre.gateOpenBefore || recentre.useNeuralTailBefore !== 1) fail(`recentre: after 40 frames the gate was ${recentre.gateOpenBefore ? 'open' : 'shut'} (${recentre.stepsBefore} steps) with use_neural_tail ${recentre.useNeuralTailBefore} (expected open and 1), so nothing was checked`);
         if (recentre.useNeuralTailOnRecentre !== 0) fail(`recentre: the frame the network starts over has use_neural_tail ${recentre.useNeuralTailOnRecentre} (expected 0: last frame's answers would be added to this frame's entries)`);
         const early = recentre.gateAfter.slice(0, 10);
         if (early.some((open) => open)) fail(`recentre: the gate opened ${early.indexOf(true) + 1} frames after the network started over (steps ${recentre.stepsAfter.slice(0, 10).join(', ')}): a step count from before the restart`);

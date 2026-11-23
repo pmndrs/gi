@@ -420,7 +420,8 @@ export class HashGridCache implements WorldCache {
             tileWords: device.createBuffer({ label: 'radiance-cache/hash-grid tile words', size: layout.tileWords.bytes, usage: storageUsage }),
             cellValues: device.createBuffer({ label: 'radiance-cache/hash-grid cell values', size: layout.cellValues.bytes, usage: storageUsage }),
             updateScratch: device.createBuffer({ label: 'radiance-cache/hash-grid update scratch', size: layout.updateScratch.bytes, usage: storageUsage }),
-            constants: device.createBuffer({ label: 'radiance-cache/hash-grid constants', size: HASH_GRID_CONSTANTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst }),
+            // copySrc: the GPU pages read the words back (P6.4's page checks `use_neural_tail` on a restart frame).
+            constants: device.createBuffer({ label: 'radiance-cache/hash-grid constants', size: HASH_GRID_CONSTANTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst | BUFFER_USAGE.copySrc }),
         };
         const outOfMemory = await device.popErrorScope();
         if (outOfMemory) {

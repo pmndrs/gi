@@ -731,6 +731,12 @@ Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experime
 
 M1–M5 tasks are added at the end of the previous milestone. See [PLAN.md](PLAN.md#later-milestones-outline).
 
+### From P6.4's independent review (2026-11-23)
+
+- **The neural tail's `prepare` leaks on a partial failure:** its `Promise.all` makes the `MlpEngine`, three kernels and two indirect-argument buffers together; when one rejects, the ones that resolved (the engine, the args) are never destroyed. Destroy whatever settled before rethrowing (`neural-tail.ts`, `prepare`).
+- **The tail's query capacity is fixed when its screen data is made:** `neuralTailQueryCapacity` reads the grid's discard probability then; lowering `hashGridCacheDiscardMultibounceRayProbability` at run time leaves second-bounce entries past the capacity without answers until the lists are made again. Remake the queries when the probability changes (or size for p = 0).
+- **`neural` is not in `PREPARE_SETTINGS`:** the tail reads its settings at `prepare`, so changing `neural` live does nothing until the technique is made again; list it (the compare toggles have none for it yet) or read the per-frame ones (steps, records) every frame.
+
 ### Follow-ups after the M3-M5 sign-off (2026-11-19)
 
 - **`giRadiance`, DDGI's rough-only fallback** (Dennis, 2026-11-19: "yeah it can wait. just note it somewhere as a follow up"). Moved out of v1 (DECISIONS 2026-11-18). Comes with the three adapter's blend with environment specular, since the fallback is only right at roughness 1. Goes with the reflections work after v1.
