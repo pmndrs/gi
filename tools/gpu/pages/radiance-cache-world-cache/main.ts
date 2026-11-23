@@ -180,6 +180,22 @@
  *    direct value × ρ, a CPU quadrature over cosine-weighted directions,
  *    tabulated) summed over every near cell within 3% of its sum, a surface.
  *
+ * Sections 19 and 20 (register D63) are hits with no light to draw counted as
+ * samples of no light (see there).
+ *
+ * P6.2, lever E8 (`cellShading: 'budgeted'`, cells lit on a budget of 20,000,
+ * one sample a lit cell from a hit drawn uniformly from its hits): sections 15,
+ * 17, 19 and 20 run again budgeted ("… budgeted"). `ShadeCells` draws from the
+ * same lights as `GenerateReservoirs` (`HashGridCache_LightMask`, the sky
+ * included), so the open floor reads ρ L and the ceiling's cells ρ L (1 − F)
+ * with their second bounce exactly 0; and a drawn hit with no light is a sample
+ * of 0 (D63), so the corrugated floor's cells read the lit radiance × their
+ * rising share. Budgeted, only rays shorter than their cell trace a shadow ray
+ * of their own, so the shadow-ray list is judged only where it has entries
+ * (all the sky, weight 1); a cell takes one sample a frame it is lit, so its
+ * bound counts 31 samples at the cap. The sky left out under E10's fallback,
+ * budgeted, is `radiance-cache-ddgi-bounce` 6d.
+ *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
  */
@@ -1260,6 +1276,15 @@ async function checkBlend(device: GPUDevice, scenario: Scenario): Promise<Checks
 // Capsaicin's blend on a light change (section 7): experiment E9's change reset (on by default) off.
 const SINGLE_BOUNCE: Partial<RadianceCacheSettings> = { useMultibounce: false, cellChangeReset: false };
 const MULTIBOUNCE: Partial<RadianceCacheSettings> = { useMultibounce: true };
+/** P6.2, lever E8: cells lit on a budget (its default 20,000), with and without multibounce. E9 is per hit only. */
+const BUDGETED: Partial<RadianceCacheSettings> = { cellShading: 'budgeted', cellShadingBudget: 20000, cellChangeReset: false };
+const MULTIBOUNCE_BUDGETED: Partial<RadianceCacheSettings> = { ...MULTIBOUNCE, ...BUDGETED };
+const SINGLE_BOUNCE_BUDGETED: Partial<RadianceCacheSettings> = { ...SINGLE_BOUNCE, ...BUDGETED };
+
+/** Whether the scenario lights its cells on a budget (lever E8): only rays shorter than their cell have shadow rays of their own. */
+function budgeted(scenario: Scenario): boolean {
+    return scenario.technique.settings.cellShading === 'budgeted';
+}
 
 /** The frame index the last frame ran with: the decay stamp `HashGridCache_TouchTile` left on a tile it touched. */
 async function lastFrameIndex(device: GPUDevice, cache: HashGridCache, cell: number): Promise<number> {
@@ -2380,7 +2405,8 @@ function judgeCells(ratios: readonly CellRatio[]): CellJudgement {
  * its shadow ray (a point whose sky is hidden by F: variance (ρ L)² F (1 − F)); `UpdateTiles`
  * averages a frame's n samples and, at the cap of 16, moves 1/16 of the way to that mean each
  * frame, an average over about 31 frames (2 / α − 1), so 31 n samples; below the cap, its
- * count of samples.
+ * count of samples. Budgeted (lever E8), a cell takes one sample a frame it is lit, so 31 at
+ * the cap.
  */
 async function judgeConstantSkyCells(device: GPUDevice, scenario: Scenario, state: FrameState, layout: SkyScene['layout']): Promise<{ judgement: CellJudgement; bySurface: Record<string, CellJudgement> }> {
     const capacity = scenario.cache.capacity;
@@ -2405,7 +2431,7 @@ async function judgeConstantSkyCells(device: GPUDevice, scenario: Scenario, stat
         }
         expected /= points.length;
         variance /= points.length;
-        const samples = value[3] >= MAX_SAMPLE_COUNT ? 31 * points.length : value[3];
+        const samples = value[3] >= MAX_SAMPLE_COUNT ? 31 * (budgeted(scenario) ? 1 : points.length) : value[3];
         const bound = TOLERANCE + (5 * Math.sqrt(variance / samples)) / expected;
         const measured = (value[0] + value[1] + value[2]) / (3 * value[3]);
         const at: Vec3 = [0, 1, 2].map((axis) => points.reduce((sum, point) => sum + point[axis], 0) / points.length) as unknown as Vec3;
@@ -2435,15 +2461,19 @@ function skyReservoirs(state: FrameState): { total: number; sky: number; secondB
     return result;
 }
 
-/** The weights in a sky-only scene: each drawn light is the sky, its weight 1 (the only candidate). */
-function checkSkyOnlyReservoirs(state: FrameState, fail: (message: string) => void, secondBounceExpected: boolean): Record<string, number> {
+/**
+ * The weights in a sky-only scene: each drawn light is the sky, its weight 1 (the only candidate).
+ * Budgeted (lever E8), only rays shorter than their cell trace shadow rays of their own (the
+ * cells' are ShadeCells', not listed), so the list may be empty and is judged where it isn't.
+ */
+function checkSkyOnlyReservoirs(state: FrameState, fail: (message: string) => void, secondBounceExpected: boolean, cellsBudgeted = false): Record<string, number> {
     const reservoirs = skyReservoirs(state);
-    if (reservoirs.total === 0) fail('no shadow rays: the sky was never drawn');
+    if (reservoirs.total === 0 && !cellsBudgeted) fail('no shadow rays: the sky was never drawn');
     if (reservoirs.sky !== reservoirs.total) fail(`${reservoirs.total - reservoirs.sky} of ${reservoirs.total} reservoirs drew something other than the sky, the only light`);
     // weightSum / skyWeight with the two equal: 1 within the GPU's division (WGSL allows 2.5 ulp; the RTX reads 1 - 2^-24).
     const otherWeights = [...reservoirs.weights].filter(([weight]) => Math.abs(weight - 1) > 1e-6).reduce((sum, [, count]) => sum + count, 0);
     if (otherWeights > 0) fail(`${otherWeights} reservoirs weigh the sky by other than 1, the only candidate`);
-    if (secondBounceExpected && reservoirs.secondBounceSky === 0) fail('no second-bounce hit drew the sky (GenerateMultibounceReservoirs)');
+    if (secondBounceExpected && !cellsBudgeted && reservoirs.secondBounceSky === 0) fail('no second-bounce hit drew the sky (GenerateMultibounceReservoirs)');
     const weights = [...reservoirs.weights.keys()];
     return { shadowRays: reservoirs.total, skyDrawn: reservoirs.sky, secondBounceShadowRays: reservoirs.secondBounce, secondBounceSkyDrawn: reservoirs.secondBounceSky, smallestWeight: Math.min(...weights), largestWeight: Math.max(...weights) };
 }
@@ -2483,10 +2513,10 @@ async function indirectOfSurface(device: GPUDevice, scenario: Scenario, state: F
 async function checkSkyOpenFloor(device: GPUDevice, scenario: Scenario): Promise<Checks> {
     const failures: string[] = [];
     const fail = (message: string): void => {
-        if (failures.length < 12) failures.push(`sky, open floor: ${message}`);
+        if (failures.length < 12) failures.push(`sky, open floor${budgeted(scenario) ? ', budgeted' : ''}: ${message}`);
     };
     const state = await readFrameState(device, scenario);
-    const reservoirs = checkSkyOnlyReservoirs(state, fail, true);
+    const reservoirs = checkSkyOnlyReservoirs(state, fail, true, budgeted(scenario));
     // Every floor cell reads ρ L (1 − F), F ≤ 0.2% from the patch, within 2% (one sample of the
     // sky is π L exactly wherever its ray escapes).
     const { judgement } = await judgeConstantSkyCells(device, scenario, state, 'openFloor');
@@ -2590,10 +2620,10 @@ async function checkSkyAndSun(device: GPUDevice, scenario: Scenario): Promise<Ch
 async function checkSkyCeilingOnly(device: GPUDevice, scenario: Scenario): Promise<Checks> {
     const failures: string[] = [];
     const fail = (message: string): void => {
-        if (failures.length < 12) failures.push(`sky, ceiling only: ${message}`);
+        if (failures.length < 12) failures.push(`sky, ceiling only${budgeted(scenario) ? ', budgeted' : ''}: ${message}`);
     };
     const state = await readFrameState(device, scenario);
-    const reservoirs = checkSkyOnlyReservoirs(state, fail, false);
+    const reservoirs = checkSkyOnlyReservoirs(state, fail, false, budgeted(scenario));
     // The ceiling's cells: ρ L (1 − F), F up to 3.5% over the patch. A sample is 0 or ρ L by its
     // ray's visibility, so a cell over the patch is a noisy mean: each cell within its bound
     // (`judgeConstantSkyCells`), and the mean over cells within 0.5%.
@@ -2907,7 +2937,7 @@ function corrugatedFloor(platform: GIPlatformImpl): void {
 async function checkUnlitHits(device: GPUDevice, scenario: Scenario): Promise<Checks> {
     const failures: string[] = [];
     const fail = (message: string): void => {
-        if (failures.length < 12) failures.push(`unlit hits (${scenario.technique.settings.useMultibounce ? 'multibounce' : 'single bounce'}): ${message}`);
+        if (failures.length < 12) failures.push(`unlit hits (${scenario.technique.settings.useMultibounce ? 'multibounce' : 'single bounce'}${budgeted(scenario) ? ', budgeted' : ''}): ${message}`);
     };
     const state = await readFrameState(device, scenario);
     const capacity = scenario.cache.capacity;
@@ -2973,7 +3003,7 @@ async function checkUnlitHits(device: GPUDevice, scenario: Scenario): Promise<Ch
 async function checkUnlitSecondHits(device: GPUDevice, scenario: Scenario): Promise<Checks> {
     const failures: string[] = [];
     const fail = (message: string): void => {
-        if (failures.length < 12) failures.push(`unlit second hits: ${message}`);
+        if (failures.length < 12) failures.push(`unlit second hits${budgeted(scenario) ? ', budgeted' : ''}: ${message}`);
     };
     const state = await readFrameState(device, scenario);
     const capacity = scenario.cache.capacity;
@@ -3125,6 +3155,14 @@ try {
     await run('unlitHits', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, MULTIBOUNCE);
     await run('unlitHitsSingleBounce', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, SINGLE_BOUNCE);
     await run('unlitSecondHits', [CORRUGATION_SUN], { corrugatedFurnace: true }, CONVERGENCE_FRAMES, checkUnlitSecondHits, MULTIBOUNCE);
+
+    // P6.2, lever E8: the same, cells lit on a budget. ShadeCells draws the sky (HashGridCache_LightMask)
+    // and counts a drawn hit with no light as a sample of 0 (register D63).
+    await run('skyOpenFloorBudgeted', [], { sky: { layout: 'openFloor', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyOpenFloor, MULTIBOUNCE_BUDGETED);
+    await run('skyCeilingOnlyBudgeted', [], { sky: { layout: 'ceilingOnly', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyCeilingOnly, MULTIBOUNCE_BUDGETED);
+    await run('unlitHitsBudgeted', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, MULTIBOUNCE_BUDGETED);
+    await run('unlitHitsSingleBounceBudgeted', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, SINGLE_BOUNCE_BUDGETED);
+    await run('unlitSecondHitsBudgeted', [CORRUGATION_SUN], { corrugatedFurnace: true }, CONVERGENCE_FRAMES, checkUnlitSecondHits, MULTIBOUNCE_BUDGETED);
 
     await drainDevice(device);
     reportGpuTest({

@@ -49,6 +49,11 @@
  *    the frames until it stays within 5%. Gate: the budgets at 20k and 80k
  *    follow the sun no slower than per hit (their changed cells start over).
  *    Recorded: every lag.
+ * 6. **A light switched off** (multibounce, the corner's sun to 0): the frames
+ *    until the hit rays' mean is under 5% of what it was; E9 and the budget
+ *    at 20k (its hits with no light are samples of 0, register D63) must get
+ *    there faster than per hit. And the furnace's second bounce after its sun
+ *    doubles (E9 faster than per hit).
  *
  * P6.2b (experiment E9, `cellChangeReset`): every section also runs per hit
  * with E9 on, which must converge as per hit does and follow both changes
@@ -131,7 +136,8 @@ function litCountOk(lit: number, target: number): boolean {
  * page still records: a far floor tile also holds ceiling hits (a cell is a column through its
  * tile), and since register D63 those count as samples of no light, so a near ceiling ray reads a
  * mean over landings of different floor shares (per hit: 15,599 of 127,454 rays off, mean 0.9919;
- * with D63's samples removed 275 of 110,467). Budgeted cells don't have D63 yet (P6.2's fixes).
+ * with D63's samples removed 275 of 110,467). Budgeted cells have D63 since P6.2's fix 3 (a drawn
+ * hit with no light is a sample of 0 in ShadeCells), so the same holds for them.
  */
 const LANDING_TOLERANCE = 0.01;
 
@@ -639,11 +645,13 @@ try {
     const offLags: Record<string, Record<string, number>> = {};
     for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3', 20000] as const) offLags[modeName(mode)] = await lagToZero(device, mode);
     data.lagToZero = offLags;
-    // E9 follows a light switched off faster than per hit (Capsaicin's step-down, 16 frames). E8 at
-    // 20k isn't gated: a cell lit with no light keeps a dark count and reads its tile's coarser
-    // levels (held until RC3.4's rule, a hit with no light counting as a zero-light sample).
-    for (const mode of ['per-hit+E9', 'per-hit+E9 keep 3'] as const) {
-        if (offLags[mode].framesToUnder5Percent >= offLags['per-hit'].framesToUnder5Percent) fail(`lag: ${mode} follows the sun switched off in ${offLags[mode].framesToUnder5Percent} frames, per hit in ${offLags['per-hit'].framesToUnder5Percent}`);
+    // E9 follows a light switched off faster than per hit (Capsaicin's step-down, 16 frames), and so
+    // does E8 at 20k: its changed cells start over from their next sample, which, with no light to
+    // draw, is a sample of 0 (register D63, P6.2's fix 3; a cell marked dark instead, as before the
+    // fix, held its tile's coarser levels and never got there).
+    for (const mode of ['per-hit+E9', 'per-hit+E9 keep 3', 20000] as const) {
+        const name = modeName(mode);
+        if (offLags[name].framesToUnder5Percent >= offLags['per-hit'].framesToUnder5Percent) fail(`lag: ${name} follows the sun switched off in ${offLags[name].framesToUnder5Percent} frames, per hit in ${offLags['per-hit'].framesToUnder5Percent}`);
     }
     const bounceLags: Record<string, Record<string, number>> = {};
     for (const mode of ['per-hit', 'per-hit+E9', 'per-hit+E9 keep 3'] as const) bounceLags[modeName(mode)] = await multibounceLag(device, mode);
