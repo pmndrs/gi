@@ -2406,7 +2406,12 @@ function judgeCells(ratios: readonly CellRatio[]): CellJudgement {
  * averages a frame's n samples and, at the cap of 16, moves 1/16 of the way to that mean each
  * frame, an average over about 31 frames (2 / α − 1), so 31 n samples; below the cap, its
  * count of samples. Budgeted (lever E8), a cell takes one sample a frame it is lit, so 31 at
- * the cap.
+ * the cap, and one sample is a whole 1/16 of the value: where F is small (the open floor's patch
+ * hides 3e-4 of a far floor point's sky) a blocked shadow ray is rare, so the spread is no bell,
+ * and one blocked ray in the last frames puts the cell up to 1/16 low (0.9375 × on the GPU; the
+ * draws with no light, marked by a test value, were not it). So a budgeted cell's bound adds one
+ * sample's weight, 1 / min(count, 16); a cell lit with a wrong light is still far past it, and
+ * the means over cells hold the cells to 0.5%.
  */
 async function judgeConstantSkyCells(device: GPUDevice, scenario: Scenario, state: FrameState, layout: SkyScene['layout']): Promise<{ judgement: CellJudgement; bySurface: Record<string, CellJudgement> }> {
     const capacity = scenario.cache.capacity;
@@ -2432,7 +2437,8 @@ async function judgeConstantSkyCells(device: GPUDevice, scenario: Scenario, stat
         expected /= points.length;
         variance /= points.length;
         const samples = value[3] >= MAX_SAMPLE_COUNT ? 31 * (budgeted(scenario) ? 1 : points.length) : value[3];
-        const bound = TOLERANCE + (5 * Math.sqrt(variance / samples)) / expected;
+        const oneSample = budgeted(scenario) ? 1 / Math.min(value[3], MAX_SAMPLE_COUNT) : 0;
+        const bound = TOLERANCE + (5 * Math.sqrt(variance / samples)) / expected + oneSample;
         const measured = (value[0] + value[1] + value[2]) / (3 * value[3]);
         const at: Vec3 = [0, 1, 2].map((axis) => points.reduce((sum, point) => sum + point[axis], 0) / points.length) as unknown as Vec3;
         const sample = { ratio: measured / expected, expected, bound, count: value[3], entries: points.length, at };
