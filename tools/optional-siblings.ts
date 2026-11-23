@@ -26,7 +26,7 @@ import type { Plugin } from 'vite';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
-interface SiblingEntry {
+export interface SiblingEntry {
     readonly repo: string;
     readonly commit: string;
     readonly clone: string;
@@ -61,29 +61,37 @@ function headOf(clone: string): string {
     }
 }
 
+/**
+ * One optional sibling's state: `entry` as package.json pins it, `root` this
+ * repository, `head` the clone's commit ('' where it isn't a git clone). The
+ * drift check: a clone at another commit than its pin is `drifted`, and gi
+ * refuses to load it.
+ */
+export function optionalSiblingState(name: string, entry: SiblingEntry, root: string, head: (clone: string) => string = headOf): OptionalSibling {
+    const clone = resolve(root, entry.clone);
+    const folder = join(clone, entry.path);
+    const file = join(folder, entry.built[0] ?? 'src/index.ts');
+    if (!existsSync(file)) {
+        return { name, state: 'missing', entry: null, folder: null, reason: `${name} is an optional sibling from ${entry.repo} (private), not cloned at ${clone}; run node tools/linked-siblings.ts --fetch where you have access` };
+    }
+    const commit = head(clone);
+    if (commit && commit !== entry.commit) {
+        return {
+            name,
+            state: 'drifted',
+            entry: file,
+            folder: realpathSync(folder),
+            reason: `${name}'s clone at ${clone} is at ${commit.slice(0, 9)}, but package.json pins ${entry.commit.slice(0, 9)}; check out the pinned commit (or update the pin)`,
+        };
+    }
+    return { name, state: 'ready', entry: file, folder: realpathSync(folder), reason: '' };
+}
+
 /** Every optional sibling of the root package.json, with its state. */
 export function optionalSiblings(): OptionalSibling[] {
     return Object.entries(siblingEntries())
         .filter(([, entry]) => entry.optional === true)
-        .map(([name, entry]) => {
-            const clone = resolve(ROOT, entry.clone);
-            const folder = join(clone, entry.path);
-            const file = join(folder, entry.built[0] ?? 'src/index.ts');
-            if (!existsSync(file)) {
-                return { name, state: 'missing', entry: null, folder: null, reason: `${name} is an optional sibling from ${entry.repo} (private), not cloned at ${clone}; run node tools/linked-siblings.ts --fetch where you have access` };
-            }
-            const head = headOf(clone);
-            if (head && head !== entry.commit) {
-                return {
-                    name,
-                    state: 'drifted',
-                    entry: file,
-                    folder: realpathSync(folder),
-                    reason: `${name}'s clone at ${clone} is at ${head.slice(0, 9)}, but package.json pins ${entry.commit.slice(0, 9)}; check out the pinned commit (or update the pin)`,
-                };
-            }
-            return { name, state: 'ready', entry: file, folder: realpathSync(folder), reason: '' };
-        });
+        .map(([name, entry]) => optionalSiblingState(name, entry, ROOT));
 }
 
 const VIRTUAL_PREFIX = '\0optional-sibling:';
