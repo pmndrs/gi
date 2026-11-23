@@ -14,8 +14,17 @@
  * denoiser's output, which this page doesn't measure, and the denoiser feeds
  * nothing back into E):
  *
- * - **noise:** |E_t − (E_t−1 + E_t+1) / 2| / max(E_t, 5% of the frame's mean),
- *   the second difference, which a steady rise doesn't move;
+ * - **noise** (what a viewer sees as noise; gated): the second difference with
+ *   the whole image's change taken out, each neighbour frame scaled to frame
+ *   t's mean: |E_t − (E_t−1 · m_t / m_t−1 + E_t+1 · m_t / m_t+1) / 2| /
+ *   max(E_t, 5% of m_t), m the frame's mean E. A light's change scales the
+ *   image, so a fast brightening of the whole image isn't counted;
+ * - **sharpness** (recorded, not gated): the plain second difference
+ *   |E_t − (E_t−1 + E_t+1) / 2| / max(E_t, 5% of m_t), which also counts a
+ *   rise that is fast and then slows. Until 2026-11-24 this was the gated
+ *   "noise"; on two-room most of E9's share of it was its mean E following
+ *   faster (the frame mean's own second difference 1.01% with E9, 0.32%
+ *   without), so it says how sharply E responds, not how noisy it is;
  * - **lag:** the frames until the frame's mean E stays within 5% of the
  *   settled image (the mean of frames 381-400 after the change; read every
  *   frame up to 300).
@@ -41,8 +50,8 @@
  *    image follows no slower (the lag no longer, frame 16 no further from
  *    settled). DECISIONS 2026-11-24: RC4.2's probe filter and D64 halved E9
  *    off's noise but not the rise E9 adds, so the 1.5× ratio of the defaults
- *    (1.34 at P6.2b, 1.79 after RC4.2) stopped measuring E9; it is recorded
- *    (`ratio`), not gated.
+ *    (1.34 at P6.2b, 1.79 after RC4.2, both on what is now `sharpness`)
+ *    stopped measuring E9; it is recorded (`ratio`), not gated.
  * 2. **A change that goes on** for 60 frames (Sponza's sun turning 0.5° a
  *    frame; a 0.6 m box crossing two-room's lit room at 2 cm a frame), then
  *    held for 400: the noise over frames 10-59 of the motion, and the
@@ -50,7 +59,8 @@
  *    settled E (frames 391-400; 110-119 until 2026-11-24, not yet settled). Gates: with E9's default the noise is at most
  *    1.25 times E9 off's (before the events, E9 reset every cell every frame
  *    of such a change), and the image follows: its error at most 1.05 times
- *    E9 off's.
+ *    E9 off's. The box runs twice per setting and the gate takes the two
+ *    runs' mean error (one run's moved by about 6%, as much as the gate).
  *
  * Only NaN, infinite or negative values and the gates fail.
  *
@@ -308,14 +318,21 @@ async function load(device: GPUDevice, id: string): Promise<Loaded> {
     };
 }
 
-/** The second difference at index `t` of `frames` into `noise`. */
-function tallyNoise(frames: readonly Frame[], t: number, noise: Tally): void {
+/**
+ * At index `t` of `frames`: the second difference with the whole image's change taken out (the
+ * neighbours scaled to frame t's mean) into `noise`, and the plain one into `sharpness`.
+ */
+function tallyNoise(frames: readonly Frame[], t: number, noise: Tally, sharpness: Tally): void {
     const [before, now, after] = [frames[t - 1], frames[t], frames[t + 1]];
     const floor = DARK_FLOOR * now.mean;
+    const beforeScale = now.mean / Math.max(before.mean, 1e-12);
+    const afterScale = now.mean / Math.max(after.mean, 1e-12);
     for (let pixel = 0; pixel < now.e.length; pixel++) {
         const value = now.e[pixel];
         if (Number.isNaN(value)) continue;
-        noise.add(Math.abs(value - (before.e[pixel] + after.e[pixel]) / 2) / Math.max(value, floor));
+        const denominator = Math.max(value, floor);
+        noise.add(Math.abs(value - (before.e[pixel] * beforeScale + after.e[pixel] * afterScale) / 2) / denominator);
+        sharpness.add(Math.abs(value - (before.e[pixel] + after.e[pixel]) / 2) / denominator);
     }
 }
 
@@ -384,9 +401,10 @@ async function stepCase(scene: Loaded, settings: Partial<RadianceCacheSettings>)
     }
     scale(1);
     const baselineNoise = new Tally();
-    for (let t = 1; t < baseline.length - 1; t++) tallyNoise(baseline, t, baselineNoise);
+    for (let t = 1; t < baseline.length - 1; t++) tallyNoise(baseline, t, baselineNoise, new Tally());
     const noise = new Tally();
-    for (let t = 1; t <= WINDOW; t++) tallyNoise(after, t, noise);
+    const sharpness = new Tally();
+    for (let t = 1; t <= WINDOW; t++) tallyNoise(after, t, noise, sharpness);
     const reference = settled.reduce((sum, mean) => sum + mean, 0) / settled.length;
     let lag = FOLLOW_FRAMES + 1;
     for (let t = FOLLOW_FRAMES; t >= 1; t--) {
@@ -398,6 +416,7 @@ async function stepCase(scene: Loaded, settings: Partial<RadianceCacheSettings>)
         baselineNoiseMean: round(baselineNoise.mean, 5),
         noiseMean: round(noise.mean, 5),
         noiseP95: round(noise.percentile(0.95)),
+        sharpnessMean: round(sharpness.mean, 5),
         lagFrames: lag,
         settledOverBefore: round(reference / before),
         meanE1OverSettled: round(means[1] / reference),
@@ -430,11 +449,13 @@ async function motionCase(scene: Loaded, kind: 'sun' | 'box', settings: Partial<
     }
     move(0);
     const noise = new Tally();
-    for (let t = 1; t < motion.length - 1; t++) tallyNoise(motion, t, noise);
+    const sharpness = new Tally();
+    for (let t = 1; t < motion.length - 1; t++) tallyNoise(motion, t, noise, sharpness);
     const reference = meanFrame(held);
     return {
-        noiseMean: round(noise.mean),
+        noiseMean: round(noise.mean, 5),
         noiseP95: round(noise.percentile(0.95)),
+        sharpnessMean: round(sharpness.mean, 5),
         endError: round(imageError(motion[motion.length - 1], reference)),
         bad: [...motion, ...held].reduce((sum, frame) => sum + frame.bad, 0),
     };
@@ -464,7 +485,25 @@ try {
             }
             const motionName = id === 'sponza' ? 'sponza sun turning' : 'two-room box moving';
             motions[motionName] = {};
-            for (const { name, settings } of SETTINGS) motions[motionName][name] = await motionCase(scene, id === 'sponza' ? 'sun' : 'box', settings);
+            for (const { name, settings } of SETTINGS) {
+                if (id === 'sponza') {
+                    motions[motionName][name] = await motionCase(scene, 'sun', settings);
+                    continue;
+                }
+                // The box's end error moves by about 6% from run to run, as much as its gate (1.05×):
+                // two runs (each on its own frames, so its own random numbers), the gate on their mean.
+                const first = await motionCase(scene, 'box', settings);
+                const second = await motionCase(scene, 'box', settings);
+                motions[motionName][name] = {
+                    ...first,
+                    noiseMean: round((first.noiseMean + second.noiseMean) / 2, 5),
+                    sharpnessMean: round((first.sharpnessMean + second.sharpnessMean) / 2, 5),
+                    endError: round((first.endError + second.endError) / 2),
+                    endErrorRun1: first.endError,
+                    endErrorRun2: second.endError,
+                    bad: first.bad + second.bad,
+                };
+            }
         } finally {
             scene.dispose();
             await device.queue.onSubmittedWorkDone();
