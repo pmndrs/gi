@@ -269,6 +269,16 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         capsaicin: 16,
         help: "The same for the cells' second bounce (GI-1.2's multibounce). Capsaicin's 16 is the default.",
     }),
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'environmentLightEnable',
+        group: 'world-cache',
+        label: 'Sky lights the cells',
+        urlName: 'rcskylight',
+        register: 'D62',
+        capsaicin: true,
+        help: "On, a world-cache cell draws the sky as one of its lights (with a shadow ray), as Capsaicin's environment light does (on, the default). Off, the cells get no skylight and the sky reaches the probes only through rays that miss, as before RC3.4.",
+    }),
 
     toggle<CompareChoiceToggle>({
         kind: 'choice',

@@ -268,12 +268,18 @@ function changes(previous: FrameImage, current: FrameImage, tally: ChangeTally):
     return { leftOut };
 }
 
-async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 'viewer'): Promise<Record<string, Measurement>> {
+async function measureScene(
+    device: GPUDevice,
+    id: string,
+    loader: 'manifest' | 'viewer',
+    environmentLightEnable = true,
+    configurations: readonly (typeof CONFIGURATIONS)[number][] = CONFIGURATIONS,
+): Promise<Record<string, Measurement>> {
     const manifest = loadManifest(id);
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(pageRadianceCache({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, fallbackIndirectSampleCount: INDIRECT_CAP }));
+    const technique = platform.addTechnique(pageRadianceCache({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, fallbackIndirectSampleCount: INDIRECT_CAP, environmentLightEnable }));
     platform.setOutput(technique);
     if (SECOND_BOUNCE === 'fallback') {
         const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
@@ -340,7 +346,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         const referenceFloor = (DARK_FLOOR * referenceMean) / Math.max(referenceCount, 1);
         const results: Record<string, Measurement> = {};
         for (const jitter of [true, false]) {
-            for (const [motion, history, term] of CONFIGURATIONS) {
+            for (const [motion, history, term] of configurations) {
                 const denoised = term !== 'raw';
                 technique.settings.interpolationJitter = (PAGE_COMPARE_VALUES.interpolationJitter as boolean | undefined) ?? jitter;
                 technique.settings.denoiser = denoised;
@@ -430,6 +436,12 @@ try {
     const failures: string[] = [];
     for (const [id, loader] of [['cornell-box', 'manifest'], ['two-room', 'manifest'], ['sponza', 'viewer']] as const) {
         scenes[id] = await measureScene(device, id, loader);
+    }
+    // RC3.4: the noise the sky light adds indoors. Its weight is the sky's unshadowed irradiance,
+    // so in Sponza's colonnade most of its draws hit a blocked sky: Sponza still, with the sky
+    // light off, against the run above.
+    scenes['sponza (sky light off)'] = await measureScene(device, 'sponza', 'viewer', false, CONFIGURATIONS.filter(([motion]) => motion === 'still'));
+    for (const id of Object.keys(scenes)) {
         for (const [name, measurement] of Object.entries(scenes[id])) {
             if (measurement.bad > 0) failures.push(`${id}, ${name}: ${measurement.bad} pixels' E is NaN, infinite or negative`);
             if (measurement.pixels === 0) failures.push(`${id}, ${name}: no pixel measured`);

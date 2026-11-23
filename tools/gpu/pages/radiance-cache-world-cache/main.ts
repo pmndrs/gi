@@ -1,11 +1,14 @@
 /**
- * RC3.2, RC3.3 and RC3.5: the radiance cache's world cache (Capsaicin's hash
- * grid) populated and resolved through the technique, on the GPU; and GI-1.2's
- * multibounce, with Capsaicin's errors in it fixed (RC3.5).
+ * RC3.2, RC3.3, RC3.4 and RC3.5: the radiance cache's world cache (Capsaicin's
+ * hash grid) populated and resolved through the technique, on the GPU; GI-1.2's
+ * multibounce, with Capsaicin's errors in it fixed (RC3.5); and the sky as one
+ * of a hit's lights (RC3.4).
  *
  * Sections 1 to 7 are GI-1.0's single bounce: they run with multibounce off
  * (`useMultibounce: false`), and pass as they did in RC3.2 (the single-bounce
  * path is unchanged by RC3.3). Sections 8 to 11 and 13 are the multibounce.
+ * Sections 1 to 14 have a black sky, so the sky light (RC3.4) is never drawn
+ * there (its weight is 0); sections 15 to 18 are under a sky.
  *
  * The scene is a corner: a 400 m floor (y = 0, facing up) and a 40 × 10 m
  * wall (z = 0, facing +z), both grey (albedo 0.5), under a black sky. The
@@ -141,16 +144,53 @@
  *    below them (the depth's precision at a grazing view, register D17) and
  *    see their undersides; they are left out of the ceiling averages.
  *
+ * Sections 15 to 18 (RC3.4) are the sky as one of a hit's lights (register
+ * D62): no sun unless named, multibounce on, the sky the only light, so every
+ * reservoir (first and second bounce) must draw the sky with weight 1. Each
+ * cell's direct value is judged against the mean, over this frame's entries
+ * in it, of ρ L (1 − F), F the share of the point's cosine-weighted sky its
+ * occluder hides (Lambert's contour integral over the occluding polygon, exact;
+ * checked against the infinite strip's closed form), within 2% plus five
+ * standard deviations of its samples' mean (a sample is ρ L or 0 by its
+ * shadow ray), 0.1% of cells allowed past it; the means are held to 0.5-1%.
+ * ρ = 0.5, L = 1.5. Expected, before the run:
+ *
+ * 15. **The open floor** (`SkyScene` openFloor: the 400 m floor, a 4 m probe
+ *    patch 50 m up): every floor cell and the floor's probe rays read ρ L =
+ *    0.75 (F ≤ 0.2%); the second bounce goes up into the sky, and its misses
+ *    add no light, so the floor's indirect values stay under 1% of ρ L (a miss
+ *    reading the sky would add ρ L again).
+ * 16. **The coded sky and a sun** (the same scene; the sky (1 + d) / 2 per
+ *    channel × 2, the sun of section 1 casting no shadow): on the floor the sky
+ *    weighs the luminance of its irradiance, S (π/2, 5π/6, π/2), the sun its
+ *    E = 8 cos 45°, so the sky is drawn for 45.06% of hits, each weighed 1 / q;
+ *    the floor cells average ρ / π (E_sky + E_sun) per channel within 1% (the
+ *    sky read along the normal instead of the drawn direction would put
+ *    green's sky part 20% high; a wrong weight shows in the share).
+ * 17. **The ceiling only** (the done-when): the 400 m ceiling 3 m up, a black
+ *    1 m probe patch on the ground: the ceiling's cells read ρ L (1 − F), F up
+ *    to 3.5% over the patch; its second-bounce rays go down and nearly all
+ *    miss (the rest hit the black patch), so every ceiling cell's indirect
+ *    value is exactly 0 with samples counted. The sky reaches the ceiling
+ *    through its own light sample; a miss reading it would count it twice.
+ * 18. **The corner** (sections 1-7's floor and 40 × 10 m wall): floor cells
+ *    ρ L (1 − F_wall), wall cells ρ L (1 − F_floor), the cells that see half
+ *    their sky hidden within 2% on average (so the shadow ray is traced); the
+ *    second bounce near the corner (each kept ray brings the other surface's
+ *    direct value × ρ, a CPU quadrature over cosine-weighted directions,
+ *    tabulated) summed over every near cell within 3% of its sum, a surface.
+ *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc3.2 world cache" -- pnpm test:gpu --filter radiance-cache-world-cache --gpu nvidia` (or intel).
  */
 
 import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/shade/wgsl.ts';
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { HASH_GRID_COUNTER, type HashGridCacheCapacity } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
@@ -271,6 +311,8 @@ interface ProbeRay {
     readonly direction: Vec3;
     readonly hitT: number;
     readonly hit: Vec3;
+    /** The hit triangle in its instance's mesh (`WorldCacheProbeRay.hitTriangle`). */
+    readonly triangle: number;
     /** The hit was on the side the mesh was authored as front. */
     readonly frontFace: boolean;
     readonly surface: Surface;
@@ -316,9 +358,30 @@ interface CornerExtras {
     readonly furnace?: boolean;
     /** Section 13: the furnace's floor as strips covering half of it. */
     readonly strips?: boolean;
+    /** Sections 15-18 (RC3.4): a scene under a sky (`SkyScene`), instead of the corner or the furnace. */
+    readonly sky?: SkyScene;
+    /** Section 19: the corrugated floor under its probe patch, instead of the corner. */
+    readonly corrugated?: boolean;
+    /** Section 20: the corrugated floor under the furnace's unlit ceiling, the probes on the floor. */
+    readonly corrugatedFurnace?: boolean;
 }
 
 function describeCorner(platform: GIPlatformImpl, lights: readonly LightDescriptor[], extras: CornerExtras): LightHandle[] {
+    if (extras.sky) return describeSkyScene(platform, lights, extras.sky);
+    if (extras.corrugatedFurnace) {
+        corrugatedFloor(platform);
+        quad(platform, 'ceiling', horizontalSquare(FURNACE.halfWidth, FURNACE.ceilingY, DOWN), DOWN, FURNACE.albedo);
+        const handles = lights.map((light) => platform.scene.createLight(light));
+        platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+        return handles;
+    }
+    if (extras.corrugated) {
+        corrugatedFloor(platform);
+        quad(platform, 'probe patch', horizontalSquare(CORRUGATION_PATCH.half, CORRUGATION_PATCH.y, DOWN), DOWN, ALBEDO);
+        const handles = lights.map((light) => platform.scene.createLight(light));
+        platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
+        return handles;
+    }
     if (extras.furnace) return describeFurnace(platform, lights, extras.strips ?? false);
     const half = 200;
     quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0], ALBEDO);
@@ -387,7 +450,10 @@ async function startScenario(device: GPUDevice, name: string, lights: readonly L
     platform.setOutput(technique);
     await platform.prepare();
     const lightHandles = describeCorner(platform, lights, extras);
-    const camera = extras.furnace ? FURNACE.camera : CAMERA;
+    const camera = extras.corrugatedFurnace ? FURNACE.camera : extras.corrugated ? CORRUGATION_CAMERA : extras.sky ? SKY_LAYOUT_CAMERA[extras.sky.layout] : extras.furnace ? FURNACE.camera : CAMERA;
+    // Sections 15-18: the sky, after describeCorner's black one.
+    const skyTexture = extras.sky?.environment === 'coded' ? codedSkyTexture(device) : null;
+    if (extras.sky) platform.scene.setEnvironment(skyEnvironment(extras.sky, skyTexture));
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
         const encoder = device.createCommandEncoder({ label: `radiance-cache-world-cache ${name}` });
@@ -408,7 +474,8 @@ async function startScenario(device: GPUDevice, name: string, lights: readonly L
     if (!cache) throw new Error(`${name}: the technique has no world cache after prepare`);
     return {
         camera,
-        furnace: extras.furnace ?? false,
+        // The open floor and the ceiling-only scene are horizontal planes too: classified as the furnace's.
+        furnace: (extras.furnace ?? false) || (extras.sky !== undefined && extras.sky.layout !== 'corner'),
         platform,
         lights: lightHandles,
         technique,
@@ -418,6 +485,7 @@ async function startScenario(device: GPUDevice, name: string, lights: readonly L
         dispose() {
             screen.dispose();
             platform.dispose();
+            skyTexture?.destroy();
         },
     };
 }
@@ -501,7 +569,7 @@ async function readFrameState(device: GPUDevice, scenario: Scenario): Promise<Fr
         const direction = unpackHalf3([rayWords[base + 4], rayWords[base + 5]]);
         const hitT = rayFloats[base + 6];
         const hit: Vec3 = [origin[0] + hitT * direction[0], origin[1] + hitT * direction[1], origin[2] + hitT * direction[2]];
-        rays.push({ origin, direction, hitT, hit, frontFace: rayWords[base + 9] !== 0, surface: hitT >= 0 ? classify(hit, scenario.furnace) : 'other' });
+        rays.push({ origin, direction, hitT, hit, triangle: rayWords[base + 8], frontFace: rayWords[base + 9] !== 0, surface: hitT >= 0 ? classify(hit, scenario.furnace) : 'other' });
     }
     const results = probes.rayScratch.rayResults;
     const radiance = unpackHalves(new Uint32Array(await readRange(device, results.buffer, results.offset ?? 0, rayCount * 8)));
@@ -1247,6 +1315,8 @@ interface ProbeRayPrediction {
     readonly resolvedCellOf: Map<number, number>;
     /** Sample counts of the levels a resolved ray reads, by probe ray: [direct, indirect]. */
     readonly counts: Map<number, [number, number]>;
+    /** The brightest channel of the direct level's mean a resolved ray reads, by probe ray. */
+    readonly directMeans: Map<number, number>;
     /** The bypass addition `UpdateMultibounceCells` makes to a probe ray (register D38), by probe ray. */
     readonly additions: Map<number, number[]>;
     readonly tally: Record<string, number>;
@@ -1312,6 +1382,7 @@ async function predictProbeRays(device: GPUDevice, scenario: Scenario, state: Fr
     }
 
     const counts = new Map<number, [number, number]>();
+    const directMeans = new Map<number, number>();
     const expected = state.rays.map((_, index) => {
         const extra = additions.get(index) ?? [0, 0, 0];
         if (selfBypassed.has(index)) {
@@ -1323,9 +1394,88 @@ async function predictProbeRays(device: GPUDevice, scenario: Scenario, state: Fr
         const d = levelsOf(cell, direct);
         const i = levelsOf(cell, indirect);
         counts.set(index, [d[3], i[3]]);
+        directMeans.set(index, Math.max(d[0], d[1], d[2]) / Math.max(d[3], 1));
         return [0, 1, 2].map((channel) => d[channel] / Math.max(d[3], 1) + i[channel] / Math.max(i[3], 1) + extra[channel]);
     });
-    return { expected, resolvedCellOf, counts, additions, tally };
+    return { expected, resolvedCellOf, counts, directMeans, additions, tally };
+}
+
+/**
+ * Every second-bounce entry's sample as `UpdateMultibounceCells` makes it this frame: the light
+ * at the second hit (its cell's filtered direct mean as read back, or its own light where its
+ * segment bypasses) × BRDF / pdf; a miss 0. Brightest channel (the furnace is grey).
+ *
+ * Why the page needs it: a hash-grid cell is a column through its tile (NOTES), so a far floor
+ * cell can hold ceiling hits too, which have no light. Since register D63 those count as
+ * samples of no light, so such a cell reads the floor's light times its floor share, and a
+ * second bounce landing there brings that, not L_f: the second bounce the cache can give is
+ * this mean, a little under ρ L_f (Capsaicin's rule, which counted only lit hits, hid it).
+ */
+async function secondBounceSamples(device: GPUDevice, scenario: Scenario, state: FrameState): Promise<Float64Array> {
+    const cache = scenario.cache;
+    const capacity = cache.capacity;
+    const tileOf = (cell: number): number => Math.floor(cell / capacity.numCellsPerTile);
+    const landingTiles = [...new Set(Array.from(state.multibounceCell).filter((cell) => cell !== MULTIBOUNCE_MISS_CELL).map(tileOf))];
+    const slotOfTile = new Map(landingTiles.map((tile, slot) => [tile, slot]));
+    const direct = await readTiles(device, cache, landingTiles, false);
+    const samples = new Float64Array(state.multibounceCell.length);
+    state.multibounceCell.forEach((cell, entry) => {
+        if (cell === MULTIBOUNCE_MISS_CELL) return;
+        let second: Vec3;
+        if ((state.multibounceRays[entry * MULTIBOUNCE_RAY_WORDS + 3] & WORLD_CACHE_PROBE_RAY_BYPASS) !== 0) {
+            second = [state.multibounceDirect[entry * 4], state.multibounceDirect[entry * 4 + 1], state.multibounceDirect[entry * 4 + 2]];
+        } else {
+            const value = pickLevel(direct, cache, slotOfTile.get(tileOf(cell)) ?? 0, cell, MAX_SAMPLE_COUNT).value;
+            second = [value[0] / Math.max(value[3], 1), value[1] / Math.max(value[3], 1), value[2] / Math.max(value[3], 1)];
+        }
+        const info = state.multibounceInfo.slice(entry * 4, entry * 4 + 4);
+        samples[entry] = Math.max(...multibounceSample(second, [info[0], info[1], info[2]], info[3]));
+    });
+    return samples;
+}
+
+/**
+ * The analytic gate on the second bounce: the samples of the entries whose first hit is in one
+ * of `cells` and whose second hit is on the floor in a tile under NEAR_TILE_SIZE (which can't
+ * reach the ceiling 3 m up, so its cells hold the floor alone and read L_f), each ρ L_f by the
+ * geometry, read back through the cache. A bias in the cells' direct values, or in the read,
+ * moves their mean off ρ L_f; the column share can't.
+ */
+function nearFloorLandings(state: FrameState, samples: Float64Array, cells: Set<number>, camera: Vec3): { mean: number; entries: number } {
+    const constants = cellSizeConstants();
+    let sum = 0;
+    let entries = 0;
+    state.multibounceQuery.forEach((query, entry) => {
+        if (!cells.has(state.visibilityCell[query]) || state.multibounceCell[entry] === MULTIBOUNCE_MISS_CELL) return;
+        const hit = multibounceHit(state, entry);
+        if (Math.abs(hit[1]) > 0.01 || hashGridCacheGetCellSize(hit, camera, constants) * LEVEL_SIDES[0] >= NEAR_TILE_SIZE) return;
+        sum += samples[entry];
+        entries++;
+    });
+    return { mean: sum / Math.max(entries, 1), entries };
+}
+
+/** The mean of `secondBounceSamples` over the entries whose first hit is in one of `cells`. */
+function meanSampleOver(state: FrameState, samples: Float64Array, cells: Set<number>): { mean: number; entries: number } {
+    let sum = 0;
+    let entries = 0;
+    state.multibounceQuery.forEach((query, entry) => {
+        if (!cells.has(state.visibilityCell[query])) return;
+        sum += samples[entry];
+        entries++;
+    });
+    return { mean: sum / Math.max(entries, 1), entries };
+}
+
+/** The furnace's first-bounce cells on the ceiling in tiles under NEAR_TILE_SIZE (they can't reach the floor). */
+function nearCeilingCells(state: FrameState): Set<number> {
+    const constants = cellSizeConstants();
+    const cells = new Set<number>();
+    state.visibilityCell.forEach((cell, visibility) => {
+        const ray = state.rays[state.visibilityQuery[visibility]];
+        if (ray.surface === 'ceiling' && hashGridCacheGetCellSize(ray.hit, FURNACE.camera.position, constants) * LEVEL_SIDES[0] < NEAR_TILE_SIZE) cells.add(cell);
+    });
+    return cells;
 }
 
 /**
@@ -1355,16 +1505,19 @@ function judgePredictedRays(state: FrameState, prediction: ProbeRayPrediction, f
 
 /**
  * The furnace's probe rays: each reads its prediction, and where its tile is under 2 m its cell
- * holds ceiling hits only, so it has no direct sample and reads `expectedIndirect` within 2% if
- * its indirect level has samples, 0 if not. A cell whose samples include one of the rare far
- * misses (a sample of no light) reads lower: up to 1% of the rays may be off for that.
+ * holds ceiling hits only, so its direct level reads no light (since register D63 with samples
+ * counted: the ceiling's hits have no light to draw), and the near rays reading an indirect
+ * level average `expectedIndirect` within `meanTolerance`. One ray's indirect value is its
+ * cell's mean of second bounces that land in floor cells of different floor shares (see
+ * `secondBounceSamples`), so single rays are judged only against their prediction; how many
+ * are more than 2% off `expectedIndirect` is recorded.
  */
-async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: FrameState, fail: (message: string) => void, expectedIndirect = CEILING_INDIRECT, perRay = true) {
+async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: FrameState, fail: (message: string) => void, expectedIndirect = CEILING_INDIRECT, meanTolerance = 0.01) {
     const constants = cellSizeConstants();
     // The ceiling has no light: a self-bypassed ceiling ray's own sample is 0.
     const prediction = await predictProbeRays(device, scenario, state, () => 0);
     const rays = judgePredictedRays(state, prediction, fail);
-    const tally = { near: 0, nearWithIndirect: 0, nearWithoutIndirect: 0, nearWithDirect: 0, nearOff: 0, worstNear: 0, nearIndirectMean: 0, nearMeanWithZeros: 0, farWithDirect: 0 };
+    const tally = { near: 0, nearWithIndirect: 0, nearWithoutIndirect: 0, nearWithDirect: 0, nearWithDirectLight: 0, nearOff: 0, worstNear: 0, nearIndirectMean: 0, nearMeanWithZeros: 0, farWithDirect: 0 };
     let nearIndirectSum = 0;
     let nearSum = 0;
     for (const index of prediction.resolvedCellOf.keys()) {
@@ -1377,6 +1530,7 @@ async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: Fr
         }
         tally.near++;
         if (directCount > 0) tally.nearWithDirect++;
+        if ((prediction.directMeans.get(index) ?? 0) > 0) tally.nearWithDirectLight++;
         const extra = prediction.additions.get(index) ?? [0, 0, 0];
         const own = [0, 1, 2].map((channel) => state.radiance[index * 4 + channel] - extra[channel]);
         nearSum += own[0];
@@ -1391,9 +1545,8 @@ async function judgeCeilingRays(device: GPUDevice, scenario: Scenario, state: Fr
     tally.nearIndirectMean = nearIndirectSum / Math.max(tally.nearWithIndirect, 1);
     tally.nearMeanWithZeros = nearSum / Math.max(tally.near, 1);
     if (tally.near === 0) fail(`no ceiling ray in a tile under ${NEAR_TILE_SIZE} m: move the camera`);
-    if (tally.nearWithDirect > 0) fail(`${tally.nearWithDirect} ceiling rays in tiles under ${NEAR_TILE_SIZE} m read direct light: the ceiling has none`);
-    if (perRay && tally.nearOff > Math.ceil(0.005 * tally.near)) fail(`${tally.nearOff} of ${tally.near} ceiling rays in tiles under ${NEAR_TILE_SIZE} m are off ${expectedIndirect.toFixed(4)}`);
-    if (tally.nearWithIndirect > 0 && relativeError(tally.nearIndirectMean, expectedIndirect) > (perRay ? 0.01 : TOLERANCE)) fail(`the near ceiling rays read ${tally.nearIndirectMean.toFixed(4)} on average, expected ${expectedIndirect.toFixed(4)}`);
+    if (tally.nearWithDirectLight > 0) fail(`${tally.nearWithDirectLight} ceiling rays in tiles under ${NEAR_TILE_SIZE} m read direct light: the ceiling has none`);
+    if (tally.nearWithIndirect > 0 && relativeError(tally.nearIndirectMean, expectedIndirect) > meanTolerance) fail(`the near ceiling rays read ${tally.nearIndirectMean.toFixed(4)} on average, expected ${expectedIndirect.toFixed(4)}`);
     return { ...rays, ...prediction.tally, ...tally };
 }
 
@@ -1423,50 +1576,84 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
     const listed = new Set(state.updateTiles);
     if (listed.size !== state.updateTiles.length) fail(`the update list holds ${state.updateTiles.length} entries for ${listed.size} tiles (register D32)`);
 
+    // The second bounce the cache gives the near ceiling this frame (`secondBounceSamples`): within
+    // 3% of the true second bounce (far floor cells that share a column with the unlit ceiling
+    // read less than L_f since register D63; measured about 1%).
+    const samples = await secondBounceSamples(device, scenario, state);
+    const throughCache = meanSampleOver(state, samples, nearCeilingCells(state));
+    if (relativeError(throughCache.mean, CEILING_INDIRECT) > TOLERANCE) fail(`the near ceiling's second bounce through the cache is ${throughCache.mean.toFixed(4)}, the true one ${CEILING_INDIRECT.toFixed(4)}`);
+    // The analytic gate: the landings in near floor tiles read ρ L_f within 1%.
+    const nearLandings = nearFloorLandings(state, samples, nearCeilingCells(state), FURNACE.camera.position);
+    if (nearLandings.entries < 1000) fail(`only ${nearLandings.entries} second bounces land in floor tiles under ${NEAR_TILE_SIZE} m`);
+    else if (relativeError(nearLandings.mean, CEILING_INDIRECT) > 0.01) fail(`the second bounces landing in floor tiles under ${NEAR_TILE_SIZE} m read ${nearLandings.mean.toFixed(4)}, rho L_f = ${CEILING_INDIRECT.toFixed(4)}`);
+
     // The probe rays.
-    const rays = await judgeCeilingRays(device, scenario, state, fail);
+    const rays = await judgeCeilingRays(device, scenario, state, fail, throughCache.mean);
 
     // The cells of every tile the frame touched (the ceiling's, the floor's and the far tiles
-    // that hold both): an indirect mean of CEILING_INDIRECT wherever there are indirect samples
-    // (only the ceiling's first-bounce hits get them), a direct mean of L_f wherever there are
-    // direct samples (only the floor's second-bounce hits get them).
+    // that hold both): indirect values (only the ceiling's first-bounce hits get them) and
+    // direct values (the floor's second-bounce hits, lit, and since register D63 the ceiling's
+    // first-bounce hits as samples of no light).
     const tileOf = (cell: number): number => Math.floor(cell / capacity.numCellsPerTile);
     const touchedTiles = [...new Set([...Array.from(state.visibilityCell, tileOf), ...secondHits.map(tileOf)])];
     const directCells = await finestValues(device, cache, touchedTiles, false);
     const indirectCells = await finestValues(device, cache, touchedTiles, true);
-    // A cell may hold one of the rare misses (about 1 in 10,000 kept rays leave the 400 m planes;
-    // a sample of no light), which pulls a cell with few samples well down: about 120 near misses
-    // over 40 frames, and the cells keep them (register D37). Up to 0.5% of the cells may be off
-    // for that (measured: 0.28%).
-    const judgeCells = (cells: Map<number, CellValue>, expected: number, name: string): { cells: number; off: number; worst: number } => {
-        const result = { cells: 0, off: 0, worst: 0 };
-        const examples: string[] = [];
-        for (const [cell, value] of cells) {
-            if (!(value[3] > 0)) continue;
-            result.cells++;
-            const error = Math.max(...[0, 1, 2].map((channel) => relativeError(value[channel] / value[3], expected)));
-            result.worst = Math.max(result.worst, error);
-            if (error > TOLERANCE) {
-                result.off++;
-                if (examples.length < 3) examples.push(`cell ${cell}'s ${name} value is a mean of ${(value[0] / value[3]).toFixed(4)} over ${value[3]} samples, expected ${expected.toFixed(4)}`);
-            }
-        }
-        if (result.cells === 0) fail(`no cell has ${name} samples`);
-        if (result.off > Math.ceil(0.005 * result.cells)) {
-            examples.forEach(fail);
-            fail(`${result.off} of ${result.cells} cells' ${name} means are more than 2% off`);
-        }
-        return result;
-    };
-    const indirectTally = judgeCells(indirectCells, CEILING_INDIRECT, 'indirect');
-    // The measured indirect value over the true second bounce: 1 since RC3.5 (Capsaicin's was 1 / (1 - p)).
+    // The cells' indirect values, on average: this frame's second bounce through the cache over
+    // every entry within 1%, and the true second bounce within 3% (1 since RC3.5 but for the
+    // columns above; Capsaicin's was 1 / (1 - p)). One cell's value is its landings' mean, so
+    // cells are counted against CEILING_INDIRECT, not judged one by one.
+    const indirectTally = { cells: 0, off: 0, worst: 0 };
     let indirectMeanSum = 0;
-    for (const value of indirectCells.values()) if (value[3] > 0) indirectMeanSum += value[0] / value[3];
-    const measuredOverTrueSecondBounce = indirectMeanSum / Math.max(indirectTally.cells, 1) / TRUE_SECOND_BOUNCE;
-    if (Math.abs(measuredOverTrueSecondBounce - 1) > 0.01) fail(`the cells' indirect means average ${measuredOverTrueSecondBounce.toFixed(4)} x the true second bounce`);
-    const directTally = judgeCells(directCells, FLOOR_RADIANCE, 'direct');
-    // The first-bounce cells with direct samples: those of far tiles that hold the floor too.
-    const ceilingCellsWithDirect = new Set(Array.from(state.visibilityCell).filter((cell) => (directCells.get(cell)?.[3] ?? 0) > 0)).size;
+    for (const value of indirectCells.values()) {
+        if (!(value[3] > 0)) continue;
+        indirectTally.cells++;
+        indirectMeanSum += value[0] / value[3];
+        const error = relativeError(value[0] / value[3], CEILING_INDIRECT);
+        indirectTally.worst = Math.max(indirectTally.worst, error);
+        if (error > TOLERANCE) indirectTally.off++;
+    }
+    if (indirectTally.cells === 0) fail('no cell has indirect samples');
+    const indirectCellMean = indirectMeanSum / Math.max(indirectTally.cells, 1);
+    const allEntries = meanSampleOver(state, samples, new Set(state.visibilityCell));
+    const measuredOverTrueSecondBounce = indirectCellMean / TRUE_SECOND_BOUNCE;
+    if (relativeError(indirectCellMean, allEntries.mean) > 0.01) fail(`the cells' indirect means average ${indirectCellMean.toFixed(4)}, this frame's second bounce through the cache ${allEntries.mean.toFixed(4)}`);
+    if (Math.abs(measuredOverTrueSecondBounce - 1) > TOLERANCE) fail(`the cells' indirect means average ${measuredOverTrueSecondBounce.toFixed(4)} x the true second bounce`);
+
+    // Register D63, the direct values, in tiles under 2 m (which can't hold both planes): the
+    // ceiling's cells hold its first-bounce hits, which have no light to draw, as samples of no
+    // light: exactly 0, with samples counted (Capsaicin counted none); the floor's hold its lit
+    // second-bounce hits: L_f within 2%. Cells of far tiles holding both are recorded; section 19
+    // judges a known mixture.
+    const directTally = { pureFloor: 0, pureFloorOff: 0, pureCeiling: 0, pureCeilingSampled: 0, pureCeilingLit: 0, mixed: 0, mixedMeasured: 0, mixedExpected: 0, mixedLitOnly: 0 };
+    const nearConstants = cellSizeConstants();
+    for (const [cell, { points }] of cellHits(state, true)) {
+        const surfaces = points.map((point) => classify(point, true));
+        if (surfaces.some((surface) => surface !== 'floor' && surface !== 'ceiling')) continue;
+        const floorShare = surfaces.filter((surface) => surface === 'floor').length / surfaces.length;
+        const near = hashGridCacheGetCellSize(points[0], FURNACE.camera.position, nearConstants) * LEVEL_SIDES[0] < NEAR_TILE_SIZE;
+        if (!near && (floorShare === 0 || floorShare === 1)) continue;
+        const value = directCells.get(cell);
+        const count = value?.[3] ?? 0;
+        const mean = value && count > 0 ? Math.max(value[0], value[1], value[2]) / count : 0;
+        if (floorShare === 0) {
+            directTally.pureCeiling++;
+            if (count > 0) directTally.pureCeilingSampled++;
+            if (mean > 0) directTally.pureCeilingLit++;
+        } else if (count > 0 && floorShare === 1) {
+            directTally.pureFloor++;
+            if (relativeError(mean, FLOOR_RADIANCE) > TOLERANCE) directTally.pureFloorOff++;
+        } else if (count > 0) {
+            directTally.mixed++;
+            directTally.mixedMeasured += mean;
+            directTally.mixedExpected += FLOOR_RADIANCE * floorShare;
+            directTally.mixedLitOnly += FLOOR_RADIANCE;
+        }
+    }
+    const mixedRatio = directTally.mixedMeasured / Math.max(directTally.mixedExpected, 1e-30);
+    if (directTally.pureCeilingLit > 0) fail(`${directTally.pureCeilingLit} ceiling-only cells hold direct light: the ceiling has none`);
+    if (directTally.pureCeilingSampled < 0.99 * directTally.pureCeiling) fail(`only ${directTally.pureCeilingSampled} of ${directTally.pureCeiling} ceiling-only cells counted their hits as samples of no light (register D63)`);
+    if (directTally.pureFloor === 0 || directTally.pureFloorOff > Math.ceil(0.005 * directTally.pureFloor)) fail(`${directTally.pureFloorOff} of ${directTally.pureFloor} floor-only cells are more than 2% off L_f`);
+    if (directTally.pureCeiling < 1000) fail(`only ${directTally.pureCeiling} near ceiling cells`);
 
     // The draws, against the CPU twin: which first-bounce entries trace a second ray, and where to.
     const frameIndex = await lastFrameIndex(device, cache, state.visibilityCell[0]);
@@ -1548,6 +1735,9 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
             trueSecondBounce: TRUE_SECOND_BOUNCE,
             capsaicinFactor: CAPSAICIN_FACTOR,
             expectedCeilingIndirect: CEILING_INDIRECT,
+            nearSecondBounceThroughCache: throughCache,
+            nearFloorLandings: nearLandings,
+            allSecondBounceThroughCache: allEntries,
             measuredOverTrueSecondBounce,
             expectedFloorRadiance: FLOOR_RADIANCE,
             frameIndex,
@@ -1560,8 +1750,7 @@ async function checkMultibounce(device: GPUDevice, scenario: Scenario): Promise<
             worstBrdfError: worstBrdf,
             rays,
             cellsWithIndirect: indirectTally,
-            cellsWithDirect: directTally,
-            ceilingCellsWithDirect,
+            directValues: { ...directTally, mixedRatio },
             bucketOverflow: overflow,
         },
     };
@@ -1593,13 +1782,15 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
     if (firstRays.nearWithIndirect > 0) fail(`${firstRays.nearWithIndirect} rays read an indirect sample after the first frame`);
 
     // ...but the scratch holds this frame's samples for next frame: one count per second-bounce
-    // entry whose first bounce is in the cell, and their quantised sum.
+    // entry whose first bounce is in the cell, and their quantised sum (each sample as
+    // `secondBounceSamples` rebuilds it from the landing cells as read back; a miss 0).
+    const firstSamples = await secondBounceSamples(device, scenario, first);
     const expectedCounts = new Map<number, number>();
-    const expectedHits = new Map<number, number>();
+    const expectedSums = new Map<number, number>();
     first.multibounceQuery.forEach((query, entry) => {
         const cell = first.visibilityCell[query];
         expectedCounts.set(cell, (expectedCounts.get(cell) ?? 0) + 1);
-        if (first.multibounceCell[entry] !== MULTIBOUNCE_MISS_CELL) expectedHits.set(cell, (expectedHits.get(cell) ?? 0) + 1);
+        expectedSums.set(cell, (expectedSums.get(cell) ?? 0) + firstSamples[entry]);
     });
     const cells = [...expectedCounts.keys()];
     const staging = device.createBuffer({ label: 'world-cache indirect scratch', size: Math.max(16, cells.length * 16), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
@@ -1621,8 +1812,10 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
         }
         // Quantised at 1/1000 (kHashGridCache_FloatQuantize); a miss is a sample of no light.
         const mean = scratch[index * 4] / 1000 / Math.max(count, 1);
-        const expectedMean = (CEILING_INDIRECT * (expectedHits.get(cell) ?? 0)) / Math.max(expected, 1);
-        const error = expectedMean > 0 ? relativeError(mean, expectedMean) : mean;
+        const expectedMean = (expectedSums.get(cell) ?? 0) / Math.max(expected, 1);
+        // Each sample is rounded to 1/1000 before it is summed, so a cell of small samples (its
+        // landings in floor cells that share a column with the unlit ceiling) may be off by that.
+        const error = Math.abs(mean - expectedMean) / Math.max(expectedMean, QUANTISATION_STEP / TOLERANCE);
         worstMean = Math.max(worstMean, error);
         if (error > TOLERANCE) {
             meansOff++;
@@ -1631,18 +1824,49 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
     });
     if (countsOff > 0) fail(`${countsOff} of ${cells.length} cells' scratch counts differ from their second-bounce entries`);
     if (meansOff > 0) fail(`${meansOff} of ${cells.length} cells' scratch averages are more than 2% off`);
+    // The analytic gate, where the geometry allows: the cells whose second bounces all missed or
+    // landed in floor tiles under 2 m (floor alone) hold ρ L_f × their hits over their entries.
+    const lagConstants = cellSizeConstants();
+    const analyticCells = new Map<number, { hits: number; entries: number; nearOnly: boolean }>();
+    first.multibounceQuery.forEach((query, entry) => {
+        const cell = first.visibilityCell[query];
+        const record = analyticCells.get(cell) ?? { hits: 0, entries: 0, nearOnly: true };
+        record.entries++;
+        if (first.multibounceCell[entry] !== MULTIBOUNCE_MISS_CELL) {
+            record.hits++;
+            const hit = multibounceHit(first, entry);
+            if (Math.abs(hit[1]) > 0.01 || hashGridCacheGetCellSize(hit, FURNACE.camera.position, lagConstants) * LEVEL_SIDES[0] >= NEAR_TILE_SIZE) record.nearOnly = false;
+        }
+        analyticCells.set(cell, record);
+    });
+    let analyticJudged = 0;
+    let analyticOff = 0;
+    cells.forEach((cell, index) => {
+        const record = analyticCells.get(cell);
+        if (!record?.nearOnly) return;
+        const count = scratch[index * 4 + 3];
+        const mean = scratch[index * 4] / 1000 / Math.max(count, 1);
+        const expectedMean = (CEILING_INDIRECT * record.hits) / Math.max(record.entries, 1);
+        analyticJudged++;
+        if (Math.abs(mean - expectedMean) / Math.max(expectedMean, QUANTISATION_STEP / TOLERANCE) > TOLERANCE) analyticOff++;
+    });
+    if (analyticJudged < 1000) fail(`only ${analyticJudged} cells' second bounces all land in floor tiles under ${NEAR_TILE_SIZE} m`);
+    else if (analyticOff > 0) fail(`${analyticOff} of ${analyticJudged} cells whose second bounces land in floor tiles under ${NEAR_TILE_SIZE} m are more than 2% off rho L_f x their hit share`);
 
-    // The second frame: UpdateTiles blends the first frame's samples in, and the rays read them.
+    // The second frame: UpdateTiles blends the first frame's samples in, and the rays read them:
+    // the near ones average the first frame's second bounce over the near cells (2%: a ray reads
+    // its cell's few samples, or a coarser level's).
+    const firstThroughCache = meanSampleOver(first, firstSamples, nearCeilingCells(first));
     await runFrames(device, scenario, 1);
     const second = await readFrameState(device, scenario);
-    const rays = await judgeCeilingRays(device, scenario, second, fail);
+    const rays = await judgeCeilingRays(device, scenario, second, fail, firstThroughCache.mean, TOLERANCE);
     if (rays.nearWithIndirect === 0) fail('no ray reads an indirect sample after the second frame');
 
     return {
         failures,
         data: {
-            firstFrame: { secondBounceEntries: first.multibounceCell.length, ceilingCellsWithIndirect: indirectSamples, rays: firstRays, scratchCells: cells.length, worstScratchMeanError: worstMean },
-            secondFrame: rays,
+            firstFrame: { secondBounceEntries: first.multibounceCell.length, ceilingCellsWithIndirect: indirectSamples, rays: firstRays, scratchCells: cells.length, worstScratchMeanError: worstMean, analyticCells: analyticJudged, analyticCellsOff: analyticOff },
+            secondFrame: { ...rays, expectedFromFirstFrame: firstThroughCache },
         },
     };
 }
@@ -1748,9 +1972,19 @@ async function checkStrips(device: GPUDevice, scenario: Scenario): Promise<Check
     const entries = state.multibounceCell.length;
     const hitEntries = Array.from(state.multibounceCell).filter((cell) => cell !== MULTIBOUNCE_MISS_CELL).length;
     const hitShare = hitEntries / Math.max(entries, 1);
-    // The rays: each reads its prediction; the near ones average STRIPS_INDIRECT (one ray is a
+    // The second bounce the cache gives the near ceiling this frame: the analytic STRIPS_INDIRECT
+    // within 5% (far floor cells that share a column with the unlit ceiling read less than L_f
+    // since register D63; a hit-only mean would read twice it), and the rays and cells against it.
+    const samples = await secondBounceSamples(device, scenario, state);
+    const throughCache = meanSampleOver(state, samples, nearCeilingCells(state));
+    if (relativeError(throughCache.mean, STRIPS_INDIRECT) > 0.05) fail(`the near ceiling's second bounce through the cache is ${throughCache.mean.toFixed(4)}, the analytic ${STRIPS_INDIRECT.toFixed(4)}`);
+    // The analytic gate: the landings on strips in floor tiles under 2 m read ρ L_f within 1%.
+    const nearLandings = nearFloorLandings(state, samples, nearCeilingCells(state), FURNACE.camera.position);
+    if (nearLandings.entries < 500) fail(`only ${nearLandings.entries} second bounces land in floor tiles under ${NEAR_TILE_SIZE} m`);
+    else if (relativeError(nearLandings.mean, CEILING_INDIRECT) > 0.01) fail(`the second bounces landing on strips in floor tiles under ${NEAR_TILE_SIZE} m read ${nearLandings.mean.toFixed(4)}, rho L_f = ${CEILING_INDIRECT.toFixed(4)}`);
+    // The rays: each reads its prediction; the near ones average the second bounce (one ray is a
     // cell's noisy mean of hits and misses, so only the average is judged).
-    const rays = await judgeCeilingRays(device, scenario, state, fail, STRIPS_INDIRECT, false);
+    const rays = await judgeCeilingRays(device, scenario, state, fail, throughCache.mean, TOLERANCE);
     // The near cells' indirect means, averaged.
     const nearCells = new Set<number>();
     state.visibilityCell.forEach((cell, visibility) => {
@@ -1826,9 +2060,10 @@ async function checkStrips(device: GPUDevice, scenario: Scenario): Promise<Check
     const nearHitShare = nearHits / Math.max(nearEntries, 1);
     if (Math.abs(nearHitShare - STRIPS.fill) > 0.02) fail(`${(nearHitShare * 100).toFixed(2)}% of the near ceiling cells' kept second-bounce rays hit, expected ${STRIPS.fill * 100}%`);
     if (disagreements > Math.ceil(0.005 * cpuJudged)) fail(`the GPU and the CPU disagree on ${disagreements} of ${cpuJudged} landings`);
-    if (relativeError(rays.nearMeanWithZeros, STRIPS_INDIRECT) > 0.01) fail(`the near ceiling rays, those reading no indirect value as 0, average ${rays.nearMeanWithZeros.toFixed(4)}, expected ${STRIPS_INDIRECT.toFixed(4)}`);
-    if (relativeError(nearCellMean, STRIPS_INDIRECT) > TOLERANCE) fail(`the near ceiling cells' indirect means average ${nearCellMean.toFixed(4)}, expected ${STRIPS_INDIRECT.toFixed(4)} (a hit-only mean would read ${(STRIPS_INDIRECT / STRIPS.fill).toFixed(4)})`);
-    return { failures, data: { expectedIndirect: STRIPS_INDIRECT, hitOnlyMeanWouldRead: STRIPS_INDIRECT / STRIPS.fill, entries, hitShare, nearCells: cells, nearCellsWithoutSamples: cellsWithoutSamples, nearCellMean, nearCellMeanOverExpected: nearCellMean / STRIPS_INDIRECT, byCountMean, nearEntries, nearHitShare, cpuHitShare: cpuHits / Math.max(cpuJudged, 1), cpuJudged, disagreements, firstHitsOnTheFloor, rays } };
+    // 2%: half the kept rays miss, so this frame's mean of about 20,000 samples is itself known to 0.7%.
+    if (relativeError(rays.nearMeanWithZeros, throughCache.mean) > TOLERANCE) fail(`the near ceiling rays, those reading no indirect value as 0, average ${rays.nearMeanWithZeros.toFixed(4)}, expected ${throughCache.mean.toFixed(4)}`);
+    if (relativeError(nearCellMean, throughCache.mean) > TOLERANCE) fail(`the near ceiling cells' indirect means average ${nearCellMean.toFixed(4)}, expected ${throughCache.mean.toFixed(4)} (a hit-only mean would read about ${(STRIPS_INDIRECT / STRIPS.fill).toFixed(4)})`);
+    return { failures, data: { expectedIndirect: STRIPS_INDIRECT, nearSecondBounceThroughCache: throughCache, nearFloorLandings: nearLandings, hitOnlyMeanWouldRead: STRIPS_INDIRECT / STRIPS.fill, entries, hitShare, nearCells: cells, nearCellsWithoutSamples: cellsWithoutSamples, nearCellMean, nearCellMeanOverExpected: nearCellMean / STRIPS_INDIRECT, byCountMean, nearEntries, nearHitShare, cpuHitShare: cpuHits / Math.max(cpuJudged, 1), cpuJudged, disagreements, firstHitsOnTheFloor, rays } };
 }
 
 // ---- Section 14: every first bounce bypasses; its probe rays average the second bounce -------------
@@ -1868,6 +2103,927 @@ async function checkBypassAverage(device: GPUDevice, scenario: Scenario): Promis
     if (rays === 0) fail('no ceiling ray bypassed the cache');
     if (relativeError(mean, TRUE_SECOND_BOUNCE) > TOLERANCE) fail(`the self-bypassed ceiling rays average ${mean.toFixed(4)}, the second bounce is ${TRUE_SECOND_BOUNCE.toFixed(4)}`);
     return { failures, data: { selfBypassedCeilingRays: rays, mean, meanOverTrueSecondBounce: mean / TRUE_SECOND_BOUNCE, predictedOff } };
+}
+
+// ---- Sections 15-18: the sky as a light (RC3.4) ---------------------------------------------------
+
+/** The constant sky's radiance in sections 15, 17 and 18. */
+const SKY_RADIANCE = 1.5;
+/** Section 16's coded sky: per channel (1 + d) / 2 times this, d the direction's x, y or z (`codedSkyTexture`). */
+const CODED_SKY_SCALE = 2;
+const SKY_ALBEDO = 0.5;
+/** ρ L: what a surface open to the constant sky reflects, the done-when's "cell radiance = ρL". */
+const OPEN_SKY_RADIANCE = SKY_ALBEDO * SKY_RADIANCE;
+const UP: Vec3 = [0, 1, 0];
+const DOWN: Vec3 = [0, -1, 0];
+
+/**
+ * A scene under a sky (sections 15-18):
+ * - `openFloor`: the furnace's 400 m floor (y = 0, facing up) and nothing over it but a 4 × 4 m
+ *   patch 50 m up, facing down, for the probes; the camera 1 m under the patch looks straight up
+ *   at it, so every probe is on the patch and every probe ray that hits, hits the floor. The patch
+ *   hides at most 16 / (π 50²) = 0.2% of the floor's sky (counted, `viewFactor`).
+ * - `ceilingOnly`: the furnace's ceiling (y = 3, facing down) and a black 1 × 1 m patch on the
+ *   ground (facing up, albedo 0) for the probes; the camera 0.3 m over the patch looks straight
+ *   down at it. The ceiling sees the sky below it but for the patch (at most 3.5%, counted), and
+ *   its second-bounce rays go down: nearly all miss, the rest hit the black patch.
+ * - `corner`: the corner of sections 1-7 (floor and 40 × 10 m wall), no slab.
+ */
+interface SkyScene {
+    readonly layout: 'openFloor' | 'ceilingOnly' | 'corner';
+    /** `constant`: SKY_RADIANCE in every direction. `coded`: (1 + d) / 2 per channel × CODED_SKY_SCALE. */
+    readonly environment: 'constant' | 'coded';
+}
+
+const OPEN_FLOOR = { patchY: 50, patchHalf: 2 } as const;
+const CEILING_ONLY = { patchHalf: 0.5 } as const;
+const SKY_LAYOUT_CAMERA: Record<SkyScene['layout'], PageCamera> = {
+    openFloor: { position: [0, OPEN_FLOOR.patchY - 1, 0], target: [0, OPEN_FLOOR.patchY, 0], fovYDeg: 60, near: 0.05, far: 1000 },
+    ceilingOnly: { position: [0, 0.3, 0], target: [0, 0, 0], fovYDeg: 60, near: 0.05, far: 1000 },
+    corner: CAMERA,
+};
+
+/** A horizontal square, half-width `half` at height `y`, as `quad` takes it: counter-clockwise seen from `normal`'s side. */
+function horizontalSquare(half: number, y: number, normal: Vec3): Vec3[] {
+    return normal[1] > 0
+        ? [[-half, y, half], [half, y, half], [half, y, -half], [-half, y, -half]]
+        : [[-half, y, -half], [half, y, -half], [half, y, half], [-half, y, half]];
+}
+
+/** The corner's wall (sections 1-7), and the part of its floor in front of it (z ≥ 0): the occluders of sections 18's floor and wall. */
+const CORNER_WALL: readonly Vec3[] = [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]];
+const CORNER_FLOOR_IN_FRONT: readonly Vec3[] = [[-200, 0, 0], [200, 0, 0], [200, 0, 200], [-200, 0, 200]];
+
+function describeSkyScene(platform: GIPlatformImpl, lights: readonly LightDescriptor[], sky: SkyScene): LightHandle[] {
+    const half = FURNACE.halfWidth;
+    if (sky.layout === 'openFloor') {
+        quad(platform, 'floor', horizontalSquare(half, 0, UP), UP, SKY_ALBEDO);
+        quad(platform, 'probe patch', horizontalSquare(OPEN_FLOOR.patchHalf, OPEN_FLOOR.patchY, DOWN), DOWN, SKY_ALBEDO);
+    } else if (sky.layout === 'ceilingOnly') {
+        quad(platform, 'ceiling', horizontalSquare(half, FURNACE.ceilingY, DOWN), DOWN, SKY_ALBEDO);
+        quad(platform, 'black probe patch', horizontalSquare(CEILING_ONLY.patchHalf, 0, UP), UP, 0);
+    } else {
+        quad(platform, 'floor', horizontalSquare(half, 0, UP), UP, SKY_ALBEDO);
+        quad(platform, 'wall', [...CORNER_WALL], [0, 0, 1], SKY_ALBEDO);
+    }
+    return lights.map((light) => platform.scene.createLight(light));
+}
+
+/** three.js's equirect direction for texture coordinates (v = 0 at the first row in memory, the nadir), as hit-shading-sky writes it. */
+function equirectTexelDirection(u: number, v: number): Vec3 {
+    const azimuth = (u - 0.5) * 2 * Math.PI;
+    const latitude = (v - 0.5) * Math.PI;
+    return [Math.cos(latitude) * Math.cos(azimuth), Math.sin(latitude), Math.cos(latitude) * Math.sin(azimuth)];
+}
+
+/**
+ * Section 16's sky: each texel holds (1 + d) / 2 for its own direction d (hit-shading-sky's
+ * coded texture), so red follows x, green y and blue z. Linear in d, so its irradiance on a
+ * normal n is exact: π/2 + (π/3) n per channel (`codedSkyIrradiance`), and so are its SH.
+ */
+function codedSkyTexture(device: GPUDevice): GPUTexture {
+    const width = 512;
+    const height = 256;
+    const texture = device.createTexture({ label: 'coded sky', size: { width, height }, format: 'rgba32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    const values = new Float32Array(width * height * 4);
+    for (let row = 0; row < height; row++) {
+        for (let column = 0; column < width; column++) {
+            const d = equirectTexelDirection((column + 0.5) / width, (row + 0.5) / height);
+            values.set([(1 + d[0]) / 2, (1 + d[1]) / 2, (1 + d[2]) / 2, 1], (row * width + column) * 4);
+        }
+    }
+    device.queue.writeTexture({ texture }, values, { bytesPerRow: width * 16 }, { width, height });
+    return texture;
+}
+
+function skyEnvironment(sky: SkyScene, texture: GPUTexture | null): EnvironmentDescriptor {
+    if (sky.environment === 'coded' && texture) return { type: 'texture', texture, layout: 'equirect', intensity: CODED_SKY_SCALE };
+    return { type: 'color', color: [1, 1, 1], intensity: SKY_RADIANCE };
+}
+
+/** The coded sky's radiance along d. */
+function codedSkyRadiance(d: Vec3): Vec3 {
+    return [0, 1, 2].map((channel) => (CODED_SKY_SCALE * (1 + d[channel])) / 2) as unknown as Vec3;
+}
+
+/** The coded sky's irradiance on a surface facing n, with nothing in the way: S (π/2 + (π/3) n) per channel. */
+function codedSkyIrradiance(n: Vec3): Vec3 {
+    return [0, 1, 2].map((channel) => CODED_SKY_SCALE * (Math.PI / 2 + (Math.PI / 3) * n[channel])) as unknown as Vec3;
+}
+
+function luminance(rgb: Vec3): number {
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
+
+// Small vector helpers for the view factors.
+function vSub(a: Vec3, b: Vec3): Vec3 {
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+function vDot(a: Vec3, b: Vec3): number {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+function vCross(a: Vec3, b: Vec3): Vec3 {
+    return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function vNormalize(a: Vec3): Vec3 {
+    const length = Math.hypot(a[0], a[1], a[2]);
+    return [a[0] / length, a[1] / length, a[2] / length];
+}
+
+/**
+ * The share of a surface point's cosine-weighted hemisphere (unit normal `normal`) that a
+ * polygon covers, the polygon wholly on the normal's side (an edge in the point's plane is
+ * fine): Lambert's contour integral, F = |Σ θ_i n · (v_i × v_{i+1}) / |v_i × v_{i+1}|| / 2π, v_i
+ * the unit directions to the corners, θ_i the angle between neighbours. Exact; independent of
+ * the GPU's estimate, which draws directions and traces them.
+ */
+function viewFactor(point: Vec3, normal: Vec3, polygon: readonly Vec3[]): number {
+    let sum = 0;
+    for (let index = 0; index < polygon.length; index++) {
+        const a = vNormalize(vSub(polygon[index], point));
+        const b = vNormalize(vSub(polygon[(index + 1) % polygon.length], point));
+        const across = vCross(a, b);
+        const length = Math.hypot(across[0], across[1], across[2]);
+        if (length < 1e-12) continue;
+        sum += Math.acos(Math.min(Math.max(vDot(a, b), -1), 1)) * (vDot(normal, across) / length);
+    }
+    return Math.abs(sum) / (2 * Math.PI);
+}
+
+/** A surface of a sky scene: its normal on the lit side, the polygon that hides part of its sky, and what a hit on it should reflect. */
+interface SkySurface {
+    readonly normal: Vec3;
+    readonly occluder: readonly Vec3[];
+    /**
+     * A hit point put back on the surface's plane, and for the corner a hair (0.1 mm) off the
+     * other surface's: a hit read back sits a rounding error off its plane, and a point a hair
+     * behind the corner's other surface would see its occluder edge-on (Lambert's contour needs
+     * the polygon on the normal's side). Both surfaces see half their sky hidden at the corner.
+     */
+    snap(point: Vec3): Vec3;
+}
+
+/** The surfaces whose cells sections 15, 17 and 18 judge, by the page's classification. */
+function skySurface(layout: SkyScene['layout'], surface: Surface): SkySurface | null {
+    if (layout === 'openFloor' && surface === 'floor') return { normal: UP, occluder: horizontalSquare(OPEN_FLOOR.patchHalf, OPEN_FLOOR.patchY, DOWN), snap: (p) => [p[0], 0, p[2]] };
+    if (layout === 'ceilingOnly' && surface === 'ceiling') return { normal: DOWN, occluder: horizontalSquare(CEILING_ONLY.patchHalf, 0, UP), snap: (p) => [p[0], FURNACE.ceilingY, p[2]] };
+    if (layout === 'corner' && surface === 'floor') return CORNER_FLOOR;
+    if (layout === 'corner' && surface === 'wall') return CORNER_WALL_SURFACE;
+    return null;
+}
+
+const CORNER_OFFSET = 1e-4;
+const CORNER_FLOOR: SkySurface = { normal: UP, occluder: CORNER_WALL, snap: (p) => [p[0], 0, Math.max(p[2], CORNER_OFFSET)] };
+const CORNER_WALL_SURFACE: SkySurface = { normal: [0, 0, 1], occluder: CORNER_FLOOR_IN_FRONT, snap: (p) => [p[0], Math.max(p[1], CORNER_OFFSET), 0] };
+
+/** F, the share of a surface point's sky its occluder hides (sections 15, 17, 18). */
+function hiddenSky(point: Vec3, surface: SkySurface): number {
+    return viewFactor(surface.snap(point), surface.normal, surface.occluder);
+}
+
+/** ρ L (1 − F): a surface's direct value under the constant sky. */
+function constantSkyDirect(point: Vec3, surface: SkySurface): number {
+    return OPEN_SKY_RADIANCE * (1 - hiddenSky(point, surface));
+}
+
+/** A second-bounce entry's hit point, from its record (origin words 0-2, direction halves 4-5, hit distance 6). */
+function multibounceHit(state: FrameState, entry: number): Vec3 {
+    const base = entry * MULTIBOUNCE_RAY_WORDS;
+    const floats = new Float32Array(state.multibounceRays.buffer, state.multibounceRays.byteOffset + base * 4, 7);
+    const direction = multibounceDirection(state, entry);
+    return [floats[0] + floats[6] * direction[0], floats[1] + floats[6] * direction[1], floats[2] + floats[6] * direction[2]];
+}
+
+/**
+ * Per cell: the hit points of this frame's entries in it (first and second bounce), each a
+ * sample its direct value took this frame, with their surfaces. A cell whose entries are on
+ * a surface the section doesn't judge is left out.
+ */
+function cellHits(state: FrameState, furnace: boolean): Map<number, { points: Vec3[]; surfaces: Set<Surface> }> {
+    const cells = new Map<number, { points: Vec3[]; surfaces: Set<Surface> }>();
+    const add = (cell: number, point: Vec3, surface: Surface): void => {
+        const entry = cells.get(cell) ?? { points: [], surfaces: new Set<Surface>() };
+        entry.points.push(point);
+        entry.surfaces.add(surface);
+        cells.set(cell, entry);
+    };
+    state.visibilityCell.forEach((cell, visibility) => {
+        const ray = state.rays[state.visibilityQuery[visibility]];
+        add(cell, ray.hit, ray.surface);
+    });
+    state.multibounceCell.forEach((cell, entry) => {
+        if (cell === MULTIBOUNCE_MISS_CELL) return;
+        const hit = multibounceHit(state, entry);
+        add(cell, hit, classify(hit, furnace));
+    });
+    return cells;
+}
+
+/** How a set of cells reads against what they should: per-cell ratios and their spread. */
+interface CellJudgement {
+    cells: number;
+    meanRatio: number;
+    worst: number;
+    p99: number;
+    /** Cells further from their expected value than their bound (2% plus five standard deviations of their samples' mean). */
+    off: number;
+    /** The worst |ratio − 1| over the cell's bound. */
+    worstOverBound: number;
+    /** The three cells furthest past their bound, for the record. */
+    worstCells: Omit<CellRatio, 'bound'>[];
+    /** By the expected value's share of the open sky, 0.1 wide: mean ratio and cells. */
+    byOpenShare: Record<string, [number, number]>;
+}
+
+/** A judged cell: measured over expected, the expected value, and how far off (relative) its samples' spread allows. */
+interface CellRatio {
+    readonly ratio: number;
+    readonly expected: number;
+    readonly bound: number;
+    /** What the record shows of the cell: its samples' count, this frame's entries and their mean point. */
+    readonly count?: number;
+    readonly entries?: number;
+    readonly at?: Vec3;
+}
+
+function judgeCells(ratios: readonly CellRatio[]): CellJudgement {
+    const errors = ratios.map(({ ratio }) => Math.abs(ratio - 1)).sort((a, b) => a - b);
+    const byOpenShare: Record<string, [number, number]> = {};
+    for (const { ratio, expected } of ratios) {
+        const bucket = (Math.floor((expected / OPEN_SKY_RADIANCE) * 10) / 10).toFixed(1);
+        const entry = byOpenShare[bucket] ?? [0, 0];
+        entry[0] += ratio;
+        entry[1]++;
+        byOpenShare[bucket] = entry;
+    }
+    for (const entry of Object.values(byOpenShare)) entry[0] /= entry[1];
+    return {
+        cells: ratios.length,
+        meanRatio: ratios.reduce((sum, { ratio }) => sum + ratio, 0) / Math.max(ratios.length, 1),
+        worst: errors[errors.length - 1] ?? 0,
+        p99: errors[Math.floor(0.99 * (errors.length - 1))] ?? 0,
+        off: ratios.filter(({ ratio, bound }) => Math.abs(ratio - 1) > bound).length,
+        worstOverBound: Math.max(0, ...ratios.map(({ ratio, bound }) => Math.abs(ratio - 1) / bound)),
+        worstCells: [...ratios]
+            .sort((a, b) => Math.abs(b.ratio - 1) / b.bound - Math.abs(a.ratio - 1) / a.bound)
+            .slice(0, 3)
+            .map(({ bound, ...rest }) => ({ ...rest, overBound: Math.abs(rest.ratio - 1) / bound })),
+        byOpenShare,
+    };
+}
+
+/**
+ * The finest-level direct values of every cell this frame's entries reached on the judged
+ * surfaces, against the mean of ρ L (1 − F) over the entries' hit points (the constant sky).
+ *
+ * Each cell's bound: 2%, plus five standard deviations of its mean. A sample is ρ L or 0 by
+ * its shadow ray (a point whose sky is hidden by F: variance (ρ L)² F (1 − F)); `UpdateTiles`
+ * averages a frame's n samples and, at the cap of 16, moves 1/16 of the way to that mean each
+ * frame, an average over about 31 frames (2 / α − 1), so 31 n samples; below the cap, its
+ * count of samples.
+ */
+async function judgeConstantSkyCells(device: GPUDevice, scenario: Scenario, state: FrameState, layout: SkyScene['layout']): Promise<{ judgement: CellJudgement; bySurface: Record<string, CellJudgement> }> {
+    const capacity = scenario.cache.capacity;
+    const hits = cellHits(state, scenario.furnace);
+    const judged = [...hits].filter(([, { surfaces }]) => [...surfaces].every((surface) => skySurface(layout, surface) !== null));
+    const tiles = [...new Set(judged.map(([cell]) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const values = await finestValues(device, scenario.cache, tiles, false);
+    const all: CellRatio[] = [];
+    const bySurface = new Map<string, CellRatio[]>();
+    for (const [cell, { points, surfaces }] of judged) {
+        const value = values.get(cell);
+        if (!value || !(value[3] > 0)) continue;
+        // The cell's entries' points, each on its own surface (a cell is a column through its tile).
+        let expected = 0;
+        let variance = 0;
+        for (const point of points) {
+            const surface = skySurface(layout, classify(point, scenario.furnace));
+            if (!surface) continue;
+            const hidden = hiddenSky(point, surface);
+            expected += OPEN_SKY_RADIANCE * (1 - hidden);
+            variance += OPEN_SKY_RADIANCE * OPEN_SKY_RADIANCE * hidden * (1 - hidden);
+        }
+        expected /= points.length;
+        variance /= points.length;
+        const samples = value[3] >= MAX_SAMPLE_COUNT ? 31 * points.length : value[3];
+        const bound = TOLERANCE + (5 * Math.sqrt(variance / samples)) / expected;
+        const measured = (value[0] + value[1] + value[2]) / (3 * value[3]);
+        const at: Vec3 = [0, 1, 2].map((axis) => points.reduce((sum, point) => sum + point[axis], 0) / points.length) as unknown as Vec3;
+        const sample = { ratio: measured / expected, expected, bound, count: value[3], entries: points.length, at };
+        all.push(sample);
+        const key = [...surfaces].sort().join('+');
+        bySurface.set(key, [...(bySurface.get(key) ?? []), sample]);
+    }
+    return { judgement: judgeCells(all), bySurface: Object.fromEntries([...bySurface].map(([key, ratios]) => [key, judgeCells(ratios)])) };
+}
+
+/** The shadow-ray list's reservoirs: how many drew the sky, with what weights, and how many of them are second-bounce entries. */
+function skyReservoirs(state: FrameState): { total: number; sky: number; secondBounce: number; secondBounceSky: number; weights: Map<number, number> } {
+    const count0 = state.counters[HASH_GRID_COUNTER.visibilityCount0];
+    const words = state.reservoirs;
+    const floats = new Float32Array(words.buffer, words.byteOffset, words.length);
+    const result = { total: state.visibilityRay.length, sky: 0, secondBounce: 0, secondBounceSky: 0, weights: new Map<number, number>() };
+    state.visibilityRay.forEach((entry, index) => {
+        const isSky = words[RESERVOIR_WORDS * index] === DIRECT_SKY_LIGHT;
+        const isSecond = (entry & ~BYPASS_CACHE_BIT) >= count0;
+        if (isSky) result.sky++;
+        if (isSecond) result.secondBounce++;
+        if (isSky && isSecond) result.secondBounceSky++;
+        const weight = floats[RESERVOIR_WORDS * index + 1];
+        result.weights.set(weight, (result.weights.get(weight) ?? 0) + 1);
+    });
+    return result;
+}
+
+/** The weights in a sky-only scene: each drawn light is the sky, its weight 1 (the only candidate). */
+function checkSkyOnlyReservoirs(state: FrameState, fail: (message: string) => void, secondBounceExpected: boolean): Record<string, number> {
+    const reservoirs = skyReservoirs(state);
+    if (reservoirs.total === 0) fail('no shadow rays: the sky was never drawn');
+    if (reservoirs.sky !== reservoirs.total) fail(`${reservoirs.total - reservoirs.sky} of ${reservoirs.total} reservoirs drew something other than the sky, the only light`);
+    // weightSum / skyWeight with the two equal: 1 within the GPU's division (WGSL allows 2.5 ulp; the RTX reads 1 - 2^-24).
+    const otherWeights = [...reservoirs.weights].filter(([weight]) => Math.abs(weight - 1) > 1e-6).reduce((sum, [, count]) => sum + count, 0);
+    if (otherWeights > 0) fail(`${otherWeights} reservoirs weigh the sky by other than 1, the only candidate`);
+    if (secondBounceExpected && reservoirs.secondBounceSky === 0) fail('no second-bounce hit drew the sky (GenerateMultibounceReservoirs)');
+    const weights = [...reservoirs.weights.keys()];
+    return { shadowRays: reservoirs.total, skyDrawn: reservoirs.sky, secondBounceShadowRays: reservoirs.secondBounce, secondBounceSkyDrawn: reservoirs.secondBounceSky, smallestWeight: Math.min(...weights), largestWeight: Math.max(...weights) };
+}
+
+/** Probe rays that hit `surface`: their mean reading (rgb averaged), each the resolve of its cell or its own sample, plus the second bounce. */
+function meanRayReading(state: FrameState, surface: Surface): { rays: number; mean: number } {
+    let sum = 0;
+    let rays = 0;
+    state.rays.forEach((ray, index) => {
+        if (ray.hitT < 0 || ray.surface !== surface) return;
+        sum += (state.radiance[index * 4] + state.radiance[index * 4 + 1] + state.radiance[index * 4 + 2]) / 3;
+        rays++;
+    });
+    return { rays, mean: sum / Math.max(rays, 1) };
+}
+
+/** The second-bounce entries: how many missed, and the indirect values of the cells the judged surface's first hits are in. */
+async function indirectOfSurface(device: GPUDevice, scenario: Scenario, state: FrameState, surface: Surface): Promise<{ cells: Map<number, CellValue>; entries: number; misses: number }> {
+    const capacity = scenario.cache.capacity;
+    const surfaceCells = new Set<number>();
+    state.visibilityCell.forEach((cell, visibility) => {
+        if (state.rays[state.visibilityQuery[visibility]].surface === surface) surfaceCells.add(cell);
+    });
+    const tiles = [...new Set([...surfaceCells].map((cell) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const values = await finestValues(device, scenario.cache, tiles, true);
+    const cells = new Map<number, CellValue>();
+    for (const cell of surfaceCells) {
+        const value = values.get(cell);
+        if (value) cells.set(cell, value);
+    }
+    const misses = Array.from(state.multibounceCell).filter((cell) => cell === MULTIBOUNCE_MISS_CELL).length;
+    return { cells, entries: state.multibounceCell.length, misses };
+}
+
+// ---- Section 15: the open floor under a constant sky ---------------------------------------------
+
+async function checkSkyOpenFloor(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`sky, open floor: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const reservoirs = checkSkyOnlyReservoirs(state, fail, true);
+    // Every floor cell reads ρ L (1 − F), F ≤ 0.2% from the patch, within 2% (one sample of the
+    // sky is π L exactly wherever its ray escapes).
+    const { judgement } = await judgeConstantSkyCells(device, scenario, state, 'openFloor');
+    if (judgement.cells < 100) fail(`only ${judgement.cells} floor cells to judge`);
+    if (judgement.off > Math.ceil(SKY_CELLS_ALLOWED_OFF * judgement.cells)) fail(`${judgement.off} of ${judgement.cells} floor cells are past their bound off rho L (1 - F) (worst ${(judgement.worst * 100).toFixed(2)}%)`);
+    if (Math.abs(judgement.meanRatio - 1) > 0.005) fail(`the floor cells average ${judgement.meanRatio.toFixed(4)} x rho L (1 - F)`);
+    // Second bounce: the floor's kept rays go up into the sky; a miss adds no light (register D37),
+    // the sky having lit the floor through its own sample. Only the rare hit on the patch's
+    // underside (which sees the floor, not the sky) adds a little.
+    const indirect = await indirectOfSurface(device, scenario, state, 'floor');
+    let indirectSum = 0;
+    let indirectCells = 0;
+    for (const value of indirect.cells.values()) {
+        if (!(value[3] > 0)) continue;
+        indirectSum += (value[0] + value[1] + value[2]) / (3 * value[3]);
+        indirectCells++;
+    }
+    const indirectMean = indirectSum / Math.max(indirectCells, 1);
+    if (indirectCells === 0) fail('no floor cell has indirect samples');
+    if (indirect.misses === 0) fail('no second-bounce ray missed');
+    if (indirectMean > 0.01 * OPEN_SKY_RADIANCE) fail(`the floor cells' indirect values average ${indirectMean.toFixed(5)}, expected about 0 (a miss would add rho L = ${OPEN_SKY_RADIANCE} if it read the sky)`);
+    // The probe rays that hit the floor read ρ L (direct, plus the near-0 indirect).
+    const rays = meanRayReading(state, 'floor');
+    if (Math.abs(rays.mean / OPEN_SKY_RADIANCE - 1) > 0.01) fail(`the floor's probe rays read ${rays.mean.toFixed(4)} on average, expected rho L = ${OPEN_SKY_RADIANCE}`);
+    return { failures, data: { expected: OPEN_SKY_RADIANCE, reservoirs, cells: judgement, indirect: { cells: indirectCells, mean: indirectMean, secondBounceEntries: indirect.entries, misses: indirect.misses }, rays } };
+}
+
+// ---- Section 16: the open floor under the coded sky and a sun --------------------------------------
+
+/** Section 16's sun: along (0, -1, -1), casting no shadow (the patch would shade a spot of the floor). */
+const SKY_SUN: LightDescriptor = { type: 'directional', direction: SUN_TRAVEL, color: [1, 1, 1], intensity: SUN_INTENSITY, castsShadows: false, label: 'sun' };
+const SKY_SUN_IRRADIANCE = SUN_INTENSITY * Math.SQRT1_2;
+
+async function checkSkyAndSun(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`coded sky and sun: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    // The light choice: on the floor the sky weighs the luminance of its irradiance (exact for
+    // the coded sky's SH), the sun its E, so the sky is drawn with q = w_sky / (w_sky + w_sun)
+    // and weighed 1 / q, the sun 1 / (1 - q).
+    const skyIrradiance = codedSkyIrradiance(UP);
+    const skyWeight = luminance(skyIrradiance);
+    const q = skyWeight / (skyWeight + SKY_SUN_IRRADIANCE);
+    const count0 = state.counters[HASH_GRID_COUNTER.visibilityCount0];
+    const floats = new Float32Array(state.reservoirs.buffer, state.reservoirs.byteOffset, state.reservoirs.length);
+    let firstBounce = 0;
+    let skyDrawn = 0;
+    let weightsOff = 0;
+    state.visibilityRay.forEach((entry, index) => {
+        const visibility = entry & ~BYPASS_CACHE_BIT;
+        if (visibility >= count0 || state.rays[state.visibilityQuery[visibility]].surface !== 'floor') return;
+        firstBounce++;
+        const isSky = state.reservoirs[RESERVOIR_WORDS * index] === DIRECT_SKY_LIGHT;
+        if (isSky) skyDrawn++;
+        const expectedWeight = isSky ? 1 / q : 1 / (1 - q);
+        if (relativeError(floats[RESERVOIR_WORDS * index + 1], expectedWeight) > 2e-3) weightsOff++;
+    });
+    const skyShare = skyDrawn / Math.max(firstBounce, 1);
+    if (firstBounce < 1000) fail(`only ${firstBounce} floor reservoirs`);
+    if (Math.abs(skyShare - q) > 0.01) fail(`the sky was drawn for ${(skyShare * 100).toFixed(2)}% of the floor's hits, expected ${(q * 100).toFixed(2)}%`);
+    if (weightsOff > 0) fail(`${weightsOff} of ${firstBounce} reservoirs aren't weighed 1 / q (sky ${(1 / q).toFixed(4)}, sun ${(1 / (1 - q)).toFixed(4)})`);
+    // The floor cells, per channel: ρ / π × (the sky's irradiance less the patch's share + the
+    // sun's). Green carries the sky's direction (its irradiance on the floor is 5π/6 S, 2π/3 S
+    // more than on a ceiling); red and blue π/2 S. A sample read along the normal instead of its
+    // direction would put green's sky part at π S, 20% high. One cell mixes sun and sky draws, so
+    // only the mean over cells is judged (within 1%).
+    const capacity = scenario.cache.capacity;
+    const hits = cellHits(state, scenario.furnace);
+    const floorCells = [...hits].filter(([, { surfaces }]) => surfaces.size === 1 && surfaces.has('floor'));
+    const tiles = [...new Set(floorCells.map(([cell]) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const values = await finestValues(device, scenario.cache, tiles, false);
+    const patch = horizontalSquare(OPEN_FLOOR.patchHalf, OPEN_FLOOR.patchY, DOWN);
+    const ratioSums = [0, 0, 0];
+    let cells = 0;
+    for (const [cell, { points }] of floorCells) {
+        const value = values.get(cell);
+        if (!value || !(value[3] > 0)) continue;
+        const expected = [0, 0, 0];
+        for (const point of points) {
+            // The patch hides F of the floor's sky, about the sky's radiance toward its centre.
+            const hidden = viewFactor(point, UP, patch);
+            const towardPatch = codedSkyRadiance(vNormalize(vSub([0, OPEN_FLOOR.patchY, 0], point)));
+            for (let channel = 0; channel < 3; channel++) expected[channel] += (SKY_ALBEDO / Math.PI) * (skyIrradiance[channel] - Math.PI * hidden * towardPatch[channel] + SKY_SUN_IRRADIANCE);
+        }
+        for (let channel = 0; channel < 3; channel++) ratioSums[channel] += value[channel] / value[3] / (expected[channel] / points.length);
+        cells++;
+    }
+    const meanRatios = ratioSums.map((sum) => sum / Math.max(cells, 1));
+    if (cells < 100) fail(`only ${cells} floor cells to judge`);
+    meanRatios.forEach((ratio, channel) => {
+        if (Math.abs(ratio - 1) > 0.01) fail(`the floor cells' ${['red', 'green', 'blue'][channel]} averages ${ratio.toFixed(4)} x its expected value`);
+    });
+    const expectedOpen = [0, 1, 2].map((channel) => (SKY_ALBEDO / Math.PI) * (skyIrradiance[channel] + SKY_SUN_IRRADIANCE));
+    return { failures, data: { skyWeight, sunWeight: SKY_SUN_IRRADIANCE, expectedSkyShare: q, skyShare, firstBounceReservoirs: firstBounce, weightsOff, expectedOpenFloor: expectedOpen, cells, meanRatios } };
+}
+
+// ---- Section 17: the ceiling only, under a constant sky ---------------------------------------------
+
+async function checkSkyCeilingOnly(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`sky, ceiling only: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const reservoirs = checkSkyOnlyReservoirs(state, fail, false);
+    // The ceiling's cells: ρ L (1 − F), F up to 3.5% over the patch. A sample is 0 or ρ L by its
+    // ray's visibility, so a cell over the patch is a noisy mean: each cell within its bound
+    // (`judgeConstantSkyCells`), and the mean over cells within 0.5%.
+    const { judgement, bySurface } = await judgeConstantSkyCells(device, scenario, state, 'ceilingOnly');
+    if (judgement.cells < 100) fail(`only ${judgement.cells} ceiling cells to judge`);
+    if (judgement.off > Math.ceil(SKY_CELLS_ALLOWED_OFF * judgement.cells)) fail(`${judgement.off} of ${judgement.cells} ceiling cells are past their bound off rho L (1 - F) (worst ${(judgement.worst * 100).toFixed(2)}%)`);
+    if (Math.abs(judgement.meanRatio - 1) > 0.005) fail(`the ceiling cells average ${judgement.meanRatio.toFixed(4)} x rho L (1 - F)`);
+    // The done-when: second-bounce misses stay 0. The ceiling's kept rays go down; nearly all
+    // miss, the rest hit the black patch (no light). The sky reaches the ceiling through its own
+    // light sample, so a miss must add a sample of no light (register D37): every ceiling cell's
+    // indirect value is exactly 0, with samples counted.
+    const indirect = await indirectOfSurface(device, scenario, state, 'ceiling');
+    let withSamples = 0;
+    let lit = 0;
+    let largest = 0;
+    for (const value of indirect.cells.values()) {
+        if (!(value[3] > 0)) continue;
+        withSamples++;
+        const mean = Math.max(value[0], value[1], value[2]) / value[3];
+        largest = Math.max(largest, mean);
+        if (mean !== 0) lit++;
+    }
+    if (indirect.misses === 0) fail('no second-bounce ray missed');
+    if (withSamples < 100) fail(`only ${withSamples} ceiling cells have indirect samples`);
+    if (lit > 0) fail(`${lit} of ${withSamples} ceiling cells hold indirect light (largest ${largest.toFixed(5)}): a miss read the sky, which the ceiling already gets as its light`);
+    const rays = meanRayReading(state, 'ceiling');
+    return { failures, data: { expectedOpen: OPEN_SKY_RADIANCE, reservoirs, cells: judgement, bySurface, secondBounce: { entries: indirect.entries, misses: indirect.misses, cellsWithIndirectSamples: withSamples, cellsWithIndirectLight: lit, largestIndirect: largest }, rays } };
+}
+
+// ---- Section 18: the corner under a constant sky ------------------------------------------------------
+
+/**
+ * The share of cells allowed past their bound. The bound is five standard deviations of the
+ * shadow rays' spread, but a cell of few samples where F is small counts its blocked rays as a
+ * Poisson count, whose tail is heavier than the normal's; and a cell whose tile is on the update
+ * list but which got no sample this frame blends in a zero (Capsaicin's `UpdateTiles`, kept for
+ * the direct values, register D37), so a sparse cell far out reads a few percent low (seen to
+ * 7% on the open floor, where every sample is exactly ρ L). The means are held tight.
+ */
+const SKY_CELLS_ALLOWED_OFF = 1e-3;
+
+/**
+ * The second bounce on the corner's floor and wall: each kept ray lands on the other surface
+ * (or misses, 0) and brings its direct value ρ L (1 − F) there, × BRDF / pdf = ρ. Over the
+ * floor point's cosine-weighted directions: ρ × the mean of that (`rings` × `sectors`
+ * stratified directions, whose sector edges fall on the corner's plane, where the other
+ * surface begins).
+ * The wall's 40 m width and the floor's 400 m are the polygons'.
+ */
+function cornerIndirect(hit: Vec3, surface: 'floor' | 'wall', rings = 16, sectors = 32): number {
+    const point = (surface === 'floor' ? CORNER_FLOOR : CORNER_WALL_SURFACE).snap(hit);
+    const normal: Vec3 = surface === 'floor' ? UP : [0, 0, 1];
+    const tangent: Vec3 = surface === 'floor' ? [1, 0, 0] : [1, 0, 0];
+    const bitangent = vCross(normal, tangent);
+    let sum = 0;
+    for (let ring = 0; ring < rings; ring++) {
+        const u = (ring + 0.5) / rings;
+        const radius = Math.sqrt(u);
+        const up = Math.sqrt(1 - u);
+        for (let sector = 0; sector < sectors; sector++) {
+            const angle = (2 * Math.PI * (sector + 0.5)) / sectors;
+            const d: Vec3 = [0, 1, 2].map((axis) => tangent[axis] * radius * Math.cos(angle) + bitangent[axis] * radius * Math.sin(angle) + normal[axis] * up) as unknown as Vec3;
+            if (surface === 'floor') {
+                // Toward the wall's front (z = 0, x in [-20, 20], y in [0, 10]).
+                if (!(d[2] < 0)) continue;
+                const t = -point[2] / d[2];
+                const q: Vec3 = [point[0] + t * d[0], point[1] + t * d[1], 0];
+                if (Math.abs(q[0]) > 20 || q[1] < 0 || q[1] > 10) continue;
+                sum += constantSkyDirect(q, CORNER_WALL_SURFACE);
+            } else {
+                // Toward the floor in front of the wall (y = 0, z in [0, 200]).
+                if (!(d[1] < 0)) continue;
+                const t = -point[1] / d[1];
+                const q: Vec3 = [point[0] + t * d[0], 0, point[2] + t * d[2]];
+                if (Math.abs(q[0]) > 200 || q[2] > 200) continue;
+                sum += constantSkyDirect(q, CORNER_FLOOR);
+            }
+        }
+    }
+    return (SKY_ALBEDO * sum) / (rings * sectors);
+}
+
+/**
+ * `cornerIndirect` tabulated near the corner (|x| ≤ 4 m, up to 4 m from the corner line, every
+ * 0.5 m across and 5 cm out, 32 × 64 directions a point), read bilinearly: every near cell's
+ * every entry can then be judged. Made once a surface, when first read.
+ */
+const CORNER_TABLE = { halfX: 4, reach: 4, xStep: 0.5, distanceStep: 0.05 } as const;
+const cornerTables = new Map<'floor' | 'wall', Float64Array>();
+
+function cornerIndirectAt(hit: Vec3, surface: 'floor' | 'wall'): number {
+    const columns = Math.round((2 * CORNER_TABLE.halfX) / CORNER_TABLE.xStep) + 1;
+    const rows = Math.round(CORNER_TABLE.reach / CORNER_TABLE.distanceStep) + 1;
+    let table = cornerTables.get(surface);
+    if (!table) {
+        table = new Float64Array(columns * rows);
+        for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+                const x = -CORNER_TABLE.halfX + column * CORNER_TABLE.xStep;
+                const distance = row * CORNER_TABLE.distanceStep;
+                table[row * columns + column] = cornerIndirect(surface === 'floor' ? [x, 0, distance] : [x, distance, 0], surface, 32, 64);
+            }
+        }
+        cornerTables.set(surface, table);
+    }
+    const fx = Math.min(Math.max((hit[0] + CORNER_TABLE.halfX) / CORNER_TABLE.xStep, 0), columns - 1);
+    const fd = Math.min(Math.max((surface === 'floor' ? hit[2] : hit[1]) / CORNER_TABLE.distanceStep, 0), rows - 1);
+    const x0 = Math.min(Math.floor(fx), columns - 2);
+    const d0 = Math.min(Math.floor(fd), rows - 2);
+    const tx = fx - x0;
+    const td = fd - d0;
+    const at = (row: number, column: number): number => table[row * columns + column];
+    return (1 - td) * ((1 - tx) * at(d0, x0) + tx * at(d0, x0 + 1)) + td * ((1 - tx) * at(d0 + 1, x0) + tx * at(d0 + 1, x0 + 1));
+}
+
+async function checkSkyCorner(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`sky, corner: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const reservoirs = checkSkyOnlyReservoirs(state, fail, true);
+    // The view factors: the infinite-strip answer for a floor point in front of an endless wall
+    // of height H, F = (1 - x / sqrt(x² + H²)) / 2, against Lambert's contour on a very wide wall.
+    const strip = (x: number, height: number): number => (1 - x / Math.hypot(x, height)) / 2;
+    const contourCheck = Math.max(...[0.1, 1, 3].map((x) => Math.abs(viewFactor([0, 0, x], UP, [[-1e5, 0, 0], [1e5, 0, 0], [1e5, 10, 0], [-1e5, 10, 0]]) - strip(x, 10))));
+    if (contourCheck > 1e-4) fail(`the page's view factor is ${contourCheck} off the infinite strip's`);
+    // The direct values: floor ρ L (1 − F_wall), wall ρ L (1 − F_floor).
+    const { judgement, bySurface } = await judgeConstantSkyCells(device, scenario, state, 'corner');
+    if (judgement.cells < 100) fail(`only ${judgement.cells} cells to judge`);
+    if (judgement.off > Math.ceil(SKY_CELLS_ALLOWED_OFF * judgement.cells)) fail(`${judgement.off} of ${judgement.cells} cells are past their bound off rho L (1 - F) (worst ${(judgement.worst * 100).toFixed(2)}%)`);
+    if (Math.abs(judgement.meanRatio - 1) > 0.01) fail(`the cells average ${judgement.meanRatio.toFixed(4)} x rho L (1 - F)`);
+    // The shadow ray matters here: the cells that see the wall over half their sky must read so.
+    const halfShaded = judgement.byOpenShare['0.5'];
+    if (!halfShaded || halfShaded[1] < 50) fail(`only ${halfShaded?.[1] ?? 0} cells see half their sky hidden`);
+    else if (Math.abs(halfShaded[0] - 1) > 0.02) fail(`the cells with half their sky hidden average ${halfShaded[0].toFixed(4)} x rho L (1 - F)`);
+    // The second bounce, near the corner (within 4 m of it, |x| ≤ 4): each cell's indirect value
+    // against the quadrature averaged over this frame's entries in it, the cells whose entries
+    // are all on one surface. One cell's kept rays are few and land on light or miss, so a cell
+    // is a noisy mean (its spread is recorded): only the ratio of the sums over every such cell
+    // is judged, within 3%, its standard error (recorded) under 1%.
+    const capacity = scenario.cache.capacity;
+    const near = new Map<number, { surface: Surface; points: Vec3[]; mixed: boolean }>();
+    state.visibilityCell.forEach((cell, visibility) => {
+        const ray = state.rays[state.visibilityQuery[visibility]];
+        const entry = near.get(cell) ?? { surface: ray.surface, points: [], mixed: false };
+        if (entry.surface !== ray.surface) entry.mixed = true;
+        entry.points.push(ray.hit);
+        near.set(cell, entry);
+    });
+    const judgedCells = [...near].filter(([, { surface, points, mixed }]) => !mixed && (surface === 'floor' || surface === 'wall') && points.every((point) => Math.abs(point[0]) <= CORNER_TABLE.halfX && point[1] <= CORNER_TABLE.reach && point[2] <= CORNER_TABLE.reach));
+    const tiles = [...new Set(judgedCells.map(([cell]) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const indirectValues = await finestValues(device, scenario.cache, tiles, true);
+    // Per surface, the cells' measured and expected values.
+    const pairs: Record<string, [number, number][]> = { floor: [], wall: [] };
+    const byDistance: Record<string, [number, number]> = {};
+    for (const [cell, { surface, points }] of judgedCells) {
+        const value = indirectValues.get(cell);
+        if (!value || !(value[3] > 0)) continue;
+        const side = surface as 'floor' | 'wall';
+        const expected = points.reduce((sum, point) => sum + cornerIndirectAt(point, side), 0) / points.length;
+        const measured = (value[0] + value[1] + value[2]) / (3 * value[3]);
+        pairs[side].push([measured, expected]);
+        // By distance from the corner line, for the record.
+        const distance = side === 'floor' ? points[0][2] : points[0][1];
+        const bucket = `${side} ${distance < 0.25 ? '<0.25' : distance < 1 ? '0.25-1' : '1-4'} m`;
+        const entry = byDistance[bucket] ?? [0, 0];
+        entry[0] += measured;
+        entry[1] += expected;
+        byDistance[bucket] = entry;
+    }
+    const indirectRatios = Object.fromEntries(
+        Object.entries(pairs).map(([surface, cells]) => {
+            // The ratio of the sums (cells where little light is expected count less), and its
+            // standard error from the cells' residuals (the delta method); the cells' own spread.
+            const measuredSum = cells.reduce((total, [measured]) => total + measured, 0);
+            const expectedSum = cells.reduce((total, [, expected]) => total + expected, 0);
+            const sumRatio = measuredSum / Math.max(expectedSum, 1e-30);
+            const residual = Math.sqrt(cells.reduce((total, [measured, expected]) => total + (measured - sumRatio * expected) ** 2, 0) / Math.max(cells.length - 1, 1));
+            const sumRatioError = (residual * Math.sqrt(cells.length)) / Math.max(expectedSum, 1e-30);
+            const ratios = cells.map(([measured, expected]) => measured / expected);
+            const meanRatio = ratios.reduce((total, ratio) => total + ratio, 0) / Math.max(ratios.length, 1);
+            const cellSpread = Math.sqrt(ratios.reduce((total, ratio) => total + (ratio - meanRatio) ** 2, 0) / Math.max(ratios.length - 1, 1));
+            return [surface, { cells: cells.length, sumRatio, sumRatioError, meanRatio, cellSpread }];
+        }),
+    );
+    const indirectByDistance = Object.fromEntries(Object.entries(byDistance).map(([bucket, [measured, expected]]) => [bucket, measured / expected]));
+    for (const [surface, { cells, sumRatio, sumRatioError }] of Object.entries(indirectRatios)) {
+        if (cells < 500) fail(`only ${cells} ${surface} cells near the corner have indirect samples`);
+        else if (Math.abs(sumRatio - 1) > 0.03) fail(`the ${surface}'s indirect values near the corner sum to ${sumRatio.toFixed(4)} x the second bounce's (standard error ${sumRatioError.toFixed(4)})`);
+        else if (sumRatioError > 0.01) fail(`the ${surface}'s indirect sum is too noisy to judge (standard error ${sumRatioError.toFixed(4)})`);
+    }
+    // Where the second bounce loses its percent, for the record (the RC3.4 review's splitting
+    // test), over SPLIT_FRAMES more frames, per surface, for the near first hits: (1) the draws,
+    // each kept ray's value at its landing point (ρ × that point's own ρ L (1 − F), a miss 0)
+    // against the quadrature at the same first hits; (2) the read, the cache's sample (the
+    // landing cell's filtered direct value, `secondBounceSamples`) against that point's value;
+    // (3) the cells, the judged cells' indirect means after the frames against their samples'
+    // mean over the frames. One frame's draws are known to about 2% a surface; the frames bring
+    // that under 1%.
+    const accumulated: Record<string, { throughCache: number; atPoint: number; quadrature: number; entries: number }> = {};
+    const samplesByCell = new Map<number, { sum: number; count: number }>();
+    for (let splitFrame = 0; splitFrame < SPLIT_FRAMES; splitFrame++) {
+        await runFrames(device, scenario, 1);
+        const frameState = await readFrameState(device, scenario);
+        const samples = await secondBounceSamples(device, scenario, frameState);
+        frameState.multibounceQuery.forEach((query, entry) => {
+            const ray = frameState.rays[frameState.visibilityQuery[query]];
+            if ((ray.surface !== 'floor' && ray.surface !== 'wall') || Math.abs(ray.hit[0]) > CORNER_TABLE.halfX || ray.hit[1] > CORNER_TABLE.reach || ray.hit[2] > CORNER_TABLE.reach) return;
+            const record = accumulated[ray.surface] ?? { throughCache: 0, atPoint: 0, quadrature: 0, entries: 0 };
+            record.entries++;
+            record.throughCache += samples[entry];
+            record.quadrature += cornerIndirectAt(ray.hit, ray.surface);
+            if (frameState.multibounceCell[entry] !== MULTIBOUNCE_MISS_CELL) {
+                const hit = multibounceHit(frameState, entry);
+                record.atPoint += SKY_ALBEDO * constantSkyDirect(hit, ray.surface === 'floor' ? CORNER_WALL_SURFACE : CORNER_FLOOR);
+            }
+            accumulated[ray.surface] = record;
+            const cell = frameState.visibilityCell[query];
+            const cellRecord = samplesByCell.get(cell) ?? { sum: 0, count: 0 };
+            cellRecord.sum += samples[entry];
+            cellRecord.count++;
+            samplesByCell.set(cell, cellRecord);
+        });
+    }
+    const afterValues = await finestValues(device, scenario.cache, tiles, true);
+    const secondBounceSplit: Record<string, Record<string, number>> = {};
+    for (const surface of ['floor', 'wall'] as const) {
+        let indirectSum = 0;
+        let sampleSum = 0;
+        let cells = 0;
+        for (const [cell, { surface: cellSurface }] of judgedCells) {
+            const value = afterValues.get(cell);
+            const own = samplesByCell.get(cell);
+            if (cellSurface !== surface || !value || !(value[3] > 0) || !own) continue;
+            indirectSum += (value[0] + value[1] + value[2]) / (3 * value[3]);
+            sampleSum += own.sum / own.count;
+            cells++;
+        }
+        const record = accumulated[surface] ?? { throughCache: 0, atPoint: 0, quadrature: 0, entries: 0 };
+        secondBounceSplit[surface] = {
+            entries: record.entries,
+            drawsOverQuadrature: record.atPoint / Math.max(record.quadrature, 1e-30),
+            readOverAtPoint: record.throughCache / Math.max(record.atPoint, 1e-30),
+            cells,
+            cellsOverSamples: indirectSum / Math.max(sampleSum, 1e-30),
+        };
+    }
+    return { failures, data: { contourCheck, reservoirs, cells: judgement, bySurface, indirect: indirectRatios, indirectByDistance, secondBounceSplit, cornerIndirectExamples: { floorAt0_5m: cornerIndirect([0, 0, 0.5], 'floor'), wallAt0_5m: cornerIndirect([0, 0.5, 0], 'wall') } } };
+}
+
+// ---- Section 19: hits with no light count (register D63) --------------------------------------------
+
+/** Frames section 18's splitting record runs after its checks. */
+const SPLIT_FRAMES = 8;
+
+/** One kept quantisation step of `HashGridCache_QuantizeRadiance` (1/1000). */
+const QUANTISATION_STEP = 1e-3;
+
+/**
+ * Section 19's floor: corrugated, ridges along z every 2 cm, faces sloping 45° (1 cm up, 1 cm
+ * across), so a cell (about 9 cm a side 2 m from the camera) holds both slopes. Built face by
+ * face with flat normals: face k is triangles 2k and 2k + 1, rising (normal (−1, 1, 0) / √2)
+ * for even k, falling ((1, 1, 0) / √2) for odd k.
+ */
+const CORRUGATION = { width: 0.01, height: 0.01, halfLength: 10 } as const;
+/** Its probes: a 4 m patch 2 m up, facing down, the camera 1 m under it looking up. */
+const CORRUGATION_PATCH = { y: 2, half: 2 } as const;
+const CORRUGATION_CAMERA: PageCamera = { position: [0, 1, 0], target: [0, 2, 0], fovYDeg: 60, near: 0.05, far: 1000 };
+/**
+ * The sun, toward-light direction 60° from the zenith on the −x side, casting no shadow: the
+ * rising faces see it at cos 15° = 0.966, the falling faces face away (cos 105° < 0), so their
+ * hits have no light to draw (a black sky).
+ */
+const CORRUGATION_SUN: LightDescriptor = { type: 'directional', direction: [Math.sin(Math.PI / 3), -Math.cos(Math.PI / 3), 0], color: [1, 1, 1], intensity: SUN_INTENSITY, castsShadows: false, label: 'low sun' };
+const RISING_RADIANCE = (ALBEDO / Math.PI) * SUN_INTENSITY * Math.cos(Math.PI / 12);
+
+function corrugatedFloor(platform: GIPlatformImpl): void {
+    const { width, height, halfLength } = CORRUGATION;
+    const faces = Math.round((2 * halfLength) / width);
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const indices: number[] = [];
+    for (let face = 0; face < faces; face++) {
+        const x0 = -halfLength + face * width;
+        const rising = face % 2 === 0;
+        const y0 = rising ? 0 : height;
+        const y1 = rising ? height : 0;
+        const normal = rising ? [-Math.SQRT1_2, Math.SQRT1_2, 0] : [Math.SQRT1_2, Math.SQRT1_2, 0];
+        const base = face * 4;
+        // Counter-clockwise seen from the normal's side.
+        positions.push(x0, y0, halfLength, x0 + width, y1, halfLength, x0 + width, y1, -halfLength, x0, y0, -halfLength);
+        for (let corner = 0; corner < 4; corner++) normals.push(...normal);
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    const scene = platform.scene;
+    const mesh = scene.createMesh({ positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices), label: 'corrugated floor' });
+    const material = scene.createMaterial({ albedo: [ALBEDO, ALBEDO, ALBEDO], label: 'corrugated floor' });
+    scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'corrugated floor' });
+}
+
+/**
+ * A cell's direct value is the mean of its samples, every hit one: the rising faces' hits lit
+ * (albedo / π × E cos 15°), the falling faces' hits samples of no light. So each cell reads
+ * that times its rising share, from this frame's first-bounce entries in it (only hits on a
+ * face's front and below the patch are counted; cells with other hits are left out). Summed
+ * over the cells with at least 4 entries, within 2% (one frame's share stands for the cell's
+ * history, which averages about 31 frames). Counting only the lit hits, as Capsaicin's
+ * `GenerateReservoirs` does, every cell would read the rising faces' radiance, about twice.
+ */
+async function checkUnlitHits(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`unlit hits (${scenario.technique.settings.useMultibounce ? 'multibounce' : 'single bounce'}): ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const capacity = scenario.cache.capacity;
+    const byCell = new Map<number, { rising: number; falling: number; other: number }>();
+    let risingHits = 0;
+    let fallingHits = 0;
+    state.visibilityCell.forEach((cell, visibility) => {
+        const ray = state.rays[state.visibilityQuery[visibility]];
+        const entry = byCell.get(cell) ?? { rising: 0, falling: 0, other: 0 };
+        const onFloor = ray.hit[1] < CORRUGATION.height + 0.01;
+        if (!onFloor || !ray.frontFace) entry.other++;
+        else if (Math.floor(ray.triangle / 2) % 2 === 0) {
+            entry.rising++;
+            risingHits++;
+        } else {
+            entry.falling++;
+            fallingHits++;
+        }
+        byCell.set(cell, entry);
+    });
+    const judged = [...byCell].filter(([, entry]) => entry.other === 0 && entry.rising + entry.falling >= 4);
+    const mixedCells = judged.filter(([, entry]) => entry.rising > 0 && entry.falling > 0).length;
+    const tiles = [...new Set(judged.map(([cell]) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const values = await finestValues(device, scenario.cache, tiles, false);
+    let measuredSum = 0;
+    let expectedSum = 0;
+    let litOnlySum = 0;
+    let cells = 0;
+    let unsampled = 0;
+    for (const [cell, entry] of judged) {
+        const value = values.get(cell);
+        if (!value || !(value[3] > 0)) {
+            unsampled++;
+            continue;
+        }
+        cells++;
+        measuredSum += (value[0] + value[1] + value[2]) / (3 * value[3]);
+        expectedSum += (RISING_RADIANCE * entry.rising) / (entry.rising + entry.falling);
+        litOnlySum += entry.rising > 0 ? RISING_RADIANCE : 0;
+    }
+    const ratio = measuredSum / Math.max(expectedSum, 1e-30);
+    if (risingHits === 0 || fallingHits === 0) fail(`${risingHits} hits on rising faces and ${fallingHits} on falling ones: both are needed`);
+    if (mixedCells < 500) fail(`only ${mixedCells} cells hold both slopes`);
+    if (unsampled > 0) fail(`${unsampled} cells with entries this frame have no samples`);
+    if (Math.abs(ratio - 1) > TOLERANCE) fail(`the cells sum to ${ratio.toFixed(4)} x albedo / pi x E cos 15° x their rising share (the lit hits alone would read ${(litOnlySum / expectedSum).toFixed(4)} x)`);
+    return { failures, data: { risingRadiance: RISING_RADIANCE, risingHits, fallingHits, cells, mixedCells, unsampled, ratio, litOnlyWouldRead: litOnlySum / Math.max(expectedSum, 1e-30) } };
+}
+
+// ---- Section 20: second hits with no light count (register D63) ---------------------------------------
+
+/**
+ * The furnace's ceiling over the corrugated floor of section 19, its low sun casting no shadow
+ * (so it reaches the floor through the ceiling and never the ceiling's underside), the probes
+ * on the floor: their rays hit the ceiling (no light) or a neighbouring face, and the ceiling's
+ * second-bounce rays come down onto the floor's rising (lit) and falling (no light) faces. The
+ * floor's cells hold those second hits, so each reads the rising faces' radiance times its
+ * rising share of them: `GenerateMultibounceReservoirs` must count a falling face's hit as a
+ * sample of no light. Each second hit is classified by its triangle; cells with at least 3 this
+ * frame, no first hit and none elsewhere are summed, within 3% (a
+ * cell's few second hits a frame make its share noisy). Counting only the lit hits, every
+ * cell would read the rising radiance.
+ */
+async function checkUnlitSecondHits(device: GPUDevice, scenario: Scenario): Promise<Checks> {
+    const failures: string[] = [];
+    const fail = (message: string): void => {
+        if (failures.length < 12) failures.push(`unlit second hits: ${message}`);
+    };
+    const state = await readFrameState(device, scenario);
+    const capacity = scenario.cache.capacity;
+    const byCell = new Map<number, { rising: number; falling: number; other: number }>();
+    let risingSecond = 0;
+    let fallingSecond = 0;
+    const add = (cell: number, hit: Vec3, triangle: number, frontFace: boolean): void => {
+        const entry = byCell.get(cell) ?? { rising: 0, falling: 0, other: 0 };
+        if (hit[1] > CORRUGATION.height + 0.01 || !frontFace) entry.other++;
+        else if (Math.floor(triangle / 2) % 2 === 0) {
+            entry.rising++;
+            risingSecond++;
+        } else {
+            entry.falling++;
+            fallingSecond++;
+        }
+        byCell.set(cell, entry);
+    };
+    // A cell holding first hits this frame (the ceiling's, or a probe ray's hit on a neighbouring
+    // face) is left out: the second hits alone are judged.
+    state.visibilityCell.forEach((cell) => {
+        const entry = byCell.get(cell) ?? { rising: 0, falling: 0, other: 0 };
+        entry.other++;
+        byCell.set(cell, entry);
+    });
+    state.multibounceCell.forEach((cell, entry) => {
+        if (cell === MULTIBOUNCE_MISS_CELL) return;
+        const base = entry * MULTIBOUNCE_RAY_WORDS;
+        add(cell, multibounceHit(state, entry), state.multibounceRays[base + 8], state.multibounceRays[base + 9] !== 0);
+    });
+    const judged = [...byCell].filter(([, entry]) => entry.other === 0 && entry.rising + entry.falling >= 3);
+    const tiles = [...new Set(judged.map(([cell]) => Math.floor(cell / capacity.numCellsPerTile)))];
+    const values = await finestValues(device, scenario.cache, tiles, false);
+    let measuredSum = 0;
+    let expectedSum = 0;
+    let litOnlySum = 0;
+    let cells = 0;
+    for (const [cell, entry] of judged) {
+        const value = values.get(cell);
+        if (!value || !(value[3] > 0)) continue;
+        cells++;
+        measuredSum += (value[0] + value[1] + value[2]) / (3 * value[3]);
+        expectedSum += (RISING_RADIANCE * entry.rising) / (entry.rising + entry.falling);
+        litOnlySum += entry.rising > 0 ? RISING_RADIANCE : 0;
+    }
+    const ratio = measuredSum / Math.max(expectedSum, 1e-30);
+    if (risingSecond === 0 || fallingSecond === 0) fail(`${risingSecond} second hits on rising faces and ${fallingSecond} on falling ones: both are needed`);
+    if (cells < 300) fail(`only ${cells} floor cells to judge`);
+    else if (Math.abs(ratio - 1) > 0.03) fail(`the floor cells sum to ${ratio.toFixed(4)} x the rising radiance x their rising share (the lit hits alone would read ${(litOnlySum / expectedSum).toFixed(4)} x)`);
+    return { failures, data: { risingSecond, fallingSecond, cells, ratio, litOnlyWouldRead: litOnlySum / Math.max(expectedSum, 1e-30) } };
 }
 
 // ---- Section 12: emptied when a cell size changes ---------------------------------------------------
@@ -1957,6 +3113,18 @@ try {
     await run('clearOnChange', [sun(SUN_TRAVEL)], {}, 10, checkClearOnChange);
     await run('strips', [FURNACE_SUN], { furnace: true, strips: true }, CONVERGENCE_FRAMES, checkStrips, MULTIBOUNCE);
     await run('bypassAverage', [FURNACE_SUN], { furnace: true }, CONVERGENCE_FRAMES, checkBypassAverage, BYPASS_ALL);
+
+    // The sky as a light (RC3.4), GI-1.2's multibounce on (Capsaicin's default).
+    await run('skyOpenFloor', [], { sky: { layout: 'openFloor', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyOpenFloor, MULTIBOUNCE);
+    await run('skyAndSun', [SKY_SUN], { sky: { layout: 'openFloor', environment: 'coded' } }, CONVERGENCE_FRAMES, checkSkyAndSun, MULTIBOUNCE);
+    await run('skyCeilingOnly', [], { sky: { layout: 'ceilingOnly', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyCeilingOnly, MULTIBOUNCE);
+    await run('skyCorner', [], { sky: { layout: 'corner', environment: 'constant' } }, CONVERGENCE_FRAMES, checkSkyCorner, MULTIBOUNCE);
+
+    // Hits with no light to draw count as samples of no light (register D63), with multibounce
+    // (GenerateReservoirs after the resolve list) and without (its early return, register D35).
+    await run('unlitHits', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, MULTIBOUNCE);
+    await run('unlitHitsSingleBounce', [CORRUGATION_SUN], { corrugated: true }, CONVERGENCE_FRAMES, checkUnlitHits, SINGLE_BOUNCE);
+    await run('unlitSecondHits', [CORRUGATION_SUN], { corrugatedFurnace: true }, CONVERGENCE_FRAMES, checkUnlitSecondHits, MULTIBOUNCE);
 
     await drainDevice(device);
     reportGpuTest({

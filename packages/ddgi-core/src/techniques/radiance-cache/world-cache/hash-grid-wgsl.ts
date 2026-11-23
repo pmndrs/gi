@@ -77,8 +77,9 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
 /**
  * Word offsets of `HashGridCacheConstants`' fields (`gi1_shared.h:59-92`,
  * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front and
- * `g_UseDirectLighting` and `gi1_use_multibounce` in the first padding
- * words), for the TypeScript that writes the block. 32 words, 128 bytes.
+ * `g_UseDirectLighting`, `gi1_use_multibounce` and `LightBuilder`'s
+ * `environment_light_enable` in the padding words), for the TypeScript that
+ * writes the block. 32 words, 128 bytes.
  */
 export const HASH_GRID_CONSTANTS_WORD = {
     eyePosition: 0,
@@ -101,6 +102,7 @@ export const HASH_GRID_CONSTANTS_WORD = {
     maxMultibounceSampleCount: 28,
     useDirectLighting: 29,
     useMultibounce: 30,
+    environmentLightEnable: 31,
 } as const;
 
 /** Bytes of `HashGridCacheConstants`. */
@@ -145,7 +147,7 @@ struct HashGridCacheConstants {
     max_multibounce_sample_count: f32,
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
     use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D35)
-    padding2: u32,
+    environment_light_enable: u32,  // LightBuilder's environment_light_enable: the sky among a hit's lights (register D33, RC3.4)
 }
 `;
 

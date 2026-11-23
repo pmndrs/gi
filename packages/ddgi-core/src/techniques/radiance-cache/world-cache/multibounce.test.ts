@@ -20,6 +20,7 @@ import {
 } from './multibounce-cpu.ts';
 import {
     generateMultibounceReservoirsWgsl,
+    generateReservoirsWgsl,
     hashGridCacheRayListLayout,
     MULTIBOUNCE_DIRECT_WORDS,
     MULTIBOUNCE_INFO_WORDS,
@@ -264,7 +265,9 @@ describe('the multibounce kernels and lists', () => {
         expect(populate).toContain('giTraceClosest');
         const reservoirs = generateMultibounceReservoirsWgsl(layout);
         expect(reservoirs).toContain(`fn ${POPULATION_ENTRY_POINT.generateMultibounceReservoirs}(`);
-        expect(reservoirs).toContain('giDirectChooseLight');
+        expect(reservoirs).toContain('giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random))');
+        expect(generateReservoirsWgsl(layout)).toContain('giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random))');
+        expect(reservoirs).toContain('select(0u, GI_DIRECT_SKY_LIGHT_BIT, g_HashGridCacheConstants.environment_light_enable != 0u)');
         const update = updateMultibounceCellsWgsl(layout);
         expect(update).toContain(`fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(`);
         expect(update).toContain('HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER');
@@ -281,5 +284,8 @@ describe('the multibounce kernels and lists', () => {
             .map((line) => line.split(':')[0]);
         // eye_position is a vec3f (three words); every other field one word.
         expect(fields.indexOf('use_multibounce') + 2).toBe(HASH_GRID_CONSTANTS_WORD.useMultibounce);
+        // RC3.4: the sky among a hit's lights, the block's last word.
+        expect(fields.indexOf('environment_light_enable') + 2).toBe(HASH_GRID_CONSTANTS_WORD.environmentLightEnable);
+        expect(fields.length + 2).toBe(32);
     });
 });

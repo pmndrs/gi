@@ -11,8 +11,10 @@
  * fn giDirectReaches(surface: GiSurface, groupMask: u32) -> bool   // any light in the groups lights this side (no shadow rays)
  * fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> bool  // the same, the sun in white when apart
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f                  // gi/direct's random numbers for a ray
- * fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice  // one light drawn by weight, and its weight
+ * fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice  // one light drawn by weight, and its weight; the sky too with GI_DIRECT_SKY_LIGHT_BIT
  * fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLightRay           // its unshadowed irradiance and shadow ray
+ * fn giSkyLightWeight(surface: GiSurface) -> f32                     // the sky as a light: its weight in the choice
+ * fn giSkyLightRay(surface: GiSurface, random: vec2f) -> GiDirectLightRay  // and one cosine-weighted sample of it, with its shadow ray
  * fn giSkyRadiance(direction: vec3f) -> vec3f
  * fn giSkyIrradiance(surface: GiSurface) -> vec3f
  * fn giSkyIrradianceAt(normal: vec3f) -> vec3f        // the same, for any unit normal
@@ -88,6 +90,10 @@ export const SHADE_UNIFORM_LAYOUT = {
     byteLength: SKY_HARMONICS_LAYOUT.byteLength + 64,
 } as const;
 
+// The sky's bit in a group mask (1 << LIGHT_GROUP_COUNT) and its light index, from the contract.
+import { DIRECT_SKY_LIGHT, DIRECT_SKY_LIGHT_BIT } from '../contract/shade.ts';
+export { DIRECT_SKY_LIGHT, DIRECT_SKY_LIGHT_BIT };
+
 /** The module's source, with its bindings at `slot`. */
 export function shadeModuleWgsl(slot: BindingSlot): string {
     const group = slot.group;
@@ -145,6 +151,7 @@ struct GiShadeUniforms {
 // The light grid's picks, R per cell: (light index, its share at a hit as f32 bits).
 @group(${group}) @binding(${lightGridBinding}) var giLightGridPicks: texture_2d<u32>;
 
+const GI_SHADE_PI: f32 = 3.14159265358979;
 const GI_SHADE_INV_PI: f32 = 0.318309886183791;
 const GI_SHADE_INV_TWO_PI: f32 = 0.159154943091895;
 const GI_SHADE_TWO_PI: f32 = 6.28318530717959;
@@ -696,17 +703,32 @@ fn giDirectReachesSplit(surface: GiSurface, groupMask: u32, sunApart: bool) -> b
 // candidates are those giDirectIrradiance weighs (the
 // directional lights; then every point and spot light, or with the light grid
 // the R picks of the hit's cell), each weighed the same way: the luminance of
-// its unshadowed irradiance at the surface times its share. One candidate is
-// drawn with probability q = its weight / the total, and its 'weight' is
-// share / q, so irradiance x weight is a one-sample estimate of the sum
-// giDirectIrradiance's lights converge to (unbiased; noisier, since one light
-// stands for all of them, directional lights included).
+// its unshadowed irradiance at the surface times its share; and, when the
+// caller sets GI_DIRECT_SKY_LIGHT_BIT in groupMask, the sky (below). One
+// candidate is drawn with probability q = its weight / the total, and its
+// 'weight' is share / q, so irradiance x weight is a one-sample estimate of
+// the sum giDirectIrradiance's lights converge to, plus the sky's irradiance
+// with that bit (unbiased; noisier, since one light stands for all of them,
+// directional lights included).
 
 // What giDirectChooseLight returns when no light of the groups reaches the surface.
 const GI_DIRECT_NO_LIGHT: u32 = 0xffffffffu;
 
+// The sky as a light: giDirectChooseLight weighs it as a candidate when this
+// bit of groupMask is set (above the four light groups' bits, so a caller
+// that passes only group bits, as gi/direct does, never gets it), and returns
+// GI_DIRECT_SKY_LIGHT for it, which giDirectLightRay takes like a light index.
+//
+// Why opt-in: a technique whose bounce source already holds the sky (DDGI's
+// probes see it through the rays that miss, and their irradiance lights
+// every hit) would count it twice. A technique that caches the light leaving
+// a hit and never looks the sky up at that hit (the radiance cache's world
+// cache, register D33) needs it here.
+const GI_DIRECT_SKY_LIGHT_BIT: u32 = ${DIRECT_SKY_LIGHT_BIT}u;
+const GI_DIRECT_SKY_LIGHT: u32 = ${DIRECT_SKY_LIGHT}u;
+
 struct GiDirectLightChoice {
-    light: u32,     // index into the light table, or GI_DIRECT_NO_LIGHT
+    light: u32,     // index into the light table, GI_DIRECT_SKY_LIGHT, or GI_DIRECT_NO_LIGHT
     weight: f32,    // multiplies the light's unshadowed irradiance: its share over the probability it was drawn with
 }
 
@@ -720,8 +742,9 @@ fn giShadeChoiceCandidate(candidate: u32, directionalCount: u32, useGrid: bool, 
 }
 
 // One light for the surface from the lights whose group bit is set in
-// groupMask, drawn with 'random' (uniform in [0, 1)) in proportion to its
-// weight (see above). No shadow ray: trace giDirectLightRay's.
+// groupMask, and the sky with GI_DIRECT_SKY_LIGHT_BIT, drawn with 'random'
+// (uniform in [0, 1)) in proportion to its weight (see above). No shadow ray:
+// trace giDirectLightRay's.
 fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice {
     let raySide = giShadeRaySide(surface);
     let lightCount = giLightCount();
@@ -730,8 +753,8 @@ fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDir
     let cell = select(0u, giLightGridCellAt(surface.position), useGrid);
     let candidates = directionalCount + select(lightCount - directionalCount, GI_LIGHT_GRID_PICKS, useGrid);
 
-    // First pass: the total weight.
-    var weightSum = 0.0;
+    // First pass: the lights' total weight; then the sky's, which comes after them.
+    var lightWeightSum = 0.0;
     for (var candidateNumber = 0u; candidateNumber < candidates; candidateNumber++) {
         let candidate = giShadeChoiceCandidate(candidateNumber, directionalCount, useGrid, cell);
         if (!(candidate.share > 0.0)) {
@@ -741,16 +764,27 @@ fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDir
         if (!giShadeInGroup(light, groupMask)) {
             continue;
         }
-        weightSum += giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) * candidate.share;
+        lightWeightSum += giShadeLuminance(giShadeLightSample(light, surface, raySide).irradiance) * candidate.share;
     }
+    var skyWeight = 0.0;
+    if ((groupMask & GI_DIRECT_SKY_LIGHT_BIT) != 0u) {
+        skyWeight = giSkyLightWeight(surface);
+    }
+    let weightSum = lightWeightSum + skyWeight;
     if (!(weightSum > 0.0)) {
         return GiDirectLightChoice(GI_DIRECT_NO_LIGHT, 0.0);
     }
 
-    // Second pass: the candidate whose stretch of the running total holds random x total.
+    // The sky's stretch of the running total is the last one: [the lights' total, the total).
+    let drawn = random * weightSum;
+    if (skyWeight > 0.0 && !(drawn < lightWeightSum)) {
+        // share / q, with share 1 and q = skyWeight / weightSum.
+        return GiDirectLightChoice(GI_DIRECT_SKY_LIGHT, weightSum / skyWeight);
+    }
+
+    // Second pass: the light whose stretch of the running total holds random x total.
     // Each weighted candidate is kept as it passes, so if rounding leaves the running
     // total a hair short of the first pass's, the last one is drawn.
-    let drawn = random * weightSum;
     var cumulative = 0.0;
     var chosen = GiDirectLightChoice(GI_DIRECT_NO_LIGHT, 0.0);
     for (var candidateNumber = 0u; candidateNumber < candidates; candidateNumber++) {
@@ -780,7 +814,8 @@ fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDir
 // A light's unshadowed irradiance at the surface and the shadow ray that
 // decides whether it arrives: from just off the surface (the side the ray
 // came from) towards a random point of the light, as giDirectIrradiance
-// aims its own. A light that casts no shadows needs no ray.
+// aims its own. A light that casts no shadows needs no ray. For
+// GI_DIRECT_SKY_LIGHT, one sample of the sky (giSkyLightRay).
 struct GiDirectLightRay {
     irradiance: vec3f,   // unshadowed, cosine included; 0 when the light can't reach this side
     castsShadows: bool,  // false: nothing to trace, the light always arrives
@@ -788,11 +823,69 @@ struct GiDirectLightRay {
 }
 
 fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLightRay {
+    if (light == GI_DIRECT_SKY_LIGHT) {
+        return giSkyLightRay(surface, random);
+    }
     let raySide = giShadeRaySide(surface);
     let origin = giShadeOffsetRayOrigin(surface.position, raySide);
     let lightData = giLight(light);
     let lightSample = giShadeLightSample(lightData, surface, raySide);
     return GiDirectLightRay(lightSample.irradiance, lightData.castsShadows, giShadeShadowRay(lightData, light, lightSample, origin, random));
+}
+
+// ---- The sky as a light -------------------------------------------------------------------
+//
+// The sky's irradiance at a surface, E = the integral over the hemisphere of
+// L(w) cos dw with the sky's radiance L as giSkyRadiance reads it, estimated
+// from one direction drawn with probability density cos / pi about the
+// shading normal: L(w) cos / (cos / pi) = pi L(w), times whether a ray along
+// it escapes (the shadow ray). Unbiased, and with no noise under a constant
+// sky with nothing in the way.
+//
+// Why cosine-weighted rather than drawn by the sky map's brightness: the
+// platform's skies have no sun disc (the sun is a directional light, already
+// a candidate of its own; calibrated-sky.ts), so the map is smooth and the
+// cosine is most of the integrand's shape; it needs no table (no new binding,
+// so no technique's bind group changes) and costs one map read. Capsaicin
+// offers it as its environment light's cosine mode (light_sampling.hlsl:164-182;
+// its default draws the hemisphere uniformly, pdf 1 / (2 pi): the same mean,
+// noisier). A host sky with a sharp sun painted in would want the map's
+// brightness drawn too (the radiance cache's register D62, its way forward).
+
+// The sky's weight among giDirectChooseLight's candidates, in the same units
+// as a light's (the luminance of unshadowed irradiance): the sky's irradiance
+// on the shading normal from its SH (giSkyIrradianceAt). Floored at 1% of
+// the irradiance averaged over every normal (the band-0 term), so the sky is
+// drawn wherever it can give light even where the truncated SH reads 0 (an
+// estimate is unbiased only if every candidate that can light the surface
+// can be drawn); 0 only when the whole sky is black.
+const GI_SKY_LIGHT_WEIGHT_FLOOR: f32 = 0.01;
+// The band-0 basis function, Y00 = 1 / (2 sqrt(pi)).
+const GI_SKY_SH_Y00: f32 = 0.28209479177387814;
+
+fn giSkyLightWeight(surface: GiSurface) -> f32 {
+    let onNormal = giShadeLuminance(giSkyIrradianceAt(surface.normal));
+    let averageOverNormals = giShadeLuminance(max(giShade.skyIrradiance[0].xyz * GI_SKY_SH_Y00, vec3f(0.0)));
+    return max(onNormal, GI_SKY_LIGHT_WEIGHT_FLOOR * averageOverNormals);
+}
+
+// One sample of the sky's irradiance at the surface and its shadow ray: the
+// direction drawn cosine-weighted about the shading normal from 'random'
+// (uniform in [0, 1)^2, used as is, so a caller that keeps the two numbers
+// can rebuild the direction), the estimate pi L(w); 0 when the direction is
+// behind the side the ray arrived on (as for a light behind it,
+// giShadeLightSample). The shadow ray leaves from just off that side and is
+// unbounded, as a directional light's: anything in the way blocks the sky.
+fn giSkyLightRay(surface: GiSurface, random: vec2f) -> GiDirectLightRay {
+    let raySide = giShadeRaySide(surface);
+    let origin = giShadeOffsetRayOrigin(surface.position, raySide);
+    let tangents = giShadeTangents(surface.normal);
+    let radius = sqrt(random.x);
+    let angle = GI_SHADE_TWO_PI * random.y;
+    let direction = normalize(tangents[0] * (radius * cos(angle)) + tangents[1] * (radius * sin(angle)) + surface.normal * sqrt(max(1.0 - random.x, 0.0)));
+    let reachesSide = dot(raySide, direction) > 0.0;
+    let irradiance = select(vec3f(0.0), GI_SHADE_PI * giSkyRadiance(direction), reachesSide);
+    return GiDirectLightRay(irradiance, true, GiRay(origin, 0.0, direction, GI_SHADE_UNBOUNDED_DISTANCE));
 }
 
 // The two numbers in [0, 1) gi/direct hands giDirectIrradiance for the hit of

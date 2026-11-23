@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { LIGHT_GROUP_COUNT } from '../../../../platform/contract/scene.ts';
+import { DIRECT_SKY_LIGHT_BIT } from '../../../../platform/contract/shade.ts';
 import { RadianceCacheTechnique } from '../../radiance-cache-technique.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../settings.ts';
 import { SharcCache, sharcLightMask, sharcPathCapacity, sharcRayWordsBytes } from './sharc-cache.ts';
@@ -208,8 +210,8 @@ describe('SHaRC hash cache: WGSL', () => {
 
 describe('SHaRC hash cache: the sky is counted once (register E4)', () => {
     it("puts RC3.4's sky light bit in the mask only with the environment light, above the four groups", () => {
-        // TODO(rc3-4 merge): compare with the platform's DIRECT_SKY_LIGHT_BIT (platform/shade/wgsl.ts), 0x10 on rc3-4.
-        expect(SHARC_SKY_LIGHT_BIT).toBe(0x10);
+        expect(SHARC_SKY_LIGHT_BIT).toBe(DIRECT_SKY_LIGHT_BIT);
+        expect(SHARC_SKY_LIGHT_BIT).toBe(1 << LIGHT_GROUP_COUNT);
         expect(SHARC_SKY_LIGHT_BIT & SHARC_LIGHT_GROUPS).toBe(0);
         expect(sharcLightMask({})).toBe(SHARC_LIGHT_GROUPS);
         expect(sharcLightMask({ environmentLightEnable: false })).toBe(SHARC_LIGHT_GROUPS);

@@ -29,10 +29,17 @@
  *    averages 1/2 within 0.03 (about 3 standard errors).
  * 3. **The furnace** (multibounce, 20k and per hit): the frame from which the
  *    near ceiling rays (tiles under 2 m, which can't hold floor hits) average
- *    ρ² E / π within 1%; gate by `FURNACE_FRAMES`, and then each near
- *    ceiling ray within 2% (0.5% of them may hold a rare miss).
+ *    ρ² E / π within 1%; gate by `FURNACE_FRAMES`. Then the analytic gate
+ *    (RC3.4, the world-cache page's): the second bounces from near ceiling
+ *    cells that land on the floor in tiles under 2 m read ρ L_f = ρ² E / π
+ *    within 1%, in every mode (`second-bounce-landings.ts`). How many near
+ *    ceiling rays are more than 2% off is recorded, not gated: since register
+ *    D63 a ray reads its cell's mean over landings in floor cells of
+ *    different floor shares (a far floor cell is a column holding ceiling
+ *    hits too), so single rays aren't ρ² E / π.
  * 4. **Strips** (multibounce, 20k): after `FURNACE_FRAMES`, the near ceiling
- *    rays average ρ² E / π × 1/2 within 2%.
+ *    rays average ρ² E / π × 1/2 within 2%, and the landings on strips in
+ *    floor tiles under 2 m read ρ L_f within 1%.
  * 5. **Lag after a light change** (single bounce, per hit and each budget):
  *    converged for 60 frames, then (a) the sun's intensity doubled (a change
  *    with no bounds, `global: ['sun']`) or (b) the corner lit by a point
@@ -72,6 +79,7 @@ import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
+import { readSecondBounceLandings } from '../radiance-cache-world-cache/second-bounce-landings.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -117,13 +125,15 @@ function litCountOk(lit: number, target: number): boolean {
     return lit <= target && lit >= target - 4 * Math.sqrt(target) - 1;
 }
 /**
- * The furnace's near ceiling rays more than 2% off allowed with cells lit on the budget: 2%, where
- * per hit allows 0.5% (the rare misses). A far floor tile also holds ceiling hits (a cell is a
- * column through its tile), so a far floor cell lit from one drawn hit a frame is noisier than
- * per hit's mean over all its hits, and the second-bounce samples that read it are too (first run:
- * 0.94% of the rays, the mean within 0.05%).
+ * The analytic gate on the second bounce (RC3.4, the lead's ruling of 2026-11-23; the world-cache
+ * page's): the landings in near floor tiles read ρ L_f within 1%. It replaced a per-ray gate (at
+ * most 0.5% of the near ceiling rays more than 2% off ρ² E / π per hit, 2% budgeted), which the
+ * page still records: a far floor tile also holds ceiling hits (a cell is a column through its
+ * tile), and since register D63 those count as samples of no light, so a near ceiling ray reads a
+ * mean over landings of different floor shares (per hit: 15,599 of 127,454 rays off, mean 0.9919;
+ * with D63's samples removed 275 of 110,467). Budgeted cells don't have D63 yet (P6.2's fixes).
  */
-const BUDGETED_RAYS_OFF = 0.02;
+const LANDING_TOLERANCE = 0.01;
 
 /** Per hit (GI-1.2), per hit with experiment E9's change reset (history dropped, or 3 samples kept), or budgeted at that many cells (E8). */
 type Mode = 'per-hit' | 'per-hit+E9' | 'per-hit+E9 keep 3' | number;
@@ -468,13 +478,27 @@ async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips'
             } else convergedAt = -1;
         }
         const final = nearCeilingStats(await readRays(device, scenario), expected);
+        const landings = await readSecondBounceLandings(device, scenario.technique, scenario.cache, { camera: FURNACE.camera, width: WIDTH, height: HEIGHT, ceilingY: FURNACE.ceilingY });
         const name = `${kind} ${modeName(mode)}`;
         if (final.rays === 0) fail(`${name}: no near ceiling ray`);
         if (kind === 'furnace') {
             if (convergedAt < 0) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, not ${expected.toFixed(4)} within 1%, after ${FURNACE_FRAMES} frames`);
-            if (final.off > Math.ceil((typeof mode === 'number' ? BUDGETED_RAYS_OFF : 0.005) * final.rays)) fail(`${name}: ${final.off} of ${final.rays} near ceiling rays off ${expected.toFixed(4)} by more than 2%`);
         } else if (Math.abs(final.mean / expected - 1) > TOLERANCE) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, expected ${expected.toFixed(4)} within 2%`);
-        return { convergedWithin1PercentAtFrame: convergedAt, meanOverExpected: Number((final.mean / expected).toFixed(5)), nearRays: final.rays, nearRaysOff: final.off };
+        // The analytic gate (LANDING_TOLERANCE); `nearRaysOff` is recorded only (see there).
+        const nearLandings = landings.nearFloorLandings;
+        if (nearLandings.entries < 1000) fail(`${name}: only ${nearLandings.entries} second bounces land on the floor in tiles under ${NEAR_TILE_SIZE} m`);
+        else if (Math.abs(nearLandings.mean / CEILING_INDIRECT - 1) > LANDING_TOLERANCE) {
+            fail(`${name}: the second bounces landing on the floor in tiles under ${NEAR_TILE_SIZE} m read ${nearLandings.mean.toFixed(4)}, rho L_f = ${CEILING_INDIRECT.toFixed(4)} within ${LANDING_TOLERANCE * 100}%`);
+        }
+        return {
+            convergedWithin1PercentAtFrame: convergedAt,
+            meanOverExpected: Number((final.mean / expected).toFixed(5)),
+            nearRays: final.rays,
+            nearRaysOff: final.off,
+            nearFloorLandingsOverRhoLf: Number((nearLandings.mean / CEILING_INDIRECT).toFixed(5)),
+            nearFloorLandings: nearLandings.entries,
+            throughCacheOverExpected: Number((landings.throughCache.mean / expected).toFixed(5)),
+        };
     } finally {
         scenario.dispose();
         await device.queue.onSubmittedWorkDone();

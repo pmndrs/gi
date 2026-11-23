@@ -346,7 +346,7 @@ interface LightCommon {
     /** Lights that don't cast shadows are cheaper but leak; default true. */
     readonly castsShadows?: boolean;
     /**
-     * Light-group index (0..3). Techniques that support groups (DDGI) can
+     * Light-group index (0..LIGHT_GROUP_COUNT - 1). Techniques that support groups (DDGI) can
      * re-weight a whole group instantly. Group assignment is scene data, so
      * it lives here; the weights belong to the technique. Defaults to 0.
      */
@@ -574,3 +574,6 @@ export interface SceneApi {
     /** World-space bounds of everything that contributes to GI. */
     readonly bounds: Aabb;
 }
+
+/** Light groups, 0..3 (`LightDescriptor.group`): the bits 0-3 of a hit-shading group mask. */
+export const LIGHT_GROUP_COUNT = 4;

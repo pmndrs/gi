@@ -93,6 +93,14 @@ export interface HashGridCacheOptions {
      */
     useDirectLighting: boolean;
     /**
+     * `LightBuilder`'s `environment_light_enable` (light_builder.h:63, light_builder.cpp:131-134,
+     * default true): `GenerateReservoirs` and `GenerateMultibounceReservoirs`
+     * weigh the sky as one of a hit's lights (register D33, RC3.4). Read every
+     * frame; changing it doesn't empty the cache (the cells follow within
+     * their 16-sample history, as for a change of the lights).
+     */
+    environmentLightEnable: boolean;
+    /**
      * Experiment E10 (P6.3, phase 6): where the indirect values come from with
      * `useMultibounce` on.
      * - `'fallback'`: no second-bounce ray. Every first-bounce entry reads the
@@ -145,6 +153,7 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     hashGridCacheDiscardMultibounceRayProbability: 0.7,
     hashGridCacheMaxMultibounceSampleCount: 16,
     useDirectLighting: true,
+    environmentLightEnable: true,
     secondBounce: 'auto',
     fallbackIndirectSampleCount: 4,
 });
