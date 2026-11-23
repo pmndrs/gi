@@ -134,8 +134,6 @@ fn HashGridCache_ClaimChangeReset(cell_index: u32, position: vec3f) -> bool {
 
 /** A cell count that marks a changed cell (exact as a half; no sum of whole counts reaches it). */
 export const CELL_CHANGED_COUNT = 1 + 2 ** -10;
-/** A cell count for a cell lit with no light to draw: the smallest normal half. */
-export const CELL_DARK_COUNT = 2 ** -14;
 
 export const CELL_SHADING_COMMON_WGSL = /* wgsl */ `
 // ---- Lever E8: cells lit on a budget (cell-shading-wgsl.ts) ----
@@ -149,10 +147,6 @@ const HASHGRIDCACHE_CELL_SELECT_SALT: u32 = ${CELL_SHADING_SALT.select}u;
 // A cell's sample count that marks it changed: its next sample replaces it (its mean is kept until
 // then). Not a whole number, so no count reaches it by adding samples; exact as a half.
 const HASHGRIDCACHE_CELL_CHANGED_COUNT: f32 = ${CELL_CHANGED_COUNT};
-// A cell's count when it was lit and had no light to draw (per hit, such a hit adds no sample): not
-// new, so not lit again first, yet light enough to leave its tile's coarser levels as they are.
-// The smallest normal half.
-const HASHGRIDCACHE_CELL_DARK_COUNT: f32 = ${CELL_DARK_COUNT};
 
 // The key a visibility entry offers for its cell this frame: random, never 0 (the scratch's empty
 // value). Recomputed by ClaimCells to find the entry that offered the largest. Two rounds of PCG's
