@@ -132,6 +132,35 @@ export interface HashGridCacheRayLists {
     readonly layout: HashGridCacheRayListLayout;
 }
 
+/** What the hash grid hands a tail (P6.4's neural tail, register E11) inside its frame. */
+export interface HashGridTailFrame {
+    readonly frame: WorldCacheFrame;
+    /** The probe rays of this screen, and the per-ray lists over them (with the tail's list). */
+    readonly rays: WorldCacheProbeRays;
+    readonly rayLists: HashGridCacheRayListLayout;
+    readonly listWords: GPUBuffer;
+    /** Entries for a bind group of the hash grid (`HASH_GRID_CACHE_GROUP_ENTRIES`' layout) and of the ray data (`RAY_DATA_GROUP_ENTRIES`'). */
+    readonly cacheEntries: readonly GPUBindGroupEntry[];
+    readonly rayDataEntries: readonly GPUBindGroupEntry[];
+}
+
+/**
+ * Work that runs inside the hash grid's frame with its data (P6.4): after
+ * `UpdateTiles` (the cells' values this frame) and before
+ * `UpdateMultibounceCells` (which reads its answers when `active`), only
+ * while GI-1.2's own second-bounce rays run (multibounce on, `secondBounce`
+ * resolved to `'gi1-rays'` and not waiting on a fallback's pass). The grid
+ * makes its per-ray lists with the tail's list (`neuralTailBuffer`) while it
+ * has one.
+ */
+export interface HashGridTail {
+    /** Read when the frame's constants are written: sets `use_neural_tail`. It must not change until `encode`. */
+    readonly active: boolean;
+    /** Before the frame's constants are written: anything that changes `active` this frame (a restart) happens here. */
+    beginFrame(frame: WorldCacheFrame): void;
+    encode(encoder: GPUCommandEncoder, frame: HashGridTailFrame): void;
+}
+
 /** The population and resolve passes: a kernel and its indirect arguments each. */
 interface PopulationPass {
     readonly kernel: ComputeKernel;
@@ -254,6 +283,16 @@ export class HashGridCache implements WorldCache {
     private lastSecondBounce: SecondBounceInUse | null = null;
     /** E10's pass for the current fallback module, or null when none was wanted yet. */
     private bounceSource: BounceSourceBuild | null = null;
+    /** P6.4's neural tail (register E11), set by the technique; null runs GI-1.2's two bounces. Applies only while GI-1.2's second-bounce rays run. */
+    tail: HashGridTail | null = null;
+    /** The tail was asked for while the second bounce came from a fallback, and that was said once. */
+    private tailInactiveWarned = false;
+    /**
+     * `resolveSecondBounce` answered `'gi1-rays'` only because the fallback's pass is still
+     * being built (`'auto'` or `'fallback'` with a field stacked): the tail waits, so it never
+     * trains or answers for the frames before the second bounce settles (P6.4's review).
+     */
+    private secondBouncePending = false;
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
     constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
@@ -381,7 +420,8 @@ export class HashGridCache implements WorldCache {
             tileWords: device.createBuffer({ label: 'radiance-cache/hash-grid tile words', size: layout.tileWords.bytes, usage: storageUsage }),
             cellValues: device.createBuffer({ label: 'radiance-cache/hash-grid cell values', size: layout.cellValues.bytes, usage: storageUsage }),
             updateScratch: device.createBuffer({ label: 'radiance-cache/hash-grid update scratch', size: layout.updateScratch.bytes, usage: storageUsage }),
-            constants: device.createBuffer({ label: 'radiance-cache/hash-grid constants', size: HASH_GRID_CONSTANTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst }),
+            // copySrc: the GPU pages read the words back (P6.4's page checks `use_neural_tail` on a restart frame).
+            constants: device.createBuffer({ label: 'radiance-cache/hash-grid constants', size: HASH_GRID_CONSTANTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst | BUFFER_USAGE.copySrc }),
         };
         const outOfMemory = await device.popErrorScope();
         if (outOfMemory) {
@@ -555,6 +595,7 @@ export class HashGridCache implements WorldCache {
      * it is ready). `'fallback'` warns when it can't have it; `'auto'` doesn't.
      */
     private resolveSecondBounce(prepared: Prepared): SecondBounceInUse {
+        this.secondBouncePending = false;
         const asked = this.options.secondBounce;
         if (asked === 'gi1-rays') return 'gi1-rays';
         const warnAsked = (message: string): void => {
@@ -573,9 +614,12 @@ export class HashGridCache implements WorldCache {
         if (!build || build.module !== module || build.version !== module.version) {
             if (build?.pass) prepared.context.warn?.(`@pmndrs/gi: the technique under the radiance cache changed (${module.techniqueId}, shading version ${module.version}); rebuilding the pass that reads it, GI-1.2's rays until it is ready`);
             void this.buildBounceSource(prepared, module);
+            this.secondBouncePending = true;
             return 'gi1-rays';
         }
-        return build.pass ? 'fallback' : 'gi1-rays';
+        if (build.pass) return 'fallback';
+        this.secondBouncePending = !build.failed;
+        return 'gi1-rays';
     }
 
     /**
@@ -607,7 +651,11 @@ export class HashGridCache implements WorldCache {
         // E10's estimator first: it decides the lists' size and the indirect cap in the constants.
         const secondBounce: SecondBounceInUse = this.options.useMultibounce ? this.resolveSecondBounce(prepared) : 'gi1-rays';
         const rayData = this.rayDataFor(prepared, rays, this.options.useMultibounce && secondBounce === 'gi1-rays');
-        this.writeConstants(prepared, frame, secondBounce);
+        // P6.4: the tail runs with GI-1.2's own rays only, once the second bounce has settled; its
+        // restart (if any) comes before the constants, which read whether it is active.
+        const tail = hashGridTailRuns(this.options.useMultibounce, secondBounce, this.secondBouncePending) ? this.tail : null;
+        tail?.beginFrame(frame);
+        this.writeConstants(prepared, frame, secondBounce, tail?.active ?? false);
 
         // Capsaicin empties the cache when the cell size, the smallest cell size or multibounce
         // changes (needs_hash_grid_clear, gi1.cpp:1740-1745, cleared at 1786-1789): cells keyed at
@@ -660,6 +708,15 @@ export class HashGridCache implements WorldCache {
         // additions to bypassing probe rays), before UpdateTiles, which blends its samples this frame.
         if (bounceSource) this.encodeBounceSourcePass(encoder, prepared, bounceSource, rayData);
         this.encodePopulationPass(encoder, prepared, rayData, 'updateTiles', 'UpdateRadianceCache');
+        // P6.4: the neural tail gathers its records and answers the second hits here, before
+        // UpdateMultibounceCells reads them. It extends GI-1.2's second-bounce rays only: with the
+        // second bounce from a fallback (E10) the fallback's field already carries the later bounces.
+        if (traceSecondBounce && tail) {
+            tail.encode(encoder, { frame, rays, rayLists: rayData.layout, listWords: rayData.listWords, cacheEntries: groupEntries(prepared.buffers), rayDataEntries: rayData.entries });
+        } else if (useMultibounce && this.tail && secondBounce === 'fallback' && !this.tailInactiveWarned) {
+            this.tailInactiveWarned = true;
+            prepared.context.warn?.("@pmndrs/gi: the radiance cache's neuralCache 'tail' is off while its second bounce comes from the technique stacked under it (secondBounce 'auto' or 'fallback'), whose field already carries the later bounces; set secondBounce: 'gi1-rays' to use the tail");
+        }
         if (traceSecondBounce) this.encodePopulationPass(encoder, prepared, rayData, 'updateMultibounceCells', 'UpdateMultibounceCells');
         this.encodePopulationPass(encoder, prepared, rayData, 'resolveCells', 'ResolveCells');
 
@@ -802,10 +859,12 @@ export class HashGridCache implements WorldCache {
     private rayDataFor(prepared: Prepared, rays: WorldCacheProbeRays, secondBounceRays: boolean): RayData {
         const current = this.rayData;
         // E10: without second-bounce rays the lists are about a third the size (register E10); made again on a switch.
-        if (current && sameRays(current.rays, rays) && current.secondBounceRays === secondBounceRays) return current;
+        // P6.4: with a tail the lists carry its answers (`neuralTailBuffer`), made again when one is set.
+        const withTail = this.tail !== null && secondBounceRays;
+        if (current && sameRays(current.rays, rays) && current.secondBounceRays === secondBounceRays && (current.layout.neuralTailBuffer !== 0) === withTail) return current;
         this.releaseRayData();
         const { device } = prepared;
-        const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells, secondBounceRays);
+        const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells, secondBounceRays, withTail);
         // The lists grow with the screen: a device that can't bind them gets GILimitError before anything is made (D14).
         checkHashGridRayListLimits(layout, device.limits);
         const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
@@ -831,6 +890,7 @@ export class HashGridCache implements WorldCache {
                 cellListLayout.lit,
                 0, // cell_shading: written every frame (writeCellShading)
                 cellListLayout.bins,
+                layout.neuralTailBuffer,
             ]),
         );
         const rayData: RayData = {
@@ -893,8 +953,8 @@ export class HashGridCache implements WorldCache {
         this.rayData = null;
     }
 
-    /** `HashGridCacheConstants` for this frame (gi1.cpp:1852-1893). */
-    private writeConstants(prepared: Prepared, frame: WorldCacheFrame, secondBounce: SecondBounceInUse): void {
+    /** `HashGridCacheConstants` for this frame (gi1.cpp:1852-1893); `tailActive`: P6.4's tail adds its answers this frame (`use_neural_tail`). */
+    private writeConstants(prepared: Prepared, frame: WorldCacheFrame, secondBounce: SecondBounceInUse, tailActive: boolean): void {
         const { capacity } = prepared;
         const options = this.options;
         const bytes = new ArrayBuffer(HASH_GRID_CONSTANTS_BYTES);
@@ -928,6 +988,7 @@ export class HashGridCache implements WorldCache {
         // RC3.4's sky light (register D62), left out in E10's fallback mode: the fallback's field
         // already holds the sky that reaches a hit (radiance-cache-ddgi-bounce's sky section).
         words[word.environmentLightEnable] = hashGridCacheSamplesSky(options, secondBounce) ? 1 : 0;
+        words[word.useNeuralTail] = tailActive ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }
 
@@ -955,6 +1016,17 @@ export interface HashGridCacheClearOptions {
  */
 export function hashGridCacheSamplesSky(options: Pick<HashGridCacheOptions, 'environmentLightEnable'>, secondBounce: SecondBounceInUse): boolean {
     return options.environmentLightEnable && secondBounce !== 'fallback';
+}
+
+/**
+ * Whether a tail (P6.4) runs this frame, and so may set `use_neural_tail`:
+ * with GI-1.2's own second-bounce rays only (multibounce on, the second
+ * bounce resolved to `'gi1-rays'`), and not while a fallback's pass is still
+ * being built (`pending`: `'auto'` would switch to it within a few frames, and
+ * the tail would have trained on the frames before).
+ */
+export function hashGridTailRuns(useMultibounce: boolean, secondBounce: SecondBounceInUse, pending: boolean): boolean {
+    return useMultibounce && secondBounce === 'gi1-rays' && !pending;
 }
 
 export function hashGridCacheClearOptions(options: HashGridCacheOptions, secondBounce: SecondBounceInUse = 'gi1-rays'): HashGridCacheClearOptions {

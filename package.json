@@ -37,6 +37,15 @@
                 ["corepack", "yarn", "workspace", "@pmndrs/denoiser-core", "build"],
                 ["corepack", "yarn", "workspace", "@pmndrs/denoiser-ffx", "build"]
             ]
+        },
+        "@pathtracer/mlp": {
+            "repo": "https://github.com/pmndrs/pathtracer.git",
+            "commit": "0e4435bd05bf4f55c8763c76facae640db35855c",
+            "clone": "../pmndrs-pathtracer",
+            "path": "packages/mlp",
+            "built": ["src/index.ts"],
+            "build": [],
+            "optional": true
         }
     },
     "devDependencies": {

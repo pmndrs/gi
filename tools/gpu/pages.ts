@@ -16,6 +16,8 @@ export interface TestPage {
     timeoutMs: number;
     /** Runs only when a filter names it exactly. See {@link PageManifest.manual}. */
     manual: boolean;
+    /** Optional siblings it needs (none when absent). See {@link PageManifest.optionalSiblings}. */
+    optionalSiblings?: string[];
 }
 
 /**
@@ -28,6 +30,22 @@ export function selectPages(pages: TestPage[], filters: string[]): TestPage[] {
         if (page.manual) return filters.includes(page.name);
         return filters.length === 0 || filters.some((filter) => page.name.includes(filter));
     });
+}
+
+/**
+ * The pages whose optional siblings (`optionalSiblings`) are all in `ready`
+ * (the names cloned at their pin); the others are left out, each with the
+ * sibling it misses.
+ */
+export function withOptionalSiblings(pages: TestPage[], ready: ReadonlySet<string>): { kept: TestPage[]; left: { page: TestPage; missing: string[] }[] } {
+    const kept: TestPage[] = [];
+    const left: { page: TestPage; missing: string[] }[] = [];
+    for (const page of pages) {
+        const missing = (page.optionalSiblings ?? []).filter((name) => !ready.has(name));
+        if (missing.length === 0) kept.push(page);
+        else left.push({ page, missing });
+    }
+    return { kept, left };
 }
 
 /** Every folder under pagesDir that has an index.html, in name order. */
@@ -45,6 +63,7 @@ export async function discoverPages(pagesDir: string): Promise<TestPage[]> {
             expectMessage: manifest.expectMessage === undefined ? null : parseExpectedMessage(manifest.expectMessage),
             timeoutMs: manifest.timeoutMs ?? DEFAULT_PAGE_TIMEOUT_MS,
             manual: manifest.manual ?? false,
+            optionalSiblings: manifest.optionalSiblings ?? [],
         });
     }
     return pages;
