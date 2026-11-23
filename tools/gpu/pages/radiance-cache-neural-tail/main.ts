@@ -98,6 +98,14 @@
  *    no cell records and no screen records. The gate counts the steps the
  *    GPU took (a step with no records is skipped there), so it stays shut
  *    with 0 steps, where 16 a frame were encoded.
+ * 12. **The box centred again** (the furnace, the tail with an 8 m box,
+ *    `boundsHalfSize: 4`; 40 frames, then the camera 3 m along x for 30): the
+ *    network starts over when the camera leaves the box's middle half. On
+ *    that frame the grid's constants must say `use_neural_tail` 0 (the
+ *    restart comes before they are written, so last frame's answers aren't
+ *    added to this frame's entries), and the gate must stay shut for the
+ *    next 10 frames (a step count copied before the restart is dropped, so
+ *    fresh weights get their warm-up).
  *
  * No glossy case: the platform's materials are diffuse (register D8), so
  * GI-1.1's reflections, where the pathtracer found the network halves the
@@ -122,6 +130,7 @@ import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/t
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import { NEURAL_TAIL_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { HASH_GRID_CONSTANTS_WORD } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-wgsl.ts';
 import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -782,6 +791,64 @@ async function runWithDdgi(device: GPUDevice, settings: Partial<RadianceCacheSet
     }
 }
 
+// ---- Section 12: the box centred again ---------------------------------------------------------------
+
+async function runRecentre(device: GPUDevice): Promise<{ gateOpenBefore: boolean; stepsBefore: number; useNeuralTailOnRecentre: number; gateAfter: boolean[]; stepsAfter: number[]; reopenedAfter: number | null; finalMeanError: number }> {
+    const platform = new GIPlatformImpl(device, { label: 'neural tail page recentre' });
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ ...TAIL, neural: { boundsHalfSize: 4 } }));
+    platform.setOutput(technique);
+    await platform.prepare();
+    const camera = describe(platform, 'furnace');
+    const moved: PageCamera = { ...camera, position: [camera.position[0] + 3, camera.position[1], camera.position[2]], target: [camera.target[0] + 3, camera.target[1], camera.target[2]] };
+    const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
+    const frame = async (view: PageCamera): Promise<void> => {
+        const encoder = device.createCommandEncoder({ label: 'neural tail page recentre' });
+        platform.encode(encoder, { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(view, WIDTH, HEIGHT) });
+        screen.encode(encoder, view);
+        platform.encodeScreen(encoder, screen.screen);
+        device.queue.submit([encoder.finish()]);
+        await device.queue.onSubmittedWorkDone();
+    };
+    try {
+        await frame(camera);
+        await platform.rays.whenBuilt();
+        for (let index = 0; index < 40; index++) await frame(camera);
+        const tail = technique.neuralTail;
+        const grid = technique.worldCache;
+        if (!tail || !grid) throw new Error('recentre: no tail or no hash grid');
+        const gateOpenBefore = tail.active;
+        const stepsBefore = tail.steps;
+        await frame(moved);
+        const useNeuralTailOnRecentre = new Uint32Array(await readRange(device, grid.buffers.constants, HASH_GRID_CONSTANTS_WORD.useNeuralTail * 4, 4))[0];
+        const gateAfter: boolean[] = [];
+        const stepsAfter: number[] = [];
+        let reopenedAfter: number | null = null;
+        let finalMeanError = 0;
+        for (let index = 1; index <= 30; index++) {
+            await frame(moved);
+            gateAfter.push(tail.active);
+            stepsAfter.push(tail.steps);
+            if (reopenedAfter === null && tail.active) reopenedAfter = index;
+            if (index === 30) {
+                const state = await readFrame(device, technique, 'furnace');
+                let sum = 0;
+                let count = 0;
+                state.rays.forEach((ray, rayIndex) => {
+                    if (ray.surface !== 'ceiling') return;
+                    sum += rayValue(state, rayIndex);
+                    count++;
+                });
+                finalMeanError = count > 0 ? sum / count / EVERY_BOUNCE - 1 : Number.NaN;
+            }
+        }
+        return { gateOpenBefore, stepsBefore, useNeuralTailOnRecentre, gateAfter: gateAfter.slice(0, 12), stepsAfter: stepsAfter.slice(0, 20), reopenedAfter, finalMeanError: Number(finalMeanError.toFixed(4)) };
+    } finally {
+        screen.dispose();
+        platform.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
 // ---- Section 7: the f32 fallback on a default-limits device ----------------------------------------
 
 /** A device as a host gets it without the platform's advice on workgroup memory and f16: WebGPU's 16 KiB, no shader-f16. */
@@ -1035,6 +1102,16 @@ try {
         if (!skyward.tailMade || skyward.tailSteps !== 0 || skyward.tailGateOpen) {
             fail(`no records: ${skyward.tailMade ? `the tail took ${skyward.tailSteps} training steps with its gate ${skyward.tailGateOpen ? 'open' : 'shut'}` : 'no tail was made'} (expected 0 steps, shut: a step with no records doesn't count)`);
         }
+    }
+
+    // 12. The box centred again: the restart before the constants, and no stale step count.
+    if (runs(12)) {
+        const recentre = await runRecentre(device);
+        data.recentre = recentre;
+        if (!recentre.gateOpenBefore) fail(`recentre: the gate wasn't open after 40 frames (${recentre.stepsBefore} steps), so nothing was checked`);
+        if (recentre.useNeuralTailOnRecentre !== 0) fail(`recentre: the frame the network starts over has use_neural_tail ${recentre.useNeuralTailOnRecentre} (expected 0: last frame's answers would be added to this frame's entries)`);
+        const early = recentre.gateAfter.slice(0, 10);
+        if (early.some((open) => open)) fail(`recentre: the gate opened ${early.indexOf(true) + 1} frames after the network started over (steps ${recentre.stepsAfter.slice(0, 10).join(', ')}): a step count from before the restart`);
     }
 
     // 7. The f32 fallback on a default-limits device (16 KiB of workgroup memory, no shader-f16).
