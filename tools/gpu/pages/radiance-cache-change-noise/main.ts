@@ -52,6 +52,17 @@
  *    off's noise but not the rise E9 adds, so the 1.5× ratio of the defaults
  *    (1.34 at P6.2b, 1.79 after RC4.2, both on what is now `sharpness`)
  *    stopped measuring E9; it is recorded (`ratio`), not gated.
+ *
+ *    What the noise gate can see (mutations, 2026-11-24, two-room, none
+ *    kept): noise in the world cache's cells is averaged out of E by the
+ *    screen probes' running mean and filter (marked cells' values scaled by
+ *    a random 0.5-1.5: E9's added noise 0.28 → 0.30 points; every cell, every
+ *    frame: E9 off's 0.70 → 0.78% on the old measure), so the gate bounds
+ *    visible noise only. And it bounds it loosely: probe cells near the
+ *    change skipping their running mean for the event's 17 frames with E9 on
+ *    raised E9's added noise from 0.28 to 0.71 points (E9 on 0.84 → 1.26%),
+ *    inside the 0.80 allowed, since half the calibration run's noise is more
+ *    than E9 off's whole visible noise at the defaults (0.56%).
  * 2. **A change that goes on** for 60 frames (Sponza's sun turning 0.5° a
  *    frame; a 0.6 m box crossing two-room's lit room at 2 cm a frame), then
  *    held for 400: the noise over frames 10-59 of the motion, and the
