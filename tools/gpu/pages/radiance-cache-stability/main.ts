@@ -32,6 +32,15 @@
  * against a converged reference (the raw irradiance averaged over 64 still frames), since
  * frame-to-frame change alone rewards lag.
  *
+ * P6.3: with `VITE_RC_SECOND_BOUNCE=fallback` a DDGI volume (the manifest's)
+ * is stacked under the radiance cache and supplies its second bounce
+ * (experiment E10), DDGI updating 2,048 probes a frame; otherwise GI-1.2's
+ * second-bounce rays, with no DDGI. `VITE_RC_INDIRECT_CAP` sets
+ * the fallback's `fallbackIndirectSampleCount` (default 4).
+ *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts),
+ * for example Capsaicin's empty-cell rule: `VITE_RC_COMPARE=emptyCellFill=capsaicin`.
+ *
  * Through the lock, one page at a time:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 stability" -- pnpm test:gpu --filter radiance-cache-stability --gpu nvidia`.
  */
@@ -41,13 +50,15 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import type { WorldCacheKind } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -79,8 +90,19 @@ const CONFIGURATIONS = [
     ['still', 'on', 'denoised, no clamp'],
     ['moving', 'on', 'denoised, no clamp'],
 ] as const;
+/**
+ * The world-cache backend (P6.1): the page's `data-world-cache` attribute, so
+ * `radiance-cache-stability-sharc` runs this page with the SHaRC cache.
+ */
+const WORLD_CACHE: WorldCacheKind = document.documentElement.dataset.worldCache === 'sharc' ? 'sharc' : 'gi1-hash-grid';
 /** A pixel's change is relative to the larger of its previous E and this share of the frame's mean E. */
 const DARK_FLOOR = 0.05;
+/** P6.3: the world cache's second bounce in this run (experiment E10), from the environment. */
+const SECOND_BOUNCE = (import.meta.env as Record<string, unknown>).VITE_RC_SECOND_BOUNCE === 'fallback' ? 'fallback' : 'gi1-rays';
+/** The cells' indirect sample cap in this run (Capsaicin's 16 unless the environment says). */
+const INDIRECT_CAP = Number((import.meta.env as Record<string, unknown>).VITE_RC_INDIRECT_CAP ?? 4);
+/** DDGI's probes a frame when it supplies the second bounce. */
+const DDGI_UNITS = 2048;
 
 type Vector = [number, number, number];
 
@@ -251,8 +273,12 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const bookmark = manifest.cameras[0];
     const base: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-stability ${id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(pageRadianceCache({ worldCache: WORLD_CACHE, secondBounce: SECOND_BOUNCE, fallbackIndirectSampleCount: INDIRECT_CAP }));
     platform.setOutput(technique);
+    if (SECOND_BOUNCE === 'fallback') {
+        const ddgi = platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } }));
+        platform.setFallback(technique, ddgi);
+    }
     await platform.prepare();
     let beforeFrame = (): void => {};
     if (loader === 'viewer') beforeFrame = await describeLoaded(platform, device, manifest);
@@ -262,7 +288,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
     const frame = (): void => {
         beforeFrame();
         const encoder = device.createCommandEncoder({ label: `radiance-cache-stability ${id}` });
-        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
+        const input: FrameInput = { deltaTime: 1 / 60, budget: { units: SECOND_BOUNCE === 'fallback' ? DDGI_UNITS : 0 }, camera: frameCamera(camera, WIDTH, HEIGHT) };
         platform.encode(encoder, input);
         screen.encode(encoder, camera);
         platform.encodeScreen(encoder, screen.screen);
@@ -292,7 +318,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         // The converged reference for the still configurations: the raw irradiance with the
         // product's settings averaged over REFERENCE_FRAMES still frames (noise averaged out,
         // nothing lagging); frame-to-frame change alone would reward a laggy filter.
-        technique.settings.interpolationJitter = true;
+        technique.settings.interpolationJitter = (PAGE_COMPARE_VALUES.interpolationJitter as boolean | undefined) ?? true;
         technique.settings.denoiser = false;
         const referenceSum = new Float64Array(WIDTH * HEIGHT);
         let referenceDepth: Float32Array | null = null;
@@ -316,7 +342,7 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
         for (const jitter of [true, false]) {
             for (const [motion, history, term] of CONFIGURATIONS) {
                 const denoised = term !== 'raw';
-                technique.settings.interpolationJitter = jitter;
+                technique.settings.interpolationJitter = (PAGE_COMPARE_VALUES.interpolationJitter as boolean | undefined) ?? jitter;
                 technique.settings.denoiser = denoised;
                 technique.settings.denoiserHistoryClamp = term === 'denoised, no clamp' ? 'none' : 'neighbourhood';
                 technique.resetScreenHistory();
@@ -384,9 +410,6 @@ async function measureScene(device: GPUDevice, id: string, loader: 'manifest' | 
                 };
             }
         }
-        technique.settings.interpolationJitter = true;
-        technique.settings.denoiser = true;
-        technique.settings.denoiserHistoryClamp = 'neighbourhood';
         return results;
     } finally {
         screen.dispose();
@@ -416,7 +439,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, scenes },
+        data: { worldCache: WORLD_CACHE, width: WIDTH, height: HEIGHT, convergeFrames: CONVERGE_FRAMES, measureFrames: MEASURE_FRAMES, secondBounce: SECOND_BOUNCE, indirectCap: INDIRECT_CAP, compare: PAGE_COMPARE_VALUES, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

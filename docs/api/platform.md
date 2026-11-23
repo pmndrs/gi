@@ -346,7 +346,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `HostHitShadingSettings` | The hit-shading settings a host may change live, `gi.hitShadingSettings`: `sampleTextures` (above, "Materials and textures"). |
 | `GIPlatformOptions` | `createGI`'s options: `gpuTiming`, `label`, `buildIn`, `textureLayerSize`. |
 | `GIPlatformModule` | The contract's declaration of `createGI` and the three helpers below. |
-| `ScreenNeeds` | `gi.screenNeeds`: which screen channels the attached techniques read (`screen`, `velocity`, `albedo`, `instance`), so a host renders only those (RC1.1). |
+| `ScreenNeeds` | `gi.screenNeeds`: which screen channels the attached techniques read (`screen`, `velocity`, `albedo`, `instance`, `lighting`), so a host renders only those (RC1.1). |
 | `requiredLimits(adapter)` | The device limits to ask for: the adapter's largest bindings and buffers, and what the kernels need. |
 | `RequiredLimits` | The type `requiredLimits` returns: limit names to numbers. |
 | `optionalFeatures(adapter)` | Features worth asking for, where the adapter has them. |
@@ -392,7 +392,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `FrameBudget` | How much GI work a frame may do: `gpuMs`, `units`, `targetFps`, `paused`. |
 | `FrameCamera` | The camera as plain data: position, view and projection matrices, near and far. |
 | `FrameScreen` | Screen buffers (depth, normals, motion) for screen-space techniques. DDGI ignores them. |
-| `OptionalScreenChannel` | The `FrameScreen` channels a technique asks for by name: `'velocity'`, `'albedo'`, `'instance'` (RC1.1). |
+| `OptionalScreenChannel` | The `FrameScreen` channels a technique asks for by name: `'velocity'`, `'albedo'`, `'instance'` (RC1.1), `'lighting'` (the host's own lit colour before GI, linear HDR; RC4.2). |
 | `ScreenChannel`, `SCREEN_CHANNELS` | Every screen channel by name (`'depth'`, `'normal'`, `'velocity'`, `'albedo'`, `'instance'`), and the list of them. |
 | `ScreenInputsView` | An engine-free debug view: one `FrameScreen` channel drawn into an `rgba8unorm` texture of display values, for a host to show (RC1.1). |
 | `ScreenInputsViewSettings`, `DEFAULT_SCREEN_INPUTS_VIEW_SETTINGS`, `SCREEN_INPUTS_VIEW_FORMAT` | Its settings (velocity scale, depth range), their defaults, and its texture format. |
@@ -433,7 +433,10 @@ A technique gets the platform's services when attached, and never sees the host.
 | `WorkFloorRate` | What its fewest units per frame may depend on: the frame rate and the calibrated batch. |
 | `SceneCopy` | The scene as techniques read it: WGSL accessors, counts, memory, the first directional light. |
 | `SceneFingerprint` | `SceneCopy.fingerprint()`: content hashes of the scene by part (geometry, materials, textures, lights, sky), which saved bakes match against. |
+| `fingerprintDifferences(saved, current)` | Which parts (geometry, materials, textures, lights, sky) of two `SceneFingerprint`s differ; every part when their versions differ. For saved bakes. |
+| `halfToFloat(bits)` | A binary16 value's 16 bits to a number; reads saved bakes' half-float fields. |
 | `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
+| `ChangeEventTracker`, `ChangeEvent`, `ChangeEventOptions` | For techniques: the change feed as events over time (`change-events.ts`): one event per source with a box grown to cover it, epochs at its start, every `rearmFrames` while it goes on and once when it stops, so a technique forgets history once per epoch rather than on every frame of a change that goes on (the radiance cache's E8, E9 and D46). |
 | `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
 | `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
 | `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |
@@ -447,6 +450,7 @@ A technique gets the platform's services when attached, and never sees the host.
 | `GpuIndirectArgs`, `IndirectArgsOptions` | Indirect dispatch arguments made from a count the GPU computed; and its options. |
 | `GpuWord` | One `u32` a pass wrote on the GPU (a total, a count) for later passes to read. |
 | `GpuScreenHistory`, `ScreenHistoryOptions`, `ScreenHistoryTextures` | `compute.createScreenHistory`: the previous frame's depth (`r32float`) and normals (decoded, `rgba16float`), copied by one compute pass at the end of a frame, for techniques that reproject (RC4.1); and its options and textures. |
+| `GpuScreenSpaceGI`, `ScreenSpaceGIOptions`, `ScreenSpaceGIInputs`, `ScreenSpaceGISettings`, `ScreenSpaceGITextures`, `DEFAULT_SCREEN_SPACE_GI_SETTINGS` | `compute.createScreenSpaceGI` (`gi/ssgi`): Capsaicin's SSGI from the depth buffer, one compute pass a frame: the ambient visibility and bent normal (`rgba16float`, world space, signed) and the near-field irradiance from a lighting image the caller gives (RC4.2; the radiance cache reads it, DDGI could). |
 | `ComputeReduction` | How a workgroup combines its threads' values: `'subgroups'` or the `'workgroup'` memory fallback. |
 
 ## Every export of `@pmndrs/gi/ddgi`
@@ -549,6 +553,7 @@ The functions are:
 
 - `giIrradiance(position, normal, viewDirection, screenUV, ...)` returns irradiance E. The renderer applies albedo/π.
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
+- `provides.worldSpaceIrradiance` (P6.3) says `giIrradiance` answers at any world point from the position and normal alone, `screenUV` unused (DDGI: true; the radiance cache: false). A technique that reads another as its bounce source in compute (the radiance cache's `secondBounce`) requires it.
 - `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It is on SPEC's after-v1 list.
 - `giDebugColor(position, normal, view, screenUV, ...)` drives the debug views.
 

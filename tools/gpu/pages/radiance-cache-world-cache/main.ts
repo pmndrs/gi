@@ -1189,7 +1189,8 @@ async function checkBlend(device: GPUDevice, scenario: Scenario): Promise<Checks
 // ---- Sections 8-10: GI-1.2's multibounce in the furnace -------------------------------------------
 
 /** Sections 1-7 run GI-1.0's single bounce; sections 8 and 10 set multibounce as they need it. */
-const SINGLE_BOUNCE: Partial<RadianceCacheSettings> = { useMultibounce: false };
+// Capsaicin's blend on a light change (section 7): experiment E9's change reset (on by default) off.
+const SINGLE_BOUNCE: Partial<RadianceCacheSettings> = { useMultibounce: false, cellChangeReset: false };
 const MULTIBOUNCE: Partial<RadianceCacheSettings> = { useMultibounce: true };
 
 /** The frame index the last frame ran with: the decay stamp `HashGridCache_TouchTile` left on a tile it touched. */

@@ -18,6 +18,8 @@
 
 import type { GpuWord } from '../../../platform/contract/compute.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
+import type { ChangeEvent } from '../../../platform/contract/change-events.ts';
+import type { Aabb } from '../../../platform/contract/math.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 
 // ---- The probe-ray buffer ------------------------------------------------------------------------
@@ -104,9 +106,11 @@ export interface WorldCacheProbeRays {
 /**
  * What a world cache uses from the technique's context. A `TechniqueContext`
  * is one: the hash grid lights its hits through the platform's hit shading
- * (`shade`) and times its passes (`timer`).
+ * (`shade`) and times its passes (`timer`). `fallback` and `warn` are optional
+ * (experiment E10): the technique stacked under this one, whose shading module
+ * the hash grid can read as its second bounce (`secondBounce: 'ddgi-volume'`).
  */
-export type WorldCacheContext = Pick<TechniqueContext, 'device' | 'kernels' | 'compute' | 'shade' | 'timer'>;
+export type WorldCacheContext = Pick<TechniqueContext, 'device' | 'kernels' | 'compute' | 'shade' | 'timer'> & Partial<Pick<TechniqueContext, 'fallback' | 'warn'>>;
 
 /** Per-frame inputs. */
 export interface WorldCacheFrame {
@@ -119,6 +123,23 @@ export interface WorldCacheFrame {
     /** The render size in pixels: cells are sized by how many pixels they cover. */
     readonly width: number;
     readonly height: number;
+    /**
+     * Optional: the scene's changes. `events` (P6.2): the change events at
+     * this frame (the platform's `ChangeEventTracker` over `SceneChanges`),
+     * each with its box and the start of its current epoch, for a cache that
+     * forgets history once per epoch (the hash grid's E8 and E9).
+     * `everything` / `boxes` (P6.1): the events armed this frame, as the screen
+     * probes' running means get them (D46): their boxes, or `everything` for
+     * a change with no bounds. Absent: no change.
+     */
+    readonly changes?: WorldCacheChanges;
+}
+
+/** The scene's changes for a world cache: the change events, and those armed this frame as boxes (the radiance cache's `HistoryChanges`). */
+export interface WorldCacheChanges {
+    readonly events: readonly Pick<ChangeEvent, 'box' | 'epoch'>[];
+    readonly everything: boolean;
+    readonly boxes: readonly Aabb[];
 }
 
 /**
@@ -144,7 +165,7 @@ export interface WorldCacheLookup {
 
 /** A world cache the technique owns. */
 export interface WorldCache {
-    /** Short stable id: `hash-grid`. */
+    /** Short stable id: `hash-grid` (Capsaicin's) or `sharc` (P6.1). */
     readonly id: string;
     /** Allocates and compiles. May throw `GILimitError` naming the device limit it needs. Call again after capacity settings change. */
     prepare(context: WorldCacheContext): Promise<void>;
@@ -155,6 +176,15 @@ export interface WorldCache {
      * `queue.writeBuffer`).
      */
     encodeFrame(encoder: GPUCommandEncoder, frame: WorldCacheFrame, rays: WorldCacheProbeRays): void;
+    /**
+     * Optional (P6.1): makes what the cache needs per probe ray for a screen
+     * of up to `maxRayCount` rays, and throws `GILimitError` naming the limit
+     * when the device can't hold it. The technique calls it where it makes
+     * its own screen resources, so a resize fails there and never inside
+     * `encodeFrame`. A cache without it makes its per-ray data in
+     * `encodeFrame`.
+     */
+    prepareScreen?(maxRayCount: number): void;
     /**
      * Records emptying the cache into the encoder: everything it has learned
      * is forgotten, as at `prepare` (a technique's `resetHistory`: a camera

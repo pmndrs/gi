@@ -33,6 +33,7 @@ import { DEFAULT_VXGI_SETTINGS } from './techniques/vxgi-technique';
 import { TECHNIQUE_LABELS, type TechniqueId } from './techniques/types';
 import { HELP } from './ui/help-text';
 import { LightingControls, type LightingHandlers } from './ui/lighting-controls';
+import { RcCompareControls } from './ui/rc-compare-controls';
 import { Panel, type DdgiPanelSettings, type PanelState, type ProbeLegendEntry } from './ui/panel';
 import { RegionPicker } from './ui/region-picker';
 import { ScenarioControls, type ScenarioHandlers } from './ui/scenario-controls';
@@ -148,6 +149,8 @@ export class ViewerApp {
     private panel!: Panel;
     private lightingControls!: LightingControls;
     private scenarioControls!: ScenarioControls;
+    /** The radiance cache's compare toggles and readout (RC4.5). */
+    private rcCompare!: RcCompareControls;
     /** The cabinet scenario's added cabinets, on the scene that offers them; null elsewhere. */
     private cabinets: AddedCabinets | null = null;
     private regionPicker!: RegionPicker;
@@ -231,7 +234,13 @@ export class ViewerApp {
             this.stats.setExtraLines(() => this.ddgiStats.lines());
             this.lightingControls = new LightingControls(this.lightingHandlers());
             this.scenarioControls = new ScenarioControls(this.scenarioHandlers());
-            this.panel = new Panel(document.body, this.manifests, this.panelHandlers(), this.lightingControls.sections, [this.scenarioControls.section]);
+            this.rcCompare = new RcCompareControls({
+                onCompare: (values) => {
+                    this.url = { ...this.url, rcCompare: values };
+                    this.applyState();
+                },
+            });
+            this.panel = new Panel(document.body, this.manifests, this.panelHandlers(), [this.rcCompare.section, ...this.lightingControls.sections], [this.scenarioControls.section]);
             this.regionPicker = new RegionPicker(this.canvas);
             this.buildWipeLabels();
             this.installPageEvents();
@@ -349,7 +358,7 @@ export class ViewerApp {
         this.core.configureProbeGrid({ ...DEFAULT_LPG_SETTINGS, ...this.probeSettings });
         this.core.configureVxgi({ ...DEFAULT_VXGI_SETTINGS, ...this.vxgiSettings });
         this.core.configureDdgi(this.ddgiSettings());
-        this.core.configureRadianceCache({ screenView: this.url.rcDebug });
+        this.core.configureRadianceCache({ screenView: this.url.rcDebug, compare: this.url.rcCompare });
         this.core.setToneMapping(this.url.tone as ToneMappingName);
         this.core.setExposureEv(this.exposureEv());
         this.core.setUpscale(this.url.upscale ? { quality: this.url.upscale } : null);
@@ -495,6 +504,10 @@ export class ViewerApp {
         };
         if (this.manifest) this.panel.setScene(this.manifest);
         this.panel.setState(state);
+        // The compare toggles show while the radiance cache is on screen with GI.
+        const onScreen: TechniqueId[] = this.url.wipe ? [...this.url.wipe] : [this.url.technique];
+        this.rcCompare.setValues(this.url.rcCompare);
+        this.rcCompare.setVisible(this.url.gi !== 'off' && onScreen.includes('rc'));
         this.refreshLightingControls();
     }
 
@@ -975,6 +988,7 @@ export class ViewerApp {
         const { stats } = this.core.loaded;
         lines.push(`${stats.triangles.toLocaleString('en')} triangles, ${stats.meshes} meshes`);
         this.panel.setStatus(lines);
+        this.rcCompare.setReadout(this.core.radianceCacheReadout());
         this.automation.ddgiStartup = this.core.ddgi ? { ...this.core.ddgi.startup } : null;
         this.automation.recompiles = this.core.ddgi ? this.core.ddgi.recompiles : null;
         const player = this.lighting?.player;

@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { extname, join, relative, resolve, sep } from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { createServer, searchForWorkspaceRoot, type Connect, type ViteDevServer } from 'vite';
-import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES } from './contract.ts';
+import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES, REFERENCE_FILES } from './contract.ts';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
 export const SITE_ROOT = import.meta.dirname;
@@ -30,6 +30,9 @@ const LINKED_SIBLINGS = ['@pmndrs/denoiser-ffx']
 
 /** Where `pnpm examples:build` writes the examples site. */
 const EXAMPLES_DIST = resolve(SITE_ROOT, '../../examples/dist');
+
+/** The Cycles references (gitignored; `tools/reference/README.md`). */
+const REFERENCES_ROOT = resolve(SITE_ROOT, '../../bench/references');
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
     '.html': 'text/html; charset=utf-8',
@@ -114,6 +117,19 @@ export async function startTestSite(): Promise<TestSiteServer> {
                         response.end(JSON.stringify(listFiles(EXAMPLES_DIST)));
                     });
                     devServer.middlewares.use(EXAMPLES_SITE_BASE, serveStatic(EXAMPLES_DIST));
+                },
+            },
+            {
+                // One scene's reference files (contract.ts, REFERENCE_FILES).
+                name: 'reference-files',
+                configureServer(devServer) {
+                    devServer.middlewares.use(REFERENCE_FILES, (request, response) => {
+                        const scene = new URL(request.url ?? '', 'http://localhost').searchParams.get('scene') ?? '';
+                        response.setHeader('Content-Type', 'application/json');
+                        const valid = /^[a-z0-9-]+$/.test(scene);
+                        const folder = join(REFERENCES_ROOT, scene);
+                        response.end(JSON.stringify({ url: `/@fs/${folder.split(sep).join('/')}`, files: valid ? listFiles(folder) : [] }));
+                    });
                 },
             },
             {

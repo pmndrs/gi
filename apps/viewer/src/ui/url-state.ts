@@ -23,6 +23,9 @@
  * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`, `gi-albedo`, or a screen input
  *                (RC1.1): `screen-depth`, `screen-normal`, `screen-velocity`, `screen-albedo`, `screen-instance`
  * - `rcdebug`    one of the radiance cache's debug views (RC2.2): `probe-atlas`, `probe-mask`, `probe-sh`
+ * - `rcblend`, `rcfill`, `rccap`, ... the radiance cache's compare toggles (RC4.5), each under its
+ *                registry entry's `urlName` (packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts),
+ *                written only when it differs from ours: `rcblend=capsaicin-hysteresis&rcfill=capsaicin`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
  * - `atlasfill`  `1`: the atlas fills the view instead of the bottom-right corner
@@ -53,6 +56,7 @@ import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
 import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
+import { COMPARE_URL_NAMES, readCompareValues, writeCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles';
 
 /**
  * The wind slider's start, a share of the strongest wind (`MAX_WIND_REACH_M`,
@@ -120,6 +124,8 @@ export interface ViewerUrlState {
     debug: DdgiScreenViewName | null;
     /** The radiance cache's debug view, or null for its normal picture. */
     rcDebug: RadianceCacheScreenViewName | null;
+    /** The radiance cache's compare toggles that differ from ours (RC4.5), by setting name. */
+    rcCompare: CompareValues;
     atlas: AtlasName | null;
     atlasFill: boolean;
     atlasEv: number;
@@ -166,6 +172,7 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     probeColor: 'state',
     debug: null,
     rcDebug: null,
+    rcCompare: {},
     atlas: null,
     atlasFill: false,
     atlasEv: 0,
@@ -215,6 +222,7 @@ const URL_KEYS = new Set([
     'wind',
     'reach',
     'textures',
+    ...COMPARE_URL_NAMES,
 ]);
 
 const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'rc', 'lpg', 'vxgi', 'cycles'];
@@ -239,7 +247,7 @@ export function presetBudgetMs(preset: DDGIPresetName): number {
 /** Reads a query string. Unknown or malformed values fall back to the defaults. */
 export function parseUrlState(search: string): ViewerUrlState {
     const params = new URLSearchParams(search);
-    const state: ViewerUrlState = { ...DEFAULT_URL_STATE, sceneSettings: {} };
+    const state: ViewerUrlState = { ...DEFAULT_URL_STATE, sceneSettings: {}, rcCompare: {} };
     for (const [name, value] of params) if (!URL_KEYS.has(name)) state.sceneSettings[name] = value;
 
     state.scene = params.get('scene');
@@ -281,6 +289,7 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
     state.rcDebug = RADIANCE_CACHE_SCREEN_VIEW_NAMES.find((name) => name === params.get('rcdebug')) ?? null;
+    state.rcCompare = readCompareValues(params);
     if (params.get('probecolor') === 'history') state.probeColor = 'history';
     state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
     state.atlasFill = params.get('atlasfill') === '1';
@@ -331,6 +340,7 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
     if (state.rcDebug) params.set('rcdebug', state.rcDebug);
+    writeCompareValues(state.rcCompare, params);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);
     if (state.atlas) params.set('atlas', state.atlas);
     if (state.atlasFill) params.set('atlasfill', '1');

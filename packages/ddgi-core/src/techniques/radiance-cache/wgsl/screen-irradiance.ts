@@ -1,6 +1,6 @@
 /*
  * Ported from AMD Capsaicin v1.3 (914b915): src/core/src/render_techniques/gi1/gi1.comp
- * (FilterProbeMask, ProjectScreenProbes, InterpolateScreenProbes) and
+ * (FilterProbeMask, FilterScreenProbes, ProjectScreenProbes, InterpolateScreenProbes) and
  * src/core/src/render_techniques/gi1/screen_probes.hlsl (ScreenProbes_FindClosestProbe).
  *
  * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
@@ -40,21 +40,24 @@
  *    (gi1.frag:76-150) turns into reflected light with `albedo / pi`, as
  *    three's composite does.
  *
- * Capsaicin runs `FilterScreenProbes` between the mask and the projection;
- * it arrives with phase 4 (RC4.2), as does the GI denoiser that reads the
- * interpolated image (RC4.3). Until then the shading module reads this
- * kernel's output directly (the design doc's phase 2 notes).
+ * Since RC4.2, `FilterScreenProbes` (gi1.comp:1356-1442, at the end of this
+ * file) runs twice between the mask and the projection, across then down,
+ * and the interpolation reads the platform's SSGI (Capsaicin's
+ * `HAS_OCCLUSION` branch). The GI denoiser that reads the interpolated image
+ * is RC4.3; until then the shading module reads this kernel's output.
  *
  * Differences from Capsaicin, in the register (docs/design/radiance-cache.md):
  * the projection weight is a cell's solid angle (D25) and the basis the
  * cell's mean (D34), the SH live in a
  * texture (D26), the interpolation's jitter is white noise (D27), SH
- * coefficients are clamped to the half range (D28). Without SSGI (phase 4)
- * the interpolation runs Capsaicin's `#ifndef HAS_OCCLUSION` branch, below.
+ * coefficients are clamped to the half range (D28), the filter keeps every
+ * finite neighbour value (D49) and leaves backup fills fills (D50), and the
+ * interpolation writes the lit image next frame's SSGI reads (D51). Without
+ * SSGI it runs Capsaicin's `#ifndef HAS_OCCLUSION` branch.
  */
 
 import { CAPSAICIN_WGSL } from './capsaicin.ts';
-import { FRAME_WGSL, PROBE_SPAWN_STRUCT_WGSL, screenDepthWgsl, screenNormalWgsl, UNIFORM_ENTRY, WORKGROUP_INDEX_WGSL } from './screen-probes.ts';
+import { FRAME_WGSL, HISTORY_WGSL, PROBE_SPAWN_STRUCT_WGSL, screenDepthWgsl, screenNormalWgsl, UNIFORM_ENTRY, WORKGROUP_INDEX_WGSL } from './screen-probes.ts';
 import { shIrradianceWgsl, SPHERICAL_HARMONICS_WGSL } from './spherical-harmonics.ts';
 
 const COMPUTE = 0x4;
@@ -62,6 +65,7 @@ const COMPUTE = 0x4;
 /** Entry points: Capsaicin's kernel names. */
 export const SCREEN_IRRADIANCE_ENTRY_POINT = {
     filterProbeMask: 'FilterProbeMask',
+    filter: 'FilterScreenProbes',
     project: 'ProjectScreenProbes',
     interpolate: 'InterpolateScreenProbes',
 } as const;
@@ -86,6 +90,8 @@ export const SCREEN_PROBES_CONSTANTS_OFFSETS = {
     cellSize: 12,
     probeMaskMipCount: 16,
     interpolationJitter: 20,
+    hasOcclusion: 24,
+    writeCombined: 28,
 } as const;
 
 /**
@@ -104,6 +110,8 @@ struct RcScreenProbesConstants {
     cellSize: f32,              // cell_size: tan(fovY * probe_size * max(1 / h, h / w^2)) (gi1.cpp:1839-1843), per unit distance
     probeMaskMipCount: u32,     // probe_mask_mip_count (gi1.cpp:1846)
     interpolationJitter: u32,   // 1: the lookup position is jittered (Capsaicin's); 0: not (RadianceCacheSettings.interpolationJitter)
+    hasOcclusion: u32,          // 1: SSGI's occlusion, bent normal and near-field light are bound (Capsaicin's HAS_OCCLUSION)
+    writeCombined: u32,         // 1: write this frame's lit image (lighting + albedo E / pi) for next frame's SSGI
 }
 @group(1) @binding(1) var<uniform> rcScreenProbes: RcScreenProbesConstants;
 `;
@@ -320,37 +328,12 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.project}(
 }
 `;
 
-// ---- InterpolateScreenProbes --------------------------------------------------------------------
-
-export const INTERPOLATE_GROUP: GPUBindGroupLayoutDescriptor = {
-    label: 'radiance-cache/InterpolateScreenProbes group 1',
-    entries: [
-        UNIFORM_ENTRY,
-        CONSTANTS_ENTRY,
-        { binding: 2, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
-        { binding: 3, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
-        { binding: 4, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
-        { binding: 5, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
-        { binding: 6, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float', viewDimension: '2d' } },
-    ],
-};
-
-export const INTERPOLATE_WGSL = /* wgsl */ `
-${CAPSAICIN_WGSL}
-${SPHERICAL_HARMONICS_WGSL}
-${FRAME_WGSL}
-${SCREEN_PROBES_CONSTANTS_WGSL}
-${screenDepthWgsl(2)}
-${screenNormalWgsl(3)}
-// g_ScreenProbes_ProbeMask: the probe mask with its whole mip chain (FilterProbeMask's).
-@group(1) @binding(4) var rcProbeMask: texture_2d<u32>;
-// g_ScreenProbes_ProbeSHBuffer, as a texture (register D26).
-@group(1) @binding(5) var rcProbeSHBuffer: texture_2d<u32>;
-// g_GIDenoiser_ColorBuffer: irradiance in rgb, the denoiser hint in alpha.
-@group(1) @binding(6) var rcColorBuffer: texture_storage_2d<rgba16float, write>;
-
-${shIrradianceWgsl('rcCalculateSHIrradianceBentCone', 'probeSH')}
-
+/**
+ * The lookups `InterpolateScreenProbes` and `FilterScreenProbes` share, over
+ * `rcProbeMask` (the probe mask with its mip chain), `RcFrame`,
+ * `RcScreenProbesConstants` and the host's depth.
+ */
+const PROBE_LOOKUP_WGSL = /* wgsl */ `
 // The probe tiles across and down: the probe mask's level 0.
 fn rcProbeMaskDimensions() -> vec2u {
     return (rcFrame.bufferDimensions + RC_PROBE_SIZE - 1u) / RC_PROBE_SIZE;
@@ -415,6 +398,68 @@ fn rcWorldPositionAt(pixel: vec2u) -> vec3f {
     let uv = (vec2f(pixel) + 0.5) / vec2f(rcFrame.bufferDimensions);
     return rcTransformPointProjection(uv, rcLoadDepth(pixel));
 }
+`;
+
+// ---- InterpolateScreenProbes --------------------------------------------------------------------
+
+export const INTERPOLATE_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'radiance-cache/InterpolateScreenProbes group 1',
+    entries: [
+        UNIFORM_ENTRY,
+        CONSTANTS_ENTRY,
+        { binding: 2, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 3, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 4, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
+        { binding: 5, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
+        { binding: 6, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float', viewDimension: '2d' } },
+        { binding: 7, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 8, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 9, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 10, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 11, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float', viewDimension: '2d' } },
+    ],
+};
+
+export const INTERPOLATE_WGSL = /* wgsl */ `
+${CAPSAICIN_WGSL}
+${SPHERICAL_HARMONICS_WGSL}
+${FRAME_WGSL}
+${SCREEN_PROBES_CONSTANTS_WGSL}
+${screenDepthWgsl(2)}
+${screenNormalWgsl(3)}
+// g_ScreenProbes_ProbeMask: the probe mask with its whole mip chain (FilterProbeMask's).
+@group(1) @binding(4) var rcProbeMask: texture_2d<u32>;
+// g_ScreenProbes_ProbeSHBuffer, as a texture (register D26).
+@group(1) @binding(5) var rcProbeSHBuffer: texture_2d<u32>;
+// g_GIDenoiser_ColorBuffer: irradiance in rgb, the denoiser hint in alpha.
+@group(1) @binding(6) var rcColorBuffer: texture_storage_2d<rgba16float, write>;
+// g_OcclusionAndBentNormalBuffer and g_NearFieldGlobalIlluminationBuffer: the platform's SSGI
+// (gi/ssgi, RC4.2), the bent normal signed in xyz and the visibility in w; 1 x 1 placeholders
+// when SSGI is off (hasOcclusion 0).
+@group(1) @binding(7) var rcOcclusionAndBentNormal: texture_2d<f32>;
+@group(1) @binding(8) var rcNearFieldGlobalIllumination: texture_2d<f32>;
+// FrameScreen.lighting and FrameScreen.albedo, and the lit image they make with this frame's
+// irradiance: Capsaicin's PrevCombinedIllumination for next frame's SSGI (register D51).
+@group(1) @binding(9) var rcLighting: texture_2d<f32>;
+@group(1) @binding(10) var rcAlbedo: texture_2d<f32>;
+@group(1) @binding(11) var rcCombinedIllumination: texture_storage_2d<rgba16float, write>;
+
+${shIrradianceWgsl('rcCalculateSHIrradianceBentCone', 'probeSH')}
+
+${PROBE_LOOKUP_WGSL}
+// The pixel's result: irradiance and the denoiser's hint, and with writeCombined the lit image
+// next frame's SSGI reads as its lighting (Capsaicin's combine pass writes it from the resolved GI,
+// combine.comp:74): the host's own light plus albedo / pi x E, nothing for a sky pixel.
+fn rcStoreResult(did: vec2u, irradiance: vec3f, denoiserHint: f32, isSky: bool) {
+    textureStore(rcColorBuffer, did, vec4f(irradiance, denoiserHint));
+    if (rcScreenProbes.writeCombined != 0u) {
+        var lit = vec3f(0.0);
+        if (!isSky) {
+            lit = textureLoad(rcLighting, did, 0).rgb + textureLoad(rcAlbedo, did, 0).rgb * irradiance * RC_INV_PI;
+        }
+        textureStore(rcCombinedIllumination, did, vec4f(lit, 1.0));
+    }
+}
 
 // InterpolateScreenProbes (gi1.comp:1514-1640), the diffuse part. Capsaicin's GI-1.1 half
 // (the glossy reflections' queue and buffers, gi1.comp:1528-1530, 1640 on) is left out with
@@ -427,7 +472,7 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
     }
     // A sky pixel is one at the far plane (register D17; Capsaicin: a zero geometry normal).
     if (rcIsSkyPixel(did)) {
-        textureStore(rcColorBuffer, did, vec4f(0.0, 0.0, 0.0, 1.0));
+        rcStoreResult(did, vec3f(0.0), 1.0, true);
         return; // discard sky pixels
     }
 
@@ -455,7 +500,7 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
     probes.x = rcFindClosestProbe(pos);
 
     if (probes.x == RC_INVALID_ID) {
-        textureStore(rcColorBuffer, did, vec4f(0.0, 0.0, 0.0, 1.0));
+        rcStoreResult(did, vec3f(0.0), 1.0, false);
         return; // couldn't find any nearby probe...
     }
 
@@ -504,14 +549,22 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
 
     w /= w.x + w.y + w.z + w.w; // weights must sum up to 1
 
-    // Capsaicin's '#ifndef HAS_OCCLUSION' branch (gi1.comp:1612-1615), what it runs without its
+    // Capsaicin's '#ifndef HAS_OCCLUSION' branch (gi1.comp:1617-1620), what it runs without its
     // SSGI technique: no ambient occlusion (ao 1, so the cone is the whole hemisphere), no
-    // near-field light to start from, and the shading normal. With SSGI (phase 4) ao, the
-    // near-field light and the bent normal come from SSGI's output instead (gi1.comp:1616-1621).
-    // Our one normal is FrameScreen.normal, the host's shading normal (register D17).
-    let ao = 1.0;
+    // near-field light to start from, and the shading normal. Our one normal is
+    // FrameScreen.normal, the host's shading normal (register D17).
+    var ao = 1.0;
     var irradiance = vec3f(0.0);
     normal = rcLoadNormal(did);
+    // The HAS_OCCLUSION branch (gi1.comp:1621-1627): SSGI's visibility narrows each probe's SH
+    // lookup to the cone around the bent normal, and its near-field light, irradiance already
+    // (register D52), is what the probes' sum starts from.
+    if (rcScreenProbes.hasOcclusion != 0u) {
+        let aoAndBentNormal = textureLoad(rcOcclusionAndBentNormal, did, 0);
+        ao = aoAndBentNormal.w;
+        irradiance = textureLoad(rcNearFieldGlobalIllumination, did, 0).rgb;
+        normal = normalize(aoAndBentNormal.xyz);
+    }
 
     for (var j = 0u; j < 4u; j++) {
         // A missing neighbour has weight 0; its 'probe' is a tile past the screen, so it is
@@ -525,6 +578,165 @@ fn ${SCREEN_IRRADIANCE_ENTRY_POINT.interpolate}(@builtin(global_invocation_id) i
 
     let denoiserHint = select(1.0, 0.0, useBackup); // hint to the denoiser that we should ideally not keep this sample...
 
-    textureStore(rcColorBuffer, did, vec4f(irradiance, denoiserHint));
+    rcStoreResult(did, irradiance, denoiserHint, false);
+}
+`;
+
+// ---- FilterScreenProbes -------------------------------------------------------------------------
+
+/** `kGI1_AngleThreshold` (screen_probes.hlsl:30): cos(0.02 pi), a neighbour's hit seen from this probe within 3.6 degrees of the cell's direction. */
+export const FILTER_ANGLE_THRESHOLD = Math.cos(2e-2 * Math.PI);
+/** `kRadius` (gi1.comp:1393): neighbour probes on each side, along the pass's direction. */
+export const FILTER_RADIUS = 3;
+/** Bytes of `RcBlurDirection`. */
+export const BLUR_DIRECTION_BYTES = 16;
+
+export const FILTER_GROUP: GPUBindGroupLayoutDescriptor = {
+    label: 'radiance-cache/FilterScreenProbes group 1',
+    entries: [
+        UNIFORM_ENTRY,
+        CONSTANTS_ENTRY,
+        { binding: 2, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 3, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 4, visibility: COMPUTE, texture: { sampleType: 'uint', viewDimension: '2d' } },
+        { binding: 5, visibility: COMPUTE, buffer: { type: 'read-only-storage' } },
+        { binding: 6, visibility: COMPUTE, texture: { sampleType: 'unfilterable-float', viewDimension: '2d' } },
+        { binding: 7, visibility: COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float', viewDimension: '2d' } },
+        { binding: 8, visibility: COMPUTE, buffer: { type: 'uniform', minBindingSize: BLUR_DIRECTION_BYTES } },
+    ],
+};
+
+export const FILTER_WGSL = /* wgsl */ `
+${CAPSAICIN_WGSL}
+${FRAME_WGSL}
+${SCREEN_PROBES_CONSTANTS_WGSL}
+${screenDepthWgsl(2)}
+${screenNormalWgsl(3)}
+${PROBE_SPAWN_STRUCT_WGSL}
+${WORKGROUP_INDEX_WGSL}
+${HISTORY_WGSL}
+// g_ScreenProbes_ProbeMask, with its mip chain (FilterProbeMask runs first, gi1.cpp:2561-2585).
+@group(1) @binding(4) var rcProbeMask: texture_2d<u32>;
+@group(1) @binding(5) var<storage, read> rcProbeSpawn: RcProbeSpawn;
+// g_ScreenProbes_PreviousProbeBuffer: the pass's input (the blended atlas, then the first pass's output).
+@group(1) @binding(6) var rcPreviousProbeBuffer: texture_2d<f32>;
+// g_ScreenProbes_ProbeBuffer: the pass's output.
+@group(1) @binding(7) var rcProbeBuffer: texture_storage_2d<rgba16float, write>;
+// g_BlurDirection: (1, 0) for the first pass, (0, 1) for the second (gi1.cpp:2601-2603).
+struct RcBlurDirection {
+    direction: vec2i,
+}
+@group(1) @binding(8) var<uniform> rcBlurDirection: RcBlurDirection;
+
+${PROBE_LOOKUP_WGSL}
+
+const RC_FILTER_ANGLE_THRESHOLD: f32 = ${FILTER_ANGLE_THRESHOLD};
+const RC_FILTER_RADIUS: i32 = ${FILTER_RADIUS};
+
+// GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:75-82) on a neighbour's radiance: x / (1 + x), saturate,
+// then back, which sends NaN, infinity and negatives to 0. Ours sends exactly those to 0 and keeps
+// every finite value: Capsaicin's form also caps at 1e4 - 1 (the max(1 - x, 1e-4)), on the
+// neighbours only (register D49). WGSL may assume no NaN in comparisons, so the bits are checked.
+fn rcRemoveNaNs(color: vec3f) -> vec3f {
+    let finite = (bitcast<vec3u>(color) & vec3u(0x7f800000u)) != vec3u(0x7f800000u);
+    return select(vec3f(0.0), max(color, vec3f(0.0)), finite);
+}
+
+// FilterScreenProbes (gi1.comp:1356-1442): one pass of the separable probe filter. Each cell of
+// each probe in this frame's list averages the matching cell of up to 2 x RC_FILTER_RADIUS
+// neighbour probes along the pass's direction (found through the mask, nearest first, alternating
+// sides), each taken only if its plane is within a cell of this probe's, its hemisphere holds the
+// cell's direction, and its hit, seen from this probe, lies within 3.6 degrees of that direction;
+// weighted by how close its linear depth is, to the 8th power. Dispatched over every possible ray
+// (gi1.cpp:2592-2593).
+@compute @workgroup_size(64)
+fn ${SCREEN_IRRADIANCE_ENTRY_POINT.filter}(
+    @builtin(workgroup_id) workgroup: vec3u,
+    @builtin(num_workgroups) workgroups: vec3u,
+    @builtin(local_invocation_index) localId: u32,
+) {
+    let did = rcWorkgroupIndex(workgroup, workgroups) * 64u + localId;
+    let probeCount = rcProbeSpawn.count;
+
+    let cellAndProbeIndex = rcGetCellAndProbeIndex(did);
+    let cellIndex = cellAndProbeIndex.x;
+    let probeIndex = cellAndProbeIndex.y;
+
+    if (probeIndex >= probeCount) {
+        return; // out of bounds
+    }
+
+    let cell = vec2u(cellIndex % RC_PROBE_SIZE, cellIndex / RC_PROBE_SIZE);
+    let seed = rcUnpackSeed(rcProbeSpawn.seeds[probeIndex]);
+    let probe = seed / RC_PROBE_SIZE;
+    let pos = probe * RC_PROBE_SIZE + cell;
+
+    let normal = rcLoadNormal(seed);
+    let worldPos = rcWorldPositionAt(seed);
+    let linearDepth = rcLinearDepth(worldPos);
+    let cellSize = distance(rcFrame.eye, worldPos) * rcScreenProbes.cellSize;
+
+    var radiance = textureLoad(rcPreviousProbeBuffer, pos, 0);
+    // A backup fill (D47) has no measured hit distance: Capsaicin's fill holds MAX_HIT_DISTANCE, so
+    // the neighbours' own distances decide its reprojection test, and it stays a fill (register D50).
+    let isFill = radiance.w < 0.0;
+    var hitDistance = select(radiance.w, RC_LARGEST_HALF, isFill);
+    radiance.w = hitDistance;
+    var totalWeight = 1.0;
+
+    let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(cell) + 0.5) / f32(RC_PROBE_SIZE)), normal);
+
+    for (var i = 0; i < 2 * RC_FILTER_RADIUS; i++) {
+        let stepOffset = (((i & 1) << 1u) - 1) * ((i >> 1u) + 1); // -1, +1, -2, +2, -3, +3
+        let probeMask = rcFindClosestProbeWithOffset(seed, stepOffset * rcBlurDirection.direction);
+
+        if (probeMask == RC_INVALID_ID) {
+            continue; // invalid probe
+        }
+
+        let probeSeed = rcUnpackSeed(probeMask);
+        let probeNormal = rcLoadNormal(probeSeed);
+        let probeWorld = rcWorldPositionAt(probeSeed);
+
+        if (abs(dot(probeWorld - worldPos, normal)) > cellSize || dot(direction, probeNormal) < 0.0) {
+            continue; // oriented hemispheres do not overlap
+        }
+
+        // The neighbour's cell for this direction, kept in the probe (D45).
+        let probeCell = min(vec2u(rcMapToHemiOctahedronInverse(rcToProbeFrame(direction, probeNormal)) * f32(RC_PROBE_SIZE)), vec2u(RC_PROBE_SIZE - 1u));
+        let probePos = (probeSeed / RC_PROBE_SIZE) * RC_PROBE_SIZE + probeCell;
+        let probeRadiance = textureLoad(rcPreviousProbeBuffer, probePos, 0);
+
+        // A neighbour's backup fill is no measurement: skipped, as the reprojection and the taps skip it (D47, register D50).
+        if (probeRadiance.w < 0.0) {
+            continue;
+        }
+
+        let probeDirection = normalize(rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(probeCell) + 0.5) / f32(RC_PROBE_SIZE)), probeNormal));
+
+        let probeHitDistance = min(probeRadiance.w, hitDistance);
+        let hitPoint = probeWorld + probeDirection * probeHitDistance;
+        let reprojectedDir = normalize(hitPoint - worldPos);
+
+        if (dot(direction, reprojectedDir) < RC_FILTER_ANGLE_THRESHOLD) {
+            continue; // skip probes with high angle error after hit reprojection
+        }
+
+        let weight = pow(saturate(1.0 - abs(rcLinearDepth(probeWorld) - linearDepth) / linearDepth), 8.0);
+
+        radiance += weight * vec4f(rcRemoveNaNs(probeRadiance.xyz), probeHitDistance);
+        totalWeight += weight;
+
+        if (!isFill) {
+            hitDistance = radiance.w / totalWeight;
+        }
+    }
+
+    var filtered = radiance / totalWeight;
+    if (isFill) {
+        filtered.w = rcFrame.fillHitDistance;
+    }
+    // Stored to the nearest half (D48), the hit distance within the half range (D19).
+    textureStore(rcProbeBuffer, pos, rcNearestHalf4(vec4f(filtered.xyz, min(filtered.w, RC_LARGEST_HALF))));
 }
 `;

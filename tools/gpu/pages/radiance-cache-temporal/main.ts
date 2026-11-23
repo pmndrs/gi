@@ -42,6 +42,13 @@
  *    each moved from the override list into an empty tile at the CPU's seed.
  *    The scene must evict, list and patch something.
  *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts):
+ * with Capsaicin's rules back, sections 1 and 5 are expected to fail (that is the drift they
+ * catch), and section 7 with `rayGuidingUniformShare=0` (D42: a cell that reads 0 is never drawn
+ * again); the guiding check follows the run's share (0: Capsaicin's rule). Sections 5 (the
+ * noisy sky, D46 and D64), 6 (a displaced probe cached and reused) and 7 (light appearing in a
+ * direction that was dark, D42) are described at their code.
+ *
  * Correctness only, no timing (DECISIONS 2026-11-09). Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc4.1 temporal" -- pnpm test:gpu --filter radiance-cache-temporal --gpu nvidia` (or intel).
  */
@@ -65,13 +72,14 @@ import {
     unpackSeed,
     type Direction,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { screenProbeCellSize } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
-import { CACHED_TILE_NEW, luminance, RAY_GUIDING_UNIFORM_SHARE, reprojectProbeTile, type ReprojectionInputs } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-history-cpu.ts';
+import { CACHED_TILE_NEW, luminance, reprojectProbeTile, type ReprojectionInputs } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-history-cpu.ts';
 import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { COUNTER, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_PROBE_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -167,7 +175,7 @@ interface Run {
 /** A floor (and with `withStep`, the step and wall) under `environment`; frames until the trees are built. */
 async function startRun(device: GPUDevice, name: string, environment: Parameters<GIPlatformImpl['scene']['setEnvironment']>[0], camera: PageCamera, withStep: boolean): Promise<Run> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-temporal ${name}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(pageRadianceCache());
     platform.setOutput(technique);
     await platform.prepare();
     const scene = platform.scene;
@@ -385,6 +393,7 @@ async function checkGuiding(device: GPUDevice, run: Run, cells: { seeds: number[
     if (!probes) throw new Error('no probes after encodeScreen');
     const [atlasWidth, atlasHeight] = probes.layout.atlasSize;
     const previous = halvesFast(await readTexture(device, probes.history.previousProbeAtlas, 8, atlasWidth, atlasHeight));
+    const share = run.technique.settings.rayGuidingUniformShare;
     const cosine = Array.from({ length: PROBE_CELLS }, (_, cell) => mapToHemiOctahedron(((cell % PROBE_SIZE) + 0.5) / PROBE_SIZE, (Math.floor(cell / PROBE_SIZE) + 0.5) / PROBE_SIZE)[2]);
     const expected = new Float64Array(PROBE_CELLS);
     const observed = new Float64Array(PROBE_CELLS);
@@ -401,12 +410,17 @@ async function checkGuiding(device: GPUDevice, run: Run, cells: { seeds: number[
         }
         const total = weights.reduce((sum, weight) => sum + weight, 0);
         for (let thread = 0; thread < PROBE_CELLS; thread++) {
-            if (!history[thread] || !(total > 0)) {
+            if (!history[thread]) {
                 expected[thread] += 1;
                 continue;
             }
-            expected[thread] += RAY_GUIDING_UNIFORM_SHARE;
-            for (let cell = 0; cell < PROBE_CELLS; cell++) expected[cell] += ((1 - RAY_GUIDING_UNIFORM_SHARE) * weights[cell]) / total;
+            // Capsaicin's rule (a share of 0): every ray follows the CDF, an all-black one to the last cell.
+            if (!(total > 0)) {
+                expected[share > 0 ? thread : PROBE_CELLS - 1] += 1;
+                continue;
+            }
+            expected[thread] += share;
+            for (let cell = 0; cell < PROBE_CELLS; cell++) expected[cell] += ((1 - share) * weights[cell]) / total;
         }
         cells.countsPerProbe[probe].forEach((count, cell) => (observed[cell] += count));
     });
@@ -872,7 +886,7 @@ async function checkCacheAndPatch(device: GPUDevice, fail: (message: string) => 
     }
 }
 
-// ---- 5. A noisy constant sky (register D46) -------------------------------------------------------
+// ---- 5. A noisy constant sky (registers D46, D64) ------------------------------------------------
 
 /** Section 5: the sky's blocks (texels of the 512 × 256 image a side), and the frames checked. */
 const NOISE_BLOCK = 4;
@@ -948,9 +962,11 @@ async function checkNoisySky(device: GPUDevice, fail: (message: string) => void)
                 firstFrames.push((await floorRatios(device, run, (pixel) => depth[pixel] === 1, sky.irradiance)).mean);
             }
             const withoutHistory = firstFrames.reduce((sum, value) => sum + value, 0) / firstFrames.length;
-            // The gate (exponential): every frame's mean over the floor within 1% of the sky's irradiance.
-            // Sparse rays are reported: what is left there is ray guiding by the cells' own estimates (NOTES).
+            // The gates. Exponential: every frame's mean over the floor within 1% of the sky's irradiance.
+            // Sparse rays (a frame's mean swings more: 1.2% worst at RTX 3060): the mean over frames within
+            // 1%, which ray guiding by the cells' own estimates pulls low without D64 (0.986).
             if (kind === 'exponential' && !(worst <= LAMBERT_TOLERANCE)) fail(`noisy sky (${kind}): a frame's mean E is ${(worst * 100).toFixed(2)}% off the sky's irradiance (mean over frames ${mean.toFixed(4)})`);
+            if (kind === 'sparse' && !(Math.abs(mean - 1) <= LAMBERT_TOLERANCE)) fail(`noisy sky (${kind}): the mean E over frames is ${mean.toFixed(4)} of the sky's irradiance (worst frame ${(worst * 100).toFixed(2)}% off)`);
             if (bad > 0) fail(`noisy sky (${kind}): ${bad} pixels not finite or negative`);
             results[kind] = { expectedE: Number(sky.irradiance.toFixed(4)), meanRatio: Number(mean.toFixed(4)), worstFrameError: Number(worst.toFixed(4)), frames: settled.length, meanRatioWithoutHistory: Number(withoutHistory.toFixed(4)) };
         } finally {
@@ -1105,6 +1121,60 @@ async function checkOccluder(device: GPUDevice, fail: (message: string) => void)
     }
 }
 
+// ---- 7. Light appearing in a direction that was dark (register D42) -----------------------------------
+
+/** Section 7: frames under the half-lit sky, then frames after the whole sky lights up (the last one gated). */
+const DARK_FRAMES = 60;
+const LIT_FRAMES = 120;
+
+/**
+ * The floor under a sky of radiance L on the +x half and black on the −x half
+ * for `DARK_FRAMES` frames, so the probes' −x cells hold history that reads 0;
+ * then the whole sky is L. A luminance CDF never draws a cell that reads 0, and
+ * with D41 such a cell keeps its value until a ray reaches it, so with every ray
+ * guided (Capsaicin's rule, `rayGuidingUniformShare: 0`) the floor stays near
+ * half lit; with D42's uniform share every cell is sampled now and then and the
+ * floor reaches E = πL. The cells found again are averaged with their
+ * neighbours' stale ones through the reprojection's taps, so the floor closes
+ * in over tens of frames (RTX 3060: 0.94 at 40 frames, 0.979 at 60). The gate:
+ * `LIT_FRAMES` frames after the change, the floor's mean E within 1% of πL.
+ * The frames it took are reported.
+ */
+async function checkDarkDirection(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, unknown>> {
+    const camera: PageCamera = { position: [0, 3, 0], target: [0, 1, -10], fovYDeg: 60, near: 0.1, far: 1000 };
+    const halfSky = skyTexture(device, (direction) => (direction[0] > 0 ? CONSTANT_SKY : 0));
+    const run = await startRun(device, 'dark direction', { type: 'texture', texture: halfSky, layout: 'equirect' }, camera, false);
+    try {
+        const expected = Math.PI * CONSTANT_SKY;
+        const ratio = async (): Promise<{ mean: number; bad: number }> => {
+            const depth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
+            return floorRatios(device, run, (pixel) => depth[pixel] === 1, expected);
+        };
+        for (let frame = 1; frame <= DARK_FRAMES; frame++) run.frame();
+        const halfLit = await ratio();
+        run.platform.scene.setEnvironment({ type: 'color', color: [CONSTANT_SKY, CONSTANT_SKY, CONSTANT_SKY], intensity: 1 });
+        const perFrame: Array<{ frame: number; mean: number }> = [];
+        let firstWithin: number | null = null;
+        let last = { mean: 0, bad: 0 };
+        let bad = halfLit.bad;
+        for (let frame = 1; frame <= LIT_FRAMES; frame++) {
+            run.frame();
+            if (frame % 8 !== 0 && frame !== 1 && frame !== LIT_FRAMES) continue;
+            last = await ratio();
+            bad += last.bad;
+            perFrame.push({ frame, mean: Number(last.mean.toFixed(4)) });
+            if (firstWithin === null && Math.abs(last.mean - 1) <= LAMBERT_TOLERANCE) firstWithin = frame;
+        }
+        if (!(Math.abs(last.mean - 1) <= LAMBERT_TOLERANCE)) fail(`dark direction: ${LIT_FRAMES} frames after the dark half of the sky lit up, the floor's mean E is ${last.mean.toFixed(4)} of pi L`);
+        if (bad > 0) fail(`dark direction: ${bad} pixels not finite or negative`);
+        return { halfLitMean: Number(halfLit.mean.toFixed(4)), litFrames: LIT_FRAMES, finalMean: Number(last.mean.toFixed(4)), firstFrameWithin1Percent: firstWithin, perFrame };
+    } finally {
+        run.dispose();
+        halfSky.destroy();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
 const startTime = performance.now();
 let deviceErrors: string[] = [];
 try {
@@ -1117,7 +1187,7 @@ try {
     const fail = (message: string): void => {
         if (failures.length < 30) failures.push(message);
     };
-    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT };
+    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT, compare: PAGE_COMPARE_VALUES };
     const only = new URLSearchParams(location.search).get('only') ?? (import.meta.env.VITE_RC_TEMPORAL_ONLY as string | undefined);
     const sections: Array<[string, (device: GPUDevice, fail: (message: string) => void) => Promise<Record<string, unknown>>]> = [
         ['constantSky', checkConstantSky],
@@ -1126,6 +1196,7 @@ try {
         ['cacheAndPatch', checkCacheAndPatch],
         ['noisySky', checkNoisySky],
         ['occluder', checkOccluder],
+        ['darkDirection', checkDarkDirection],
     ];
     for (const [name, section] of sections) {
         if (only && !only.split(',').includes(name)) continue;

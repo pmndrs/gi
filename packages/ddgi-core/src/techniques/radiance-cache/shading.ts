@@ -119,10 +119,14 @@ export class RadianceCacheShadingModule implements ShadingModule {
     readonly techniqueId = 'radiance-cache';
     readonly code = SHADING_WGSL;
     readonly parameters: readonly ShadingParameter[];
-    readonly provides = { radiance: false } as const;
+    /** Screen space: `giIrradiance` reads the pixel at `screenUV`, so it is no bounce source for another technique. */
+    readonly provides = { radiance: false, worldSpaceIrradiance: false } as const;
     readonly version = 1;
+    /** True with SSGI (`RadianceCacheSettings.ssgi`): E is already narrowed by its visibility. */
+    readonly occludesIrradiance: boolean;
 
-    constructor(source: RadianceCacheShadingSource) {
+    constructor(source: RadianceCacheShadingSource, occludesIrradiance = false) {
+        this.occludesIrradiance = occludesIrradiance;
         const texture = (name: string, sampleType: 'float' | 'uint', pick: (textures: ReturnType<RadianceCacheShadingSource['shadingTextures']>) => GPUTexture): ShadingParameter => ({
             kind: 'texture',
             name,

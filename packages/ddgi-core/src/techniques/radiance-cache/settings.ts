@@ -15,6 +15,18 @@
  * configuration").
  */
 
+import { DEFAULT_SCREEN_SPACE_GI_SETTINGS } from '../../platform/contract/compute.ts';
+import type { SecondBounceSource } from './world-cache/capacity.ts';
+import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
+
+/**
+ * Which backend fills the world-cache slot (docs/design/radiance-cache.md,
+ * "World cache as a slot"): Capsaicin's GI-1.2 hash grid (the default), or
+ * the SHaRC-style hash cache ported from pmndrs/pathtracer (phase 6
+ * experiment P6.1, register E1-E7).
+ */
+export type WorldCacheKind = 'gi1-hash-grid' | 'sharc';
+
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
 
@@ -100,9 +112,174 @@ export interface RadianceCacheSettings {
      * 8 frames. Default true. Read every frame.
      */
     denoiserChangeReset: boolean;
+     * `FilterScreenProbes` (gi1.comp:1356-1442; RC4.2): each probe's cells
+     * averaged with up to three neighbour probes on each side, across then
+     * down, before the SH projection. Capsaicin always runs it (default true);
+     * off only to measure it. Read every frame.
+     */
+    probeFilter: boolean;
+    /**
+     * Whether the filtered probes become next frame's history (register D59).
+     * False (ours): the projection reads a filtered copy and the blended probes
+     * stay the history. True (Capsaicin): the filter writes back into the atlas,
+     * which under the running mean (D46) compounds frame after frame. Read every
+     * frame.
+     */
+    probeFilterHistory: boolean;
+    /**
+     * Capsaicin's SSGI technique feeding `InterpolateScreenProbes` (its
+     * `HAS_OCCLUSION` branch; RC4.2), through the platform's `gi/ssgi`: the
+     * probes' SH read through the cone around the bent normal that the
+     * ambient visibility leaves open, plus the near-field light from the
+     * occluding pixels. Capsaicin's GI-1 renderer always runs it; ours is
+     * off by default (Dennis, 2026-11-19: its noise outweighs it; register
+     * D61), on to opt in. On, the technique asks the host for `FrameScreen.lighting` and
+     * `FrameScreen.albedo` (the lit image SSGI reads, register D51). Fixed at
+     * construction for the screen channels it asks for; turned off later,
+     * SSGI stops (to measure it). Read every frame.
+     */
+    ssgi: boolean;
+    /** `ssgi_slice_count_` (ssgi.h:47, default 1). Read every frame. */
+    ssgiSliceCount: number;
+    /** `ssgi_step_count_` (ssgi.h:48, default 2). Read every frame. */
+    ssgiStepCount: number;
+    /** `ssgi_view_radius_` (ssgi.h:49, default 0.2 scene units). Read every frame. */
+    ssgiViewRadius: number;
+    /** `ssgi_falloff_range_` (ssgi.h:50, default 0.05 of the radius). Read every frame. */
+    ssgiFalloffRange: number;
+    /**
+     * Frames SSGI's slice sums are kept over, as running means reprojected with the screen
+     * history (register D60; 1 is Capsaicin's one frame). Default 16. Read every frame.
+     */
+    ssgiHistoryFrames: number;
+    /**
+     * How the world cache lights its cells (lever E8, TASKS P6.2; id Tech 8's
+     * "shade cells, not hits"). `'per-hit'` (default) is GI-1.2's: every probe
+     * and second-bounce hit draws a light and traces a shadow ray into its
+     * cell. `'budgeted'`: hits only find their cells, and at most
+     * `cellShadingBudget` cells a frame are lit, one light sample each, by
+     * priority (new or changed cells, then cells still converging, then each
+     * cell's turn, then the rest at random); a cell not lit this frame keeps
+     * its value. Rays shorter than their cell are still lit per hit (they read
+     * no cell). Read every frame (docs/design/radiance-cache.md, "Lever E8").
+     */
+    cellShading: 'per-hit' | 'budgeted';
+    /** Cells lit a frame with `cellShading: 'budgeted'` (id Tech 8 lights about 20,000). A whole number, 0 or more. Read every frame. */
+    cellShadingBudget: number;
+    /**
+     * Experiment E9 (TASKS P6.2b): with cells lit per hit, a cell hit near a
+     * scene change (`SceneChanges.regions`, or anywhere for a change with no
+     * bounds) forgets its 16-sample history once per epoch of the change
+     * (`ChangeEventTracker`: its start, every 8 frames while it goes on, once
+     * when it stops), keeping `cellChangeResetHistory` samples of it beside
+     * that frame's, and its second-bounce history is cut to one sample. E8's
+     * change marking on its own. On by default, dropping the history (lead,
+     * 2026-11-20: fast reaction and no ghosting first). Read every frame.
+     */
+    cellChangeReset: boolean;
+    /**
+     * With `cellChangeReset`: how many samples of a marked cell's history it
+     * keeps (default 0: the frame's samples replace the
+     * value; 1 to 15 keep the mean as that many samples beside the frame's).
+     * A setting for tuning between following a change at once (a doubled sun
+     * in 2 frames at 0, 19 at 3) and the noise of one-frame means. Read every
+     * frame.
+     */
+    cellChangeResetHistory: number;
+    /**
+     * Experiment E10 (P6.3; not Capsaicin's): where the world cache's second
+     * bounce comes from with `useMultibounce` on. `'auto'` (default; lead
+     * decision 2026-11-19): from the technique stacked under this one
+     * (`gi.setFallback(radianceCache, ddgi)`) when its shading module answers
+     * in world space, else GI-1.2's rays. `'fallback'` asks for the stacked
+     * technique (and warns when it can't have it); `'gi1-rays'` is GI-1.2's
+     * rays, the faithful baseline. Details on `HashGridCacheOptions.secondBounce`
+     * and register E10. Changing what runs empties the world cache. Read every
+     * frame.
+     */
+    secondBounce: SecondBounceSource;
+    /** The cells' indirect sample cap with the second bounce from a fallback (E10; default 4). Read every frame. */
+    fallbackIndirectSampleCount: number;
+    /**
+     * The world-cache backend (P6.1): `gi1-hash-grid` (Capsaicin's, the
+     * default; the `hashGridCache*` and multibounce options above are its) or
+     * `sharc`. Read at `prepare`: changing it makes the other cache there.
+     */
+    worldCache: WorldCacheKind;
+    /** The SHaRC backend's settings over its defaults (`DEFAULT_SHARC_SETTINGS`), with `worldCache: 'sharc'`. Read every frame, but the table size, fallback levels and pyramid at `prepare`. */
+    sharc: Partial<SharcSettings>;
+
+    // ---- The screen probes' temporal rules (RC4.1's changes to Capsaicin, register D41-D47) ----
+    // Each has a value that brings Capsaicin's behaviour back (RC4.5, compare-toggles.ts), read
+    // every frame: no page reload. Changing one listed in SCREEN_HISTORY_SETTINGS starts the
+    // screen probes' history over at the next frame, so the old rule's cells don't linger.
+
+    /**
+     * How a probe cell carries its past (register D46). `running-mean` (ours): a cell
+     * with history moves to this frame's mean of its rays by k / n, n capped at
+     * `historySampleCap`. `capsaicin-hysteresis`: this frame's mean, then Capsaicin's
+     * biased hysteresis, which keeps the past only against a brightening of over 2×
+     * (gi1.comp:1258-1269).
+     */
+    probeBlend: 'running-mean' | 'capsaicin-hysteresis';
+    /** The most samples a cell's running mean counts (D46; 8). 1 makes every cell a one-frame estimate. */
+    historySampleCap: number;
+    /**
+     * A probe cell no ray reached this frame (register D41). `keep-previous` (ours): it
+     * keeps its previous value; only a cell with no history takes the backup, the mean of
+     * the reached cells' means. `capsaicin`: every such cell takes Capsaicin's backup, the
+     * reached cells' summed samples over their number divided again by the number of empty
+     * cells (gi1.comp:407-429, 1212-1256), which darkens the probes over time.
+     */
+    emptyCellFill: 'keep-previous' | 'capsaicin';
+    /**
+     * Whether a backup fill counts as history (register D47). False (ours): a fill is
+     * stored with a negative hit distance and the reprojection and the taps skip it.
+     * True (Capsaicin): it is stored with the largest hit distance (65,504, D19) and read
+     * later as if measured (gi1.comp:427, 1232).
+     */
+    backupFillsAsHistory: boolean;
+    /**
+     * The share of a probe's rays that sample their own cell under ray guiding
+     * (register D42; 1/8). 0 is Capsaicin's rule: every ray of a cell with history is
+     * guided by the luminance CDF, and a probe whose cells all read black sends every
+     * ray to its last cell (gi1.comp:969-973; the CDF over max(total, 1e-5)).
+     */
+    rayGuidingUniformShare: number;
+    /**
+     * Ray guiding draws a cell by its own estimate, so under the running mean a cell
+     * that read low gets fewer rays and stays low longer, and the mean reads dark
+     * (register D64). True (ours): each frame's step is weighted by the rays the cell
+     * got over the rays it expected, so its expected step doesn't depend on what it
+     * reads. False: the step is its rays over its sample count (RC4.1's). Capsaicin
+     * has no running mean. Read every frame.
+     */
+    rayGuidingCorrection: boolean;
+    /**
+     * Where the platform reports a scene change, a probe cell whose last ray crosses a
+     * changed box forgets its sample count, so its next ray replaces it (D46; ours).
+     * Capsaicin has no such reset (false).
+     */
+    probeChangeReset: boolean;
+    /**
+     * The screen probes keep their history from frame to frame (true, as Capsaicin).
+     * False drops it before every frame, so each frame runs as the first does: for
+     * comparing, not a product setting. The world cache keeps its cells either way.
+     */
+    probeHistory: boolean;
 }
 
-/** Capsaicin's defaults (gi1.h:48-71). */
+/**
+ * Settings whose change starts the screen probes' history over at the next frame:
+ * cells made under the old rule (darkened backups, fills kept as history) would
+ * otherwise linger under the new one, and the picture would show a mix of both.
+ */
+export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
+
+/** Settings read at `prepare` only: changing one makes the technique again (the viewer restarts it; compare-toggles.ts). */
+export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'ssgi'];
+
+/** Capsaicin's defaults (gi1.h:48-71, and SSGI's, ssgi.h:47-50). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
     useDirectLighting: true,
     useTemporalFeedback: false,
@@ -123,6 +300,31 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     denoiserHistoryClamp: 'neighbourhood',
     denoiserHistoryClip: 2,
     denoiserChangeReset: true,
+    probeFilter: true,
+    probeFilterHistory: false,
+    ssgi: false,
+    ssgiSliceCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.sliceCount,
+    ssgiStepCount: DEFAULT_SCREEN_SPACE_GI_SETTINGS.stepCount,
+    ssgiViewRadius: DEFAULT_SCREEN_SPACE_GI_SETTINGS.viewRadius,
+    ssgiFalloffRange: DEFAULT_SCREEN_SPACE_GI_SETTINGS.falloffRange,
+    ssgiHistoryFrames: DEFAULT_SCREEN_SPACE_GI_SETTINGS.historyFrames,
+    cellShading: 'per-hit',
+    cellShadingBudget: 20000,
+    cellChangeReset: true,
+    cellChangeResetHistory: 0,
+    secondBounce: 'auto',
+    fallbackIndirectSampleCount: 4,
+    worldCache: 'gi1-hash-grid',
+    sharc: Object.freeze({}),
+    // Ours (RC4.1, decided: DECISIONS 2026-11-19); compare-toggles.ts lists Capsaicin's values.
+    probeBlend: 'running-mean',
+    historySampleCap: 8,
+    emptyCellFill: 'keep-previous',
+    backupFillsAsHistory: false,
+    rayGuidingUniformShare: 0.125,
+    rayGuidingCorrection: true,
+    probeChangeReset: true,
+    probeHistory: true,
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */

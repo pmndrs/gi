@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cameraRelativeViewProjection } from './camera.ts';
-import { historyChangesWords, mergeHistoryChanges, NO_HISTORY_CHANGES } from './screen-probe-history.ts';
-import { PROBE_CELLS } from './settings.ts';
+import { historyChangesFromEvents, historyChangesWords, NO_HISTORY_CHANGES } from './screen-probe-history.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_CELLS } from './settings.ts';
 import {
     blendProbeCells,
     blendRunningMean,
@@ -18,7 +18,7 @@ import {
     temporalBlendFactor,
     unpackNormal,
 } from './screen-probe-history-cpu.ts';
-import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, HISTORY_SAMPLE_CAP as WGSL_HISTORY_SAMPLE_CAP, RAY_GUIDING_UNIFORM_SHARE as WGSL_RAY_GUIDING_UNIFORM_SHARE, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
+import { CACHED_TILE_NEW as WGSL_CACHED_TILE_NEW, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, SAMPLE_WGSL } from './wgsl/screen-probes.ts';
 
 describe("BlendScreenProbes' biased hysteresis (gi1.comp:1262-1268)", () => {
     it('keeps nothing of the past when the new value is darker or under twice as bright', () => {
@@ -84,8 +84,18 @@ describe('ray guiding (SampleScreenProbes, gi1.comp:916-978, register D42)', () 
         expect(guidedCell(3, true, cdf, RAY_GUIDING_UNIFORM_SHARE * 0.99)).toBe(3);
         expect(guidedCell(3, true, cdf, RAY_GUIDING_UNIFORM_SHARE)).toBe(40);
         expect(guidedCell(3, false, cdf, 0.9)).toBe(3);
-        expect(RAY_GUIDING_UNIFORM_SHARE).toBe(WGSL_RAY_GUIDING_UNIFORM_SHARE);
-        expect(SAMPLE_WGSL).toContain(`RC_RAY_GUIDING_UNIFORM_SHARE: f32 = ${RAY_GUIDING_UNIFORM_SHARE};`);
+        // The CPU twin's share is the technique's default, which the GPU reads from RcFrame.
+        expect(RAY_GUIDING_UNIFORM_SHARE).toBe(DEFAULT_RADIANCE_CACHE_SETTINGS.rayGuidingUniformShare);
+        expect(SAMPLE_WGSL).toContain('rcFrame.rayGuidingUniformShare');
+    });
+
+    it("with a share of 0 follows Capsaicin's rule: every ray guided, an all-black CDF sends all to the last cell", () => {
+        const weights = new Array<number>(PROBE_CELLS).fill(0);
+        weights[40] = 1;
+        expect(guidedCell(3, true, cellCdf(weights), 0.01, 0)).toBe(40);
+        const empty = cellCdf(new Array<number>(PROBE_CELLS).fill(0));
+        expect(guidedCell(5, true, empty, 0.9, 0)).toBe(PROBE_CELLS - 1);
+        expect(guidedCell(5, false, empty, 0.9, 0)).toBe(5);
     });
 });
 
@@ -157,9 +167,9 @@ describe('a constant sky with history (register D41): the cause of GI-1.2 drifti
 
 describe('noisy rays with history (register D46): the running mean against the hysteresis', () => {
     // E / (pi L) averaged over frames 100 to 200, so one frame's probe noise doesn't decide.
-    const settled = (rule: 'fixed' | 'running', noise: 'exponential' | 'sparse'): number => {
+    const settled = (rule: 'fixed' | 'running', noise: 'exponential' | 'sparse', guidingCorrection = false): number => {
         const report = Array.from({ length: 26 }, (_, index) => 100 + 4 * index);
-        const results = simulateConstantSky({ rule, guiding: 'fixed', frames: 200, report, noise });
+        const results = simulateConstantSky({ rule, guiding: 'fixed', frames: 200, report, noise, guidingCorrection });
         return results.reduce((sum, result) => sum + result.ourProjection, 0) / results.length;
     };
 
@@ -173,6 +183,14 @@ describe('noisy rays with history (register D46): the running mean against the h
         // What is left on sparse rays is ray guiding by the cell's own estimate (NOTES).
         expect(Math.abs(settled('running', 'sparse') - 1)).toBeLessThan(0.03);
     }, 120_000);
+
+    it('weighting each step by the rays a cell expected removes the bias of ray guiding (register D64)', () => {
+        const exponential = settled('running', 'exponential', true);
+        const sparse = settled('running', 'sparse', true);
+        console.log(`D64 CPU model: exponential ${exponential.toFixed(4)}, sparse ${sparse.toFixed(4)} (without: ${settled('running', 'exponential').toFixed(4)}, ${settled('running', 'sparse').toFixed(4)})`);
+        expect(Math.abs(exponential - 1)).toBeLessThan(0.005);
+        expect(Math.abs(sparse - 1)).toBeLessThan(0.01);
+    }, 240_000);
 
     it('the running mean keeps the noiseless sky exact', () => {
         for (const result of simulateConstantSky({ rule: 'running', guiding: 'fixed', frames: 100, report: [1, 50, 100] })) {
@@ -203,21 +221,18 @@ describe('noisy rays with history (register D46): the running mean against the h
         // Neither rays nor history: the reached cells' mean, as a fill that counts nothing.
         expect(values[3]).toBeCloseTo((2 + 3) / 2, 12);
         expect(next[3]).toBe(0);
-        expect(HISTORY_SAMPLE_CAP).toBe(WGSL_HISTORY_SAMPLE_CAP);
+        expect(HISTORY_SAMPLE_CAP).toBe(DEFAULT_RADIANCE_CACHE_SETTINGS.historySampleCap);
     });
 });
 
 describe('scene changes for the running means (D46)', () => {
     const box = (x: number) => ({ min: [x, 0, 0] as const, max: [x + 1, 1, 1] as const });
-    const changes = (regions: number, global: ('sun' | 'environment' | 'lights')[] = []) =>
-        ({ regions: Array.from({ length: regions }, (_, index) => ({ bounds: box(index), reason: 'light' as const })), global, receivers: [], lights: [], lightsOverflowed: false }) as const;
 
-    it('collects the dirty regions as boxes, and a change with no bounds or too many boxes as everything', () => {
-        const two = mergeHistoryChanges(NO_HISTORY_CHANGES, changes(2));
-        expect(two).toEqual({ everything: false, boxes: [box(0), box(1)] });
-        expect(mergeHistoryChanges(two, changes(0, ['sun'])).everything).toBe(true);
-        expect(mergeHistoryChanges(NO_HISTORY_CHANGES, changes(MAX_HISTORY_CHANGE_BOXES + 1)).everything).toBe(true);
-        expect(mergeHistoryChanges(NO_HISTORY_CHANGES, changes(0))).toBe(NO_HISTORY_CHANGES);
+    it("forgets at the events armed this frame: their boxes, everything for one with no bounds or too many", () => {
+        expect(historyChangesFromEvents([{ box: box(0) }, { box: box(1) }])).toEqual({ everything: false, boxes: [box(0), box(1)] });
+        expect(historyChangesFromEvents([{ box: box(0) }, { box: null }]).everything).toBe(true);
+        expect(historyChangesFromEvents(Array.from({ length: MAX_HISTORY_CHANGE_BOXES + 1 }, (_, index) => ({ box: box(index) }))).everything).toBe(true);
+        expect(historyChangesFromEvents([])).toBe(NO_HISTORY_CHANGES);
     });
 
     it('writes RcHistoryChanges: the count, the flag, then each box as min and max', () => {

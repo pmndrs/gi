@@ -24,7 +24,7 @@
 import type { GpuIndirectArgs, GpuPrefixScan, GpuScreenHistory, GpuWord, ScreenHistoryTextures } from '../../platform/contract/compute.ts';
 import type { FrameScreen } from '../../platform/contract/frame.ts';
 import type { Aabb } from '../../platform/contract/math.ts';
-import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
+import type { ChangeEvent } from '../../platform/contract/change-events.ts';
 import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import type { ScreenProbeLayout } from './settings.ts';
@@ -93,6 +93,8 @@ export interface HistoryResources {
     readonly spawnProbe: GPUBuffer;
     /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D43). */
     readonly evictedRadiance: GPUBuffer;
+    /** Per ray slot: the rays its cell expected this frame under ray guiding (f32; register D64). */
+    readonly expectedRays: GPUBuffer;
     /**
      * The history sample count of each atlas texel (D46): this frame's, last
      * frame's (then each spawned probe's previous count, from Sample), and the
@@ -223,6 +225,7 @@ export class ScreenProbeHistory {
             overrideTiles: buffer('override tiles', layout.maxProbeSpawnCount * WORD_BYTES),
             spawnProbe: buffer('spawn probe', layout.maxProbeSpawnCount * PROBE_SPAWN_PROBE_BYTES),
             evictedRadiance: buffer('evicted probe radiance', layout.maxRayCount * 8),
+            expectedRays: buffer('expected rays per cell', layout.maxRayCount * 4),
             cellCounts: buffer('cell counts', atlasTexels * WORD_BYTES),
             previousCellCounts: buffer('previous cell counts', atlasTexels * WORD_BYTES),
             cachedCellCounts: buffer('cached cell counts', atlasTexels * WORD_BYTES),
@@ -250,6 +253,7 @@ export class ScreenProbeHistory {
             resources.overrideTiles,
             resources.spawnProbe,
             resources.evictedRadiance,
+            resources.expectedRays,
             resources.cellCounts,
             resources.previousCellCounts,
             resources.cachedCellCounts,
@@ -451,6 +455,7 @@ export class ScreenProbeHistory {
             sized.overrideTiles,
             sized.spawnProbe,
             sized.evictedRadiance,
+            sized.expectedRays,
             sized.cellCounts,
             sized.previousCellCounts,
             sized.cachedCellCounts,
@@ -498,18 +503,19 @@ export interface HistoryChanges {
 export const NO_HISTORY_CHANGES: HistoryChanges = Object.freeze({ everything: false, boxes: [] });
 
 /**
- * Adds a frame's `SceneChanges` to those not yet given to a screen stage:
- * every dirty region's box (lights with their reach, geometry, materials);
- * a change with no bounds (`global`: the sun, the environment, too many
- * lights) or more boxes than the blend takes counts as everything.
+ * The changes the blend's running means forget at this frame (D46): the
+ * change events whose epoch starts now (`ChangeEventTracker.armedEvents`: a
+ * change's first frame, every re-arm while it goes on, and once when it
+ * stops), so a probe cell forgets once per epoch, not on every frame of a
+ * change that goes on. A probe cell with no ray on that frame keeps its
+ * history until the next epoch (the probes carry no memory of their own
+ * resets). An event with no bounds is everything; boxes past the blend's
+ * limit too (the tracker keeps fewer).
  */
-export function mergeHistoryChanges(pending: HistoryChanges, changes: SceneChanges): HistoryChanges {
-    if (pending.everything) return pending;
-    if (changes.global.length > 0) return { everything: true, boxes: [] };
-    if (changes.regions.length === 0) return pending;
-    const boxes = [...pending.boxes, ...changes.regions.map((region) => region.bounds)];
-    if (boxes.length > MAX_HISTORY_CHANGE_BOXES) return { everything: true, boxes: [] };
-    return { everything: false, boxes };
+export function historyChangesFromEvents(armed: readonly Pick<ChangeEvent, 'box'>[]): HistoryChanges {
+    if (armed.length === 0) return NO_HISTORY_CHANGES;
+    if (armed.some((event) => event.box === null) || armed.length > MAX_HISTORY_CHANGE_BOXES) return { everything: true, boxes: [] };
+    return { everything: false, boxes: armed.map((event) => event.box as Aabb) };
 }
 
 /** `RcHistoryChanges` (wgsl/screen-probes.ts) for `changes`. */
