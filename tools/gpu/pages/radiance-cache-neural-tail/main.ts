@@ -89,6 +89,11 @@
  *    screen records take only what the cache holds at a ray's hit, and a
  *    miss is a 0 (a target with the sky in it would light the second hits).
  *    Hit rays' mean under 1% of the lit value.
+ * 11. **Nothing to learn from** (the lit plane with the camera looking up at
+ *    the black sky, 40 frames): no surface on the screen, so no probe rays,
+ *    no cell records and no screen records. The gate counts the steps the
+ *    GPU took (a step with no records is skipped there), so it stays shut
+ *    with 0 steps, where 16 a frame were encoded.
  *
  * No glossy case: the platform's materials are diffuse (register D8), so
  * GI-1.1's reflections, where the pathtracer found the network halves the
@@ -143,6 +148,8 @@ const ALBEDO = 0.5;
 const CHECK_FRAMES = Number((import.meta.env as Record<string, unknown>).VITE_NEURAL_TAIL_FRAMES ?? 300);
 
 const CORNER_CAMERA: PageCamera = { position: [0, 2, 6], target: [0, 1, 0], fovYDeg: 60, near: 0.05, far: 1000 };
+/** Section 11: 30 m in front of the wall, looking up at the sky (the wall's top 75° off vertical, outside the view). */
+const SKYWARD_CAMERA: PageCamera = { position: [0, 2, 30], target: [0, 100, 20], fovYDeg: 60, near: 0.05, far: 1000 };
 const SUN_INTENSITY = 8;
 const SUN_TRAVEL: Vec3 = [0, -1, -1];
 /** albedo / π × E, E = 8 cos 45° on the floor. */
@@ -166,7 +173,7 @@ const GI1: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache:
 const TAIL: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail' };
 const TAIL_NO_SCREEN: Partial<RadianceCacheSettings> = { useMultibounce: true, neuralCache: 'tail', neural: { screenStride: 0 } };
 
-type SceneKind = 'litPlane' | 'corner' | 'skyCorner' | 'furnace' | 'strips';
+type SceneKind = 'litPlane' | 'skyward' | 'corner' | 'skyCorner' | 'furnace' | 'strips';
 type Surface = 'floor' | 'wall' | 'ceiling' | 'other';
 
 interface ProbeRay {
@@ -216,7 +223,7 @@ function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
         return FURNACE_CAMERA;
     }
     quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
-    quad(platform, 'wall', [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]], [0, 0, 1], kind === 'litPlane' ? 0 : ALBEDO);
+    quad(platform, 'wall', [[-20, 0, 0], [20, 0, 0], [20, 10, 0], [-20, 10, 0]], [0, 0, 1], kind === 'litPlane' || kind === 'skyward' ? 0 : ALBEDO);
     if (kind === 'skyCorner') {
         // Section 10: no sun, a sky of radiance 1.
         platform.scene.setEnvironment({ type: 'color', color: [1, 1, 1], intensity: 1 });
@@ -224,7 +231,7 @@ function describe(platform: GIPlatformImpl, kind: SceneKind): PageCamera {
     }
     platform.scene.createLight({ type: 'directional', direction: SUN_TRAVEL, color: [1, 1, 1], intensity: SUN_INTENSITY, label: 'sun' });
     platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
-    return CORNER_CAMERA;
+    return kind === 'skyward' ? SKYWARD_CAMERA : CORNER_CAMERA;
 }
 
 function classify(hit: Vec3, kind: SceneKind): Surface {
@@ -290,6 +297,8 @@ interface Run {
     readonly judged: number;
     readonly tailSteps: number;
     readonly tailGateOpen: boolean;
+    /** The technique made a tail (`neuralCache: 'tail'` prepared). */
+    readonly tailMade: boolean;
     /** The tail's state after the last frame, by surface: its answers' mean (the second hits') and its training targets' mean. */
     readonly tailBySurface: Record<string, TailDiagnostics> | null;
 }
@@ -415,7 +424,7 @@ async function runScenario(device: GPUDevice, kind: SceneKind, settings: Partial
         }
         const tail = technique.neuralTail;
         const bySurface = await tailDiagnostics(device, technique, (position) => classify(position, kind));
-        return judges.map((_, judgeIndex) => ({ meanError: meanError[judgeIndex], withinShare: withinShare[judgeIndex], judged: judged[judgeIndex], tailSteps: tail?.steps ?? 0, tailGateOpen: tail?.active ?? false, tailBySurface: bySurface }));
+        return judges.map((_, judgeIndex) => ({ meanError: meanError[judgeIndex], withinShare: withinShare[judgeIndex], judged: judged[judgeIndex], tailSteps: tail?.steps ?? 0, tailGateOpen: tail?.active ?? false, tailMade: tail !== null, tailBySurface: bySurface }));
     } finally {
         screen.dispose();
         platform.dispose();
@@ -1007,6 +1016,15 @@ try {
         data.skyOnly = { gi1HitMeanOverLit: Number(final(gi1).toFixed(5)), tail: summary(tail), judged: tail.judged };
         if (!(final(tail) < 0.01)) fail(`sky only: the tail's hit rays read ${(final(tail) * LIT_RADIANCE).toFixed(4)} on average (expected 0: a cell has no sky light before RC3.4, so the tail must bring none)`);
         if (tail.judged < 1000 || !tail.tailGateOpen) fail(`sky only: ${tail.judged} judged rays, gate ${tail.tailGateOpen ? 'open' : 'shut'}`);
+    }
+
+    // 11. Nothing on the screen: no records, so no step the GPU counts, and the gate stays shut.
+    if (runs(11)) {
+        const [skyward] = await runScenario(device, 'skyward', TAIL, 40, [() => null]);
+        data.noRecords = { frames: 40, stepsEncoded: 40 * 16, tailSteps: skyward.tailSteps, tailGateOpen: skyward.tailGateOpen, tailMade: skyward.tailMade };
+        if (!skyward.tailMade || skyward.tailSteps !== 0 || skyward.tailGateOpen) {
+            fail(`no records: ${skyward.tailMade ? `the tail took ${skyward.tailSteps} training steps with its gate ${skyward.tailGateOpen ? 'open' : 'shut'}` : 'no tail was made'} (expected 0 steps, shut: a step with no records doesn't count)`);
+        }
     }
 
     // 7. The f32 fallback on a default-limits device (16 KiB of workgroup memory, no shader-f16).
