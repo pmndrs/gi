@@ -376,6 +376,15 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
     // ---- The probe filter and SSGI (RC4.2, register D59-D61) ----
     toggle<CompareBooleanToggle>({
         kind: 'boolean',
+        setting: 'probeFilter',
+        group: 'screen-probes',
+        label: 'Probe filter',
+        urlName: 'rcfilter',
+        capsaicin: true,
+        help: "Each probe's cells averaged with up to three neighbour probes on each side before the irradiance is read from them, which takes out much of the probes' noise. On, as Capsaicin always runs it; off only to measure what it does (E9's noise gate is calibrated with it off).",
+    }),
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
         setting: 'probeFilterHistory',
         group: 'screen-probes',
         label: 'Filtered probes as history',

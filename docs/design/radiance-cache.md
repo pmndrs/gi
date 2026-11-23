@@ -172,6 +172,7 @@ Every change we make to Capsaicin's behaviour over time gets a setting whose oth
 | `probeChangeReset` | screen probes | true | false (no reset) | D46 |
 | `interpolationJitter` | screen probes | true | true | |
 | `rayGuidingCorrection` | screen probes | true (each cell's step over the rays it expected) | none (Capsaicin has no running mean; false is RC4.1's k / n) | D64 |
+| `probeFilter` | screen probes | true | true (`FilterScreenProbes` always runs); off only to measure it, as E9's noise gate's calibration run does | |
 | `probeFilterHistory` | screen probes | false (the blended atlas stays history) | true (the filtered atlas is next frame's history) | D59 |
 | `ssgi` ⟳ | screen probes | false | true (SSGI always runs before GI-1) | D61 |
 | `ssgiSliceCount` | screen probes | 1 | 1 | |

@@ -72,6 +72,18 @@ describe('the compare toggles (RC4.5)', () => {
         expect(capsaicinCompareValues()).toMatchObject({ denoiserHistoryClamp: 'none', denoiserChangeReset: false });
     });
 
+    it("covers RC4.2's probe filter and its history, and the ray-guiding correction (D59, D64): E9's noise gate turns the first and last off by name", () => {
+        const byName = new Map(RADIANCE_CACHE_COMPARE_TOGGLES.map((entry) => [entry.setting, entry]));
+        expect(byName.get('probeFilter')).toMatchObject({ group: 'screen-probes', urlName: 'rcfilter', defaultValue: true, capsaicin: true, resetsHistory: false, restartsTechnique: false });
+        expect(byName.get('probeFilterHistory')).toMatchObject({ group: 'screen-probes', defaultValue: false, capsaicin: true, register: 'D59' });
+        expect(byName.get('rayGuidingCorrection')).toMatchObject({ group: 'screen-probes', urlName: 'rcguidefix', defaultValue: true, register: 'D64' });
+        // radiance-cache-change-noise's calibration run (DECISIONS 2026-11-24).
+        expect(compareValuesFromText('rcfilter=false,rcguidefix=false')).toEqual({ probeFilter: false, rayGuidingCorrection: false });
+        const technique = new RadianceCacheTechnique();
+        applyCompareValues(technique.settings, { probeFilter: false });
+        expect(technique.settings.probeFilter).toBe(false);
+    });
+
     it('round-trips every value through link parameters, writing only what differs from the defaults', () => {
         for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
             for (const value of [entry.capsaicin ?? entry.defaultValue, otherValue(entry)]) {
