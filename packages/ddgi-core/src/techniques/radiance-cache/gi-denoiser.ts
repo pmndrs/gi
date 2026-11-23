@@ -15,7 +15,7 @@
  * previous depth and normals (`GpuScreenHistory`, the copy `ReprojectScreenProbes` reads too),
  * and the frame's scene changes (`SceneChanges`, as the probes' running means take them, D46):
  * inside a changed region, and everywhere for a global change (the sun, the sky), the
- * denoiser keeps a short history for a few frames (its soft reset, register D50).
+ * denoiser keeps a short history for a few frames (its soft reset, register D66).
  */
 
 import { Gi1Denoiser } from '@pmndrs/denoiser-ffx';

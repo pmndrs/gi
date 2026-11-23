@@ -82,8 +82,8 @@ export interface RadianceCacheSettings {
     /**
      * `InterpolateScreenProbes` jitters each pixel's lookup position by up to a
      * spawn tile (gi1.comp:1540-1551; default true, as Capsaicin). The jitter is
-     * meant for the GI denoiser (RC4.3) to average away; until it exists it is
-     * part of the frame-to-frame change. Off only to measure that (RC4.1 review).
+     * meant for the GI denoiser (RC4.3) to average away; without the denoiser it
+     * is part of the frame-to-frame change. Off only to measure that (RC4.1 review).
      * Read every frame.
      */
     interpolationJitter: boolean;
@@ -94,7 +94,7 @@ export interface RadianceCacheSettings {
      */
     denoiser: boolean;
     /**
-     * The denoiser's history clamp (register D50): `'neighbourhood'` clips the long history to
+     * The denoiser's history clamp (register D66): `'neighbourhood'` clips the long history to
      * a short one (about 4 frames) ± a few standard deviations, spatial or temporal, so a
      * lighting change is followed within a few frames; `'none'` is Capsaicin's unclipped
      * history (45-160 frames to follow a step change). Default `'neighbourhood'`. Read every frame.
@@ -108,10 +108,11 @@ export interface RadianceCacheSettings {
     denoiserHistoryClip: number;
     /**
      * The denoiser's soft reset where the frame's scene changes are (`SceneChanges`, the boxes
-     * D46 uses, or everywhere for a global change; register D50): a short history there for
+     * D46 uses, or everywhere for a global change; register D66): a short history there for
      * 8 frames. Default true. Read every frame.
      */
     denoiserChangeReset: boolean;
+    /**
      * `FilterScreenProbes` (gi1.comp:1356-1442; RC4.2): each probe's cells
      * averaged with up to three neighbour probes on each side, across then
      * down, before the SH projection. Capsaicin always runs it (default true);
