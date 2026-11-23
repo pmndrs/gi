@@ -10,7 +10,7 @@ const repo = join(root, 'gi');
 mkdirSync(join(root, 'sibling', 'packages', 'mlp', 'src'), { recursive: true });
 mkdirSync(repo);
 writeFileSync(join(root, 'sibling', 'packages', 'mlp', 'src', 'index.ts'), 'export {};\n');
-const entry: SiblingEntry = { repo: 'https://example.invalid/sibling.git', commit: PIN, clone: '../sibling', path: 'packages/mlp', built: ['src/index.ts'], build: [], optional: true };
+const entry: SiblingEntry = { repo: 'https://example.invalid/sibling.git', commit: PIN, clone: '../sibling', path: 'packages/mlp', built: ['src/index.ts'], optional: true };
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
