@@ -184,10 +184,10 @@ describe('noisy rays with history (register D46): the running mean against the h
         expect(Math.abs(settled('running', 'sparse') - 1)).toBeLessThan(0.03);
     }, 120_000);
 
-    it('weighting each step by the rays a cell expected removes the bias of ray guiding (register D62)', () => {
+    it('weighting each step by the rays a cell expected removes the bias of ray guiding (register D64)', () => {
         const exponential = settled('running', 'exponential', true);
         const sparse = settled('running', 'sparse', true);
-        console.log(`D62 CPU model: exponential ${exponential.toFixed(4)}, sparse ${sparse.toFixed(4)} (without: ${settled('running', 'exponential').toFixed(4)}, ${settled('running', 'sparse').toFixed(4)})`);
+        console.log(`D64 CPU model: exponential ${exponential.toFixed(4)}, sparse ${sparse.toFixed(4)} (without: ${settled('running', 'exponential').toFixed(4)}, ${settled('running', 'sparse').toFixed(4)})`);
         expect(Math.abs(exponential - 1)).toBeLessThan(0.005);
         expect(Math.abs(sparse - 1)).toBeLessThan(0.01);
     }, 240_000);

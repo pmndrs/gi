@@ -93,7 +93,7 @@ export interface HistoryResources {
     readonly spawnProbe: GPUBuffer;
     /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D43). */
     readonly evictedRadiance: GPUBuffer;
-    /** Per ray slot: the rays its cell expected this frame under ray guiding (f32; register D62). */
+    /** Per ray slot: the rays its cell expected this frame under ray guiding (f32; register D64). */
     readonly expectedRays: GPUBuffer;
     /**
      * The history sample count of each atlas texel (D46): this frame's, last

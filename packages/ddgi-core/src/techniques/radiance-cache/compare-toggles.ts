@@ -359,7 +359,7 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         group: 'screen-probes',
         label: 'Ray-guiding correction',
         urlName: 'rcguidefix',
-        register: 'D62',
+        register: 'D64',
         help: "Guided rays favour cells that read bright, so a cell that read low is sampled less and stays low. On (ours) weights each cell's update by the rays it got over the rays it expected, which keeps the mean right; off is RC4.1's weighting. Capsaicin has no running mean.",
     }),
 

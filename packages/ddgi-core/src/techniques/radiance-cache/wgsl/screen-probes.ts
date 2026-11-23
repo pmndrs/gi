@@ -140,7 +140,7 @@ struct RcFrame {
     capsaicinEmptyCells: u32,        // 1: Capsaicin's backup in every cell no ray reached (D41)
     fillHitDistance: f32,            // a backup fill's hit distance: -1 (never history, D47) or 65,504 (Capsaicin)
     probeChangeReset: u32,           // 1: a scene change on a cell's last ray resets its count (D46)
-    rayGuidingCorrection: u32,       // 1: a cell's step is weighted by its rays over the rays it expected (D62)
+    rayGuidingCorrection: u32,       // 1: a cell's step is weighted by its rays over the rays it expected (D64)
 }
 @group(1) @binding(0) var<uniform> rcFrame: RcFrame;
 `;
@@ -709,7 +709,7 @@ ${PROBE_SPAWN_PROBE_WGSL}
 @group(1) @binding(18) var<storage, read> rcCellCounts: array<u32>;
 @group(1) @binding(19) var<storage, read_write> rcPreviousCellCounts: array<u32>;
 @group(1) @binding(20) var<storage, read> rcCachedCellCounts: array<u32>;
-// The rays each cell can expect this frame under ray guiding, for the blend's weight (register D62).
+// The rays each cell can expect this frame under ray guiding, for the blend's weight (register D64).
 @group(1) @binding(21) var<storage, read_write> rcExpectedRays: array<f32>;
 // The probe rays: this kernel writes their count and directions.
 @group(1) @binding(3) var<storage, read_write> rcProbeRays: RcProbeRays;
@@ -740,7 +740,7 @@ var<workgroup> rcRadianceReuseSampleCount: atomic<u32>;
 // lds_ScreenProbes_Radiance: the cells' sampling CDF (exclusive sums over the total).
 var<workgroup> rcCellCdf: array<f32, 64>;
 var<workgroup> rcCellCdfTotal: f32;
-// The probe's rays that follow the CDF when guiding: those whose own cell has history (D62).
+// The probe's rays that follow the CDF when guiding: those whose own cell has history (D64).
 var<workgroup> rcGuidedRayCount: atomic<u32>;
 
 // A cell of a nearby or cached probe, moved into this probe's frame (gi1.comp:725-756 and
@@ -1045,7 +1045,7 @@ fn ${ENTRY_POINT.sample}(
     }
     let direction = rcFromProbeFrame(rcMapToHemiOctahedron((vec2f(sampledCell) + rcRand2(&random)) / f32(RC_PROBE_SIZE)), normal);
 
-    // How many of the probe's rays this cell can expect, by the draws above (register D62): its own
+    // How many of the probe's rays this cell can expect, by the draws above (register D64): its own
     // ray if that one isn't guided (or with the uniform share), plus each guided ray's chance of
     // landing in it, the CDF step to the next cell (rcFindCellIndex takes the last cell to 1).
     let guidedRays = f32(atomicLoad(&rcGuidedRayCount));
@@ -1284,7 +1284,7 @@ ${HISTORY_CHANGES_WGSL}
 @group(1) @binding(18) var<storage, read_write> rcCellCounts: array<u32>;
 @group(1) @binding(19) var<storage, read> rcPreviousCellCounts: array<u32>;
 @group(1) @binding(20) var<storage, read_write> rcCachedCellCounts: array<u32>;
-// The rays each cell expected this frame (SampleScreenProbes, register D62).
+// The rays each cell expected this frame (SampleScreenProbes, register D64).
 @group(1) @binding(21) var<storage, read> rcExpectedRays: array<f32>;
 
 // BlendScreenProbes (gi1.comp:1166-1331), each cell a running mean (register D46).
@@ -1367,7 +1367,7 @@ fn ${ENTRY_POINT.blend}(
         count = min(historyCount + sampleCount, historySampleCap);
         var weight = min(f32(sampleCount) / f32(count), 1.0);
         if (rcFrame.rayGuidingCorrection != 0u && historySampleCap > 1u) {
-            // Register D62: ray guiding draws a cell by its own estimate, so with weight k / n a cell
+            // Register D64: ray guiding draws a cell by its own estimate, so with weight k / n a cell
             // that read low gets fewer rays, moves less, and stays low; the mean comes out dark. Over
             // the rays it expected, E[k] / E[k] = 1, the step is 1 / n whatever the cell reads, and the
             // mean is the radiance's. n counts the frames since the cell's history began, up to the cap.
@@ -1382,7 +1382,7 @@ fn ${ENTRY_POINT.blend}(
     } else if (hasHistory && rcFrame.capsaicinEmptyCells == 0u) {
         radiance = previousRadiance; // no ray this frame: the cell keeps what it held (D41)
         count = historyCount;
-        // Under D62 the count is frames since the history began, reached or not: if it only grew when
+        // Under D64 the count is frames since the history began, reached or not: if it only grew when
         // guiding sent a ray, a dark cell would keep a smaller count and take bigger steps.
         if (rcFrame.rayGuidingCorrection != 0u && historySampleCap > 1u && historyCount > 0u) {
             count = min(historyCount + 1u, historySampleCap);

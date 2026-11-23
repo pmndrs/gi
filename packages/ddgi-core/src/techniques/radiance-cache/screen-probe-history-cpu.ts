@@ -60,7 +60,7 @@ export const HISTORY_SAMPLE_CAP = 8;
  * rays moves to their mean by k / min(n + k, cap); a cell without keeps its
  * value and count; a cell with neither is a fill (the reached cells' mean),
  * count 0, which is never history (D47). With `expectedRays` (the rays each
- * cell expected under ray guiding, register D62), a cell's step is k over its
+ * cell expected under ray guiding, register D64), a cell's step is k over its
  * expected rays times n, n its reached frames up to the cap, so its expected
  * step does not depend on what it reads; n counts the frames since its history
  * began, reached or not, so it doesn't either.
@@ -96,7 +96,7 @@ export function blendRunningMean(
             nextCounts.push(n);
         } else if (before !== null && history > 0) {
             values.push(before);
-            // Corrected (D62), the count is frames since the history began, reached or not: it may not
+            // Corrected (D64), the count is frames since the history began, reached or not: it may not
             // depend on whether guiding sent a ray here, or a dark cell would take bigger steps.
             nextCounts.push(expectedRays !== undefined && cap > 1 ? Math.min(history + 1, cap) : history);
         } else {
@@ -362,7 +362,7 @@ export interface ConstantSkyOptions {
      * and 0 otherwise (`sparse`, a bright source few rays find).
      */
     readonly noise?: 'none' | 'exponential' | 'sparse';
-    /** With the running mean: weight each step by the rays the cell expected (register D62). */
+    /** With the running mean: weight each step by the rays the cell expected (register D64). */
     readonly guidingCorrection?: boolean;
 }
 
@@ -385,7 +385,7 @@ export interface ConstantSkyOptions {
  */
 /**
  * The rays each cell of a probe can expect from `guidedCell`'s draws (register
- * D62): its own ray where that isn't guided (always, or the uniform share),
+ * D64): its own ray where that isn't guided (always, or the uniform share),
  * plus every guided ray's chance of landing in it.
  */
 export function expectedRaysPerCell(ownHasHistory: readonly boolean[], cdf: { cdf: readonly number[]; total: number }, uniformShare = RAY_GUIDING_UNIFORM_SHARE): number[] {

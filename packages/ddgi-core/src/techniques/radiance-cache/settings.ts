@@ -225,7 +225,7 @@ export interface RadianceCacheSettings {
     /**
      * Ray guiding draws a cell by its own estimate, so under the running mean a cell
      * that read low gets fewer rays and stays low longer, and the mean reads dark
-     * (register D62). True (ours): each frame's step is weighted by the rays the cell
+     * (register D64). True (ours): each frame's step is weighted by the rays the cell
      * got over the rays it expected, so its expected step doesn't depend on what it
      * reads. False: the step is its rays over its sample count (RC4.1's). Capsaicin
      * has no running mean. Read every frame.
