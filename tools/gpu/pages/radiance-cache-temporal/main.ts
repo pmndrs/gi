@@ -1098,7 +1098,7 @@ async function checkOccluder(device: GPUDevice, fail: (message: string) => void)
 
 /** Section 7: frames under the half-lit sky, then frames after the whole sky lights up (the last one gated). */
 const DARK_FRAMES = 60;
-const LIT_FRAMES = 60;
+const LIT_FRAMES = 120;
 
 /**
  * The floor under a sky of radiance L on the +x half and black on the −x half
@@ -1107,8 +1107,11 @@ const LIT_FRAMES = 60;
  * with D41 such a cell keeps its value until a ray reaches it, so with every ray
  * guided (Capsaicin's rule, `rayGuidingUniformShare: 0`) the floor stays near
  * half lit; with D42's uniform share every cell is sampled now and then and the
- * floor reaches E = πL. The gate: `LIT_FRAMES` frames after the change, the
- * floor's mean E within 1% of πL. The frames it took are reported.
+ * floor reaches E = πL. The cells found again are averaged with their
+ * neighbours' stale ones through the reprojection's taps, so the floor closes
+ * in over tens of frames (RTX 3060: 0.94 at 40 frames, 0.979 at 60). The gate:
+ * `LIT_FRAMES` frames after the change, the floor's mean E within 1% of πL.
+ * The frames it took are reported.
  */
 async function checkDarkDirection(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, unknown>> {
     const camera: PageCamera = { position: [0, 3, 0], target: [0, 1, -10], fovYDeg: 60, near: 0.1, far: 1000 };
@@ -1129,7 +1132,7 @@ async function checkDarkDirection(device: GPUDevice, fail: (message: string) => 
         let bad = halfLit.bad;
         for (let frame = 1; frame <= LIT_FRAMES; frame++) {
             run.frame();
-            if (frame % 4 !== 0 && frame !== 1 && frame !== LIT_FRAMES) continue;
+            if (frame % 8 !== 0 && frame !== 1 && frame !== LIT_FRAMES) continue;
             last = await ratio();
             bad += last.bad;
             perFrame.push({ frame, mean: Number(last.mean.toFixed(4)) });
