@@ -10,19 +10,27 @@
  * rays (radiance-cache-probes/screen.ts):
  *
  * - **still:** the camera at the bookmark;
- * - **moving:** the camera sliding sideways at 0.5 m/s (60 frames a second)
- *   and turning 3 degrees a second.
+ * - **moving:** the camera sliding sideways at 0.25 m/s (60 frames a second; 0.5 m/s
+ *   before RC4.3's review) and turning 3 degrees a second; a frame fails if the camera is up
+ *   against a surface.
  *
  * Each with the interpolation's jitter on (the product) and off (RC4.1 review: the jitter is
  * meant for the GI denoiser, RC4.3), and with the screen probes' history on (RC4.1) and off (the history
  * dropped before every frame, so each frame runs as the first does; the world
- * cache keeps its cells in both). After `CONVERGE_FRAMES` frames, over
+ * cache keeps its cells in both). Those eight measure the raw interpolated irradiance (the
+ * denoiser off). RC4.3 adds the denoised irradiance, the term the composite reads (Capsaicin's
+ * `ReprojectGI` and `FilterGI`, gi-denoiser.ts): still and moving, history on, jitter on and off,
+ * after `DENOISED_CONVERGE_FRAMES` (the denoiser keeps up to 64 frames). Moving, the extra
+ * frames are spent still at the bookmark first, so the camera then travels the same path as the
+ * raw configurations (two-room's camera passes through the wall after about 70 frames of the slide). After `CONVERGE_FRAMES` frames, over
  * `MEASURE_FRAMES` frames, per surface pixel: the relative change of the
  * interpolated irradiance E from the previous frame, |E_t − E_t−1| /
  * max(E_t−1, 5% of the frame's mean E), as the mean and the 95th percentile
  * over every pixel and frame, and the mean E itself. Moving, the previous
  * frame's E is read at the pixel the velocity points back to; a pixel whose
- * previous pixel shows another surface (a disocclusion) is left out.
+ * previous pixel shows another surface (a disocclusion) is left out. Still, also the error
+ * against a converged reference (the raw irradiance averaged over 64 still frames), since
+ * frame-to-frame change alone rewards lag.
  *
  * P6.3: with `VITE_RC_SECOND_BOUNCE=fallback` a DDGI volume (the manifest's)
  * is stacked under the radiance cache and supplies its second bounce
@@ -57,18 +65,30 @@ import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-prob
 const WIDTH = 1280;
 const HEIGHT = 720;
 /** Frames before the warm world cache is measured on, then frames per configuration to settle, then to measure. */
-const WARM_FRAMES = 60;
+const WARM_FRAMES = Number(new URLSearchParams(location.search).get('warm') ?? 60);
 const CONVERGE_FRAMES = 30;
+const DENOISED_CONVERGE_FRAMES = 90;
 const MEASURE_FRAMES = 40;
 /** The moving camera: metres and degrees per frame (0.5 m/s and 3 degrees/s at 60 frames a second). */
-const SLIDE_PER_FRAME = 0.5 / 60;
+// 0.25 m/s since RC4.3's review: at 0.5 m/s two-room's camera reached a wall in the last
+// measured frames. Every moving frame also checks the camera isn't up against a surface.
+const SLIDE_PER_FRAME = 0.25 / 60;
+/** A moving frame fails when more than this share of its surface pixels is nearer than NEAR_LIMIT. */
+const NEAR_SHARE_LIMIT = 0.05;
+const NEAR_LIMIT = 0.3;
+/** Still frames averaged (raw, jitter and history on) into the converged reference. */
+const REFERENCE_FRAMES = 64;
 const TURN_PER_FRAME = 3 / 60;
 /** Camera motion and screen-probe history, each measured with the interpolation jitter on and off. */
 const CONFIGURATIONS = [
-    ['still', 'on'],
-    ['still', 'off'],
-    ['moving', 'on'],
-    ['moving', 'off'],
+    ['still', 'on', 'raw'],
+    ['still', 'off', 'raw'],
+    ['moving', 'on', 'raw'],
+    ['moving', 'off', 'raw'],
+    ['still', 'on', 'denoised'],
+    ['moving', 'on', 'denoised'],
+    ['still', 'on', 'denoised, no clamp'],
+    ['moving', 'on', 'denoised, no clamp'],
 ] as const;
 /**
  * The world-cache backend (P6.1): the page's `data-world-cache` attribute, so
@@ -156,9 +176,40 @@ interface Measurement {
     readonly meanChange: number;
     readonly p95Change: number;
     readonly meanE: number;
+    /** Still only: mean |E − ref| / max(ref, 5% of its mean) against the converged reference. */
+    readonly referenceError: number | null;
     readonly pixels: number;
+    readonly driftPerFrame: number;
     readonly leftOut: number;
     readonly bad: number;
+}
+
+/** The share of surface pixels nearer than NEAR_LIMIT (linear depth from the page's projection). */
+function nearShare(image: FrameImage): number {
+    const { near, far } = image.camera;
+    const a = far / (near - far);
+    const b = (near * far) / (near - far);
+    let close = 0;
+    let count = 0;
+    for (let pixel = 0; pixel < image.depth.length; pixel++) {
+        const depth = image.depth[pixel];
+        if (depth === 1) continue;
+        count++;
+        if (b / (depth + a) < NEAR_LIMIT) close++;
+    }
+    return close / Math.max(count, 1);
+}
+
+/** The mean E over surface pixels. */
+function frameMean(image: FrameImage): number {
+    let sum = 0;
+    let count = 0;
+    for (let pixel = 0; pixel < image.e.length; pixel++) {
+        if (image.depth[pixel] === 1) continue;
+        sum += image.e[pixel];
+        count++;
+    }
+    return sum / Math.max(count, 1);
 }
 
 /** World position of a pixel from a depth readback and the camera it was drawn with. */
@@ -222,7 +273,7 @@ async function measureScene(
     id: string,
     loader: 'manifest' | 'viewer',
     environmentLightEnable = true,
-    configurations: readonly (readonly [string, string])[] = CONFIGURATIONS,
+    configurations: readonly (typeof CONFIGURATIONS)[number][] = CONFIGURATIONS,
 ): Promise<Record<string, Measurement>> {
     const manifest = loadManifest(id);
     const bookmark = manifest.cameras[0];
@@ -249,10 +300,12 @@ async function measureScene(
         platform.encodeScreen(encoder, screen.screen);
         device.queue.submit([encoder.finish()]);
     };
-    const readFrame = async (withVelocity: boolean): Promise<FrameImage> => {
+    const readFrame = async (withVelocity: boolean, denoised: boolean): Promise<FrameImage> => {
         const probes = technique.probes;
         if (!probes) throw new Error('no probes after encodeScreen');
-        const irradiance = halvesFast(await readTexture(device, probes.irradiance, 8, WIDTH, HEIGHT));
+        const source = denoised ? probes.denoisedIrradiance : probes.irradiance;
+        if (!source) throw new Error('no denoised irradiance with the denoiser on');
+        const irradiance = halvesFast(await readTexture(device, source, 8, WIDTH, HEIGHT));
         const e = new Float32Array(WIDTH * HEIGHT);
         for (let pixel = 0; pixel < e.length; pixel++) e[pixel] = (irradiance[pixel * 4] + irradiance[pixel * 4 + 1] + irradiance[pixel * 4 + 2]) / 3;
         const depth = new Float32Array((await readTexture(device, screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
@@ -268,33 +321,64 @@ async function measureScene(
             frame();
             if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
         }
+        // The converged reference for the still configurations: the raw irradiance with the
+        // product's settings averaged over REFERENCE_FRAMES still frames (noise averaged out,
+        // nothing lagging); frame-to-frame change alone would reward a laggy filter.
+        technique.settings.interpolationJitter = (PAGE_COMPARE_VALUES.interpolationJitter as boolean | undefined) ?? true;
+        technique.settings.denoiser = false;
+        const referenceSum = new Float64Array(WIDTH * HEIGHT);
+        let referenceDepth: Float32Array | null = null;
+        for (let index = 0; index < REFERENCE_FRAMES; index++) {
+            frame();
+            await device.queue.onSubmittedWorkDone();
+            const image = await readFrame(false, false);
+            referenceDepth ??= image.depth;
+            for (let pixel = 0; pixel < referenceSum.length; pixel++) referenceSum[pixel] += image.e[pixel];
+        }
+        const reference = Float64Array.from(referenceSum, (sum) => sum / REFERENCE_FRAMES);
+        let referenceMean = 0;
+        let referenceCount = 0;
+        for (let pixel = 0; pixel < reference.length; pixel++) {
+            if (referenceDepth![pixel] === 1) continue;
+            referenceMean += reference[pixel];
+            referenceCount++;
+        }
+        const referenceFloor = (DARK_FLOOR * referenceMean) / Math.max(referenceCount, 1);
         const results: Record<string, Measurement> = {};
         for (const jitter of [true, false]) {
-            for (const [motion, history] of configurations) {
+            for (const [motion, history, term] of configurations) {
+                const denoised = term !== 'raw';
                 technique.settings.interpolationJitter = (PAGE_COMPARE_VALUES.interpolationJitter as boolean | undefined) ?? jitter;
+                technique.settings.denoiser = denoised;
+                technique.settings.denoiserHistoryClamp = term === 'denoised, no clamp' ? 'none' : 'neighbourhood';
                 technique.resetScreenHistory();
                 let step = 0;
+                let stillLeadIn = denoised ? DENOISED_CONVERGE_FRAMES - CONVERGE_FRAMES : 0;
                 const advance = (): void => {
                     if (history === 'off') technique.resetScreenHistory();
-                    if (motion === 'moving') camera = movingCamera(base, step++);
+                    if (motion === 'moving' && stillLeadIn-- <= 0) camera = movingCamera(base, step++);
                     frame();
                 };
                 camera = base;
-                for (let index = 0; index < CONVERGE_FRAMES; index++) {
+                for (let index = 0; index < (denoised ? DENOISED_CONVERGE_FRAMES : CONVERGE_FRAMES); index++) {
                     advance();
                     if (index % 8 === 7) await device.queue.onSubmittedWorkDone();
                 }
                 await device.queue.onSubmittedWorkDone();
-                let previous = await readFrame(motion === 'moving');
+                let previous = await readFrame(motion === 'moving', denoised);
                 const tally = new ChangeTally();
                 let leftOut = 0;
                 let eSum = 0;
                 let eCount = 0;
                 let bad = 0;
+                let firstMeanE = 0;
+                let lastMeanE = 0;
+                let referenceErrorSum = 0;
+                let referenceErrorCount = 0;
                 for (let index = 0; index < MEASURE_FRAMES; index++) {
                     advance();
                     await device.queue.onSubmittedWorkDone();
-                    const current = await readFrame(motion === 'moving');
+                    const current = await readFrame(motion === 'moving', denoised);
                     for (let pixel = 0; pixel < current.e.length; pixel++) {
                         if (current.depth[pixel] === 1) continue;
                         const value = current.e[pixel];
@@ -305,13 +389,28 @@ async function measureScene(
                         }
                     }
                     leftOut += changes(previous, current, tally).leftOut;
+                    if (motion === 'still') {
+                        for (let pixel = 0; pixel < current.e.length; pixel++) {
+                            if (current.depth[pixel] === 1) continue;
+                            referenceErrorSum += Math.abs(current.e[pixel] - reference[pixel]) / Math.max(reference[pixel], referenceFloor);
+                            referenceErrorCount++;
+                        }
+                    } else {
+                        const near = nearShare(current);
+                        if (near > NEAR_SHARE_LIMIT) throw new Error(`${id}: the moving camera is up against a surface (${(near * 100).toFixed(1)}% of pixels nearer than ${NEAR_LIMIT} m)`);
+                    }
+                    if (index === 0) firstMeanE = frameMean(current);
+                    if (index === MEASURE_FRAMES - 1) lastMeanE = frameMean(current);
                     previous = current;
                 }
-                results[`${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
+                results[`${denoised ? `${term}, ` : ''}${motion}, history ${history}, jitter ${jitter ? 'on' : 'off'}`] = {
                     meanChange: Number((tally.sum / Math.max(tally.count, 1)).toFixed(5)),
                     p95Change: Number(tally.percentile(0.95).toFixed(4)),
                     meanE: Number((eSum / Math.max(eCount, 1)).toPrecision(5)),
+                    referenceError: referenceErrorCount > 0 ? Number((referenceErrorSum / referenceErrorCount).toFixed(5)) : null,
                     pixels: tally.count,
+                    // The whole image's mean E from the first to the last measured frame, per frame: a drift, not noise.
+                    driftPerFrame: Number(((lastMeanE / Math.max(firstMeanE, 1e-30)) ** (1 / (MEASURE_FRAMES - 1)) - 1).toExponential(2)),
                     leftOut,
                     bad,
                 };

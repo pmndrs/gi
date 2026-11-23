@@ -14,9 +14,10 @@
  *   public) would make it a normal dependency.
  *
  *   node tools/linked-siblings.ts           checks every sibling (the root `preinstall` runs it):
- *                                           a required one missing, unbuilt or at another commit
- *                                           than its pin stops the install with the fix; an
- *                                           optional one only says so
+ *                                           a required one missing or unbuilt stops the install
+ *                                           with the fix (at another commit than its pin: a
+ *                                           warning, fine while developing both); an optional
+ *                                           one only says so
  *   node tools/linked-siblings.ts --fetch   clones each missing sibling next to this repo at its
  *                                           pinned commit and builds it (corepack + yarn), as CI
  *                                           does; an optional one it can't clone (no access) is
@@ -101,12 +102,13 @@ for (const [name, sibling] of siblings) {
     if (head && head !== sibling.commit) {
         const drift = `${name}'s clone is at ${head.slice(0, 9)}; package.json pins ${sibling.commit.slice(0, 9)}`;
         if (optional) notes.push(`${drift}: gi refuses to load it until the pinned commit is checked out (or the pin updated).`);
-        else if (fetch) console.warn(`linked-siblings: ${drift} (left as it is; check out the pin, or update it)`);
-        else problems.push(`${drift}: check out the pinned commit, or update the pin.`);
+        // A required clone at another commit is fine while developing both (RC4.3); --fetch leaves it as it is.
+        else console.warn(`linked-siblings: ${drift} (fine while developing both; check out the pin, or update it)`);
     }
 }
 
 for (const note of notes) console.log(`linked-siblings: ${note}`);
+
 if (problems.length > 0) {
     console.error(
         [

@@ -1,4 +1,4 @@
 {
-    "description": "RC4.1: frame-to-frame relative change of the radiance cache irradiance (mean and p95 per pixel) on cornell-box, two-room and Sponza, camera still and slowly moving, screen-probe history on and off, after convergence; RC4.2: with the probe filter and SSGI, the filter alone, and neither (RC4.1). A measurement, not a gate: only NaN, infinite or negative values fail.",
-    "timeoutMs": 2400000
+    "description": "RC4.1: frame-to-frame relative change of the radiance cache irradiance (mean and p95 per pixel) on cornell-box, two-room and Sponza, camera still and slowly moving, screen-probe history on and off, after convergence; RC4.2: with the probe filter and SSGI, the filter alone, and neither (RC4.1); RC4.3: raw and through the GI denoiser (clamp on and off), with the error against a converged reference. A measurement, not a gate: only NaN, infinite or negative values fail.",
+    "timeoutMs": 3600000
 }

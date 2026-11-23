@@ -482,6 +482,54 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         help: "With GI-1.2's own second-bounce rays only (the cache alone, or the second bounce from GI-1.2's rays): a small network (pmndrs/pathtracer's, from its private package) learns the cells' indirect light and answers the bounces past the second, so the cache carries every bounce. Off (the default, Capsaicin's) is two bounces. With DDGI giving the second bounce, or without the package, it stays off and warns once.",
     }),
 
+    // ---- The GI denoiser (RC4.3, register D65-D66) ----
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'denoiser',
+        group: 'denoiser',
+        label: 'GI denoiser',
+        urlName: 'rcdenoise',
+        register: 'D65',
+        capsaicin: true,
+        help: "GI-1.0's image-space denoiser (ReprojectGI and FilterGI, from pmndrs/denoiser) on the interpolated irradiance, which the picture then shows. On, as Capsaicin always runs it; off shows the raw interpolation.",
+    }),
+    toggle<CompareChoiceToggle>({
+        kind: 'choice',
+        setting: 'denoiserHistoryClamp',
+        group: 'denoiser',
+        label: 'Denoiser history clamp',
+        urlName: 'rcdnclamp',
+        register: 'D66',
+        choices: [
+            { value: 'neighbourhood', label: 'Clamp to a short history (ours)' },
+            { value: 'none', label: "No clamp (Capsaicin's)" },
+        ],
+        capsaicin: 'none',
+        help: "Whether the denoiser's long history is held near a short one of about 4 frames, so a lighting change shows within a few frames (ours). Capsaicin uses its history as it is, which takes 45-160 frames to follow a change (none).",
+    }),
+    toggle<CompareNumberToggle>({
+        kind: 'number',
+        setting: 'denoiserHistoryClip',
+        group: 'denoiser',
+        label: 'Clamp width (standard errors)',
+        urlName: 'rcdnclip',
+        register: 'D66',
+        min: 0.5,
+        max: 8,
+        step: 0.25,
+        help: 'With the clamp on: how far the long history may sit from the short one, in standard errors (ours 2). Smaller follows changes sooner and flickers more. Capsaicin has no clamp, so no value of its own.',
+    }),
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'denoiserChangeReset',
+        group: 'denoiser',
+        label: 'Denoiser: short history where the scene changed',
+        urlName: 'rcdnreset',
+        register: 'D66',
+        capsaicin: false,
+        help: "Where a light or object changed, the denoiser keeps at most a few frames of history there for 8 frames, so the change shows sooner (ours, on). Capsaicin's denoiser hears of no change (off).",
+    }),
+
     // ---- Experiments (not Capsaicin's changes; for seeing what history does) ----
     toggle<CompareBooleanToggle>({
         kind: 'boolean',
