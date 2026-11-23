@@ -160,9 +160,10 @@ export const ALL_LIGHT_GROUPS = 0xf;
  * The lights a cache hit draws its one light sample from, as
  * `giDirectChooseLight`'s group mask: every light group, and the sky with
  * `environment_light_enable` (register D33, RC3.4). Shared by
- * `GenerateReservoirs` and `GenerateMultibounceReservoirs`.
+ * `GenerateReservoirs`, `GenerateMultibounceReservoirs` and lever E8's
+ * `ShadeCells` (cell-shading-wgsl.ts).
  */
-const LIGHT_MASK_WGSL = /* wgsl */ `
+export const LIGHT_MASK_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
 
 // Capsaicin's light list holds the environment map when LightBuilder's environment_light_enable
@@ -376,7 +377,14 @@ fn HashGridCache_SetRayListWord(offset: u32, index: u32, value: u32) {
 // sky is black or not a candidate) is a sample of no light for its cell, as PopulateCells counts
 // an occluded shadow ray (register D63). Capsaicin traces no shadow ray for it (gi1.comp:2569-2572,
 // 2661-2664), so nothing counted it, and a cell holding lit and unlit hits averaged the lit ones.
+// Lever E8 (cells lit on a budget): only a ray shorter than its cell gets here, and its sample stays
+// with its ray (as PopulateCells keeps a lit one out of the scratch); its cell's sample is drawn from
+// all its hits, this one too, and ShadeCells counts no light as a sample of 0. Counted here as well,
+// it would reach UpdateTiles as a sample of 0 in a cell ScatterCells left unlit.
 fn HashGridCache_AddSampleOfNoLight(cell_index: u32) {
+    if (HashGridCache_CellShadingBudgeted()) {
+        return;
+    }
     atomicAdd(&g_HashGridCache_UpdateScratch[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);
 }
 

@@ -64,7 +64,8 @@
  *
  * 6d. **The sky counted once** (RC3.4): an open floor under a constant sky L,
  *    with `environmentLightEnable` on: gi1-rays and the fallback both read ρ L
- *    (see `runSkyOnce`).
+ *    (see `runSkyOnce`); again with the cells lit on a budget (P6.2, lever E8),
+ *    whose `ShadeCells` draws from the same light mask.
  *
  * 7. **What runs:** with 'fallback' the frame has no second-bounce entry
  *    and no second-bounce shadow ray, and the cache reports 'fallback' in
@@ -551,11 +552,18 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
  * brings it as the hit's indirect light. Either way a floor probe ray reads ρ L (the patch hides
  * at most 0.2% of the sky), within 2% (gi1-rays) or 3% (fallback, DDGI's field); counting the
  * sky twice reads 2 ρ L. DDGI bounce off, so its field is the sky alone.
+ *
+ * P6.2 (lever E8, `cellShading: 'budgeted'` at 20,000 cells): `ShadeCells` lights the cells from
+ * `HashGridCache_LightMask()` as `GenerateReservoirs` lights hits, so with GI-1.2's rays the
+ * budgeted floor cells draw the sky (without it they'd read 0), and with the fallback they leave it
+ * out (a floor hit then has no light to draw: a sample of 0, register D63), and DDGI's field brings
+ * it once; the same tolerances.
  */
-async function runSkyOnce(device: GPUDevice, mode: Mode, failures: string[]): Promise<Record<string, unknown>> {
-    const name = `6d open floor under a sky, ${mode}`;
+async function runSkyOnce(device: GPUDevice, mode: Mode, failures: string[], cellShading: 'per-hit' | 'budgeted' = 'per-hit'): Promise<Record<string, unknown>> {
+    const name = `6d open floor under a sky, ${mode}${cellShading === 'budgeted' ? ', budgeted' : ''}`;
     const expected = FURNACE.albedo * SKY_RADIANCE;
-    const scenario = await startScenario(device, name, { scene: { kind: 'openFloorSky' }, settings: { secondBounce: mode }, ddgi: { ...DDGI_ACCURACY, bounceEnergy: 0 } });
+    const settings: Partial<RadianceCacheSettings> = cellShading === 'budgeted' ? { secondBounce: mode, cellShading, cellShadingBudget: 20000 } : { secondBounce: mode };
+    const scenario = await startScenario(device, name, { scene: { kind: 'openFloorSky' }, settings, ddgi: { ...DDGI_ACCURACY, bounceEnergy: 0 } });
     try {
         await runFrames(device, scenario, ACCURACY_FRAMES);
         const rays = await readRays(device, scenario, false);
@@ -786,6 +794,7 @@ try {
         for (const testCase of ACCURACY_CASES) accuracy[testCase.name] = await runAccuracy(device, testCase, failures);
         accuracy['6c coverage'] = await runCoverage(device, failures);
         for (const mode of ['gi1-rays', 'fallback'] as const) accuracy[`6d sky once, ${mode}`] = await runSkyOnce(device, mode, failures);
+        for (const mode of ['gi1-rays', 'fallback'] as const) accuracy[`6d sky once, ${mode}, budgeted`] = await runSkyOnce(device, mode, failures, 'budgeted');
         noFallback = await runNoFallback(device, failures);
     }
     const lag: Record<string, unknown> = {};

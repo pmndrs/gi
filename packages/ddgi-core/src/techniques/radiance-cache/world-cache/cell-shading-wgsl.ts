@@ -60,17 +60,16 @@
  * a sample's value, and the running mean of unbiased samples is unbiased. The
  * cell's mean converges to per-hit's; it gets one sample a lighting instead of
  * one per hit, so its value is noisier and older. Per hit, a hit with no light
- * to draw adds no sample; so here: a lit cell whose sample hit has no light
- * adds none, and a cell with no estimate is marked dark (`CELL_DARK_COUNT`, a
- * count too small to move its tile's coarser levels) so it isn't taken as
- * new every frame. (A sample of 0 instead dimmed the coarser levels where
- * floor and ceiling share a tile, and the furnace's second bounce read low.)
+ * to draw adds a sample of no light (register D63,
+ * `HashGridCache_AddSampleOfNoLight`); so here a lit cell whose sample hit has
+ * no light to draw takes a sample of 0, and its mean is over all its hits as
+ * per hit's is.
  */
 
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_EVENTS, CELL_SHADING_SALT } from './cell-shading-common.ts';
-import { ALL_LIGHT_GROUPS, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
+import { LIGHT_MASK_WGSL, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
 
 /** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes an event. */
 export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_EVENTS;
@@ -137,8 +136,8 @@ fn HashGridCache_KeepOneSample(value_index: u32) {
 }
 
 // A changed cell's direct value: its mean kept (so nothing goes dark) with the changed count, so that
-// whenever it is next lit its sample replaces it (ShadeCells). A cell with no samples (new, or lit
-// with no light) is emptied: it is lit again first.
+// whenever it is next lit its sample replaces it (ShadeCells). A cell with no samples (new) is
+// emptied: it is lit again first.
 fn HashGridCache_MarkChanged(cell_index: u32) {
     let value = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
     var marked = vec4f(0.0);
@@ -188,7 +187,7 @@ fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
     }
 
     // New (no count), changed (now or on an earlier frame, not lit since), converging (whole counts
-    // under the cap), settled (at the cap, or lit with no light: the dark count).
+    // under the cap), settled (at the cap).
     var priority = ${CELL_PRIORITY_CLASS.rest}u;
     if (changed || direct.w <= 0.0 || direct.w == HASHGRIDCACHE_CELL_CHANGED_COUNT) {
         priority = ${CELL_PRIORITY_CLASS.newOrChanged}u;
@@ -370,7 +369,8 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
 /**
  * `ShadeCells`: over the shade list, the cell's sample hit draws one light and
  * traces its shadow ray, as `GenerateReservoirs` and `PopulateCells` do for a
- * hit (the platform's light choice, register D4; Lambert, D8), and the result
+ * hit (the platform's light choice, register D4, with the sky as
+ * `HashGridCache_LightMask` sets it, D62; Lambert, D8), and the result
  * is the cell's one sample this frame, stored over the key in its scratch. A
  * changed cell's value is emptied first, so the sample replaces it.
  *
@@ -381,8 +381,7 @@ export function shadeCellsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${cellShadingHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
-
-const HASHGRIDCACHE_SHADE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
+${LIGHT_MASK_WGSL}
 const HASHGRIDCACHE_CELL_SHADE_SALT: u32 = ${CELL_SHADING_SALT.shade}u;
 // INV_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_SHADE_INV_PI: f32 = 0.318309886183791;
@@ -403,34 +402,28 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
     let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, visibility_index);
     let surface = HashGridCache_ProbeSurface(HashGridCache_VisibilityRay(visibility_index));
 
-    // One light, as GenerateReservoirs draws it, and its shadow ray, as PopulateCells traces it.
+    // One light, drawn from the lights GenerateReservoirs draws from (HashGridCache_LightMask: every
+    // group, and the sky unless E10's fallback holds it, register D62), and its shadow ray, as
+    // PopulateCells traces it.
     var random = rcMakeRandom(visibility_index ^ HASHGRIDCACHE_CELL_SHADE_SALT, g_HashGridCacheConstants.frame_index);
-    // TODO(RC3.4): once rc3-4 merges, draw from HashGridCache_LightMask() as GenerateReservoirs does
-    // (the sky as a light); with ALL_LIGHT_GROUPS budgeted cells get no sky light on the cache's hits.
-    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_SHADE_LIGHT_GROUPS, rcRand(&random));
+    let reservoir = giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random));
     let sample_params = rcRand2(&random);
-    // A changed cell, or one with no whole sample (new, or dark), starts again from this sample
-    // (UpdateTiles takes a sample whole into a value with no count).
+    // A changed cell, or one with no whole sample (new), starts again from this sample (UpdateTiles
+    // takes a sample whole into a value with no count).
     let value = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
     let replaces = (shaded & HASHGRIDCACHE_CELL_CHANGED_BIT) != 0u || value.w < 1.0 || value.w == HASHGRIDCACHE_CELL_CHANGED_COUNT;
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
 
-    if (reservoir.light == GI_DIRECT_NO_LIGHT) {
-        // No light to draw: no sample, as per hit (GenerateReservoirs adds none for such a hit), so a
-        // cell's mean is over the same hits per hit's is. A cell with no estimate is marked dark (not
-        // new, so it doesn't take the budget every frame); one with samples keeps them.
-        if (replaces) {
-            g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = HashGridCache_PackRadiance(vec4f(0.0, 0.0, 0.0, HASHGRIDCACHE_CELL_DARK_COUNT));
-        }
-        atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], 0u);
-        atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], 0u);
-        return;
-    }
-    let light_ray = giDirectLightRay(surface, reservoir.light, sample_params);
-    let occluded = light_ray.castsShadows && giTraceAny(light_ray.shadowRay);
+    // No light to draw (it faces away from every light, and the sky is black or not a candidate): a
+    // sample of 0, as per hit (HashGridCache_AddSampleOfNoLight, register D63), so a cell's mean is
+    // over all its hits, as per hit's is.
     var lighting = vec3f(0.0);
-    if (!occluded) {
-        lighting = surface.albedo * HASHGRIDCACHE_SHADE_INV_PI * light_ray.irradiance * reservoir.weight;
+    if (reservoir.light != GI_DIRECT_NO_LIGHT) {
+        let light_ray = giDirectLightRay(surface, reservoir.light, sample_params);
+        let occluded = light_ray.castsShadows && giTraceAny(light_ray.shadowRay);
+        if (!occluded) {
+            lighting = surface.albedo * HASHGRIDCACHE_SHADE_INV_PI * light_ray.irradiance * reservoir.weight;
+        }
     }
     if (replaces) {
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u);
