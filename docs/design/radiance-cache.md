@@ -186,6 +186,10 @@ Every change we make to Capsaicin's behaviour over time gets a setting whose oth
 | `cellShadingBudget` | world cache | 20,000 | none | E8 |
 | `cellChangeReset` | world cache | true | false (no reset) | E9 |
 | `cellChangeResetHistory` | world cache | 0 | none | E9 |
+| `denoiser` | denoiser | true | true (GI-1 always runs it; off shows the raw interpolation) | D65 |
+| `denoiserHistoryClamp` | denoiser | `neighbourhood` (the long history held to a short one's mean ± `denoiserHistoryClip` standard errors) | `none` (the history as it is: 45-160 frames to follow a step) | D66 |
+| `denoiserHistoryClip` | denoiser | 2 | none (no clamp in Capsaicin) | D66 |
+| `denoiserChangeReset` | denoiser | true (a short history for 8 frames where the scene changed) | false (no change signal reaches the denoiser) | D66 |
 | `probeHistory` | experiments | true | true (off: every frame a first frame) | |
 
 ↺: a change starts the screen probes' history over. ⟳: read at `prepare` (`PREPARE_SETTINGS`): the viewer makes a new radiance cache when it changes. `sharc.<key>` entries set one key of `settings.sharc` (`compareSettingValue`); an entry with no Capsaicin value (`capsaicin` left out) is left at ours by "All Capsaicin". `host.<key>` entries (`HOST_COMPARE_DEFAULTS`) are the host's choices about how it makes the technique, read with `hostCompareValue` and never put in the technique's settings; they always restart it.
@@ -285,7 +289,7 @@ Reprojection with the plane and normal tests, adaptive patching, luminance-CDF r
 
 - *Passes,* in Capsaicin's order (`GI1::render`, gi1.cpp:2256-2557; `screen-probe-history.ts`, kernels in `wgsl/temporal-probes.ts`): `ClearCounters`; last frame's atlas, mask and SH copied aside (D44), or with no history an empty previous mask and `InitCachedTileLRU`; `ReprojectScreenProbes` (velocity per `FrameScreen.velocity`, which the technique now asks for); `CountScreenProbes`, the platform's scan and `ScatterScreenProbes` (indirect on the list's element count); spawn and compaction (`CompactScreenProbes` now fills the override list); `PatchScreenProbes` (indirect on the empty-tile count); `SampleScreenProbes` with the 3 × 3 taps, the cached probes, the evicted and updated cache entries, and the luminance CDF; population and the world cache; `BlendScreenProbes` with the biased hysteresis and the cache writes; `ReorderScreenProbes` with the scan of the LRU flags; RC2.2's image passes; the screen's depth and normals copied for the next frame.
 - *History:* `resetHistory` drops the screen probes' history with the world cache; `resetScreenHistory` drops only the screen probes' (a cut), so the next frame runs as the first does.
-- *Not yet:* the GI denoiser (RC4.3). (`FilterScreenProbes` arrived with RC4.2.)
+- *Not yet* at the time: the GI denoiser (arrived with RC4.3, below) and `FilterScreenProbes` (RC4.2).
 - *Checked by* `radiance-cache-temporal` (the constant sky at πL every frame for 440 frames, the sums that can't wrap, `ReprojectScreenProbes` against its CPU port, the cache's LRU and MRU invariants and the patch against the CPU spawn rule) and measured by `radiance-cache-stability` (frame-to-frame change on two-room and Sponza; PROGRESS, NOTES).
 
 **What RC4.2 built** (the probe filter and SSGI; register D49-D58).
@@ -295,6 +299,12 @@ Reprojection with the plane and normal tests, adaptive patching, luminance-CDF r
 - *`InterpolateScreenProbes`*'s `HAS_OCCLUSION` branch (gi1.comp:1621-1627): the SH through the cone of SSGI's visibility around its bent normal, plus SSGI's near-field light. With SSGI it also writes the lit image the next frame's SSGI reads: the host's own light (`FrameScreen.lighting`, a new optional channel; three's scene-pass `output`) plus albedo × E / π (D51). `settings.ssgi` (default true) asks for `lighting` and `albedo`; turned off later it stops SSGI.
 - *GTAO and the composite:* the radiance cache's E carries its own occlusion now; the three composite's opt-in GTAO (`occlusion`) on top of it would darken GI twice (composite.ts says so). The composite has none by default (DECISIONS 2026-11-18).
 - *Checked by* `radiance-cache-near-field` (a uniform field through the filter, the filter against its CPU port across depth edges, SSGI on an open plane, in a corner against the analytic visibility and bent normal, and a near-field furnace) and `radiance-cache-image` (the Lambert check and the interpolation against its CPU port, now with SSGI's images as its inputs).
+
+**What RC4.3 built** (the image-space GI denoiser; register D65-D66).
+
+- *Where:* GI-1.0's `ReprojectGI`, `FilterGI` × 2 and `gi_denoiser.hlsl` (gi1.comp:3997-4154, gi1.cpp:2881-2926) are `Gi1Denoiser` in pmndrs/denoiser's `@pmndrs/denoiser-ffx` (draft PR pmndrs/denoiser#33), linked here from a local clone pinned in package.json `linkedSiblings` (`tools/linked-siblings.ts`) until a release carries it. `gi-denoiser.ts` runs it after `InterpolateScreenProbes`, with the platform's screen history as the previous depth and normals (D65); the composite reads its output (`settings.denoiser`, on as in Capsaicin).
+- *Ours over Capsaicin* (D66): the history clamp (`denoiserHistoryClamp`, `denoiserHistoryClip`) and a soft reset where the scene changed (`denoiserChangeReset`, fed by the change events' armed boxes, D46's), each a compare toggle with Capsaicin's value.
+- *Checked by* the denoiser's own bed (pmndrs/denoiser `examples/ffx-denoiser/gi1.html`: constant field, blur mask, reprojection, ghosting), `radiance-cache-temporal` (the constant sky through the denoiser), `radiance-cache-denoiser-change` (two-room's lamp moves) and measured by `radiance-cache-stability` (raw and denoised).
 
 ### Phase 5: baseline comparison and attention list
 

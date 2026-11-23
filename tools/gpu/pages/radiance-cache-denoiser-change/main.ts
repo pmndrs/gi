@@ -19,9 +19,14 @@
  *
  * The frame-to-frame change over the first 8 frames after the move shows whether the history
  * is kept (a dropped history shows the raw input's noise; the raw change is reported beside
- * it). Gate (defaults: clamp on, reset on): 64 frames after the move the denoised error is at
- * most `ERROR_RATIO_GATE` times the raw input's (the radiance cache itself takes about 60
- * frames to follow), no NaN or negative values, no device errors.
+ * it). Gate (on the run at the defaults: clamp on, reset on): 64 frames after the move the
+ * denoised error is at most `ERROR_RATIO_GATE` times the raw input's (the radiance cache itself
+ * takes about 60 frames to follow), no NaN or negative values, no device errors.
+ *
+ * `VITE_RC_COMPARE` (RC4.5, radiance-cache-probes/compare-env.ts) sets every run's other
+ * settings, and the gate moves to the run whose clamp and reset it names, so a Capsaicin value
+ * can be run against the gate written for it: `VITE_RC_COMPARE=denoiserHistoryClamp=none` gates
+ * the run with the clamp off and the reset on.
  *
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-denoiser-change --gpu nvidia`
  */
@@ -31,9 +36,11 @@ import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/con
 import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { setCompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -85,7 +92,10 @@ async function measure(device: GPUDevice, clamp: 'neighbourhood' | 'none', reset
     const bookmark = manifest.cameras[0];
     const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
     const platform = new GIPlatformImpl(device, { label: 'radiance-cache-denoiser-change' });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ denoiserHistoryClamp: clamp, denoiserChangeReset: reset }));
+    // The run's compare values (if any) over the defaults, then this run's clamp and reset.
+    const technique = platform.addTechnique(pageRadianceCache());
+    technique.settings.denoiserHistoryClamp = clamp;
+    technique.settings.denoiserChangeReset = reset;
     platform.setOutput(technique);
     await platform.prepare();
     const lights: LightHandle[] = [];
@@ -206,13 +216,17 @@ try {
     }
     const failures: string[] = [];
     for (const [name, run] of Object.entries(runs)) if (run.bad > 0) failures.push(`${name}: ${run.bad} bad values`);
-    const defaults = runs['clamp neighbourhood, change reset on'];
-    if (!(defaults.errorRatioAt64 <= ERROR_RATIO_GATE)) failures.push(`defaults: denoised error ${defaults.errorRatioAt64}x the raw input's at frame 64, gate ${ERROR_RATIO_GATE}`);
+    // The gated run: the defaults, or the clamp and reset VITE_RC_COMPARE names.
+    const gatedSettings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS };
+    setCompareValues(gatedSettings, PAGE_COMPARE_VALUES);
+    const gatedName = `clamp ${gatedSettings.denoiserHistoryClamp}, change reset ${gatedSettings.denoiserChangeReset ? 'on' : 'off'}`;
+    const gated = runs[gatedName];
+    if (!(gated.errorRatioAt64 <= ERROR_RATIO_GATE)) failures.push(`${gatedName}: denoised error ${gated.errorRatioAt64}x the raw input's at frame 64, gate ${ERROR_RATIO_GATE}`);
     await drainDevice(device);
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, lampTo: LAMP_B, runs },
+        data: { width: WIDTH, height: HEIGHT, lampTo: LAMP_B, compare: PAGE_COMPARE_VALUES, gated: gatedName, runs },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
