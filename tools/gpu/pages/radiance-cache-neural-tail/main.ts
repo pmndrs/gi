@@ -29,24 +29,24 @@
  *    with the tail the ceiling settles at every bounce, ρ (ρE/π) / (1 − ρ²) =
  *    0.4244 (`furnaceCeiling`). Judged: ceiling hits whose GI-1.2 tile is
  *    under 2 m (beyond, its tiles hold floor and ceiling hits together; NOTES),
- *    their mean at the last frame: within 2% with 8 px cells, within 6% at
- *    Capsaicin's 32 px. At 32 px the far tiles' columns put the floor's direct
- *    light into ceiling cells at grazing angles, so a floor pixel's cosine ray
- *    reads them high, the screen records teach the network that, and the
- *    fixed point settles about 3% over (4-5% while the targets were the
- *    screen's irradiance, before P6.4's review); at 8 px the columns are out
- *    of reach and the floor's records read ρ × the ceiling.
+ *    their mean at the last frame: within 2% of every bounce with 8 px cells
+ *    (the clean test of the tail). At Capsaicin's 32 px the grid's own column
+ *    effect moves the base (far tiles hold floor and ceiling hits together;
+ *    since RC3.4's D63 an unlit ceiling hit adds a sample of no light there;
+ *    NOTES), so what is gated is what the tail adds: its error against every
+ *    bounce minus GI-1.2's error against two bounces, the same page run,
+ *    within 2% (`DELTA_TOLERANCE`); the absolute reading is recorded.
  *    Also recorded: the tail without screen records (`screenStride: 0`),
  *    which can't learn the floor here (every probe is on it, every probe ray
  *    goes up, so no cell record is a floor's), and the tail's answers and
  *    training targets by surface.
  * 3. **Strips** (the furnace's floor as 5 cm strips every 10 cm: half of a
  *    ceiling bounce ray misses; 300 frames): GI-1.2 0.1592, every bounce
- *    `furnaceCeiling(..., 1/2)` = 0.1819; the tail's near ceiling rays'
- *    mean within 2% at 32 px cells, within 6% at 8 px (the strips' own
- *    screen irradiance reads about 20% low at 8 px: probes start under thin
- *    strips, register D17). Also recorded: GI-1.2 at 8 px for both scenes
- *    (its second bounce doesn't read the floor's irradiance).
+ *    `furnaceCeiling(..., 1/2)` = 0.1819; as the furnace: the tail's near
+ *    ceiling rays within 2% of every bounce at 8 px cells, and at 32 px its
+ *    error minus GI-1.2's within 2% (after RC3.4 GI-1.2 itself reads about
+ *    −2.5% there, the column effect). Also recorded: GI-1.2 at 8 px for both
+ *    scenes.
  * 4. **Lag and flicker** (the corner, floor and wall albedo 0.5, multibounce;
  *    the sun doubled after 150 frames, 200 frames after): frames until the
  *    mean irradiance E over the screen, and the mean hit-ray radiance, stay
@@ -103,7 +103,8 @@
  *    takes what the cache holds at its ray's hit (0 on a miss), so the sky is
  *    counted once. The strips' rays read every bounce, rho * rho (1 - f) L /
  *    (1 - rho^2 f) = 0.1429 (`skyStripsCeiling`; GI-1.2 0.125): within 2% at
- *    8 px cells, 6% at Capsaicin's 32 px (the furnace's column tiles). A sky
+ *    8 px cells, and at Capsaicin's 32 px what the tail adds over GI-1.2's
+ *    own error within 2% (the furnace's rule). A sky
  *    in the screen records' misses would read about twice that.
  * 11. **Nothing to learn from** (the lit plane with the camera looking up at
  *    the black sky, 40 frames): no surface on the screen, so no probe rays,
@@ -160,13 +161,17 @@ const WIDTH = 1280;
 const HEIGHT = 720;
 const TOLERANCE = 0.02;
 /**
- * The every-bounce checks take the floor's light from the screen records (a cosine ray from a
- * visible surface to the cache's value at its hit), so they inherit the grid's errors there, each
- * judged within 2% where the grid is clean and within this where it isn't (P6.4): the furnace at
- * Capsaicin's 32 px cells reads about 3% over (far ceiling tiles are columns that also hold floor
- * hits, NOTES), clean at 8 px; the strips at 8 px read 1-5% under (thin strips, register D17).
+ * At Capsaicin's 32 px cells the grid's own column effect (D63, NOTES) moves GI-1.2's reading, and
+ * the tail's with it, so the 32 px checks gate what the tail adds (the lead, 2026-11-23): the
+ * tail's relative error against every bounce minus GI-1.2's against two bounces, the same page
+ * run, within this. The absolute readings are recorded.
  */
-const COLUMN_TOLERANCE = 0.06;
+const DELTA_TOLERANCE = 0.02;
+
+/** The tail's error against every bounce minus GI-1.2's against two bounces (each run's last frame). */
+function tailAdds(tail: Run, gi1: Run): number {
+    return final(tail) - final(gi1);
+}
 const ALBEDO = 0.5;
 /** Frames of each analytic check: the gate opens at frame 17, the fixed point needs a few hundred more. */
 const CHECK_FRAMES = Number((import.meta.env as Record<string, unknown>).VITE_NEURAL_TAIL_FRAMES ?? 300);
@@ -1045,9 +1050,11 @@ try {
             tailWithoutScreenRecords: summary(noScreen),
             tailWithCellsOf8Pixels: summary(fineCells),
             gi1WithCellsOf8Pixels: summary(gi1FineCells),
+            tailAddsAt32Pixels: Number(tailAdds(tail, gi1).toFixed(5)),
         };
         if (Math.abs(final(fineCells)) > TOLERANCE) fail(`furnace, every bounce (8 px cells): the tail's ceiling rays average ${(final(fineCells) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames`);
-        if (Math.abs(final(tail)) > COLUMN_TOLERANCE) fail(`furnace, every bounce (Capsaicin's 32 px cells): the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${EVERY_BOUNCE.toFixed(4)} after ${CHECK_FRAMES} frames (over ${COLUMN_TOLERANCE * 100}%)`);
+        // 32 px: the column effect (D63) moves the base; gated is what the tail adds over GI-1.2's own error.
+        if (Math.abs(tailAdds(tail, gi1)) > DELTA_TOLERANCE) fail(`furnace (Capsaicin's 32 px cells): the tail reads ${(final(tail) * 100).toFixed(2)}% off every bounce where GI-1.2 reads ${(final(gi1) * 100).toFixed(2)}% off two: it adds ${(tailAdds(tail, gi1) * 100).toFixed(2)}% (over ${DELTA_TOLERANCE * 100}%)`);
         if (tail.judged < 1000) fail(`furnace: only ${tail.judged} judged ceiling rays`);
     }
 
@@ -1057,9 +1064,10 @@ try {
         const [tail] = await runScenario(device, 'strips', TAIL, CHECK_FRAMES, [ceilingJudge(STRIPS_EVERY_BOUNCE)]);
         const [fineCells] = await runScenario(device, 'strips', { ...TAIL, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(STRIPS_EVERY_BOUNCE)]);
         const [gi1FineCells] = await runScenario(device, 'strips', { ...GI1, hashGridCacheCellSize: 8 }, 60, [ceilingJudge(STRIPS_SECOND_BOUNCE)]);
-        data.strips = { secondBounce: STRIPS_SECOND_BOUNCE, everyBounce: STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail), tailWithCellsOf8Pixels: summary(fineCells), gi1WithCellsOf8Pixels: summary(gi1FineCells) };
-        if (Math.abs(final(tail)) > TOLERANCE) fail(`strips, every bounce (32 px cells): the tail's ceiling rays average ${(final(tail) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)}`);
-        if (Math.abs(final(fineCells)) > COLUMN_TOLERANCE) fail(`strips, every bounce (8 px cells): the tail's ceiling rays average ${(final(fineCells) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)} (over ${COLUMN_TOLERANCE * 100}%)`);
+        data.strips = { secondBounce: STRIPS_SECOND_BOUNCE, everyBounce: STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail), tailWithCellsOf8Pixels: summary(fineCells), gi1WithCellsOf8Pixels: summary(gi1FineCells), tailAddsAt32Pixels: Number(tailAdds(tail, gi1).toFixed(5)) };
+        if (Math.abs(final(fineCells)) > TOLERANCE) fail(`strips, every bounce (8 px cells): the tail's ceiling rays average ${(final(fineCells) * 100).toFixed(2)}% off ${STRIPS_EVERY_BOUNCE.toFixed(4)}`);
+        // 32 px: the column effect (D63) moves the base; gated is what the tail adds over GI-1.2's own error.
+        if (Math.abs(tailAdds(tail, gi1)) > DELTA_TOLERANCE) fail(`strips (32 px cells): the tail reads ${(final(tail) * 100).toFixed(2)}% off every bounce where GI-1.2 reads ${(final(gi1) * 100).toFixed(2)}% off two: it adds ${(tailAdds(tail, gi1) * 100).toFixed(2)}% (over ${DELTA_TOLERANCE * 100}%)`);
     }
 
     // 4. Lag and flicker.
@@ -1131,9 +1139,9 @@ try {
         const [gi1] = await runScenario(device, 'skyStrips', { ...GI1, ...sky }, CHECK_FRAMES, [ceilingJudge(SKY_STRIPS_SECOND_BOUNCE)]);
         const [tail] = await runScenario(device, 'skyStrips', { ...TAIL, ...sky }, CHECK_FRAMES, [ceilingJudge(SKY_STRIPS_EVERY_BOUNCE)]);
         const [fineCells] = await runScenario(device, 'skyStrips', { ...TAIL, ...sky, hashGridCacheCellSize: 8 }, CHECK_FRAMES, [ceilingJudge(SKY_STRIPS_EVERY_BOUNCE)]);
-        data.skyStrips = { secondBounce: SKY_STRIPS_SECOND_BOUNCE, everyBounce: SKY_STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail), tailWithCellsOf8Pixels: summary(fineCells) };
+        data.skyStrips = { secondBounce: SKY_STRIPS_SECOND_BOUNCE, everyBounce: SKY_STRIPS_EVERY_BOUNCE, gi1: summary(gi1), tail: summary(tail), tailWithCellsOf8Pixels: summary(fineCells), tailAddsAt32Pixels: Number(tailAdds(tail, gi1).toFixed(5)) };
         if (Math.abs(final(fineCells)) > TOLERANCE) fail(`sky strips (8 px cells): the tail's strip rays average ${(final(fineCells) * 100).toFixed(2)}% off ${SKY_STRIPS_EVERY_BOUNCE.toFixed(4)} (a sky counted twice reads about +100%)`);
-        if (Math.abs(final(tail)) > COLUMN_TOLERANCE) fail(`sky strips (32 px cells): the tail's strip rays average ${(final(tail) * 100).toFixed(2)}% off ${SKY_STRIPS_EVERY_BOUNCE.toFixed(4)} (over ${COLUMN_TOLERANCE * 100}%)`);
+        if (Math.abs(tailAdds(tail, gi1)) > DELTA_TOLERANCE) fail(`sky strips (32 px cells): the tail reads ${(final(tail) * 100).toFixed(2)}% off every bounce where GI-1.2 reads ${(final(gi1) * 100).toFixed(2)}% off two: it adds ${(tailAdds(tail, gi1) * 100).toFixed(2)}% (over ${DELTA_TOLERANCE * 100}%)`);
         if (fineCells.judged < 1000 || !fineCells.tailGateOpen) fail(`sky strips: ${fineCells.judged} judged rays, gate ${fineCells.tailGateOpen ? 'open' : 'shut'}`);
     }
 
