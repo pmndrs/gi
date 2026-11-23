@@ -2,6 +2,10 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-24
+
+- **Merging radiance-cache into main keeps P6.4's three review follow-ups in TASKS Later, below main's issue index** (the implementer, on the merge; the lead's to change). Main made Later an index of GitHub issues (2026-11-19, "follow-ups are GitHub issues"); the radiance-cache track had added three items that are not issues yet, and the merge posts nothing outside the repository. So they stay as text under "Not yet issues" until someone files them. Also left as it was: the radiance cache's hits multiply their light by `surface.albedo`, which DV-08 made uncapped, rather than `giBounceAlbedo`; at the default `bounceAlbedoCap` of 1 the two differ only for an albedo over 1. *Revisit* when the follow-ups are filed, or if the radiance cache should follow DDGI's bounce cap.
+
 ## 2026-11-23
 
 - **The world-cache alternatives stay variants; none becomes the default until we've compared them** (Dennis, 2026-11-23). The lead offered the pathtracer hash cache (`worldCache: 'sharc'`) as a default that doesn't need a DDGI volume. His answer: "we can, but it should be a variant and not just the default until we can work out preferences, pros/cons etc". *What it means:* defaults stay as they are: the GI-1.2 hash grid, and `secondBounce: 'auto'` (DDGI's irradiance when a volume is stacked, GI-1.2's rays otherwise). SHaRC, budgeted cells and the NRC tail stay opt-in settings. P6.5 compares the variants side by side and writes up the pros and cons, and Dennis picks the default from that. *Revisit* when P6.5's comparison is done.
