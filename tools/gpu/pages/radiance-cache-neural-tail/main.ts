@@ -69,7 +69,9 @@
  *    comes from DDGI (P6.3, register E10), whose field already carries the
  *    later bounces, so the tail stays off: no training step, the gate shut,
  *    one warning naming `neuralCache`; with `secondBounce: 'gi1-rays'` the
- *    tail runs as without DDGI (its gate opens, no warning).
+ *    tail runs as without DDGI (its gate opens, no warning). The tail also
+ *    waits while DDGI's pass is still compiling (`'auto'` traces GI-1.2's
+ *    rays meanwhile), so 0 steps doesn't depend on how fast it compiles.
  *
  * 7. **The f32 fallback** (a device without `shader-f16` and with WebGPU's
  *    default 16 KiB of workgroup memory, as a host gets it without the
