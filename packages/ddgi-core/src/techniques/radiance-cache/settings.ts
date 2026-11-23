@@ -197,12 +197,14 @@ export interface RadianceCacheSettings {
      * Phase 6 experiment P6.4 (register E11): `tail` adds a neural network
      * (pmndrs/pathtracer's `@pathtracer/mlp`) as the second bounce's tail, so
      * GI-1.2's multibounce carries every bounce; the hash grid stays the near
-     * cache. `off` (the default) is GI-1.2. Applies only with `useMultibounce`,
-     * the GI-1.2 grid (`worldCache: 'gi1-hash-grid'`) and its own second-bounce
-     * rays (`secondBounce` resolved to `'gi1-rays'`; a fallback's field already
-     * carries the later bounces, register E11): otherwise it is off, with one
-     * warning. Read at
-     * `prepare`.
+     * cache. `off` (the default) is GI-1.2. Applies only with the GI-1.2 grid
+     * (`worldCache: 'gi1-hash-grid'`) and its own second-bounce rays
+     * (`useMultibounce` on and `secondBounce` resolved to `'gi1-rays'`; a
+     * fallback's field already carries the later bounces, register E11). With
+     * `worldCache: 'sharc'`, a second bounce from a fallback, or the optional
+     * package missing or off its pin, it is off with one warning; with
+     * `useMultibounce` off there is no second bounce for it to extend. Read at
+     * `prepare` (a compare toggle, `rcneural`, restarts the technique).
      */
     neuralCache: NeuralCacheMode;
     /** The neural tail's settings over its defaults (`DEFAULT_NEURAL_TAIL_SETTINGS`), with `neuralCache: 'tail'`. Read at `prepare`. */
@@ -217,7 +219,7 @@ export interface RadianceCacheSettings {
 export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
 
 /** Settings read at `prepare` only: changing one makes the technique again (the viewer restarts it; compare-toggles.ts). */
-export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache'];
+export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'neuralCache'];
 
 /** Capsaicin's defaults (gi1.h:48-71). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({

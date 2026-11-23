@@ -166,6 +166,7 @@ Every change we make to Capsaicin's behaviour over time gets a setting whose oth
 | `cellShadingBudget` | world cache | 20,000 | none | E8 |
 | `cellChangeReset` | world cache | true | false (no reset) | E9 |
 | `cellChangeResetHistory` | world cache | 0 | none | E9 |
+| `neuralCache` ⟳ | world cache | `off` (`tail` is P6.4's experiment; it runs only with GI-1.2's own second-bounce rays, so with the viewer's stacked DDGI it stays off and warns) | `off` | E11 |
 | `probeHistory` | experiments | true | true (off: every frame a first frame) | |
 
 ↺: a change starts the screen probes' history over. ⟳: read at `prepare` (`PREPARE_SETTINGS`): the viewer makes a new radiance cache when it changes. `sharc.<key>` entries set one key of `settings.sharc` (`compareSettingValue`); an entry with no Capsaicin value (`capsaicin` left out) is left at ours by "All Capsaicin". `host.<key>` entries (`HOST_COMPARE_DEFAULTS`) are the host's choices about how it makes the technique, read with `hostCompareValue` and never put in the technique's settings; they always restart it.
