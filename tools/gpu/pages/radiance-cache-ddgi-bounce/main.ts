@@ -40,7 +40,16 @@
  *    fallback without DDGI's bounce read the second bounce ρ L_f1 × 1/2 =
  *    0.1592; with DDGI's bounce, every bounce: the strips' light is
  *    L_f1 / (1 − ρ² / 2) = 0.7276 and the ceiling's ρ / 2 × that = 0.1819.
- *    Same tolerances.
+ *    Same tolerances, but for 4 (gi1-rays), whose near rays' mean is
+ *    recorded, not gated: since register D63 a far strip-floor cell that
+ *    shares a hash column with the ceiling counts the ceiling's unlit hits,
+ *    so it reads the strips' light × its floor share and GI-1.2's rays
+ *    landing there bring less (0.974 × ρ L_f1 / 2).
+ *
+ * 1 and 4 (gi1-rays) also take the world-cache page's analytic gate (RC3.4,
+ *    `second-bounce-landings.ts`): the second bounces from near ceiling cells
+ *    landing on the floor (or a strip) in tiles under 2 m, which hold the
+ *    floor alone, read ρ L_f1 = 0.3183 within 1%.
  *
  * 6b. **Every ray bypasses** (cells of 900 pixels, wider than the gap, as
  *    radiance-cache-world-cache's section 14): a probe ray shorter than its
@@ -112,6 +121,7 @@ import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts'
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
+import { readSecondBounceLandings } from '../radiance-cache-world-cache/second-bounce-landings.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -125,6 +135,8 @@ const FURNACE = {
 } as const;
 /** The furnace's DDGI volume: probes at y = 0.5, 1.5 and 2.5, 1 m apart, around the near rays' hits. */
 const FURNACE_VOLUME = { center: [0, 1.5, -4] as Vec3, size: [24, 2, 24] as Vec3, spacing: 1 };
+/** The analytic gate on GI-1.2's second bounces landing on the floor in tiles under 2 m (the world-cache page's). */
+const LANDING_TOLERANCE = 0.01;
 /** Rays judged: their hit within this distance of the camera (tiles under 2 m). */
 const NEAR_HIT_METRES = 8;
 const STRIPS = { width: 0.05, period: 0.1, halfLength: 100, fill: 0.5 } as const;
@@ -415,20 +427,24 @@ interface AccuracyCase {
     /** DDGI's bounceEnergy (fallback only). */
     readonly ddgiBounce: number;
     readonly expected: number;
-    readonly tolerance: number;
+    /** The near ceiling rays' mean within this of `expected`; null: recorded, not gated (case 4). */
+    readonly tolerance: number | null;
+    /** The analytic gate on GI-1.2's landings in near floor tiles (gi1-rays only: the fallback traces no second bounce). */
+    readonly landings?: boolean;
     /** More radiance-cache settings for the case. */
     readonly extra?: Partial<RadianceCacheSettings>;
 }
 
 const ACCURACY_CASES: readonly AccuracyCase[] = [
-    { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02 },
+    { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02, landings: true },
     { name: '2 furnace, fallback, DDGI bounce off (second bounce)', strips: false, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.secondBounce, tolerance: 0.03 },
     { name: '3 furnace, fallback, DDGI bounce on (every bounce)', strips: false, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.everyBounce, tolerance: 0.03 },
-    // 4%: since register D63 the ceiling's unlit hits count, so a far strip-floor cell that shares a
-    // hash column with the ceiling reads the strips' light times its floor share, and GI-1.2's rays
-    // landing there bring less (measured 0.973 here, 0.973 in radiance-cache-world-cache's strips,
-    // whose 1% analytic gate on landings in floor tiles under 2 m holds the cells' own values).
-    { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: 0.04 },
+    // The near rays' mean is recorded, not gated (the lead, 2026-11-23): since register D63 the
+    // ceiling's unlit hits count, so a far strip-floor cell that shares a hash column with the ceiling
+    // reads the strips' light times its floor share, and GI-1.2's rays landing there bring less
+    // (measured 0.973-0.974 here and in radiance-cache-world-cache's strips). The gate is on the
+    // landings in near floor tiles, which hold the strips alone (`landings`).
+    { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: null, landings: true },
     { name: '5 strips, fallback, DDGI bounce off (second bounce)', strips: true, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.stripsSecondBounce, tolerance: 0.03 },
     { name: '6 strips, fallback, DDGI bounce on (every bounce)', strips: true, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.stripsEveryBounce, tolerance: 0.03 },
     // Cells of 900 pixels (3.7 m a metre away, wider than the 3 m gap): nearly every probe ray is
@@ -483,12 +499,24 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
         const rays = await readRays(device, scenario, true);
         const indirect = await meanIndirect(device, scenario.cache);
         const counters = await readCounters(device, scenario.cache);
+        const landings = testCase.landings
+            ? await readSecondBounceLandings(device, scenario.technique, scenario.cache, { camera: FURNACE.camera, width: WIDTH, height: HEIGHT, ceilingY: FURNACE.ceilingY })
+            : null;
         const ratio = rays.nearMean / testCase.expected;
         if (rays.nearRays < 1000) failures.push(`${testCase.name}: only ${rays.nearRays} near ceiling rays`);
-        if (Math.abs(ratio - 1) > testCase.tolerance) {
+        if (testCase.tolerance !== null && Math.abs(ratio - 1) > testCase.tolerance) {
             failures.push(`${testCase.name}: near ceiling rays read ${rays.nearMean.toFixed(4)}, expected ${testCase.expected.toFixed(4)} within ${testCase.tolerance * 100}% (ratio ${ratio.toFixed(4)})`);
         }
         if (rays.bad > 0) failures.push(`${testCase.name}: ${rays.bad} rays NaN, infinite or negative`);
+        // The analytic gate: each landing in a near floor tile is ρ L_f1 (a strip is lit floor; the gaps are misses, left out).
+        const landingRatio = landings ? landings.nearFloorLandings.mean / EXPECTED.secondBounce : null;
+        if (landings) {
+            const near = landings.nearFloorLandings;
+            if (near.entries < 1000) failures.push(`${testCase.name}: only ${near.entries} second bounces land on the floor in tiles under 2 m`);
+            else if (Math.abs(near.mean / EXPECTED.secondBounce - 1) > LANDING_TOLERANCE) {
+                failures.push(`${testCase.name}: the second bounces landing on the floor in tiles under 2 m read ${near.mean.toFixed(4)}, rho L_f1 = ${EXPECTED.secondBounce.toFixed(4)} within ${LANDING_TOLERANCE * 100}%`);
+            }
+        }
         if (scenario.cache.secondBounceInUse !== testCase.mode) failures.push(`${testCase.name}: the cache ran ${scenario.cache.secondBounceInUse}, not ${testCase.mode}`);
         const secondBounceEntries = counters[HASH_GRID_COUNTER.visibilityCount1];
         if (testCase.mode === 'fallback' && secondBounceEntries !== 0) failures.push(`${testCase.name}: ${secondBounceEntries} second-bounce entries; 'fallback' traces none`);
@@ -497,7 +525,9 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
             expected: round(testCase.expected),
             nearCeilingMean: round(rays.nearMean),
             ratio: round(ratio),
+            meanGated: testCase.tolerance !== null,
             nearRays: rays.nearRays,
+            ...(landings ? { nearFloorLandingsOverRhoLf: round(landingRatio ?? 0), nearFloorLandings: landings.nearFloorLandings.entries } : {}),
             cellIndirectMean: round(indirect.mean),
             cellsWithIndirect: indirect.cells,
             firstBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount0],
