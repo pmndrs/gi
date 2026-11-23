@@ -2,6 +2,10 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-23
+
+- **The world-cache alternatives stay variants; none becomes the default until we've compared them** (Dennis, 2026-11-23). The lead offered the pathtracer hash cache (`worldCache: 'sharc'`) as a default that doesn't need a DDGI volume. His answer: "we can, but it should be a variant and not just the default until we can work out preferences, pros/cons etc". *What it means:* defaults stay as they are: the GI-1.2 hash grid, and `secondBounce: 'auto'` (DDGI's irradiance when a volume is stacked, GI-1.2's rays otherwise). SHaRC, budgeted cells and the NRC tail stay opt-in settings. P6.5 compares the variants side by side and writes up the pros and cons, and Dennis picks the default from that. *Revisit* when P6.5's comparison is done.
+
 ## 2026-11-20
 
 - **The platform's device asks for `shader-f16` and the adapter's workgroup memory** (the lead, on P6.4, under Dennis's standing rules: no WebGPU default caps; feature-forward with one declared fallback). `optionalFeatures(adapter)` adds `shader-f16` where the adapter has it; `requiredLimits(adapter)` adds the adapter's `maxComputeWorkgroupStorageSize` (32 KiB on the RTX 3060 in Chrome, against WebGPU's default 16 KiB). Why: the radiance cache's neural tail (`@pathtracer/mlp`) runs its network in f16 and tiles it to workgroup memory; without them it fell back to f32 with smaller tiles, and the pathtracer's default 5 × 64 network couldn't run at all. f32 stays the declared fallback (`precision: 'auto'`), and kernels that tile read the device's limit and fit themselves, so a host that passes neither still works. No platform kernel changes: all of them already fit 16 KiB and none uses f16. Revisit if a host's own device creation (three's) can't ask for them.
