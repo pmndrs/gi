@@ -9,10 +9,14 @@
  * import resolves here instead (vite, vitest) and through tsconfig `paths`
  * (TypeScript, with a declaration-only fallback when the clone is missing):
  *
- * - the clone at the pinned commit: the package's entry file;
+ * - the clone at the pinned commit: the package's entry file (the dev server
+ *   and vitest only: a production build gets the stub below unless
+ *   `GI_BUNDLE_OPTIONAL_SIBLINGS=1` asks for it, so `pnpm build:apps` on a
+ *   machine with the private clone doesn't put its source in `dist`);
  * - missing, or checked out at another commit: a module that throws when
- *   loaded, with the reason, so the tail turns off with one warning and gi
- *   never builds whatever branch the sibling clone happens to be on.
+ *   loaded, with the reason (no local paths in it), so the tail turns off
+ *   with one warning and gi never builds whatever branch the sibling clone
+ *   happens to be on.
  *
  * `node tools/linked-siblings.ts --fetch` clones the pinned commit where the
  * repository is reachable. A published `@pathtracer/mlp` (or the pathtracer
@@ -44,7 +48,7 @@ export interface OptionalSibling {
     readonly entry: string | null;
     /** The package folder, real path, where it exists (for the dev server's `fs.allow`). */
     readonly folder: string | null;
-    /** Why it isn't ready, in a sentence a developer can act on. */
+    /** Why it isn't ready, in a sentence a developer can act on (no local paths: it goes into the stub module). */
     readonly reason: string;
 }
 
@@ -72,7 +76,7 @@ export function optionalSiblingState(name: string, entry: SiblingEntry, root: st
     const folder = join(clone, entry.path);
     const file = join(folder, entry.built[0] ?? 'src/index.ts');
     if (!existsSync(file)) {
-        return { name, state: 'missing', entry: null, folder: null, reason: `${name} is an optional sibling from ${entry.repo} (private), not cloned at ${clone}; run node tools/linked-siblings.ts --fetch where you have access` };
+        return { name, state: 'missing', entry: null, folder: null, reason: `${name} is an optional sibling from ${entry.repo} (private), not cloned next to this repository (${entry.clone}); run node tools/linked-siblings.ts --fetch where you have access` };
     }
     const commit = head(clone);
     if (commit && commit !== entry.commit) {
@@ -81,7 +85,7 @@ export function optionalSiblingState(name: string, entry: SiblingEntry, root: st
             state: 'drifted',
             entry: file,
             folder: realpathSync(folder),
-            reason: `${name}'s clone at ${clone} is at ${commit.slice(0, 9)}, but package.json pins ${entry.commit.slice(0, 9)}; check out the pinned commit (or update the pin)`,
+            reason: `${name}'s clone (${entry.clone}) is at ${commit.slice(0, 9)}, but package.json pins ${entry.commit.slice(0, 9)}; check out the pinned commit (or update the pin)`,
         };
     }
     return { name, state: 'ready', entry: file, folder: realpathSync(folder), reason: '' };
@@ -96,25 +100,43 @@ export function optionalSiblings(): OptionalSibling[] {
 
 const VIRTUAL_PREFIX = '\0optional-sibling:';
 
+/** The environment variable that lets a production build bundle a ready optional sibling. */
+export const BUNDLE_OPTIONAL_SIBLINGS_ENV = 'GI_BUNDLE_OPTIONAL_SIBLINGS';
+
+/** Why a production build leaves an optional sibling out. */
+function buildReason(name: string): string {
+    return `${name} is an optional sibling from a private repository, left out of this build (set ${BUNDLE_OPTIONAL_SIBLINGS_ENV}=1 to bundle it)`;
+}
+
 /**
  * Resolves each optional sibling for vite and vitest: its entry file when the
- * clone is at the pinned commit, else a module that throws the reason when
+ * clone is at the pinned commit (in a production build only with
+ * `GI_BUNDLE_OPTIONAL_SIBLINGS=1`), else a module that throws the reason when
  * loaded (a dynamic import of it rejects; nothing imports it statically).
+ * `siblings` and `env` are for tests.
  */
-export function optionalSiblingsPlugin(): Plugin {
-    const siblings = new Map(optionalSiblings().map((sibling) => [sibling.name, sibling]));
+export function optionalSiblingsPlugin(siblings: readonly OptionalSibling[] = optionalSiblings(), env: Readonly<Record<string, string | undefined>> = process.env): Plugin {
+    const byName = new Map(siblings.map((sibling) => [sibling.name, sibling]));
+    const bundle = env[BUNDLE_OPTIONAL_SIBLINGS_ENV] === '1';
+    let building = false;
     return {
         name: 'gi-optional-siblings',
         enforce: 'pre',
+        configResolved(config) {
+            building = config.command === 'build';
+        },
         resolveId(id) {
-            const sibling = siblings.get(id);
+            const sibling = byName.get(id);
             if (!sibling) return null;
-            return sibling.state === 'ready' && sibling.entry ? sibling.entry : `${VIRTUAL_PREFIX}${id}`;
+            const usable = sibling.state === 'ready' && sibling.entry !== null && (!building || bundle);
+            return usable ? sibling.entry : `${VIRTUAL_PREFIX}${id}`;
         },
         load(id) {
             if (!id.startsWith(VIRTUAL_PREFIX)) return null;
-            const sibling = siblings.get(id.slice(VIRTUAL_PREFIX.length));
-            return `throw new Error(${JSON.stringify(`@pmndrs/gi: ${sibling?.reason ?? 'an optional sibling is unavailable'}`)});\n`;
+            const name = id.slice(VIRTUAL_PREFIX.length);
+            const sibling = byName.get(name);
+            const reason = sibling?.state === 'ready' ? buildReason(name) : (sibling?.reason ?? 'an optional sibling is unavailable');
+            return `throw new Error(${JSON.stringify(`@pmndrs/gi: ${reason}`)});\n`;
         },
     };
 }
