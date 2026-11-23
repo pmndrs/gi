@@ -652,7 +652,7 @@ export class HashGridCache implements WorldCache {
         const rayData = this.rayDataFor(prepared, rays, this.options.useMultibounce && secondBounce === 'gi1-rays');
         // P6.4: the tail runs with GI-1.2's own rays only, once the second bounce has settled; its
         // restart (if any) comes before the constants, which read whether it is active.
-        const tail = this.options.useMultibounce && secondBounce === 'gi1-rays' && !this.secondBouncePending ? this.tail : null;
+        const tail = hashGridTailRuns(this.options.useMultibounce, secondBounce, this.secondBouncePending) ? this.tail : null;
         tail?.beginFrame(frame);
         this.writeConstants(prepared, frame, secondBounce, tail?.active ?? false);
 
@@ -1021,6 +1021,17 @@ export function hashGridCacheSamplesSky(options: object, secondBounce: SecondBou
     // The option arrives with RC3.4; until then it is absent and the cache takes no sky (D33).
     const environmentLightEnable = (options as { readonly environmentLightEnable?: boolean }).environmentLightEnable ?? false;
     return environmentLightEnable && secondBounce !== 'fallback';
+}
+
+/**
+ * Whether a tail (P6.4) runs this frame, and so may set `use_neural_tail`:
+ * with GI-1.2's own second-bounce rays only (multibounce on, the second
+ * bounce resolved to `'gi1-rays'`), and not while a fallback's pass is still
+ * being built (`pending`: `'auto'` would switch to it within a few frames, and
+ * the tail would have trained on the frames before).
+ */
+export function hashGridTailRuns(useMultibounce: boolean, secondBounce: SecondBounceInUse, pending: boolean): boolean {
+    return useMultibounce && secondBounce === 'gi1-rays' && !pending;
 }
 
 export function hashGridCacheClearOptions(options: HashGridCacheOptions, secondBounce: SecondBounceInUse = 'gi1-rays'): HashGridCacheClearOptions {

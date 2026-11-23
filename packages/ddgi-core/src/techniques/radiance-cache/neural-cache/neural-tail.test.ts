@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hashGridCacheRayListLayout, MULTIBOUNCE_DIRECT_WORDS, NEURAL_TAIL_WORDS } from '../world-cache/hash-grid-population-wgsl.ts';
+import { hashGridTailRuns } from '../world-cache/hash-grid-cache.ts';
+import { hashGridCacheRayListLayout, MULTIBOUNCE_DIRECT_WORDS, NEURAL_TAIL_WORDS, RAY_LISTS_UNIFORM_BYTES } from '../world-cache/hash-grid-population-wgsl.ts';
 import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD } from '../world-cache/hash-grid-wgsl.ts';
 import { loadMlp, type MlpModule } from './mlp-loader.ts';
 import { furnaceCeiling, neuralTailAngles, neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailPosition, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
@@ -98,20 +99,53 @@ describe('the neural tail (P6.4, register E11)', () => {
     });
 
     it('lays its parameter words out as the WGSL struct does', () => {
-        // box_lo, box_scale (vec4 each), a mat4x4f, eye (vec4), then eight words.
-        expect(NEURAL_TAIL_PARAMS_WORD.inverseViewProjection).toBe(8);
-        expect(NEURAL_TAIL_PARAMS_WORD.eye).toBe(8 + 16);
-        expect(NEURAL_TAIL_PARAMS_WORD.frameIndex).toBe(28);
-        expect(NEURAL_TAIL_PARAMS_BYTES).toBe(Math.ceil((NEURAL_TAIL_PARAMS_WORD.screenRecords + 1) / 4) * 16);
+        // Parsed from the kernel's own struct: each field's word (vec4f 4, mat4x4f 16, u32 1), named as the TypeScript key in snake case.
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const struct = /struct NeuralTailParams \{([^}]*)\}/.exec(gatherScreenRecordsWgsl(layout))?.[1] ?? '';
+        const sizes: Record<string, number> = { vec4f: 4, mat4x4f: 16, u32: 1, f32: 1 };
+        const offsets = new Map<string, number>();
+        let word = 0;
+        for (const line of struct.split(/\r?\n/).map((text) => text.replace(/\/\/.*$/, '').trim()).filter((text) => text.endsWith(','))) {
+            const [name, type] = line.slice(0, -1).split(':').map((part) => part.trim());
+            expect(sizes[type], `${name}: ${type}`).toBeDefined();
+            offsets.set(name, word);
+            word += sizes[type];
+        }
+        for (const [key, offset] of Object.entries(NEURAL_TAIL_PARAMS_WORD)) {
+            const field = key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+            expect(offsets.get(field), `${key} → ${field}`).toBe(offset);
+        }
+        expect(word * 4).toBe(NEURAL_TAIL_PARAMS_BYTES);
     });
 
-    it('gives the hash grid a tail list and a constant only with a tail', () => {
+    it('gives the hash grid a tail list only with a tail and its own second-bounce rays', () => {
         const without = hashGridCacheRayListLayout(4096, 22282240);
         const withTail = hashGridCacheRayListLayout(4096, 22282240, true, true);
         expect(without.neuralTailBuffer).toBe(0);
         expect(withTail.neuralTailBuffer).toBe(without.multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * 4096);
         expect(withTail.bytes - without.bytes).toBe(NEURAL_TAIL_WORDS * 4096 * 4);
+        // A tail with no second-bounce rays (the bounce from a fallback, E10): no list, no bytes.
+        const noRays = hashGridCacheRayListLayout(4096, 22282240, false);
+        const noRaysWithTail = hashGridCacheRayListLayout(4096, 22282240, false, true);
+        expect(noRaysWithTail.neuralTailBuffer).toBe(0);
+        expect(noRaysWithTail.bytes).toBe(noRays.bytes);
+    });
+
+    it('runs the tail, and sets use_neural_tail, only with GI-1.2 rays that have settled', () => {
         expect(HASH_GRID_CONSTANTS_WORD.useNeuralTail * 4).toBeLessThan(HASH_GRID_CONSTANTS_BYTES);
+        expect(hashGridTailRuns(true, 'gi1-rays', false)).toBe(true);
+        expect(hashGridTailRuns(false, 'gi1-rays', false)).toBe(false); // multibounce off: no second bounce
+        expect(hashGridTailRuns(true, 'fallback', false)).toBe(false); // E10: the fallback's field has the later bounces
+        expect(hashGridTailRuns(true, 'gi1-rays', true)).toBe(false); // 'auto' while the fallback's pass builds
+    });
+
+    it('lays the hash grid ray-list uniform out in its bytes', () => {
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const struct = /struct HashGridCacheRayLists \{([^}]*)\}/.exec(gatherCellRecordsWgsl(layout))?.[1] ?? '';
+        const fields = struct.split(/\r?\n/).map((line) => line.replace(/\/\/.*$/, '').trim()).filter((line) => line.endsWith(','));
+        expect(fields.every((field) => field.endsWith(': u32,'))).toBe(true);
+        expect(fields.at(-1)).toMatch(/^neural_tail_buffer:/);
+        expect(RAY_LISTS_UNIFORM_BYTES).toBe(Math.ceil((fields.length * 4) / 16) * 16);
     });
 
     it('builds its kernels and the network hooks', () => {

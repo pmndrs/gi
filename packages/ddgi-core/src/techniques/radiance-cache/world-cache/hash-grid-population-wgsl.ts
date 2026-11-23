@@ -124,7 +124,7 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: CELL_CHANGES_BINDING.cellLists, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
-/** Bytes of `HashGridCacheRayLists`: sixteen words (the neural tail's last, P6.4), padded to 16 bytes. */
+/** Bytes of `HashGridCacheRayLists`: seventeen words (the neural tail's last, P6.4), padded to a multiple of 16 bytes. */
 export const RAY_LISTS_UNIFORM_BYTES = 80;
 
 /** Word of `HashGridCacheRayLists` that says how cells are lit: bit 0 budgeted (lever E8), bit 1 per-hit change reset (E9). Written every frame. */

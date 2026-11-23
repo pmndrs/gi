@@ -57,6 +57,8 @@ export interface MlpEngineOptions {
 }
 
 export declare class MlpEngine {
+    /** Made by `create` only (the package's constructor is private). */
+    private constructor();
     static create(device: GPUDevice, options: MlpEngineOptions): Promise<MlpEngine>;
     readonly shape: MlpShape;
     readonly precision: Precision;
