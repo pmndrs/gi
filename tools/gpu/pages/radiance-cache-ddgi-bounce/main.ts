@@ -40,7 +40,16 @@
  *    fallback without DDGI's bounce read the second bounce ρ L_f1 × 1/2 =
  *    0.1592; with DDGI's bounce, every bounce: the strips' light is
  *    L_f1 / (1 − ρ² / 2) = 0.7276 and the ceiling's ρ / 2 × that = 0.1819.
- *    Same tolerances.
+ *    Same tolerances, but for 4 (gi1-rays), whose near rays' mean is
+ *    recorded, not gated: since register D63 a far strip-floor cell that
+ *    shares a hash column with the ceiling counts the ceiling's unlit hits,
+ *    so it reads the strips' light × its floor share and GI-1.2's rays
+ *    landing there bring less (0.974 × ρ L_f1 / 2).
+ *
+ * 1 and 4 (gi1-rays) also take the world-cache page's analytic gate (RC3.4,
+ *    `second-bounce-landings.ts`): the second bounces from near ceiling cells
+ *    landing on the floor (or a strip) in tiles under 2 m, which hold the
+ *    floor alone, read ρ L_f1 = 0.3183 within 1%.
  *
  * 6b. **Every ray bypasses** (cells of 900 pixels, wider than the gap, as
  *    radiance-cache-world-cache's section 14): a probe ray shorter than its
@@ -52,6 +61,10 @@
  *    3%), rays whose hit is at x > +2 m, past the volume's fade, read under 2%
  *    of it: the fallback's coverage weighs its value, which outside every
  *    volume is the nearest volume's edge value, not 0.
+ *
+ * 6d. **The sky counted once** (RC3.4): an open floor under a constant sky L,
+ *    with `environmentLightEnable` on: gi1-rays and the fallback both read ρ L
+ *    (see `runSkyOnce`).
  *
  * 7. **What runs:** with 'fallback' the frame has no second-bounce entry
  *    and no second-bounce shadow ray, and the cache reports 'fallback' in
@@ -108,6 +121,7 @@ import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts'
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
+import { readSecondBounceLandings } from '../radiance-cache-world-cache/second-bounce-landings.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -121,6 +135,8 @@ const FURNACE = {
 } as const;
 /** The furnace's DDGI volume: probes at y = 0.5, 1.5 and 2.5, 1 m apart, around the near rays' hits. */
 const FURNACE_VOLUME = { center: [0, 1.5, -4] as Vec3, size: [24, 2, 24] as Vec3, spacing: 1 };
+/** The analytic gate on GI-1.2's second bounces landing on the floor in tiles under 2 m (the world-cache page's). */
+const LANDING_TOLERANCE = 0.01;
 /** Rays judged: their hit within this distance of the camera (tiles under 2 m). */
 const NEAR_HIT_METRES = 8;
 const STRIPS = { width: 0.05, period: 0.1, halfLength: 100, fill: 0.5 } as const;
@@ -169,7 +185,7 @@ interface Scenario {
 }
 
 interface ScenarioOptions {
-    readonly scene: { readonly kind: 'furnace'; readonly strips: boolean } | { readonly kind: 'manifest'; readonly id: string };
+    readonly scene: { readonly kind: 'furnace'; readonly strips: boolean } | { readonly kind: 'manifest'; readonly id: string } | { readonly kind: 'openFloorSky' };
     readonly settings: Partial<RadianceCacheSettings>;
     /** DDGI stacked under the radiance cache, with these settings; null for none. */
     readonly ddgi: Partial<Omit<DDGISettings, 'volume' | 'volumes'>> | null;
@@ -224,12 +240,26 @@ function describeFurnace(platform: GIPlatformImpl, strips: boolean): LightHandle
     return handles;
 }
 
+// Section 6d's scene: radiance-cache-world-cache's open floor (section 15), a 400 m floor under a
+// constant sky with nothing over it but a 4 m probe patch 50 m up, the camera under the patch.
+const SKY_RADIANCE = 1.5;
+const OPEN_FLOOR_CAMERA: PageCamera = { position: [0, 49, 0], target: [0, 50, 0], fovYDeg: 60, near: 0.05, far: 1000 };
+const OPEN_FLOOR_VOLUME = { center: [0, 1.5, 0] as Vec3, size: [24, 2, 24] as Vec3, spacing: 1 };
+
+function describeOpenFloorSky(platform: GIPlatformImpl): void {
+    const half = FURNACE.halfWidth;
+    quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0], FURNACE.albedo);
+    quad(platform, 'probe patch', [[-2, 50, -2], [2, 50, -2], [2, 50, 2], [-2, 50, 2]], [0, -1, 0], FURNACE.albedo);
+    platform.scene.setEnvironment({ type: 'color', color: [1, 1, 1], intensity: SKY_RADIANCE });
+}
+
 async function startScenario(device: GPUDevice, name: string, options: ScenarioOptions): Promise<Scenario> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-ddgi-bounce ${name}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique(options.settings));
     platform.setOutput(technique);
-    let camera: PageCamera = FURNACE.camera;
-    let volume = options.volume ?? { center: FURNACE_VOLUME.center, size: FURNACE_VOLUME.size, spacing: FURNACE_VOLUME.spacing };
+    const openFloor = options.scene.kind === 'openFloorSky';
+    let camera: PageCamera = openFloor ? OPEN_FLOOR_CAMERA : FURNACE.camera;
+    let volume = options.volume ?? (openFloor ? OPEN_FLOOR_VOLUME : { center: FURNACE_VOLUME.center, size: FURNACE_VOLUME.size, spacing: FURNACE_VOLUME.spacing });
     const manifest = options.scene.kind === 'manifest' ? loadManifest(options.scene.id) : null;
     if (manifest) {
         const bookmark = manifest.cameras[0];
@@ -243,6 +273,7 @@ async function startScenario(device: GPUDevice, name: string, options: ScenarioO
     await platform.prepare();
     const lights: LightHandle[] = [];
     if (manifest) describeScene(platform, manifest, {}, lights);
+    else if (openFloor) describeOpenFloorSky(platform);
     else lights.push(...describeFurnace(platform, options.scene.kind === 'furnace' && options.scene.strips));
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
@@ -396,16 +427,24 @@ interface AccuracyCase {
     /** DDGI's bounceEnergy (fallback only). */
     readonly ddgiBounce: number;
     readonly expected: number;
-    readonly tolerance: number;
+    /** The near ceiling rays' mean within this of `expected`; null: recorded, not gated (case 4). */
+    readonly tolerance: number | null;
+    /** The analytic gate on GI-1.2's landings in near floor tiles (gi1-rays only: the fallback traces no second bounce). */
+    readonly landings?: boolean;
     /** More radiance-cache settings for the case. */
     readonly extra?: Partial<RadianceCacheSettings>;
 }
 
 const ACCURACY_CASES: readonly AccuracyCase[] = [
-    { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02 },
+    { name: '1 furnace, gi1-rays (second bounce)', strips: false, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.secondBounce, tolerance: 0.02, landings: true },
     { name: '2 furnace, fallback, DDGI bounce off (second bounce)', strips: false, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.secondBounce, tolerance: 0.03 },
     { name: '3 furnace, fallback, DDGI bounce on (every bounce)', strips: false, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.everyBounce, tolerance: 0.03 },
-    { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: 0.02 },
+    // The near rays' mean is recorded, not gated (the lead, 2026-11-23): since register D63 the
+    // ceiling's unlit hits count, so a far strip-floor cell that shares a hash column with the ceiling
+    // reads the strips' light times its floor share, and GI-1.2's rays landing there bring less
+    // (measured 0.973-0.974 here and in radiance-cache-world-cache's strips). The gate is on the
+    // landings in near floor tiles, which hold the strips alone (`landings`).
+    { name: '4 strips, gi1-rays (second bounce)', strips: true, mode: 'gi1-rays', ddgiBounce: 1, expected: EXPECTED.stripsSecondBounce, tolerance: null, landings: true },
     { name: '5 strips, fallback, DDGI bounce off (second bounce)', strips: true, mode: 'fallback', ddgiBounce: 0, expected: EXPECTED.stripsSecondBounce, tolerance: 0.03 },
     { name: '6 strips, fallback, DDGI bounce on (every bounce)', strips: true, mode: 'fallback', ddgiBounce: 1, expected: EXPECTED.stripsEveryBounce, tolerance: 0.03 },
     // Cells of 900 pixels (3.7 m a metre away, wider than the 3 m gap): nearly every probe ray is
@@ -460,12 +499,24 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
         const rays = await readRays(device, scenario, true);
         const indirect = await meanIndirect(device, scenario.cache);
         const counters = await readCounters(device, scenario.cache);
+        const landings = testCase.landings
+            ? await readSecondBounceLandings(device, scenario.technique, scenario.cache, { camera: FURNACE.camera, width: WIDTH, height: HEIGHT, ceilingY: FURNACE.ceilingY })
+            : null;
         const ratio = rays.nearMean / testCase.expected;
         if (rays.nearRays < 1000) failures.push(`${testCase.name}: only ${rays.nearRays} near ceiling rays`);
-        if (Math.abs(ratio - 1) > testCase.tolerance) {
+        if (testCase.tolerance !== null && Math.abs(ratio - 1) > testCase.tolerance) {
             failures.push(`${testCase.name}: near ceiling rays read ${rays.nearMean.toFixed(4)}, expected ${testCase.expected.toFixed(4)} within ${testCase.tolerance * 100}% (ratio ${ratio.toFixed(4)})`);
         }
         if (rays.bad > 0) failures.push(`${testCase.name}: ${rays.bad} rays NaN, infinite or negative`);
+        // The analytic gate: each landing in a near floor tile is ρ L_f1 (a strip is lit floor; the gaps are misses, left out).
+        const landingRatio = landings ? landings.nearFloorLandings.mean / EXPECTED.secondBounce : null;
+        if (landings) {
+            const near = landings.nearFloorLandings;
+            if (near.entries < 1000) failures.push(`${testCase.name}: only ${near.entries} second bounces land on the floor in tiles under 2 m`);
+            else if (Math.abs(near.mean / EXPECTED.secondBounce - 1) > LANDING_TOLERANCE) {
+                failures.push(`${testCase.name}: the second bounces landing on the floor in tiles under 2 m read ${near.mean.toFixed(4)}, rho L_f1 = ${EXPECTED.secondBounce.toFixed(4)} within ${LANDING_TOLERANCE * 100}%`);
+            }
+        }
         if (scenario.cache.secondBounceInUse !== testCase.mode) failures.push(`${testCase.name}: the cache ran ${scenario.cache.secondBounceInUse}, not ${testCase.mode}`);
         const secondBounceEntries = counters[HASH_GRID_COUNTER.visibilityCount1];
         if (testCase.mode === 'fallback' && secondBounceEntries !== 0) failures.push(`${testCase.name}: ${secondBounceEntries} second-bounce entries; 'fallback' traces none`);
@@ -474,13 +525,47 @@ async function runAccuracy(device: GPUDevice, testCase: AccuracyCase, failures: 
             expected: round(testCase.expected),
             nearCeilingMean: round(rays.nearMean),
             ratio: round(ratio),
+            meanGated: testCase.tolerance !== null,
             nearRays: rays.nearRays,
+            ...(landings ? { nearFloorLandingsOverRhoLf: round(landingRatio ?? 0), nearFloorLandings: landings.nearFloorLandings.entries } : {}),
             cellIndirectMean: round(indirect.mean),
             cellsWithIndirect: indirect.cells,
             firstBounceEntries: counters[HASH_GRID_COUNTER.visibilityCount0],
             secondBounceEntries,
             shadowRays: counters[HASH_GRID_COUNTER.visibilityRayCount],
         };
+    } finally {
+        scenario.dispose();
+        await device.queue.onSubmittedWorkDone();
+    }
+}
+
+// ---- Section 6d: the sky counted once ------------------------------------------------------------
+
+/**
+ * 6d. **The sky, counted once** (RC3.4's sky light with E10): the open floor under a constant
+ * sky L, no other light, `environmentLightEnable` on (its default). With GI-1.2's rays the sky
+ * reaches a floor hit through the hit's own light sample (register D62) and the second bounce's
+ * misses add nothing; with the fallback the cache's light choice leaves the sky out
+ * (`hashGridCacheSamplesSky`) and DDGI's field, which holds the sky (E = πL on the open floor),
+ * brings it as the hit's indirect light. Either way a floor probe ray reads ρ L (the patch hides
+ * at most 0.2% of the sky), within 2% (gi1-rays) or 3% (fallback, DDGI's field); counting the
+ * sky twice reads 2 ρ L. DDGI bounce off, so its field is the sky alone.
+ */
+async function runSkyOnce(device: GPUDevice, mode: Mode, failures: string[]): Promise<Record<string, unknown>> {
+    const name = `6d open floor under a sky, ${mode}`;
+    const expected = FURNACE.albedo * SKY_RADIANCE;
+    const scenario = await startScenario(device, name, { scene: { kind: 'openFloorSky' }, settings: { secondBounce: mode }, ddgi: { ...DDGI_ACCURACY, bounceEnergy: 0 } });
+    try {
+        await runFrames(device, scenario, ACCURACY_FRAMES);
+        const rays = await readRays(device, scenario, false);
+        const ratio = rays.nearMean / expected;
+        const tolerance = mode === 'fallback' ? 0.03 : 0.02;
+        if (rays.nearRays < 1000) failures.push(`${name}: only ${rays.nearRays} near floor rays`);
+        if (Math.abs(ratio - 1) > tolerance) failures.push(`${name}: near floor rays read ${rays.nearMean.toFixed(4)}, rho L = ${expected.toFixed(4)} within ${tolerance * 100}% (ratio ${ratio.toFixed(4)}; the sky twice reads 2)`);
+        if (rays.bad > 0) failures.push(`${name}: ${rays.bad} rays NaN, infinite or negative`);
+        if (scenario.cache.secondBounceInUse !== mode) failures.push(`${name}: the cache ran ${scenario.cache.secondBounceInUse}, not ${mode}`);
+        return { expected: round(expected), nearFloorMean: round(rays.nearMean), ratio: round(ratio), nearRays: rays.nearRays };
     } finally {
         scenario.dispose();
         await device.queue.onSubmittedWorkDone();
@@ -700,6 +785,7 @@ try {
     if (SECTIONS !== 'lag') {
         for (const testCase of ACCURACY_CASES) accuracy[testCase.name] = await runAccuracy(device, testCase, failures);
         accuracy['6c coverage'] = await runCoverage(device, failures);
+        for (const mode of ['gi1-rays', 'fallback'] as const) accuracy[`6d sky once, ${mode}`] = await runSkyOnce(device, mode, failures);
         noFallback = await runNoFallback(device, failures);
     }
     const lag: Record<string, unknown> = {};

@@ -64,6 +64,9 @@
  * **Picking scenes, settings and frame counts** (vite env, as other pages):
  * `VITE_RC_ACCURACY_SCENES=two-room,sponza`, `VITE_RC_ACCURACY_CONFIGS=default,history off`,
  * `VITE_RC_ACCURACY_WARM_FRAMES`, `VITE_RC_ACCURACY_MEASURE_FRAMES`.
+ * `VITE_RC_COMPARE` sets compare toggles (RC4.5, radiance-cache-probes/compare-env.ts)
+ * under every configuration's own settings, for example RC4.1's blend weight:
+ * `VITE_RC_COMPARE=rayGuidingCorrection=false`.
  * Scenes without a reference are listed and skipped. The references are
  * `bench/references/<scene>/<bookmark>/` (gitignored; a junction to the
  * checkout that holds them works).
@@ -80,6 +83,7 @@ import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { setCompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings, type WorldCacheKind } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
 import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
@@ -87,6 +91,7 @@ import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { assert } from '../../client.ts';
+import { PAGE_COMPARE_VALUES } from '../radiance-cache-probes/compare-env.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { advanceThreeFrame, findManifest, HdrReader, SHOT_FAR, SHOT_NEAR } from '../three-composite-shared/composite-check.ts';
@@ -386,7 +391,9 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
             const configurations: Record<string, ConfigurationResult> = {};
             const pictures: Record<string, RgbImage> = {};
             for (const configuration of CONFIGURATIONS) {
-                Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, { worldCache: WORLD_CACHE }, configuration.settings);
+                Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, { worldCache: WORLD_CACHE });
+                setCompareValues(technique.settings, PAGE_COMPARE_VALUES);
+                Object.assign(technique.settings, configuration.settings);
                 threeGI.budget = { units: configuration.ddgiUnits ?? 0 };
                 if (ddgiTechnique) {
                     // DDGI under the cache only for E10's settings, from a fresh field each time.
@@ -548,7 +555,7 @@ await runThreePage(
         sheet.style.flexDirection = 'column';
         sheet.style.gap = '4px';
         document.body.append(sheet);
-        data.settings = { worldCache: WORLD_CACHE, warmFrames: WARM_FRAMES, measureFrames: MEASURE_FRAMES, configurations: CONFIGURATIONS.map((configuration) => configuration.name) };
+        data.settings = { worldCache: WORLD_CACHE, compare: PAGE_COMPARE_VALUES, warmFrames: WARM_FRAMES, measureFrames: MEASURE_FRAMES, configurations: CONFIGURATIONS.map((configuration) => configuration.name) };
         const scenes: Record<string, Record<string, ViewResult>> = {};
         const skipped: string[] = [];
         data.scenes = scenes;

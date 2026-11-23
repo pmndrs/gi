@@ -150,7 +150,8 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         const { device, loaded, hasTimestamps } = this.context;
         const platform = createGI(device, { gpuTiming: hasTimestamps, label: `viewer radiance cache ${loaded.manifest.id}` });
         this.platform = platform;
-        const technique = new RadianceCacheTechnique();
+        // SSGI decides the screen channels the technique asks for, so it is given at construction (a restart setting).
+        const technique = new RadianceCacheTechnique({ ssgi: this.settings.compare.ssgi === true });
         applyCompareValues(technique.settings, this.settings.compare);
         platform.addTechnique(technique);
         this.technique = technique;

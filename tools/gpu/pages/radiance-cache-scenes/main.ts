@@ -23,6 +23,13 @@
  * Each must be finite and at least 0. Device errors fail the page too. The
  * mean probe radiance is reported, as information.
  *
+ * RC3.4 adds `bistro-exterior` (through the viewer's loader, with its sky),
+ * with the sky as a light at cache hits (`environmentLightEnable`, the
+ * default) and without it (register D33's old behaviour): the same scan, and
+ * the mean radiance of the probe rays that hit something after frame 60, on
+ * and off, recorded. With the sky in the light choice it must rise: outdoors,
+ * the skylight on the surfaces the hits land on was missing.
+ *
  * Scenes load as `radiance-cache-probes` loads them (Cornell and two-room from
  * their manifests; Sponza through the viewer's loader and the three adapter's
  * scene sync, as a loader only); its `PageScreen` draws the screen.
@@ -35,6 +42,9 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { DIRECT_SKY_LIGHT } from '../../../../packages/ddgi-core/src/platform/shade/wgsl.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { RESERVOIR_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
@@ -104,6 +114,12 @@ interface Scan {
     readonly liveTiles: number;
     readonly cellValuesBad: number;
     readonly meanRayRadiance: number;
+    /** The same over the rays that hit something (a miss's distance is the largest half, 65,504). */
+    readonly meanHitRayRadiance: number;
+    readonly hitRays: number;
+    /** This frame's shadow rays (first and second bounce), and how many drew the sky (RC3.4). */
+    readonly shadowRays: number;
+    readonly skyDrawn: number;
     /**
      * The mean of the interpolated irradiance over the screen. The comparison
      * reads this, not the rays' mean: since RC4.1 ray guiding sends more rays
@@ -113,6 +129,9 @@ interface Scan {
     readonly meanIrradiance: number;
     readonly firstBad: string | null;
 }
+
+/** A missed probe ray's stored hit distance: the largest half (register D19). */
+const MISS_DISTANCE = 65504;
 
 async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame: number): Promise<Scan> {
     const probes = technique.probes;
@@ -126,6 +145,13 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
     const rays = badHalves(rayBits, (index) => index % 4 !== 3);
     let radianceSum = 0;
     for (let index = 0; index < rayBits.length; index++) if (index % 4 !== 3) radianceSum += halfBitsToFloat(rayBits[index]);
+    let hitRadianceSum = 0;
+    let hitRays = 0;
+    for (let ray = 0; ray < rayCount; ray++) {
+        if (!(halfBitsToFloat(rayBits[ray * 4 + 3]) < MISS_DISTANCE)) continue;
+        hitRays++;
+        hitRadianceSum += (halfBitsToFloat(rayBits[ray * 4]) + halfBitsToFloat(rayBits[ray * 4 + 1]) + halfBitsToFloat(rayBits[ray * 4 + 2])) / 3;
+    }
 
     // The atlas: radiance and hit distance per texel.
     const atlas = badHalves(await readHalfTexture(device, probes.probeAtlas), (index) => index % 4 !== 3);
@@ -154,6 +180,15 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
         }
     }
 
+    // The frame's reservoirs: how many drew the sky as their light (RC3.4, register D62).
+    const lists = cache.rayLists;
+    const counters = new Uint32Array(await readRange(device, cache.buffers.tileWords, 0, 64 * 4));
+    const shadowRays = counters[HASH_GRID_COUNTER.visibilityRayCount];
+    let skyDrawn = 0;
+    if (lists && shadowRays > 0) {
+        const reservoirs = new Uint32Array(await readRange(device, lists.buffer, lists.layout.reservoirBuffer * 4, shadowRays * RESERVOIR_WORDS * 4));
+        for (let ray = 0; ray < shadowRays; ray++) if (reservoirs[ray * RESERVOIR_WORDS] === DIRECT_SKY_LIGHT) skyDrawn++;
+    }
     const irradianceBits = await readHalfTexture(device, probes.irradiance);
     let irradianceSum = 0;
     for (let index = 0; index < irradianceBits.length; index++) if (index % 4 !== 3) irradianceSum += halfBitsToFloat(irradianceBits[index]);
@@ -161,11 +196,15 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
     return {
         frame,
         probeRays: rayCount,
+        shadowRays,
+        skyDrawn,
         rayValuesBad: rays.bad,
         atlasValuesBad: atlas.bad,
         liveTiles,
         cellValuesBad: cellBad,
         meanRayRadiance: rays.checked > 0 ? radianceSum / rays.checked : 0,
+        meanHitRayRadiance: hitRays > 0 ? hitRadianceSum / hitRays : 0,
+        hitRays,
         meanIrradiance: irradianceSum / Math.max((irradianceBits.length / 4) * 3, 1),
         firstBad: rays.first ?? atlas.first ?? firstCell,
     };
@@ -247,9 +286,17 @@ try {
         ['cornell-box', 'manifest', false],
         ['two-room', 'manifest', false],
     ] as const;
-    for (const [scene, loader, useMultibounce] of runs) {
-        const id = useMultibounce ? scene : `${scene} (multibounce off)`;
-        const scans = await scanScene(device, scene, loader, { useMultibounce });
+    // RC3.4: Bistro exterior with the sky as a light at cache hits (the default), and without it.
+    const skyRuns = [
+        ['bistro-exterior', true],
+        ['bistro-exterior', false],
+    ] as const;
+    const allRuns: { id: string; scene: string; loader: 'manifest' | 'viewer'; settings: Partial<RadianceCacheSettings> }[] = [
+        ...runs.map(([scene, loader, useMultibounce]) => ({ id: useMultibounce ? scene : `${scene} (multibounce off)`, scene, loader, settings: { useMultibounce } })),
+        ...skyRuns.map(([scene, environmentLightEnable]) => ({ id: environmentLightEnable ? scene : `${scene} (sky light off)`, scene, loader: 'viewer' as const, settings: { environmentLightEnable } })),
+    ];
+    for (const { id, scene, loader, settings } of allRuns) {
+        const scans = await scanScene(device, scene, loader, settings);
         scenes[id] = scans;
         for (const result of scans) {
             const bad = result.rayValuesBad + result.atlasValuesBad + result.cellValuesBad;
@@ -266,11 +313,26 @@ try {
     if (!(lastMean('two-room') > lastMean('two-room (multibounce off)'))) {
         failures.push(`two-room's mean irradiance after frame 60 is ${lastMean('two-room')} with multibounce and ${lastMean('two-room (multibounce off)')} without: the second bounce should raise it`);
     }
+    // RC3.4: the sky as a light at cache hits, before (off) and after (on), on Bistro exterior.
+    const lastScan = (id: string): Scan | undefined => scenes[id]?.[scenes[id].length - 1];
+    const skyOn = lastScan('bistro-exterior');
+    const skyOff = lastScan('bistro-exterior (sky light off)');
+    const skyLight = {
+        'bistro-exterior': {
+            meanHitRayRadiance: { on: skyOn?.meanHitRayRadiance ?? 0, off: skyOff?.meanHitRayRadiance ?? 0, ratio: (skyOn?.meanHitRayRadiance ?? 0) / Math.max(skyOff?.meanHitRayRadiance ?? 0, 1e-9) },
+            meanRayRadiance: { on: skyOn?.meanRayRadiance ?? 0, off: skyOff?.meanRayRadiance ?? 0, ratio: (skyOn?.meanRayRadiance ?? 0) / Math.max(skyOff?.meanRayRadiance ?? 0, 1e-9) },
+            meanIrradiance: { on: skyOn?.meanIrradiance ?? 0, off: skyOff?.meanIrradiance ?? 0, ratio: (skyOn?.meanIrradiance ?? 0) / Math.max(skyOff?.meanIrradiance ?? 0, 1e-9) },
+        },
+    };
+    // Judged on the screen's irradiance, as the multibounce gain is (ray guiding moves the rays' mean, RC4.1).
+    if (!((skyOn?.meanIrradiance ?? 0) > (skyOff?.meanIrradiance ?? 0))) {
+        failures.push(`bistro-exterior's mean irradiance reads ${skyOn?.meanIrradiance} with the sky as a light and ${skyOff?.meanIrradiance} without: the skylight at hits should raise it`);
+    }
     await drainDevice(device);
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, multibounceGain, scenes },
+        data: { width: WIDTH, height: HEIGHT, multibounceGain, skyLight, scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,

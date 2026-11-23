@@ -53,6 +53,7 @@
  * emission is added straight to the probe ray, never cached.
  */
 
+import { DIRECT_SKY_LIGHT_BIT } from '../../../../platform/contract/shade.ts';
 import { CAPSAICIN_WGSL } from '../../wgsl/capsaicin.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from '../world-cache.ts';
 
@@ -86,11 +87,10 @@ export const SHARC_LIGHTS_PER_PATH = 3;
 /** Words per probe ray of the per-ray buffer: its sample, a path record, a second-bounce entry and its light entries. */
 export const SHARC_WORDS_PER_RAY = SHARC_RAY_SAMPLE_WORDS + SHARC_PATH_WORDS + 1 + SHARC_LIGHTS_PER_PATH;
 /**
- * RC3.4's `GI_DIRECT_SKY_LIGHT_BIT` (platform/shade/wgsl.ts on `rc3-4`): with it in the light mask,
- * `giDirectChooseLight` draws the sky too. TODO(rc3-4 merge): import `DIRECT_SKY_LIGHT_BIT` instead
- * and keep the unit test that checks they agree.
+ * RC3.4's `GI_DIRECT_SKY_LIGHT_BIT`, the platform's `DIRECT_SKY_LIGHT_BIT`: with it in the light
+ * mask, `giDirectChooseLight` draws the sky too.
  */
-export const SHARC_SKY_LIGHT_BIT = 0x10;
+export const SHARC_SKY_LIGHT_BIT = DIRECT_SKY_LIGHT_BIT;
 /** The light groups a cache hit draws its light from: all four. */
 export const SHARC_LIGHT_GROUPS = 0xf;
 /** Threads per workgroup of the per-ray passes and of the resolve. */

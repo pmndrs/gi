@@ -346,7 +346,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `HostHitShadingSettings` | The hit-shading settings a host may change live, `gi.hitShadingSettings`: `sampleTextures` (above, "Materials and textures"). |
 | `GIPlatformOptions` | `createGI`'s options: `gpuTiming`, `label`, `buildIn`, `textureLayerSize`. |
 | `GIPlatformModule` | The contract's declaration of `createGI` and the three helpers below. |
-| `ScreenNeeds` | `gi.screenNeeds`: which screen channels the attached techniques read (`screen`, `velocity`, `albedo`, `instance`), so a host renders only those (RC1.1). |
+| `ScreenNeeds` | `gi.screenNeeds`: which screen channels the attached techniques read (`screen`, `velocity`, `albedo`, `instance`, `lighting`), so a host renders only those (RC1.1). |
 | `requiredLimits(adapter)` | The device limits to ask for: the adapter's largest bindings and buffers, and what the kernels need. |
 | `RequiredLimits` | The type `requiredLimits` returns: limit names to numbers. |
 | `optionalFeatures(adapter)` | Features worth asking for, where the adapter has them. |
@@ -382,6 +382,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `LightDescriptor` | Any light: one of the three below. |
 | `DirectionalLightDescriptor`, `PointLightDescriptor`, `SpotLightDescriptor` | The three kinds of light, with their units. |
 | `LightChanges` | What `updateLight` takes: any fields of the light's own kind except `type`. |
+| `LIGHT_GROUP_COUNT` | How many light groups there are (4): `LightDescriptor.group` is 0 to 3. |
 | `EnvironmentDescriptor` | The sky: `'none'`, `'color'`, `'texture'` (cube or equirect) or `'procedural'`. |
 
 ### The frame
@@ -392,7 +393,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `FrameBudget` | How much GI work a frame may do: `gpuMs`, `units`, `targetFps`, `paused`. |
 | `FrameCamera` | The camera as plain data: position, view and projection matrices, near and far. |
 | `FrameScreen` | Screen buffers (depth, normals, motion) for screen-space techniques. DDGI ignores them. |
-| `OptionalScreenChannel` | The `FrameScreen` channels a technique asks for by name: `'velocity'`, `'albedo'`, `'instance'` (RC1.1). |
+| `OptionalScreenChannel` | The `FrameScreen` channels a technique asks for by name: `'velocity'`, `'albedo'`, `'instance'` (RC1.1), `'lighting'` (the host's own lit colour before GI, linear HDR; RC4.2). |
 | `ScreenChannel`, `SCREEN_CHANNELS` | Every screen channel by name (`'depth'`, `'normal'`, `'velocity'`, `'albedo'`, `'instance'`), and the list of them. |
 | `ScreenInputsView` | An engine-free debug view: one `FrameScreen` channel drawn into an `rgba8unorm` texture of display values, for a host to show (RC1.1). |
 | `ScreenInputsViewSettings`, `DEFAULT_SCREEN_INPUTS_VIEW_SETTINGS`, `SCREEN_INPUTS_VIEW_FORMAT` | Its settings (velocity scale, depth range), their defaults, and its texture format. |
@@ -439,6 +440,7 @@ A technique gets the platform's services when attached, and never sees the host.
 | `ChangeEventTracker`, `ChangeEvent`, `ChangeEventOptions` | For techniques: the change feed as events over time (`change-events.ts`): one event per source with a box grown to cover it, epochs at its start, every `rearmFrames` while it goes on and once when it stops, so a technique forgets history once per epoch rather than on every frame of a change that goes on (the radiance cache's E8, E9 and D46). |
 | `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
 | `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
+| `DIRECT_SKY_LIGHT_BIT`, `DIRECT_SKY_LIGHT` | The sky as a light in hit shading's one-light choice (RC3.4): the group-mask bit that makes `giDirectChooseLight` weigh the sky (`1 << LIGHT_GROUP_COUNT`, so group bits alone never set it), and the light index it returns for the sky. |
 | `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |
 | `BounceSource` | Another technique's shading module used for bounce light. |
 | `WgslModule`, `BindingSlot`, `ModuleBindingEntry` | A piece of WGSL and the resources it binds. |
@@ -450,6 +452,7 @@ A technique gets the platform's services when attached, and never sees the host.
 | `GpuIndirectArgs`, `IndirectArgsOptions` | Indirect dispatch arguments made from a count the GPU computed; and its options. |
 | `GpuWord` | One `u32` a pass wrote on the GPU (a total, a count) for later passes to read. |
 | `GpuScreenHistory`, `ScreenHistoryOptions`, `ScreenHistoryTextures` | `compute.createScreenHistory`: the previous frame's depth (`r32float`) and normals (decoded, `rgba16float`), copied by one compute pass at the end of a frame, for techniques that reproject (RC4.1); and its options and textures. |
+| `GpuScreenSpaceGI`, `ScreenSpaceGIOptions`, `ScreenSpaceGIInputs`, `ScreenSpaceGISettings`, `ScreenSpaceGITextures`, `DEFAULT_SCREEN_SPACE_GI_SETTINGS` | `compute.createScreenSpaceGI` (`gi/ssgi`): Capsaicin's SSGI from the depth buffer, one compute pass a frame: the ambient visibility and bent normal (`rgba16float`, world space, signed) and the near-field irradiance from a lighting image the caller gives (RC4.2; the radiance cache reads it, DDGI could). |
 | `ComputeReduction` | How a workgroup combines its threads' values: `'subgroups'` or the `'workgroup'` memory fallback. |
 
 ## Every export of `@pmndrs/gi/ddgi`

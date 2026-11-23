@@ -167,9 +167,9 @@ describe('a constant sky with history (register D41): the cause of GI-1.2 drifti
 
 describe('noisy rays with history (register D46): the running mean against the hysteresis', () => {
     // E / (pi L) averaged over frames 100 to 200, so one frame's probe noise doesn't decide.
-    const settled = (rule: 'fixed' | 'running', noise: 'exponential' | 'sparse'): number => {
+    const settled = (rule: 'fixed' | 'running', noise: 'exponential' | 'sparse', guidingCorrection = false): number => {
         const report = Array.from({ length: 26 }, (_, index) => 100 + 4 * index);
-        const results = simulateConstantSky({ rule, guiding: 'fixed', frames: 200, report, noise });
+        const results = simulateConstantSky({ rule, guiding: 'fixed', frames: 200, report, noise, guidingCorrection });
         return results.reduce((sum, result) => sum + result.ourProjection, 0) / results.length;
     };
 
@@ -183,6 +183,14 @@ describe('noisy rays with history (register D46): the running mean against the h
         // What is left on sparse rays is ray guiding by the cell's own estimate (NOTES).
         expect(Math.abs(settled('running', 'sparse') - 1)).toBeLessThan(0.03);
     }, 120_000);
+
+    it('weighting each step by the rays a cell expected removes the bias of ray guiding (register D64)', () => {
+        const exponential = settled('running', 'exponential', true);
+        const sparse = settled('running', 'sparse', true);
+        console.log(`D64 CPU model: exponential ${exponential.toFixed(4)}, sparse ${sparse.toFixed(4)} (without: ${settled('running', 'exponential').toFixed(4)}, ${settled('running', 'sparse').toFixed(4)})`);
+        expect(Math.abs(exponential - 1)).toBeLessThan(0.005);
+        expect(Math.abs(sparse - 1)).toBeLessThan(0.01);
+    }, 240_000);
 
     it('the running mean keeps the noiseless sky exact', () => {
         for (const result of simulateConstantSky({ rule: 'running', guiding: 'fixed', frames: 100, report: [1, 50, 100] })) {

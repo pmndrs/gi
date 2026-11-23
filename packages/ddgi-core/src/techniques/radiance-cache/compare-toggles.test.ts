@@ -112,9 +112,9 @@ describe('the compare toggles (RC4.5)', () => {
             expect(compareSettingValue(technique.settings, entry.setting)).toBe(entry.defaultValue);
         }
         const settings: RadianceCacheSettings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS };
-        expect(temporalRuleUniforms(settings)).toEqual({ historySampleCap: 8, rayGuidingUniformShare: 0.125, capsaicinHysteresis: 0, capsaicinEmptyCells: 0, fillHitDistance: -1, probeChangeReset: 1 });
+        expect(temporalRuleUniforms(settings)).toEqual({ historySampleCap: 8, rayGuidingUniformShare: 0.125, capsaicinHysteresis: 0, capsaicinEmptyCells: 0, fillHitDistance: -1, probeChangeReset: 1, rayGuidingCorrection: 1 });
         applyCompareValues(settings, capsaicinCompareValues());
-        expect(temporalRuleUniforms(settings)).toEqual({ historySampleCap: 1, rayGuidingUniformShare: 0, capsaicinHysteresis: 1, capsaicinEmptyCells: 1, fillHitDistance: 65504, probeChangeReset: 0 });
+        expect(temporalRuleUniforms(settings)).toEqual({ historySampleCap: 1, rayGuidingUniformShare: 0, capsaicinHysteresis: 1, capsaicinEmptyCells: 1, fillHitDistance: 65504, probeChangeReset: 0, rayGuidingCorrection: 1 });
         // Each RcFrame field has an offset, and the kernels read them (no compile-time constants left).
         for (const field of Object.keys(temporalRuleUniforms(settings))) expect(FRAME_UNIFORM_OFFSETS).toHaveProperty(field);
         expect(BLEND_WGSL).toContain('rcFrame.capsaicinHysteresis');
@@ -122,6 +122,7 @@ describe('the compare toggles (RC4.5)', () => {
         expect(BLEND_WGSL).toContain('rcFrame.historySampleCap');
         expect(BLEND_WGSL).toContain('rcFrame.probeChangeReset');
         expect(BLEND_WGSL).toContain('rcFrame.fillHitDistance');
+        expect(BLEND_WGSL).toContain('rcFrame.rayGuidingCorrection');
         expect(REPROJECT_WGSL).toContain('rcFrame.capsaicinEmptyCells');
         expect(SAMPLE_WGSL).toContain('rcFrame.rayGuidingUniformShare');
     });

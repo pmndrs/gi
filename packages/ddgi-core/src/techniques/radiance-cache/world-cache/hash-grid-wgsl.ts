@@ -77,11 +77,11 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
 /**
  * Word offsets of `HashGridCacheConstants`' fields (`gi1_shared.h:59-92`,
  * debug fields left out, `g_Eye` and `g_FrameIndex` added at the front and
- * `g_UseDirectLighting` and `gi1_use_multibounce` in the first padding
- * words), for the TypeScript that writes the block. 36 words, 144 bytes:
- * word 31 is left to RC3.4 (`environmentLightEnable`, branch rc3-4), and P6.4's
- * `useNeuralTail` follows it, the rest padding. Each field has its own words
- * (`HASH_GRID_CONSTANTS_SPANS`, checked by a unit test).
+ * `g_UseDirectLighting`, `gi1_use_multibounce` and `LightBuilder`'s
+ * `environment_light_enable` in the padding words), for the TypeScript that
+ * writes the block. 36 words, 144 bytes: P6.4's `useNeuralTail` follows
+ * RC3.4's `environmentLightEnable` (word 31), the rest padding. Each field
+ * has its own words (`HASH_GRID_CONSTANTS_SPANS`, checked by a unit test).
  */
 export const HASH_GRID_CONSTANTS_WORD = {
     eyePosition: 0,
@@ -104,6 +104,7 @@ export const HASH_GRID_CONSTANTS_WORD = {
     maxMultibounceSampleCount: 28,
     useDirectLighting: 29,
     useMultibounce: 30,
+    environmentLightEnable: 31,
     /** P6.4 (register E11): `UpdateMultibounceCells` adds the neural tail's answer to the second hit's light. */
     useNeuralTail: 32,
 } as const;
@@ -158,7 +159,7 @@ struct HashGridCacheConstants {
     max_multibounce_sample_count: f32,
     use_direct_lighting: u32,       // GI1's g_UseDirectLighting (gi1.comp:35; gi1_use_direct_lighting)
     use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D35)
-    padding2: u32,                  // RC3.4's environment light switch takes this word (branch rc3-4)
+    environment_light_enable: u32,  // LightBuilder's environment_light_enable: the sky among a hit's lights (register D33, RC3.4)
     use_neural_tail: u32,           // P6.4 (register E11): add the neural tail's answer to each second hit's light
     padding3: u32,
     padding4: u32,

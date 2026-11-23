@@ -983,15 +983,11 @@ export class HashGridCache implements WorldCache {
         floats[word.discardMultibounceRayProbability] = options.hashGridCacheDiscardMultibounceRayProbability;
         // E10: the fallback's value has no ray noise, so its own, shorter running mean (register E10).
         floats[word.maxMultibounceSampleCount] = secondBounce === 'fallback' ? options.fallbackIndirectSampleCount : options.hashGridCacheMaxMultibounceSampleCount;
-        // E10 with RC3.4: in the fallback mode the cache's own light choice leaves the sky out
-        // (GI_DIRECT_SKY_LIGHT_BIT), since the fallback's field already holds the sky that reaches a
-        // hit. RC3.4 (branch rc3-4) adds the word and the option; written here once they exist.
-        // TODO(RC3.4 merge): keep this line after RC3.4's own write of the word, and check that
-        // radiance-cache-ddgi-bounce's sky section (to be added with the merge) reads one sky.
-        const environmentWord = (word as Readonly<Record<string, number>>).environmentLightEnable;
-        if (environmentWord !== undefined) words[environmentWord] = hashGridCacheSamplesSky(options, secondBounce) ? 1 : 0;
         words[word.useDirectLighting] = options.useDirectLighting ? 1 : 0;
         words[word.useMultibounce] = options.useMultibounce ? 1 : 0;
+        // RC3.4's sky light (register D62), left out in E10's fallback mode: the fallback's field
+        // already holds the sky that reaches a hit (radiance-cache-ddgi-bounce's sky section).
+        words[word.environmentLightEnable] = hashGridCacheSamplesSky(options, secondBounce) ? 1 : 0;
         words[word.useNeuralTail] = tailActive ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }
@@ -1018,10 +1014,8 @@ export interface HashGridCacheClearOptions {
  * sky reaching a hit (register E10). Emissive surfaces as cache lights (D21's
  * way back) will need the same rule.
  */
-export function hashGridCacheSamplesSky(options: object, secondBounce: SecondBounceInUse): boolean {
-    // The option arrives with RC3.4; until then it is absent and the cache takes no sky (D33).
-    const environmentLightEnable = (options as { readonly environmentLightEnable?: boolean }).environmentLightEnable ?? false;
-    return environmentLightEnable && secondBounce !== 'fallback';
+export function hashGridCacheSamplesSky(options: Pick<HashGridCacheOptions, 'environmentLightEnable'>, secondBounce: SecondBounceInUse): boolean {
+    return options.environmentLightEnable && secondBounce !== 'fallback';
 }
 
 /**

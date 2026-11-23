@@ -76,9 +76,8 @@ export interface SharcCacheOptions {
      * RC3.4's `environmentLightEnable`: the sky is one of the lights a hit
      * draws from (`GI_DIRECT_SKY_LIGHT_BIT` in the light mask). Then a bounce
      * ray that misses brings nothing, otherwise the sky's radiance, so the sky
-     * is counted once either way (register E4). Absent (before RC3.4 merges):
-     * no sky light, and the misses bring it. TODO(rc3-4 merge): the
-     * technique's settings carry it from then on; run the sky checks again.
+     * is counted once either way (register E4). The technique's settings
+     * carry it (default true); absent, no sky light, and the misses bring it.
      */
     readonly environmentLightEnable?: boolean;
 }

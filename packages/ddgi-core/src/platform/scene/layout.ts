@@ -294,7 +294,7 @@ export const LIGHT_TYPE = { directional: 0, point: 1, spot: 2 } as const;
 export const LIGHT_FLAG = { castsShadows: 1 } as const;
 
 /** Light groups 0..3 (contract: `LightCommon.group`). */
-export const LIGHT_GROUP_COUNT = 4;
+export { LIGHT_GROUP_COUNT } from '../contract/scene.ts';
 
 /** Where the table buffer's sections start, in vec4s, for given capacities. */
 export interface TableLayout {
