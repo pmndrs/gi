@@ -17,20 +17,37 @@
  * - **noise:** |E_t − (E_t−1 + E_t+1) / 2| / max(E_t, 5% of the frame's mean),
  *   the second difference, which a steady rise doesn't move;
  * - **lag:** the frames until the frame's mean E stays within 5% of the
- *   settled image (the mean of frames 100-119 after the change).
+ *   settled image (the mean of frames 381-400 after the change; read every
+ *   frame up to 300).
+ *
+ * The windows (2026-11-24, from a 1,000-frame trace of the mean after each
+ * step): before a step the scene settles for 400 frames, and the settled image
+ * is frames 381-400. With E9 off two-room's mean reaches 95% of its final value
+ * at about frame 120 and 99.5% near frame 300; Sponza's 95% near frame 130 and
+ * 99.5% near 400. The old 60 settle frames left the last step still fading
+ * (each later setting's "settled over before" read lower: 1.90, 1.83, 1.73),
+ * and the old window (frames 101-120, the lag read to 40) sat at 0.94-0.99 of
+ * final, so two-room's lag was 41 (never within 5% inside 40) with E9 on and
+ * off, and the lag gate passed whatever E9 did.
  *
  * 1. **A light doubled once** (Sponza's sun; two-room's lamp; and two-room
  *    with multibounce off, to tell the second bounce's pace from the rest):
  *    noise before and over the 16 frames after, the lag, and the mean E 16
  *    frames after over the settled. Gates, on E9's default (history dropped):
- *    the noise over the 16 frames after is at most 1.5 times E9 off's (two-room
- *    measured 1.34), and the image follows no slower (the lag no longer,
- *    frame 16 no further from settled).
+ *    the noise E9 adds over the 16 frames after (E9 on's minus E9 off's, both
+ *    at the defaults) is at most half of E9 off's noise with the probe filter
+ *    and the ray-guiding correction off (`rcfilter=false,rcguidefix=false`,
+ *    the configuration P6.2b's 1.5× gate was set on: the same +50%), and the
+ *    image follows no slower (the lag no longer, frame 16 no further from
+ *    settled). DECISIONS 2026-11-24: RC4.2's probe filter and D64 halved E9
+ *    off's noise but not the rise E9 adds, so the 1.5× ratio of the defaults
+ *    (1.34 at P6.2b, 1.79 after RC4.2) stopped measuring E9; it is recorded
+ *    (`ratio`), not gated.
  * 2. **A change that goes on** for 60 frames (Sponza's sun turning 0.5° a
  *    frame; a 0.6 m box crossing two-room's lit room at 2 cm a frame), then
- *    held for 120: the noise over frames 10-59 of the motion, and the
+ *    held for 400: the noise over frames 10-59 of the motion, and the
  *    per-pixel error of the motion's last frame against the held image's
- *    settled E (frames 110-119). Gates: with E9's default the noise is at most
+ *    settled E (frames 391-400; 110-119 until 2026-11-24, not yet settled). Gates: with E9's default the noise is at most
  *    1.25 times E9 off's (before the events, E9 reset every cell every frame
  *    of such a change), and the image follows: its error at most 1.05 times
  *    E9 off's.
@@ -38,9 +55,8 @@
  * Only NaN, infinite or negative values and the gates fail.
  *
  * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts);
- * the E9 settings of each case are set over them. Since RC4.2 the probe filter and the ray-guiding
- * correction (D64) take most of the noise E9 off shows, but not E9's own, so two-room's ratio rose
- * from 1.34 to about 1.8 (PROGRESS 2026-11-24, E9's noise gate after RC4.2).
+ * the E9 settings of each case are set over them, and the calibration run's filter and D64 over
+ * those.
  *
  * Through the lock: `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-change-noise --gpu nvidia`.
  */
@@ -58,6 +74,7 @@ import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
+import { compareValuesFromText } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
@@ -65,15 +82,17 @@ import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-prob
 const WIDTH = 1280;
 const HEIGHT = 720;
 const WARM_FRAMES = 60;
-const SETTLE_FRAMES = 60;
+/** Frames before a step or a motion: the last case's change has faded (see the doc comment). */
+const SETTLE_FRAMES = 400;
 const BASELINE_FRAMES = 10;
-/** Frames read every frame after a change (lag and noise), then the settled window. */
-const FOLLOW_FRAMES = 40;
-const SETTLED_FROM = 100;
-const SETTLED_TO = 120;
+/** Frames whose mean is read after a change (the lag), then the settled window (frames 381-400). */
+const FOLLOW_FRAMES = 300;
+const SETTLED_FROM = 380;
+const SETTLED_TO = 400;
 const WINDOW = 16;
 const MOTION_FRAMES = 60;
-const HOLD_FRAMES = 120;
+/** Frames the motion's end is held: its last 10 are the settled image (120 left it short, as the steps' windows did). */
+const HOLD_FRAMES = 400;
 const DARK_FLOOR = 0.05;
 const LAG_WITHIN = 0.05;
 
@@ -85,6 +104,16 @@ const SETTINGS: readonly { readonly name: string; readonly settings: Partial<Rad
 /** The gated setting: E9's default (lead, 2026-11-20: history dropped, for fast reaction and no ghosting). */
 const KEPT = 'E9 on';
 const OFF = 'E9 off';
+/**
+ * E9 off in the configuration P6.2b's gate was set on: RC4.2's probe filter and the ray-guiding
+ * correction (D64) off, by their compare toggles (DECISIONS 2026-11-24). Half its noise is what E9
+ * may add at the defaults.
+ */
+const CALIBRATION = 'E9 off, filter and D64 off';
+const CALIBRATION_SETTINGS: Partial<RadianceCacheSettings> = { cellChangeReset: false, cellChangeResetHistory: 0, ...(compareValuesFromText('rcfilter=false,rcguidefix=false') as Partial<RadianceCacheSettings>) };
+/** P6.2b's 1.5× of E9 off: the noise E9 may add, as a share of the calibration run's. */
+const ADDED_NOISE_ALLOWANCE = 0.5;
+const STEP_SETTINGS = [...SETTINGS, { name: CALIBRATION, settings: CALIBRATION_SETTINGS }];
 
 const HALF_TABLE = Float32Array.from({ length: 65536 }, (_, bits) => halfBitsToFloat(bits));
 
@@ -132,8 +161,12 @@ interface Controls {
 
 interface Loaded {
     readonly technique: RadianceCacheTechnique;
+    /** The page's settings (its own and the run's compare values), which each case starts from. */
+    readonly base: Readonly<RadianceCacheSettings>;
     readonly controls: Controls;
     frame(): void;
+    /** Waits for the frames submitted so far (so long runs don't queue hundreds). */
+    drain(): Promise<void>;
     read(): Promise<Frame>;
     dispose(): void;
 }
@@ -263,8 +296,10 @@ async function load(device: GPUDevice, id: string): Promise<Loaded> {
     }
     return {
         technique,
+        base: { ...technique.settings },
         controls,
         frame,
+        drain: () => device.queue.onSubmittedWorkDone(),
         read,
         dispose() {
             screen.dispose();
@@ -307,55 +342,80 @@ function meanFrame(frames: readonly Frame[]): Frame {
 
 const round = (value: number, digits = 4): number => Number(value.toFixed(digits));
 
+/** A frame's mean E only, for the frames past the noise window. */
+async function readMean(scene: Loaded): Promise<{ readonly mean: number; readonly bad: number }> {
+    const { mean, bad } = await scene.read();
+    return { mean, bad };
+}
+
 async function stepCase(scene: Loaded, settings: Partial<RadianceCacheSettings>): Promise<Record<string, number>> {
     const scale = scene.controls.lightScale;
     if (!scale) throw new Error('no light to scale');
-    Object.assign(scene.technique.settings, settings);
+    Object.assign(scene.technique.settings, scene.base, settings);
     scale(1);
-    for (let index = 0; index < SETTLE_FRAMES; index++) scene.frame();
+    for (let index = 0; index < SETTLE_FRAMES; index++) {
+        scene.frame();
+        if (index % 8 === 7) await scene.drain();
+    }
     const baseline: Frame[] = [];
     for (let index = 0; index < BASELINE_FRAMES; index++) {
         scene.frame();
         baseline.push(await scene.read());
     }
     scale(2);
+    // Whole frames for the noise window (and one past it), means after that.
     const after: Frame[] = [baseline[baseline.length - 1]];
-    const settled: Frame[] = [];
+    const means: number[] = [baseline[baseline.length - 1].mean];
+    const settled: number[] = [];
+    let bad = 0;
     for (let index = 1; index <= SETTLED_TO; index++) {
         scene.frame();
-        if (index <= FOLLOW_FRAMES) after.push(await scene.read());
-        else if (index > SETTLED_FROM) settled.push(await scene.read());
+        if (index <= WINDOW + 1) {
+            const frame = await scene.read();
+            after.push(frame);
+            means.push(frame.mean);
+            bad += frame.bad;
+        } else if (index <= FOLLOW_FRAMES || index > SETTLED_FROM) {
+            const frame = await readMean(scene);
+            bad += frame.bad;
+            if (index <= FOLLOW_FRAMES) means.push(frame.mean);
+            else settled.push(frame.mean);
+        } else if (index % 8 === 0) await scene.drain();
     }
     scale(1);
     const baselineNoise = new Tally();
     for (let t = 1; t < baseline.length - 1; t++) tallyNoise(baseline, t, baselineNoise);
     const noise = new Tally();
     for (let t = 1; t <= WINDOW; t++) tallyNoise(after, t, noise);
-    const reference = settled.reduce((sum, frame) => sum + frame.mean, 0) / settled.length;
+    const reference = settled.reduce((sum, mean) => sum + mean, 0) / settled.length;
     let lag = FOLLOW_FRAMES + 1;
     for (let t = FOLLOW_FRAMES; t >= 1; t--) {
-        if (Math.abs(after[t].mean / reference - 1) > LAG_WITHIN) break;
+        if (Math.abs(means[t] / reference - 1) > LAG_WITHIN) break;
         lag = t;
     }
     const before = baseline.reduce((sum, frame) => sum + frame.mean, 0) / baseline.length;
     return {
-        baselineNoiseMean: round(baselineNoise.mean),
-        noiseMean: round(noise.mean),
+        baselineNoiseMean: round(baselineNoise.mean, 5),
+        noiseMean: round(noise.mean, 5),
         noiseP95: round(noise.percentile(0.95)),
         lagFrames: lag,
         settledOverBefore: round(reference / before),
-        meanE1OverSettled: round(after[1].mean / reference),
-        meanE16OverSettled: round(after[16].mean / reference),
-        bad: [...baseline, ...after, ...settled].reduce((sum, frame) => sum + frame.bad, 0),
+        meanE1OverSettled: round(means[1] / reference),
+        meanE16OverSettled: round(means[16] / reference),
+        meanE40OverSettled: round(means[40] / reference),
+        bad: bad + baseline.reduce((sum, frame) => sum + frame.bad, 0),
     };
 }
 
 async function motionCase(scene: Loaded, kind: 'sun' | 'box', settings: Partial<RadianceCacheSettings>): Promise<Record<string, number>> {
     const move = kind === 'sun' ? scene.controls.sunTurn : scene.controls.boxAt;
     if (!move) throw new Error(`no ${kind} to move`);
-    Object.assign(scene.technique.settings, settings);
+    Object.assign(scene.technique.settings, scene.base, settings);
     move(0);
-    for (let index = 0; index < SETTLE_FRAMES; index++) scene.frame();
+    for (let index = 0; index < SETTLE_FRAMES; index++) {
+        scene.frame();
+        if (index % 8 === 7) await scene.drain();
+    }
     const motion: Frame[] = [];
     for (let step = 1; step <= MOTION_FRAMES; step++) {
         move(kind === 'sun' ? 0.5 * step : step);
@@ -366,6 +426,7 @@ async function motionCase(scene: Loaded, kind: 'sun' | 'box', settings: Partial<
     for (let index = 1; index <= HOLD_FRAMES; index++) {
         scene.frame();
         if (index > HOLD_FRAMES - 10) held.push(await scene.read());
+        else if (index % 8 === 0) await scene.drain();
     }
     move(0);
     const noise = new Tally();
@@ -395,12 +456,11 @@ try {
         try {
             const lightName = id === 'sponza' ? 'sponza sun doubled' : 'two-room lamp doubled';
             steps[lightName] = {};
-            for (const { name, settings } of SETTINGS) steps[lightName][name] = await stepCase(scene, settings);
+            for (const { name, settings } of STEP_SETTINGS) steps[lightName][name] = await stepCase(scene, settings);
             if (id === 'two-room') {
                 // The second bounce's pace: the same change with multibounce off.
                 steps['two-room lamp doubled, multibounce off'] = {};
-                for (const { name, settings } of SETTINGS) steps['two-room lamp doubled, multibounce off'][name] = await stepCase(scene, { ...settings, useMultibounce: false });
-                Object.assign(scene.technique.settings, { useMultibounce: true });
+                for (const { name, settings } of STEP_SETTINGS) steps['two-room lamp doubled, multibounce off'][name] = await stepCase(scene, { ...settings, useMultibounce: false });
             }
             const motionName = id === 'sponza' ? 'sponza sun turning' : 'two-room box moving';
             motions[motionName] = {};
@@ -413,8 +473,13 @@ try {
     for (const [name, results] of [...Object.entries(steps), ...Object.entries(motions)]) {
         for (const [setting, measured] of Object.entries(results)) if (measured.bad > 0) failures.push(`${name}, ${setting}: ${measured.bad} pixels' E is NaN, infinite or negative`);
     }
+    const noiseGates: Record<string, Record<string, number>> = {};
     for (const [name, results] of Object.entries(steps)) {
-        if (results[KEPT].noiseMean > 1.5 * results[OFF].noiseMean) failures.push(`${name}: noise after the change ${results[KEPT].noiseMean} with ${KEPT}, over 1.5 times ${OFF}'s ${results[OFF].noiseMean}`);
+        // The noise E9 adds, against half the calibration run's (DECISIONS 2026-11-24); the ratio is recorded only.
+        const added = results[KEPT].noiseMean - results[OFF].noiseMean;
+        const allowed = ADDED_NOISE_ALLOWANCE * results[CALIBRATION].noiseMean;
+        noiseGates[name] = { added: round(added, 5), allowed: round(allowed, 5), ratio: round(results[KEPT].noiseMean / results[OFF].noiseMean, 3) };
+        if (added > allowed) failures.push(`${name}: E9 adds ${round(added, 5)} noise after the change (${KEPT} ${results[KEPT].noiseMean}, ${OFF} ${results[OFF].noiseMean}), over half of ${CALIBRATION}'s ${results[CALIBRATION].noiseMean}`);
         if (results[KEPT].lagFrames > results[OFF].lagFrames || results[KEPT].meanE16OverSettled < results[OFF].meanE16OverSettled) {
             failures.push(`${name}: with ${KEPT} the lag is ${results[KEPT].lagFrames} frames and frame 16 at ${results[KEPT].meanE16OverSettled} of settled, with ${OFF} ${results[OFF].lagFrames} and ${results[OFF].meanE16OverSettled}`);
         }
@@ -427,7 +492,7 @@ try {
     reportGpuTest({
         status: failures.length === 0 && deviceErrors.length === 0 ? 'pass' : 'fail',
         message: failures.length === 0 ? undefined : failures.join(' | '),
-        data: { width: WIDTH, height: HEIGHT, compare: PAGE_COMPARE_VALUES, steps, motions },
+        data: { width: WIDTH, height: HEIGHT, compare: PAGE_COMPARE_VALUES, noiseGates, steps, motions },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
