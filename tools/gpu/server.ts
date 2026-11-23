@@ -8,6 +8,7 @@ import { extname, join, relative, resolve, sep } from 'node:path';
 import type { ServerResponse } from 'node:http';
 import { createServer, searchForWorkspaceRoot, type Connect, type ViteDevServer } from 'vite';
 import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES, REFERENCE_FILES } from './contract.ts';
+import { optionalSiblings, optionalSiblingsPlugin } from '../optional-siblings.ts';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
 export const SITE_ROOT = import.meta.dirname;
@@ -19,14 +20,20 @@ export interface TestSiteServer {
 }
 
 /**
- * Sibling libraries linked from a local clone for development (root package.json `link:`;
- * the radiance cache's GI denoiser, RC4.3). They live outside this repo, so vite serves their
- * real folders only when they are listed in `server.fs.allow`.
+ * Sibling libraries from a local clone for development (root package.json
+ * `linkedSiblings`): a required one through its `link:` dependency in
+ * node_modules (the radiance cache's GI denoiser, RC4.3), an optional one
+ * through `optionalSiblingsPlugin` (`@pathtracer/mlp` for the neural tail,
+ * P6.4). They live outside this repo, so vite serves their real folders only
+ * when they are listed in `server.fs.allow`.
  */
-const LINKED_SIBLINGS = ['@pmndrs/denoiser-ffx']
-    .map((name) => resolve(SITE_ROOT, '../../node_modules', name))
-    .filter((path) => existsSync(path))
-    .map((path) => realpathSync(path));
+const LINKED_SIBLINGS = [
+    ...Object.keys((JSON.parse(readFileSync(resolve(SITE_ROOT, '../../package.json'), 'utf8')) as { linkedSiblings?: Record<string, unknown> }).linkedSiblings ?? {})
+        .map((name) => resolve(SITE_ROOT, '../../node_modules', name))
+        .filter((path) => existsSync(path))
+        .map((path) => realpathSync(path)),
+    ...optionalSiblings().flatMap((sibling) => (sibling.folder ? [sibling.folder] : [])),
+];
 
 /** Where `pnpm examples:build` writes the examples site. */
 const EXAMPLES_DIST = resolve(SITE_ROOT, '../../examples/dist');
@@ -108,6 +115,7 @@ export async function startTestSite(): Promise<TestSiteServer> {
             watch: null,
         },
         plugins: [
+            optionalSiblingsPlugin(),
             {
                 // The built examples site, as a static subdirectory (contract.ts, EXAMPLES_SITE_BASE).
                 name: 'examples-site',

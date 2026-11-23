@@ -2,6 +2,7 @@ import { execFileSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import { delimiter, join, resolve, sep } from 'path';
 import { defineConfig, type Plugin } from 'vite';
+import { optionalSiblings, optionalSiblingsPlugin } from '../../tools/optional-siblings.ts';
 
 const repoRoot = resolve(__dirname, '../..');
 
@@ -74,13 +75,14 @@ export default defineConfig({
         // The commit the viewer runs, so the Compare panel can say when a reference is from an older one.
         __VIEWER_COMMIT__: JSON.stringify(currentCommit()),
     },
-    plugins: [recordingsList()],
+    // Optional siblings (`@pathtracer/mlp` for the radiance cache's neural tail): the pinned clone, or a module that throws when loaded.
+    plugins: [recordingsList(), optionalSiblingsPlugin()],
     // Top-level await (renderer.init) needs a modern target. Two pages: the viewer and the native compare page.
     build: { target: 'esnext', rollupOptions: { input: { main: resolve(__dirname, 'index.html'), compare: resolve(__dirname, 'compare.html') } } },
     server: {
         port: 5200,
         open: false,
         // The scene manifests and the downloaded models live outside this folder.
-        fs: { allow: [repoRoot, ...downloadsDirectories, ...recordingDirectories.map((entry) => entry.directory)] },
+        fs: { allow: [repoRoot, ...downloadsDirectories, ...recordingDirectories.map((entry) => entry.directory), ...optionalSiblings().flatMap((sibling) => (sibling.folder ? [sibling.folder] : []))] },
     },
 });

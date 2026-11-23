@@ -20,7 +20,7 @@ import {
 } from './hash-grid-cpu.ts';
 import { checkHashGridRayListLimits, hashGridCacheRayListLayout, RESERVOIR_WORDS, updateTilesPerWorkgroup } from './hash-grid-population-wgsl.ts';
 import { floatToHalfBits, halfBitsToFloat } from '../capsaicin-math.ts';
-import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
+import { HASH_GRID_CONSTANTS_BYTES, HASH_GRID_CONSTANTS_SPANS, HASH_GRID_CONSTANTS_WORD, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import type { WorldCacheContext } from './world-cache.ts';
 
 // ---- Independent references: the HLSL hashes in BigInt arithmetic, mod 2^32 at every step ----
@@ -252,10 +252,30 @@ describe('PurgeTiles\' decay age (gi1.comp:1726-1738)', () => {
 });
 
 describe('the constants and the shared WGSL', () => {
-    it('lays HashGridCacheConstants out in 32 words, the eye first', () => {
-        expect(HASH_GRID_CONSTANTS_BYTES).toBe(128);
+    it('lays HashGridCacheConstants out in 36 words, the eye first', () => {
+        expect(HASH_GRID_CONSTANTS_BYTES).toBe(144);
         expect(HASH_GRID_CONSTANTS_WORD.frameIndex).toBe(3);
         expect(HASH_GRID_CONSTANTS_WORD.maxMultibounceSampleCount).toBeLessThan(32);
+    });
+
+    it("gives every constant its own words, inside the block (RC3.4's sky switch at 31, the tail's at 32)", () => {
+        const owner = new Map<number, string>();
+        for (const [name, first] of Object.entries(HASH_GRID_CONSTANTS_WORD)) {
+            const span = HASH_GRID_CONSTANTS_SPANS[name as keyof typeof HASH_GRID_CONSTANTS_WORD] ?? 1;
+            for (let word = first; word < first + span; word++) {
+                expect(owner.get(word), `${name} shares word ${word} with ${owner.get(word)}`).toBeUndefined();
+                owner.set(word, name);
+                expect(word * 4).toBeLessThan(HASH_GRID_CONSTANTS_BYTES);
+            }
+        }
+        expect(owner.get(31)).toBe('environmentLightEnable');
+        expect(owner.get(32)).toBe('useNeuralTail');
+        // The WGSL struct is as long as the block: one u32 or f32 per word, the eye a vec3f.
+        const struct = /struct HashGridCacheConstants \{([^}]*)\}/.exec(hashGridCacheWgsl(1, hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS))))?.[1] ?? '';
+        const fields = struct.split(/\r?\n/).map((line) => line.replace(/\/\/.*$/, '').trim()).filter((line) => line.endsWith(','));
+        expect(fields.length + 2).toBe(HASH_GRID_CONSTANTS_BYTES / 4); // + 2: the vec3f eye is three words
+        expect(fields.findIndex((field) => field.startsWith('use_neural_tail:')) + 2).toBe(HASH_GRID_CONSTANTS_WORD.useNeuralTail);
+        expect(fields.findIndex((field) => field.startsWith('environment_light_enable:')) + 2).toBe(HASH_GRID_CONSTANTS_WORD.environmentLightEnable);
     });
 
     it('reads the vertical field of view back from a projection', () => {

@@ -124,8 +124,8 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: CELL_CHANGES_BINDING.cellLists, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
-/** Bytes of `HashGridCacheRayLists`: fifteen words, padded to 16 bytes. */
-export const RAY_LISTS_UNIFORM_BYTES = 64;
+/** Bytes of `HashGridCacheRayLists`: seventeen words (the neural tail's last, P6.4), padded to a multiple of 16 bytes. */
+export const RAY_LISTS_UNIFORM_BYTES = 80;
 
 /** Word of `HashGridCacheRayLists` that says how cells are lit: bit 0 budgeted (lever E8), bit 1 per-hit change reset (E9). Written every frame. */
 export const RAY_LISTS_CELL_SHADING_WORD = 14;
@@ -134,6 +134,9 @@ export const CELL_SHADING_FLAG = { budgeted: 1, changeReset: 2, historyShift: 8 
 
 /** Words of a reservoir: the light, its weight (f32 bits), the point on the light (two unorm16). */
 export const RESERVOIR_WORDS = 3;
+
+/** Words of a second-bounce entry's neural-tail answer (P6.4, register E11): rgb and a valid flag as four halves. */
+export const NEURAL_TAIL_WORDS = 2;
 
 /** Words of a second-bounce entry's `MultibounceInfoBuffer` value: BRDF and pdf as four halves (`HashGridCache_PackBRDF`). */
 export const MULTIBOUNCE_INFO_WORDS = 2;
@@ -224,6 +227,13 @@ export interface HashGridCacheRayListLayout {
     readonly firstBounceBypassBuffer: number;
     /** Ours (register D38): per second-bounce entry, its own direct light where its segment bypasses the cache. */
     readonly multibounceDirectBuffer: number;
+    /**
+     * P6.4 (register E11): per second-bounce entry, the neural tail's answer
+     * (`NEURAL_TAIL_WORDS`), which `UpdateMultibounceCells` adds to the second
+     * hit's light when the tail is in use. Only made with a tail: without
+     * one it is 0 and holds no words.
+     */
+    readonly neuralTailBuffer: number;
     readonly bytes: number;
 }
 
@@ -236,7 +246,7 @@ export interface HashGridCacheRayListLayout {
  * entry (at most one per first-bounce entry, so `max_ray_count`) its BRDF and
  * pdf (`MultibounceInfoBuffer`) and its ray (ours, register D36).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true): HashGridCacheRayListLayout {
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true, neuralTail = false): HashGridCacheRayListLayout {
     // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
     // Without second-bounce rays (multibounce off, or the second bounce from a fallback, register
     // E10) the lists hold the first bounce only and the second-bounce lists are empty: 9 words a
@@ -253,7 +263,9 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const multibounceRayBuffer = multibounceInfoBuffer + MULTIBOUNCE_INFO_WORDS * secondBounceCount;
     const firstBounceBypassBuffer = multibounceRayBuffer + MULTIBOUNCE_RAY_WORDS * secondBounceCount;
     const multibounceDirectBuffer = firstBounceBypassBuffer + maxRayCount;
-    const words = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * secondBounceCount;
+    const tailStart = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * secondBounceCount;
+    // P6.4 (register E11): the neural tail's answers, one per second-bounce entry, only with a tail.
+    const words = tailStart + (neuralTail ? NEURAL_TAIL_WORDS * secondBounceCount : 0);
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -267,6 +279,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         multibounceRayBuffer,
         firstBounceBypassBuffer,
         multibounceDirectBuffer,
+        neuralTailBuffer: neuralTail && secondBounceRays ? tailStart : 0,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -308,6 +321,7 @@ struct HashGridCacheRayLists {
     cell_shade_buffer: u32,         // lever E8, in g_HashGridCache_CellLists: the cells lit this frame
     cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset; bits 8-15: E9's history kept
     cell_priority_bins: u32,        // lever E8, in g_HashGridCache_CellLists: each bin's first slot, then its count
+    neural_tail_buffer: u32,          // P6.4 (register E11): the neural tail's answer per second-bounce entry, 2 words
 }
 
 ${CELL_CHANGES_WGSL}
@@ -469,7 +483,11 @@ fn HashGridCache_WorkgroupIndex(workgroup: vec3u, workgroups: vec3u) -> u32 {
 }
 `;
 
-/** The shared head of every population kernel: the hash grid (group 1) and the ray data (group 2). */
+/**
+ * The shared head of every population kernel: the hash grid (group 1) and
+ * the ray data (group 2). Exported for kernels that run inside the grid's
+ * frame with its data (E10's pass, P6.4's neural tail).
+ */
 export function populationHeadWgsl(layout: HashGridCacheBufferLayout): string {
     return `${hashGridCacheWgsl(HASH_GRID_KERNEL_GROUP, layout)}\n${RAY_DATA_WGSL}\n${LINEAR_WORKGROUP_WGSL}`;
 }
@@ -1436,6 +1454,16 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
             let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
             second_radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
             adds_sample = !HashGridCache_CellShadingBudgeted() || direct_radiance.w > 0.0;
+        }
+        // P6.4 (register E11): the neural tail's answer for the second hit, the light it reflects
+        // from indirect light (every later bounce, as the network has learned the grid's indirect
+        // values), so the first-bounce cell's indirect value carries every bounce in expectation.
+        if (g_HashGridCacheConstants.use_neural_tail != 0u) {
+            let tail_base = g_HashGridCache_RayLists.neural_tail_buffer + ${NEURAL_TAIL_WORDS}u * did;
+            let tail = vec4f(unpack2x16float(HashGridCache_RayListWord(tail_base, 0u)), unpack2x16float(HashGridCache_RayListWord(tail_base, 1u)));
+            if (tail.w > 0.0) {
+                second_radiance += tail.rgb;
+            }
         }
         radiance = (second_radiance * brdf) / pdf;
     }

@@ -467,6 +467,20 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         step: 1,
         help: "When a cell forgets its history after a change: how many samples of the old average it keeps beside the new frame's (ours 0, follows at once; 3 is a little calmer and takes about 19 frames for a doubled sun). Not in Capsaicin.",
     }),
+    toggle<CompareChoiceToggle>({
+        kind: 'choice',
+        setting: 'neuralCache',
+        group: 'world-cache',
+        label: 'Neural tail (every bounce)',
+        urlName: 'rcneural',
+        register: 'E11',
+        choices: [
+            { value: 'off', label: "Off: two bounces (Capsaicin's)" },
+            { value: 'tail', label: 'A small network answers the later bounces' },
+        ],
+        capsaicin: 'off',
+        help: "With GI-1.2's own second-bounce rays only (the cache alone, or the second bounce from GI-1.2's rays): a small network (pmndrs/pathtracer's, from its private package) learns the cells' indirect light and answers the bounces past the second, so the cache carries every bounce. Off (the default, Capsaicin's) is two bounces. With DDGI giving the second bounce, or without the package, it stays off and warns once.",
+    }),
 
     // ---- The GI denoiser (RC4.3, register D65-D66) ----
     toggle<CompareBooleanToggle>({

@@ -26,6 +26,7 @@ import type { SharcSettings } from './world-cache/sharc/sharc-settings.ts';
  * experiment P6.1, register E1-E7).
  */
 export type WorldCacheKind = 'gi1-hash-grid' | 'sharc';
+import type { NeuralCacheMode, NeuralTailSettings } from './neural-cache/neural-tail-settings.ts';
 
 /** One probe is `PROBE_SIZE` × `PROBE_SIZE` cells and covers a tile of that many pixels (`probe_size_`, gi1.h:191). */
 export const PROBE_SIZE = 8;
@@ -277,6 +278,22 @@ export interface RadianceCacheSettings {
      * comparing, not a product setting. The world cache keeps its cells either way.
      */
     probeHistory: boolean;
+    /**
+     * Phase 6 experiment P6.4 (register E11): `tail` adds a neural network
+     * (pmndrs/pathtracer's `@pathtracer/mlp`) as the second bounce's tail, so
+     * GI-1.2's multibounce carries every bounce; the hash grid stays the near
+     * cache. `off` (the default) is GI-1.2. Applies only with the GI-1.2 grid
+     * (`worldCache: 'gi1-hash-grid'`) and its own second-bounce rays
+     * (`useMultibounce` on and `secondBounce` resolved to `'gi1-rays'`; a
+     * fallback's field already carries the later bounces, register E11). With
+     * `worldCache: 'sharc'`, a second bounce from a fallback, or the optional
+     * package missing or off its pin, it is off with one warning; with
+     * `useMultibounce` off there is no second bounce for it to extend. Read at
+     * `prepare` (a compare toggle, `rcneural`, restarts the technique).
+     */
+    neuralCache: NeuralCacheMode;
+    /** The neural tail's settings over its defaults (`DEFAULT_NEURAL_TAIL_SETTINGS`), with `neuralCache: 'tail'`. Read at `prepare`. */
+    neural: Partial<NeuralTailSettings>;
 }
 
 /**
@@ -287,7 +304,7 @@ export interface RadianceCacheSettings {
 export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
 
 /** Settings read at `prepare` only: changing one makes the technique again (the viewer restarts it; compare-toggles.ts). */
-export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'ssgi'];
+export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'ssgi', 'neuralCache'];
 
 /** Capsaicin's defaults (gi1.h:48-71, and SSGI's, ssgi.h:47-50). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
@@ -336,6 +353,8 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     rayGuidingCorrection: true,
     probeChangeReset: true,
     probeHistory: true,
+    neuralCache: 'off',
+    neural: Object.freeze({}),
 });
 
 /** The sizes Capsaicin derives from the render size (`GI1::ScreenProbes::ensureMemoryIsAllocated`, gi1.cpp:113-129). */
