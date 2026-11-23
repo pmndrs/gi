@@ -32,6 +32,10 @@
  *    reported beside it.
  *
  * All sections check the outputs for NaN, infinite and negative values.
+ *
+ * `VITE_RC_COMPARE` runs it at compare toggles (RC4.5, radiance-cache-probes/compare-env.ts),
+ * for example SSGI's single frame: `VITE_RC_COMPARE=ssgiHistoryFrames=1`.
+ *
  * Correctness only. Through the lock:
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-near-field --gpu nvidia`.
  */
@@ -43,11 +47,12 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
 import { filterScreenProbesCell, unpackSeed, type Direction, type ProbeFilterInputs } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { screenProbeCellSize, viewForward } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import { PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
+import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { PageScreen, frameCamera, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
@@ -153,8 +158,8 @@ interface RunExtras {
 
 async function makeRun(device: GPUDevice, name: string, quads: readonly Quad[], material: MaterialDescriptor, environment: EnvironmentDescriptor, camera: PageCamera, extras: RunExtras = {}): Promise<Run> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-near-field ${name}` });
-    // SSGI is opt-in (D61).
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ ssgi: true }));
+    // SSGI is opt-in (D61); VITE_RC_COMPARE sets compare toggles over it (RC4.5).
+    const technique = platform.addTechnique(pageRadianceCache({ ssgi: true }));
     platform.setOutput(technique);
     await platform.prepare();
     const scene = platform.scene;
@@ -276,7 +281,7 @@ try {
     const fail = (message: string): void => {
         if (failures.length < 30) failures.push(message);
     };
-    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT };
+    const data: Record<string, unknown> = { width: WIDTH, height: HEIGHT, compare: PAGE_COMPARE_VALUES };
     const grey: MaterialDescriptor = { albedo: [0.5, 0.5, 0.5] };
 
     // 1 and 3: the open floor under a constant sky.

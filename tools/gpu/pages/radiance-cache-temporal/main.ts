@@ -856,7 +856,7 @@ async function checkCacheAndPatch(device: GPUDevice, fail: (message: string) => 
     }
 }
 
-// ---- 5. A noisy constant sky (register D46) -------------------------------------------------------
+// ---- 5. A noisy constant sky (registers D46, D64) ------------------------------------------------
 
 /** Section 5: the sky's blocks (texels of the 512 × 256 image a side), and the frames checked. */
 const NOISE_BLOCK = 4;
@@ -932,9 +932,11 @@ async function checkNoisySky(device: GPUDevice, fail: (message: string) => void)
                 firstFrames.push((await floorRatios(device, run, (pixel) => depth[pixel] === 1, sky.irradiance)).mean);
             }
             const withoutHistory = firstFrames.reduce((sum, value) => sum + value, 0) / firstFrames.length;
-            // The gate (exponential): every frame's mean over the floor within 1% of the sky's irradiance.
-            // Sparse rays are reported: what is left there is ray guiding by the cells' own estimates (NOTES).
+            // The gates. Exponential: every frame's mean over the floor within 1% of the sky's irradiance.
+            // Sparse rays (a frame's mean swings more: 1.2% worst at RTX 3060): the mean over frames within
+            // 1%, which ray guiding by the cells' own estimates pulls low without D64 (0.986).
             if (kind === 'exponential' && !(worst <= LAMBERT_TOLERANCE)) fail(`noisy sky (${kind}): a frame's mean E is ${(worst * 100).toFixed(2)}% off the sky's irradiance (mean over frames ${mean.toFixed(4)})`);
+            if (kind === 'sparse' && !(Math.abs(mean - 1) <= LAMBERT_TOLERANCE)) fail(`noisy sky (${kind}): the mean E over frames is ${mean.toFixed(4)} of the sky's irradiance (worst frame ${(worst * 100).toFixed(2)}% off)`);
             if (bad > 0) fail(`noisy sky (${kind}): ${bad} pixels not finite or negative`);
             results[kind] = { expectedE: Number(sky.irradiance.toFixed(4)), meanRatio: Number(mean.toFixed(4)), worstFrameError: Number(worst.toFixed(4)), frames: settled.length, meanRatioWithoutHistory: Number(withoutHistory.toFixed(4)) };
         } finally {
