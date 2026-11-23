@@ -157,9 +157,10 @@ export const ALL_LIGHT_GROUPS = 0xf;
  * The lights a cache hit draws its one light sample from, as
  * `giDirectChooseLight`'s group mask: every light group, and the sky with
  * `environment_light_enable` (register D33, RC3.4). Shared by
- * `GenerateReservoirs` and `GenerateMultibounceReservoirs`.
+ * `GenerateReservoirs`, `GenerateMultibounceReservoirs` and lever E8's
+ * `ShadeCells` (cell-shading-wgsl.ts).
  */
-const LIGHT_MASK_WGSL = /* wgsl */ `
+export const LIGHT_MASK_WGSL = /* wgsl */ `
 const HASHGRIDCACHE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
 
 // Capsaicin's light list holds the environment map when LightBuilder's environment_light_enable

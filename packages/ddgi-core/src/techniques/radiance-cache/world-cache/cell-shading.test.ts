@@ -112,6 +112,12 @@ describe("lever E8's kernels and lists", () => {
         expect(updateTilesWgsl(layout)).toContain('HashGridCache_CellShadingBudgeted()');
     });
 
+    it('light a cell from the lights GenerateReservoirs draws from, the sky with environment_light_enable (register D62)', () => {
+        const shade = shadeCellsWgsl(layout);
+        expect(shade).toContain('giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random))');
+        expect(shade).toContain('select(0u, GI_DIRECT_SKY_LIGHT_BIT, g_HashGridCacheConstants.environment_light_enable != 0u)');
+    });
+
     it('keep two candidate words and a lit word per visibility entry, then the bins, in a buffer of their own', () => {
         const lists = cellShadingListLayout(2000);
         expect(lists.lit).toBe(lists.candidates + 2 * 2000);

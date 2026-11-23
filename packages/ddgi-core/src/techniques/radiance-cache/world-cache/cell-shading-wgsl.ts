@@ -70,7 +70,7 @@
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_EVENTS, CELL_SHADING_SALT } from './cell-shading-common.ts';
-import { ALL_LIGHT_GROUPS, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
+import { LIGHT_MASK_WGSL, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
 
 /** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes an event. */
 export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_EVENTS;
@@ -370,7 +370,8 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
 /**
  * `ShadeCells`: over the shade list, the cell's sample hit draws one light and
  * traces its shadow ray, as `GenerateReservoirs` and `PopulateCells` do for a
- * hit (the platform's light choice, register D4; Lambert, D8), and the result
+ * hit (the platform's light choice, register D4, with the sky as
+ * `HashGridCache_LightMask` sets it, D62; Lambert, D8), and the result
  * is the cell's one sample this frame, stored over the key in its scratch. A
  * changed cell's value is emptied first, so the sample replaces it.
  *
@@ -381,8 +382,7 @@ export function shadeCellsWgsl(layout: HashGridCacheBufferLayout): string {
     return /* wgsl */ `
 ${cellShadingHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
-
-const HASHGRIDCACHE_SHADE_LIGHT_GROUPS: u32 = ${ALL_LIGHT_GROUPS}u;
+${LIGHT_MASK_WGSL}
 const HASHGRIDCACHE_CELL_SHADE_SALT: u32 = ${CELL_SHADING_SALT.shade}u;
 // INV_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_SHADE_INV_PI: f32 = 0.318309886183791;
@@ -403,11 +403,11 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
     let cell_index = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, visibility_index);
     let surface = HashGridCache_ProbeSurface(HashGridCache_VisibilityRay(visibility_index));
 
-    // One light, as GenerateReservoirs draws it, and its shadow ray, as PopulateCells traces it.
+    // One light, drawn from the lights GenerateReservoirs draws from (HashGridCache_LightMask: every
+    // group, and the sky unless E10's fallback holds it, register D62), and its shadow ray, as
+    // PopulateCells traces it.
     var random = rcMakeRandom(visibility_index ^ HASHGRIDCACHE_CELL_SHADE_SALT, g_HashGridCacheConstants.frame_index);
-    // TODO(RC3.4): once rc3-4 merges, draw from HashGridCache_LightMask() as GenerateReservoirs does
-    // (the sky as a light); with ALL_LIGHT_GROUPS budgeted cells get no sky light on the cache's hits.
-    let reservoir = giDirectChooseLight(surface, HASHGRIDCACHE_SHADE_LIGHT_GROUPS, rcRand(&random));
+    let reservoir = giDirectChooseLight(surface, HashGridCache_LightMask(), rcRand(&random));
     let sample_params = rcRand2(&random);
     // A changed cell, or one with no whole sample (new, or dark), starts again from this sample
     // (UpdateTiles takes a sample whole into a value with no count).
