@@ -2,6 +2,10 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-23
+
+- **The world-cache alternatives stay variants; none becomes the default until we've compared them** (Dennis, 2026-11-23). The lead offered the pathtracer hash cache (`worldCache: 'sharc'`) as a default that doesn't need a DDGI volume. His answer: "we can, but it should be a variant and not just the default until we can work out preferences, pros/cons etc". *What it means:* defaults stay as they are: the GI-1.2 hash grid, and `secondBounce: 'auto'` (DDGI's irradiance when a volume is stacked, GI-1.2's rays otherwise). SHaRC, budgeted cells and the NRC tail stay opt-in settings. P6.5 compares the variants side by side and writes up the pros and cons, and Dennis picks the default from that. *Revisit* when P6.5's comparison is done.
+
 ## 2026-11-19
 
 - **The radiance cache's second bounce comes from the technique stacked under it when there is one** (the lead, P6.3's review, 2026-11-19; RC3.6 waited on it). `secondBounce: 'auto'` is the default: with a world-space fallback stacked (`setFallback(radianceCache, ddgi)`, `provides.worldSpaceIrradiance`), each first-bounce hit reads its irradiance instead of tracing GI-1.2's second-bounce ray (register E10), with the cells' indirect cap at 4; with nothing stacked, GI-1.2's rays as before. *Why:* against Cycles the closed rooms go from −22 to −56% to within −1.3 to +5.2% (every bounce, plus emitter light the cache's lights lack), the world cache costs about half, and it reacts faster at cap 4. `'gi1-rays'` keeps the faithful baseline by name. *Revisit* if Sponza's brightening (the sky DDGI sees, +5/+10 points) stays once RC4.4's history and world-cache-direct excesses are fixed, or if RC3.4's sky rule can't be kept.

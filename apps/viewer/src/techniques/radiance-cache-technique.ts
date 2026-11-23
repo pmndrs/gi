@@ -27,6 +27,9 @@
  * the cache's `secondBounce: 'auto'` reads its second bounce and every later
  * one from DDGI (register E10); DDGI updates `STACKED_DDGI_PROBES_PER_FRAME`
  * probes a frame (the frame budget's units; the radiance cache ignores them).
+ * DDGI warms up before the picture shows GI (RC4.6b: its own warm-up, full
+ * passes over every probe, run as prepare steps while the plain scene pass
+ * shows), so the first frames aren't lit by a black field.
  * The compare toggle "Run the cache alone" (`host.cacheAlone`) leaves DDGI
  * out: GI-1.2's own second-bounce rays, as Capsaicin.
  *
@@ -93,7 +96,8 @@ export interface RadianceCacheChangeReadout {
     framesSinceChange: number;
 }
 
-type Phase = 'preparing' | 'ready' | 'failed';
+/** Starting: the platform prepares; then, with DDGI stacked, DDGI's warm-up runs; then ready. */
+type Phase = 'preparing' | 'warming' | 'ready' | 'failed';
 
 /** The pipeline with GI: the scene pass, its screen stage and the composite. */
 interface GiGraph {
@@ -178,7 +182,9 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         this.debugMaterial = new DdgiDebugMaterial(platform.shading);
         this.applyDebugView();
         this.changeMeter = new RcChangeMeter(device);
-        this.phase = 'ready';
+        // With DDGI under the cache, its own warm-up first (encodePrepareStep), as the ddgi entry's
+        // loading screen does: otherwise the cache's later bounces start from a black field.
+        this.phase = this.ddgiUnder ? 'warming' : 'ready';
     }
 
     private buildGiGraph(threeGI: ThreeGI): GiGraph {
@@ -205,17 +211,21 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
 
     get outputNode(): Node {
         const graph = this.giGraph;
-        if (!graph || this.giMode === 'off') return this.plainPass as unknown as Node;
+        if (!graph || this.giMode === 'off' || this.phase !== 'ready') return this.plainPass as unknown as Node;
         return graph.output;
     }
 
     get ready(): boolean {
-        return this.phase !== 'preparing';
+        return this.phase !== 'preparing' && this.phase !== 'warming';
     }
 
     get progress(): number {
+        if (this.phase === 'warming') return 0.5;
         return this.ready ? 1 : 0;
     }
+
+    /** A few warm-up frames per batch, so the picture stays live while DDGI warms. */
+    readonly prepareStepsPerBatch = 2;
 
     get prepareGeneration(): number {
         return 0;
@@ -293,6 +303,8 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         switch (this.phase) {
             case 'preparing':
                 return 'Starting: compiling the GPU programs and copying the scene';
+            case 'warming':
+                return 'Starting: warming up the DDGI volume under the radiance cache';
             case 'failed':
                 return `Could not start: ${this.failure}`;
             case 'ready': {
@@ -306,7 +318,19 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         }
     }
 
+    /**
+     * While DDGI warms under the cache: one GI frame (`ThreeGI.update`, the world-space work,
+     * DDGI's warm-up passes at its full batch whatever the budget; the cache's screen stage waits)
+     * until DDGI reports its warm-up done. The ddgi entry's warm-up is the same technique warm-up,
+     * run by `DDGIVolume.start`.
+     */
     encodePrepareStep(): boolean {
+        const threeGI = this.threeGI;
+        const ddgiUnder = this.ddgiUnder;
+        if (this.phase === 'warming' && threeGI && ddgiUnder) {
+            threeGI.update(this.camera);
+            if (!ddgiUnder.warmingUp) this.phase = 'ready';
+        }
         return this.ready;
     }
 

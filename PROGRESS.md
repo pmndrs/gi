@@ -34,6 +34,27 @@ Verified (RTX 3060 Laptop, nvidia/ampere, headless Chrome, bench lock, one page 
 Numbers: Lambert E / πL mean and p95 error 0.05% (was 0.05%); varying sky 0.10% / 0.28%; constant sky with history worst mean 0.05% over 440 frames; noisy sky 0.999 (was 0.9954), sparse rays 0.9993 (was 0.986). Filter vs CPU: 0 of 88,320 cells over 1%, 33,408 plane refusals. Uniform field through the filter: worst cell 0.065% (half rounding). Open plane SSGI: visibility mean 0.9998, bent tilt p99 0.0003°, near-field 7e-8 πL. Corner at d < 1 cm: defaults 0.62 (analytic 0.516, bent 19° vs 32.5°), dense (4 slices, 16 steps) 0.518, 32.7°. Furnace E / πL 0.999-1.014 near the wall, 1.0002 away (Capsaicin's units 0.741 at the foot). Stability (mean / p95 frame-to-frame change, history on; RC4.1 → filter only → filter+SSGI): still, jitter off: Cornell 8.2/29 → 2.9/11 → 4.4/15%; two-room 1.8/5.3 → 0.6/2.1 → 1.5/6.2%; Sponza 5.7/19 → 4.0/15 → 21.0/75%. Jitter on: Cornell 28.8/80 → 19.6/57 → 21.2/64%; two-room 4.6/13 → 3.2/10 → 3.9/13%; Sponza 13.4/46 → 10.5/38 → 26.8/85%. Moving similar (PROGRESS data in the page's JSON). Mean E with filter+SSGI vs RC4.1: Cornell +4%, two-room +0.7%, Sponza −3.1%.
 Not verified: Intel UHD; accuracy against a reference on two-room (references exist only in webgpu-ddgi/bench/references/two-room, Cycles, gitignored; no radiance-cache-vs-reference tool yet: RC4.4's item); D54 by mutation; the viewer by eye; timing (none taken).
 Next: (lead) decide SSGI's default before RC4.3 lands: one white-noise slice makes Sponza's image change 21-27% a frame (filter only 4-11%); options: keep Capsaicin's default and let RC4.3's denoiser average it, more slices, or off until RC4.3. RC4.4 (b) looks mostly answered by the filter (sparse rays 0.9993). @pmndrs/downsampler: SSGI has no depth hierarchy in Capsaicin (level 0 only; the HZB is the visibility buffer's), so nothing to build on it and no upstream issue. Prefix-check D49-D58 against RC3.4's register on merge.
+
+## 2026-11-20 · RC4.6b SHaRC against Cycles; the stacked DDGI warms up · implementer (opus)
+Did: branch `rc4-6b` from radiance-cache ccb82ff. (1) P6.1's missing Cycles run: `radiance-cache-accuracy`, configuration `default` with nothing stacked (the cache alone: each world cache's own bounces), `VITE_RC_ACCURACY_WORLD_CACHE` unset and `sharc`, on two-room, Cornell point light and Sponza (references through a junction to webgpu-ddgi's bench/references, removed after with the assets junction). (2) The viewer's `rc` entry runs the stacked DDGI's own warm-up (full passes over every probe, as prepare steps with the plain pass showing, `phase: 'warming'`) before it shows GI.
+Verified: lint, typecheck, viewer unit tests. RTX 3060, bench lock: both accuracy runs PASS; `radiance-cache-viewer` PASS on Sponza and two-room with the warm-up.
+Numbers, GI term against Cycles, bias / 8 × 8 mean / p95 (world cache alone against Cycles' direct + indirect, bias / mean, coverage):
+
+| Scene, view | GI-1.2 hash grid | SHaRC |
+| --- | --- | --- |
+| two-room lit-room | −43.5% / 43.5% / 48% (cache −54% / 56%, 1.00) | −6.4% / 6.4% / 9.2% (cache −2.7% / 4.9%, 0.99) |
+| two-room through-the-doorway | −43.5% / 43.5% / 48% (−60% / 61%) | −6.5% / 6.5% / 7.9% (−2.4% / 4.0%) |
+| two-room dark-room-leak-view | −55.6% / 55.6% / 68% (+3% / 122%) | −10.8% / 11% / 15% (−6.1% / 9.9%) |
+| Cornell point front | −22.2% / 22.9% / 32% (−30% / 40%, 0.51) | −2.9% / 6.2% / 16% (−0.3% / 5.5%, 0.93) |
+| Cornell point inside-from-red-wall | −21.9% / 23.5% / 48% (−48% / 56%, 0.90) | −0.1% / 7.1% / 27% (−0.6% / 8.1%, 0.99) |
+| Cornell point diagonal | −22.0% / 22.4% / 33% (−28% / 39%, 0.83) | −3.6% / 5.5% / 15% (−0.8% / 7.5%, 1.00) |
+| Sponza colonnade-from-the-floor | +8.2% / 12.7% / 57% (−13% / 55%, 0.90) | +6.3% / 11.0% / 49% (−3.5% / 32%, 0.76) |
+| Sponza upper-gallery | +11.4% / 19.2% / 89% (+17% / 90%, 1.00) | +8.3% / 14.6% / 57% (+7.0% / 32%, 0.97) |
+
+The hash grid alone is short by the bounces after the second in the closed rooms (as RC4.4 found); SHaRC's two bounce rays with the cache as the path's tail close most of it (within 0.1-11%). For comparison, the hash grid with DDGI stacked (RC4.6) read −1.1/−1.0/+2.4% on two-room.
+Viewer, cache alone against ours (DDGI stacked, now warmed): Sponza 1.29× (cold DDGI in RC4.6: 1.21×), two-room 0.55×, `secondBounce=gi1-rays` Sponza 0.94×, two-room 0.64×. So Sponza's cache-alone ratio was not the cold DDGI: at the viewer's first bookmark the stacked DDGI makes Sponza darker than the cache alone, while at the references' cameras it reads brighter (+14.5/+20% against +8/+11%). Not explained here; a guess to check is DDGI's coverage (c = 0 outside the volume gives a hit no later bounce, where GI-1.2's ray would).
+Next: the Sponza difference above (viewer bookmark against the accuracy cameras).
+
 ## 2026-11-20 · P6.2 / P6.2b ready to land: merged radiance-cache ccb82ff (RC4.6) · implementer (opus)
 Did: merged `radiance-cache` ccb82ff (RC4.6: DDGI stacked under the radiance cache in the viewer), every log entry kept; P6.2 and P6.2b rows at review, ready to land; fixes 3-4 (E8's no-light rule, `HashGridCache_LightMask()` in ShadeCells) follow RC3.4's merge.
 Verified (RTX 3060 Laptop, bench lock, one at a time): `radiance-cache-viewer` (DDGI stacked, and "Run the cache alone"; every toggle clicked), `-change-noise`, `-cell-shading`, `-world-cache`, `-world-cache-sharc`, `-temporal`, `-ddgi-bounce` PASS; typecheck and unit tests pass.
