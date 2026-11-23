@@ -156,6 +156,13 @@ interface RunExtras {
     readonly normalBump?: PageScreen['normalBump'];
 }
 
+/** The filter's output: the filtered atlas, or the atlas itself with Capsaicin's filtered history (`probeFilterHistory`, D59). */
+function filterOutput(technique: RadianceCacheTechnique): GPUTexture {
+    const probes = technique.probes;
+    if (!probes) throw new Error('no probes after encodeScreen');
+    return technique.settings.probeFilterHistory ? probes.probeAtlas : probes.filteredAtlas;
+}
+
 async function makeRun(device: GPUDevice, name: string, quads: readonly Quad[], material: MaterialDescriptor, environment: EnvironmentDescriptor, camera: PageCamera, extras: RunExtras = {}): Promise<Run> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-near-field ${name}` });
     // SSGI is opt-in (D61); VITE_RC_COMPARE sets compare toggles over it (RC4.5).
@@ -290,7 +297,7 @@ try {
         const probes = open.technique.probes;
         if (!probes?.occlusion) throw new Error('no probes or no SSGI after encodeScreen');
         const [atlasWidth, atlasHeight] = probes.layout.atlasSize;
-        const atlas = halves(await readTexture(device, probes.filteredAtlas, 8, atlasWidth, atlasHeight));
+        const atlas = halves(await readTexture(device, filterOutput(open.technique), 8, atlasWidth, atlasHeight));
         const scratch = halves(await readTexture(device, probes.filterScratch, 8, atlasWidth, atlasHeight));
         const seeds = await readSeeds(device, open);
         let worst = 0;
@@ -404,7 +411,7 @@ try {
             if (!probes) throw new Error('no probes after encodeScreen');
             const { layout } = probes;
             const [atlasWidth, atlasHeight] = layout.atlasSize;
-            const atlas = halves(await readTexture(device, probes.filteredAtlas, 8, atlasWidth, atlasHeight));
+            const atlas = halves(await readTexture(device, filterOutput(step.technique), 8, atlasWidth, atlasHeight));
             const scratch = halves(await readTexture(device, probes.filterScratch, 8, atlasWidth, atlasHeight));
             const levels: Array<{ width: number; texels: Uint32Array }> = [];
             for (let level = 0; level < layout.probeMaskMipCount; level++) {
