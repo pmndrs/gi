@@ -31,10 +31,11 @@
  *    under 2 m (beyond, its tiles hold floor and ceiling hits together; NOTES),
  *    their mean at the last frame: within 2% with 8 px cells, within 6% at
  *    Capsaicin's 32 px. At 32 px the far tiles' columns put the floor's direct
- *    light into ceiling rays at grazing angles, so the floor's screen
- *    irradiance reads about 13% over π × the ceiling, the screen records teach
- *    the network that, and the fixed point settles 4-5% over; at 8 px the
- *    columns are out of reach and the floor's records read ρ × the ceiling.
+ *    light into ceiling cells at grazing angles, so a floor pixel's cosine ray
+ *    reads them high, the screen records teach the network that, and the
+ *    fixed point settles about 3% over (4-5% while the targets were the
+ *    screen's irradiance, before P6.4's review); at 8 px the columns are out
+ *    of reach and the floor's records read ρ × the ceiling.
  *    Also recorded: the tail without screen records (`screenStride: 0`),
  *    which can't learn the floor here (every probe is on it, every probe ray
  *    goes up, so no cell record is a floor's), and the tail's answers and
@@ -138,12 +139,11 @@ const WIDTH = 1280;
 const HEIGHT = 720;
 const TOLERANCE = 0.02;
 /**
- * The every-bounce checks take the floor's light from the screen's irradiance (screen records),
- * so they inherit its errors, each judged within 2% where the floor's irradiance is clean and
- * within this where it isn't (P6.4): the furnace at Capsaicin's 32 px cells reads 4-5% over
- * (far ceiling tiles are columns that also hold floor hits, NOTES), clean at 8 px; the strips at
- * 8 px read 4-5% under (the strips' screen irradiance reads about 20% under ρ × the ceiling
- * there; probes start under thin strips, register D17), clean at 32 px.
+ * The every-bounce checks take the floor's light from the screen records (a cosine ray from a
+ * visible surface to the cache's value at its hit), so they inherit the grid's errors there, each
+ * judged within 2% where the grid is clean and within this where it isn't (P6.4): the furnace at
+ * Capsaicin's 32 px cells reads about 3% over (far ceiling tiles are columns that also hold floor
+ * hits, NOTES), clean at 8 px; the strips at 8 px read 1-5% under (thin strips, register D17).
  */
 const COLUMN_TOLERANCE = 0.06;
 const ALBEDO = 0.5;
