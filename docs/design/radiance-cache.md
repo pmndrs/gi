@@ -166,6 +166,11 @@ Every change we make to Capsaicin's behaviour over time gets a setting whose oth
 | `rayGuidingUniformShare` | screen probes | 0.125 | 0: every ray guided, the CDF over max(total, 1e-5), an all-black CDF to the last cell (gi1.comp:969-973) | D42 |
 | `probeChangeReset` | screen probes | true | false (no reset) | D46 |
 | `interpolationJitter` | screen probes | true | true | |
+| `rayGuidingCorrection` | screen probes | true (each cell's step over the rays it expected) | none (Capsaicin has no running mean; false is RC4.1's k / n) | D64 |
+| `probeFilterHistory` | screen probes | false (the blended atlas stays history) | true (the filtered atlas is next frame's history) | D59 |
+| `ssgi` ⟳ | screen probes | false | true (SSGI always runs before GI-1) | D61 |
+| `ssgiSliceCount` | screen probes | 1 | 1 | |
+| `ssgiHistoryFrames` | screen probes | 16 | 1 (each frame's slices alone) | D60 |
 | `hashGridCacheMaxSampleCount` | world cache | 16 | 16 | |
 | `hashGridCacheMaxMultibounceSampleCount` | world cache | 16 | 16 | |
 | `worldCache` ⟳ | world cache | `gi1-hash-grid` | `gi1-hash-grid` (`sharc` is P6.1's experiment) | E1 |
