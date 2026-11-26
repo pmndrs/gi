@@ -106,6 +106,9 @@ async function start() {
     document.body.append(renderer.domElement);
     await renderer.init();
     if (!(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend) throw new Error('A WebGPU renderer is required.');
+    // The canvas texture is the last thing a frame writes, so frame timing waits on it.
+    const canvasContext = renderer.domElement.getContext('webgpu') as GPUCanvasContext;
+    const presentedTexture = () => canvasContext.getCurrentTexture();
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
     const camera = new THREE.PerspectiveCamera(62, 1, 0.05, 40);
@@ -168,11 +171,11 @@ async function start() {
         rc.mode.value = view.value === 'indirect' ? 1 : view.value === 'specular' ? 2 : view.value === 'diffuse' ? 3 : 0;
         rc.intensity.value = view.value === 'direct' ? 0 : 1;
         const sample = !verify && !reference && !samplingQueue && device.features.has('timestamp-query') && renderedFrames % 30 === 0
-            ? frameTimestamps(device,1) : null;
-        sample?.mark(0);
+            ? frameTimestamps(device,1,presentedTexture) : null;
+        sample?.begin(0);
         reconstruction.render();
         if (sample) {
-            sample.mark(1);
+            sample.end(0);
             samplingQueue = true;
             void sample.finish().then(([value]) => { queueMs = value; }).catch(() => { queueMs = null; })
                 .finally(() => { samplingQueue = false; });
@@ -266,7 +269,7 @@ async function start() {
                 const queryIds: string[] = [];
                 const peakProbes = reference?.capacities.map(() => 0) ?? [];
                 const linearReceiver = [];
-                const gpu = measured && device.features.has('timestamp-query') ? frameTimestamps(device,request.frames) : null;
+                const gpu = measured && device.features.has('timestamp-query') ? frameTimestamps(device,request.frames,presentedTexture) : null;
                 let previousTick: number | null = null;
                 let firstTick: number | null = null;
                 if (measured) {
@@ -280,9 +283,9 @@ async function start() {
                     if (measured && previousTick !== null) frameIntervalsMs.push(tick - previousTick);
                     previousTick = tick;
                     if (request.advance !== false && (request.frame === undefined || i > 0)) advance();
-                    gpu?.mark(2*i);
+                    gpu?.begin(i);
                     draw(!measured);
-                    gpu?.mark(2*i+1);
+                    gpu?.end(i);
                     if (measured && referenceTiming) {
                         // Same identifier used by the pinned addon's readGPUTime(). Resolve all frames in one batch.
                         const uid = (rc as unknown as { _timestampUID: string | null })._timestampUID;
