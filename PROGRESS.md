@@ -21,6 +21,14 @@ Rules:
 
 ---
 
+## 2026-11-26 · SRC.1 · Public tracer and upstream integration
+
+Merged upstream main at `a3f4685` and pinned `@pmndrs/raytracer@0.1.0` from public npm. A fresh checkout with an empty pnpm store, frozen lockfile and private Git access disabled downloaded all 186 packages. The new Mac launcher uses the frozen registry install.
+
+Chrome on the RTX passed transport, native core, native reflections, door response and polished-rail quality. The three analytical fixtures and all 540 native door samples matched their archived values exactly. The shutter reached 90% at 2 frames after closure and 12 after reopening. Polished-rail full-image RGB MAE was 2.135/255 at 1.5× and 2.641/255 at 2×.
+
+Four of five original phases pass. The Windows part of reconstruction and hardware is complete. The remaining evidence is the Apple Silicon correctness, quality and timing archive. The earlier kit identifies its tested revision, and the public branch can run the same checks directly. The separate [radiance-cache base PR](https://github.com/pmndrs/gi/pull/41) precedes Split RC in the planned merge order. [Phase tracker](docs/radiance-cascades/PLAN.md) · [Mac instructions](docs/radiance-cascades/metal.md)
+
 ## 2026-11-20 · SRC.1 · Idle reflection timing and Apple Silicon handoff
 
 **RTX 3060 Laptop** · Chrome 157.0.8103.79, native interval solver, 640 × 360 internal and 960 × 540 display, 1.5× temporal reconstruction. The final run supersedes a pass that overlapped unit tests. Three pairs toggled the reflection gather at the same 60 moving rail ticks after shader preparation and 48 warmup draws. Each arm advanced transport once per draw. All 15 prelaunch GPU readings were 0–1%. Both GPU and CPU reservations were held throughout. Starting temperatures were 61, 60 and 57°C. [Individual frames](bench/results/radiance-cascades-polished-frames.csv) · [Summary and conditions](bench/results/radiance-cascades.csv)
