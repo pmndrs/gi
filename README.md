@@ -105,7 +105,7 @@ MIT, see [LICENSE](LICENSE). The bundled tinybvh, Emscripten runtime and HIPRT c
 
 ## Working on this repository
 
-On the radiance-cache branches, first (once): `node tools/linked-siblings.ts --fetch`, which clones and builds the sibling pmndrs/denoiser that the GI denoiser is linked from during development ([docs/HANDOFF-radiance-cache.md](docs/HANDOFF-radiance-cache.md), "The linked denoiser").
+Optional, once: `node tools/linked-siblings.ts --fetch` clones the sibling pmndrs/pathtracer next to this repository for the radiance cache's neural tail (`@pathtracer/mlp`, not on npm). Without it everything else works and the tail stays off ([docs/HANDOFF-radiance-cache.md](docs/HANDOFF-radiance-cache.md), "The GI denoiser and linked siblings").
 
 ```bash
 pnpm install

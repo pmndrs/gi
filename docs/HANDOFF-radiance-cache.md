@@ -40,18 +40,16 @@ These were held in the old machine's local agent memory, so they're written out 
 - **Brixelizer** is being ported in another workstream and plugs in through the `WorldCache` slot. **id Tech 8** (Sousa, SIGGRAPH 2025) is the main source of performance levers. **GPUTex** handles compressed textures if needed.
 - **Commit as you go**, so nothing is lost if usage runs out mid-row.
 
-## The linked denoiser (RC4.3, one-time setup)
+## The GI denoiser and linked siblings
 
-From RC4.3 on (branch `rc4-3`, then `radiance-cache` once merged), the radiance cache's GI denoiser is `Gi1Denoiser` from the sibling library pmndrs/denoiser (`@pmndrs/denoiser-ffx`, branch `gi1-denoiser`, draft PR #33), linked for development: the root package.json has `"@pmndrs/denoiser-ffx": "link:../pmndrs-denoiser/packages/denoiser-ffx"`, and `linkedSiblings` pins the commit. Nothing is published, so the link stays until a `denoiser` release carries it; then it becomes an ordinary dependency and `linkedSiblings`, `tools/linked-siblings.ts` and the CI step go.
+The radiance cache's GI denoiser (RC4.3) is `Gi1Denoiser` from the sibling library pmndrs/denoiser. It is on npm since `denoiser@2.1.0` (2026-11-26) and imported from `denoiser/ffx`, an ordinary root devDependency. Until then it was linked from a local clone of the denoiser repo; that link, its pin and its build steps are gone.
 
-- **Once per machine:** `node tools/linked-siblings.ts --fetch` (or `pnpm siblings:fetch` after a first install). It clones pmndrs/denoiser next to this repository (`../pmndrs-denoiser`) at the pinned commit and builds `denoiser-core` and `denoiser-ffx` (git, corepack and yarn 4 via corepack). Without it, `pnpm install` stops at its `preinstall` check with that command.
-- **Working on both:** edit in `../pmndrs-denoiser`, rebuild with `corepack yarn workspace @pmndrs/denoiser-ffx build` (gi reads its `dist`), and move the pin in package.json when the denoiser branch moves (the check only warns when the clone is elsewhere).
-- **Why not a git dependency:** pnpm installs a git subdirectory without its yarn workspace, so `@pmndrs/denoiser-core@workspace:*` doesn't resolve (`ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`), and the package keeps no built output in git.
-- CI (`ci.yml`, `deploy-pages.yml`) runs the `--fetch` step before `pnpm install`. pmndrs/denoiser is public, so no token is needed.
+- **Working on both:** to try an unreleased denoiser change, point the root devDependency at a local clone for a while (`"denoiser": "link:../pmndrs-denoiser/packages/denoiser"`, after `corepack yarn workspaces foreach -R --topological-dev --from denoiser run build` there), and put the npm version back before merging.
+- **Still linked:** `@pathtracer/mlp` (the neural tail, P6.4), optional, from pmndrs/pathtracer, which isn't on npm. `node tools/linked-siblings.ts --fetch` (or `pnpm siblings:fetch`) clones it next to this repository at its pin; without it the tail stays off and everything else works. CI (`ci.yml`, `deploy-pages.yml`) runs the same `--fetch` step before `pnpm install`; the repository is public, so no token is needed.
 
 ## First steps on the Mac
 
-1. `git fetch`, then check out `radiance-cache`; run `node tools/linked-siblings.ts --fetch` (once; see "The linked denoiser" above), then `pnpm install`, `pnpm lint` and `pnpm typecheck`.
+1. `git fetch`, then check out `radiance-cache`; optionally run `node tools/linked-siblings.ts --fetch` (once, for the neural tail; see "The GI denoiser and linked siblings" above), then `pnpm install`, `pnpm lint` and `pnpm typecheck`.
 2. Check that the GPU test runner (`pnpm test:gpu`, headless Chrome) finds Chrome and the Apple GPU. It was only run on Windows (RTX 3060 and Intel UHD). Record the adapter name in PROGRESS. The M5 Pro is a real target device, not correctness-only.
 3. Fetch the scene assets (`pnpm assets:fetch`); `assets/downloads` isn't in git.
 4. Native Capsaicin is D3D12 on Windows only, so it can't run on the Mac. Native comparisons and timings stay on the Windows laptop. Reading the Capsaicin source works anywhere.
