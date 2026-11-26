@@ -17,6 +17,7 @@ import { FloatType, MeshStandardMaterial, NodeMaterial, PerspectiveCamera, QuadM
 import type { Camera, Material, Mesh, Node, Object3D, Scene, WebGPURenderer } from 'three/webgpu';
 import { type context, isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { GITechnique } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
@@ -43,6 +44,8 @@ export interface CompositeSceneOptions {
     /** Probe updates per GI frame (a fixed `units` budget, so the run doesn't depend on the budget controller). */
     readonly probesPerFrame: number;
     readonly log: (message: string) => void;
+    /** More techniques to attach before the platform prepares (beside DDGI, the output). */
+    readonly techniques?: readonly GITechnique[];
 }
 
 export interface CompositeScene {
@@ -89,6 +92,7 @@ export async function loadCompositeScene(device: GPUDevice, sceneId: string, opt
     const platform = new GIPlatformImpl(device, { label: `three composite ${sceneId}` });
     const volume = manifest.volume;
     platform.setOutput(platform.addTechnique(new DDGITechnique({ volume: { center: volume.center, size: volume.size, spacing: volume.probeSpacing }, warmUpPasses: 0 })));
+    for (const technique of options.techniques ?? []) platform.addTechnique(technique);
     await platform.prepare();
     const environment = manifest.environment.type === 'procedural' ? platformSkyEnvironment(manifest) : null;
     const threeGI = new ThreeGI(platform, scene, { budget: { units: 0 }, environment });

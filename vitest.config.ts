@@ -1,7 +1,10 @@
 import { resolve } from 'path';
 import { configDefaults, defineConfig } from 'vitest/config';
+import { optionalSiblingsPlugin } from './tools/optional-siblings.ts';
 
 export default defineConfig({
+    // Optional siblings (`@pathtracer/mlp`): the pinned clone, or a module that throws when loaded.
+    plugins: [optionalSiblingsPlugin()],
     test: {
         environment: 'node',
         // A package with no tests yet (the M0 skeleton) is not a failure.

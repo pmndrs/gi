@@ -5,7 +5,7 @@
  * ```wgsl
  * fn giIrradiance(position: vec3f, normal: vec3f, viewDirection: vec3f, screenUV: vec2f, <resources>) -> vec3f
  * fn giCoverage(position: vec3f, normal: vec3f, <resources>) -> f32
- * fn giDebugColor(position: vec3f, normal: vec3f, view: u32, <resources>) -> vec3f
+ * fn giDebugColor(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f, <resources>) -> vec3f
  * fn giProbeIrradiance(point: u32, direction: vec3f, <resources>) -> vec3f
  * ```
  *
@@ -227,11 +227,14 @@ fn giCoverage(
     ).coverage;
 }
 
-// A colour for one of DDGI's screen debug views (DDGI_DEBUG_VIEW in shading.ts).
+// A colour for one of DDGI's screen debug views (DDGI_DEBUG_VIEW in shading.ts). DDGI's views
+// are drawn from the field at the point; the screen position (the contract's, for screen-space
+// techniques) is not needed.
 fn giDebugColor(
     position: vec3f,
     normal: vec3f,
     view: u32,
+    screenUV: vec2f,
     ddgiIrradiance: texture_2d_array<f32>,
     ddgiIrradianceSampler: sampler,
     ddgiDistance: texture_2d_array<f32>,

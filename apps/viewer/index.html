@@ -43,9 +43,12 @@
                 right: 0;
                 bottom: 0;
                 width: var(--panel-width);
+                /* Never wider than the window (phones); it scrolls itself, up and down only. */
+                max-width: 100vw;
                 box-sizing: border-box;
                 padding: 12px 14px 0;
                 overflow-y: auto;
+                overflow-x: hidden;
                 background: var(--bg);
                 border-left: 1px solid #2a323d;
                 z-index: 20;
@@ -143,6 +146,14 @@
             .panel .indented[hidden],
             .panel .legend[hidden],
             .panel .note[hidden] {
+                display: none;
+            }
+            /* A radiance-cache compare toggle away from ours (rc-compare-controls.ts). */
+            .panel .changed {
+                border-left: 2px solid var(--accent);
+                padding-left: 4px;
+            }
+            .panel section[hidden] {
                 display: none;
             }
             .panel .legend-row {

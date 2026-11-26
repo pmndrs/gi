@@ -5,9 +5,9 @@
  *
  * - `scene`      manifest id
  * - `camera`     bookmark number (1-based) or name; `cam=px,py,pz,tx,ty,tz,fov` is a free camera that overrides it
- * - `technique`  `ddgi` (default), `lpg` or `vxgi` (the GI technique shown when there is no wipe)
+ * - `technique`  `ddgi` (default), `rc` (the radiance cache), `lpg` or `vxgi` (the GI technique shown when there is no wipe)
  * - `gi`         `off` (direct light only), `on` (default), or `only` (the indirect light alone)
- * - `wipe`       two techniques, `left,right`, each `none`, `ddgi`, `lpg`, `vxgi` or `cycles` (the
+ * - `wipe`       two techniques, `left,right`, each `none`, `ddgi`, `rc`, `lpg`, `vxgi` or `cycles` (the
  *                reference image); turns the split screen on
  * - `split`      where the wipe line starts, 0 to 1
  * - `ev`, `tone` exposure in stops and the tone mapper; without `ev` the scene's own default (manifest `exposureEv`)
@@ -20,7 +20,12 @@
  * - `warmup`     `0`: DDGI starts without its warm-up, so the probes fill in live from black (for
  *                watching a saved bake load: the panel's "Load probes from a file")
  * - `probes`     `1` draws DDGI's probes as spheres coloured by state
- * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`
+ * - `debug`      one of DDGI's screen debug views: `gi-only`, `coverage`, `probe-states`, `gi-albedo`, or a screen input
+ *                (RC1.1): `screen-depth`, `screen-normal`, `screen-velocity`, `screen-albedo`, `screen-instance`
+ * - `rcdebug`    one of the radiance cache's debug views (RC2.2): `probe-atlas`, `probe-mask`, `probe-sh`
+ * - `rcblend`, `rcfill`, `rccap`, ... the radiance cache's compare toggles (RC4.5), each under its
+ *                registry entry's `urlName` (packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts),
+ *                written only when it differs from ours: `rcblend=capsaicin-hysteresis&rcfill=capsaicin`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are, `irradiance` by each
  *                probe's own light (RTXGI's probe view) (default: by state)
  * - `atlas`      `irradiance` or `distance`: that probe atlas drawn over the picture
@@ -52,6 +57,7 @@ import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
 import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
+import { COMPARE_URL_NAMES, readCompareValues, writeCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles';
 
 /**
  * The wind slider's start, a share of the strongest wind (`MAX_WIND_REACH_M`,
@@ -66,9 +72,13 @@ export const MAX_EXPOSURE_EV = MAX_DEFAULT_EXPOSURE_EV;
 
 export type GiChoice = 'off' | 'on' | 'only';
 
-/** DDGI's screen debug views by their link names (`techniques/ddgi-technique.ts`; `gi-albedo` is the viewer's own). */
-export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'gi-albedo';
-export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'gi-albedo'];
+/** DDGI's screen debug views by their link names (`techniques/ddgi-technique.ts`; `gi-albedo` is the viewer's own, the `screen-*` views are the screen inputs, RC1.1). */
+export type DdgiScreenViewName = 'gi-only' | 'coverage' | 'probe-states' | 'gi-albedo' | 'screen-depth' | 'screen-normal' | 'screen-velocity' | 'screen-albedo' | 'screen-instance';
+export const DDGI_SCREEN_VIEW_NAMES: readonly DdgiScreenViewName[] = ['gi-only', 'coverage', 'probe-states', 'gi-albedo', 'screen-depth', 'screen-normal', 'screen-velocity', 'screen-albedo', 'screen-instance'];
+
+/** The radiance cache's debug views by their link names (ids in `techniques/radiance-cache-technique.ts`). */
+export type RadianceCacheScreenViewName = 'probe-atlas' | 'probe-mask' | 'probe-sh';
+export const RADIANCE_CACHE_SCREEN_VIEW_NAMES: readonly RadianceCacheScreenViewName[] = ['probe-atlas', 'probe-mask', 'probe-sh'];
 
 export type ProbeColorName = 'state' | 'history' | 'irradiance';
 export type AtlasName = 'irradiance' | 'distance';
@@ -113,6 +123,10 @@ export interface ViewerUrlState {
     probes: boolean;
     probeColor: ProbeColorName;
     debug: DdgiScreenViewName | null;
+    /** The radiance cache's debug view, or null for its normal picture. */
+    rcDebug: RadianceCacheScreenViewName | null;
+    /** The radiance cache's compare toggles that differ from ours (RC4.5), by setting name. */
+    rcCompare: CompareValues;
     atlas: AtlasName | null;
     atlasFill: boolean;
     atlasEv: number;
@@ -158,6 +172,8 @@ export const DEFAULT_URL_STATE: ViewerUrlState = {
     probes: false,
     probeColor: 'state',
     debug: null,
+    rcDebug: null,
+    rcCompare: {},
     atlas: null,
     atlasFill: false,
     atlasEv: 0,
@@ -192,6 +208,7 @@ const URL_KEYS = new Set([
     'warmup',
     'probes',
     'debug',
+    'rcdebug',
     'probecolor',
     'atlas',
     'atlasfill',
@@ -206,10 +223,11 @@ const URL_KEYS = new Set([
     'wind',
     'reach',
     'textures',
+    ...COMPARE_URL_NAMES,
 ]);
 
-const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'lpg', 'vxgi', 'cycles'];
-const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
+const TECHNIQUES: readonly TechniqueId[] = ['none', 'ddgi', 'rc', 'lpg', 'vxgi', 'cycles'];
+const GI_TECHNIQUES: readonly GiTechniqueId[] = ['ddgi', 'rc', 'lpg', 'vxgi'];
 const UPSCALE_QUALITIES: readonly UpscaleQuality[] = ['native-aa', 'quality', 'balanced', 'performance', 'ultra-performance'];
 
 function asTechnique(value: string | undefined): TechniqueId | null {
@@ -230,7 +248,7 @@ export function presetBudgetMs(preset: DDGIPresetName): number {
 /** Reads a query string. Unknown or malformed values fall back to the defaults. */
 export function parseUrlState(search: string): ViewerUrlState {
     const params = new URLSearchParams(search);
-    const state: ViewerUrlState = { ...DEFAULT_URL_STATE, sceneSettings: {} };
+    const state: ViewerUrlState = { ...DEFAULT_URL_STATE, sceneSettings: {}, rcCompare: {} };
     for (const [name, value] of params) if (!URL_KEYS.has(name)) state.sceneSettings[name] = value;
 
     state.scene = params.get('scene');
@@ -271,6 +289,8 @@ export function parseUrlState(search: string): ViewerUrlState {
     state.warmUp = params.get('warmup') !== '0';
     state.probes = params.get('probes') === '1';
     state.debug = DDGI_SCREEN_VIEW_NAMES.find((name) => name === params.get('debug')) ?? null;
+    state.rcDebug = RADIANCE_CACHE_SCREEN_VIEW_NAMES.find((name) => name === params.get('rcdebug')) ?? null;
+    state.rcCompare = readCompareValues(params);
     const probeColor = params.get('probecolor');
     if (probeColor === 'history' || probeColor === 'irradiance') state.probeColor = probeColor;
     state.atlas = ATLAS_NAMES.find((name) => name === params.get('atlas')) ?? null;
@@ -321,6 +341,8 @@ export function serializeUrlState(state: ViewerUrlState): string {
     if (!state.warmUp) params.set('warmup', '0');
     if (state.probes) params.set('probes', '1');
     if (state.debug) params.set('debug', state.debug);
+    if (state.rcDebug) params.set('rcdebug', state.rcDebug);
+    writeCompareValues(state.rcCompare, params);
     if (state.probeColor !== DEFAULT_URL_STATE.probeColor) params.set('probecolor', state.probeColor);
     if (state.atlas) params.set('atlas', state.atlas);
     if (state.atlasFill) params.set('atlasfill', '1');

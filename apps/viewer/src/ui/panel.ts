@@ -25,6 +25,7 @@ import {
     type DdgiScreenViewName,
     type GiChoice,
     type ProbeColorName,
+    type RadianceCacheScreenViewName,
 } from './url-state';
 
 export interface DdgiPanelSettings {
@@ -58,6 +59,8 @@ export interface PanelHandlers {
     onTechnique(id: GiTechniqueId): void;
     onDdgiSettings(settings: DdgiPanelSettings): void;
     onDdgiRestart(): void;
+    /** The radiance cache's debug view, or null for its normal picture. */
+    onRadianceCacheDebug(view: RadianceCacheScreenViewName | null): void;
     /** Save the probes to a file (a download). */
     onDdgiSaveBake(): void;
     /** Load probes from a file the user picked. */
@@ -95,6 +98,8 @@ export interface PanelState {
     gi: GiChoice;
     technique: GiTechniqueId;
     ddgi: DdgiPanelSettings;
+    /** The radiance cache's debug view, or null. */
+    radianceCacheDebug: RadianceCacheScreenViewName | null;
     probeBounces: number;
     maxProbes: number;
     vxgiBounces: number;
@@ -119,6 +124,18 @@ const SCREEN_VIEW_LABELS: Record<DdgiScreenViewName | 'none', string> = {
     coverage: 'Coverage (where DDGI answers)',
     'probe-states': 'Probes near this point',
     'gi-albedo': 'GI albedo at hits (what rays see)',
+    'screen-depth': 'Screen inputs: depth',
+    'screen-normal': 'Screen inputs: normal',
+    'screen-velocity': 'Screen inputs: motion',
+    'screen-albedo': 'Screen inputs: albedo',
+    'screen-instance': 'Screen inputs: object id',
+};
+
+const RADIANCE_CACHE_VIEW_LABELS: Record<RadianceCacheScreenViewName | 'none', string> = {
+    none: 'Normal picture',
+    'probe-atlas': 'Probe atlas (each probe, 8 × 8 directions)',
+    'probe-mask': 'Probe mask (where the probes are)',
+    'probe-sh': 'Probe SH (each probe as nine numbers)',
 };
 
 /** The quality presets, cheapest first, as the picker names them. */
@@ -161,8 +178,8 @@ const STATS_LINES: ReadonlyArray<readonly [string, HelpKey]> = [
 ];
 
 /** Every technique, in the order the selectors list them. */
-const WIPE_CHOICES: readonly TechniqueId[] = ['ddgi', 'lpg', 'vxgi', 'none', 'cycles'];
-const GI_CHOICES: readonly GiTechniqueId[] = ['ddgi', 'lpg', 'vxgi'];
+const WIPE_CHOICES: readonly TechniqueId[] = ['ddgi', 'rc', 'lpg', 'vxgi', 'none', 'cycles'];
+const GI_CHOICES: readonly GiTechniqueId[] = ['ddgi', 'rc', 'lpg', 'vxgi'];
 
 /** The budget slider's step, in milliseconds. */
 const BUDGET_STEP_MS = 0.25;
@@ -225,6 +242,8 @@ export class Panel {
     private readonly probeBounces = h('select');
     private readonly probeBudget = h('select');
     private readonly vxgiSettings = h('div', { className: 'group' });
+    private readonly radianceCacheSettings = h('div', { className: 'group' });
+    private readonly radianceCacheView = h('select');
     private readonly vxgiBounces = h('select');
     private readonly status = h('div', { className: 'status' });
     /** The file picker behind "Load probes from a file" (hidden; the button opens it). */
@@ -268,6 +287,7 @@ export class Panel {
             for (const id of WIPE_CHOICES) side.append(h('option', { value: id, text: TECHNIQUE_LABELS[id] }));
         }
         for (const [view, label] of Object.entries(SCREEN_VIEW_LABELS)) this.screenView.append(h('option', { value: view, text: label }));
+        for (const [view, label] of Object.entries(RADIANCE_CACHE_VIEW_LABELS)) this.radianceCacheView.append(h('option', { value: view, text: label }));
         for (const [name, label] of Object.entries(PRESET_LABELS)) this.preset.append(h('option', { value: name, text: label }));
         for (const [choice, label] of Object.entries(PROBE_COLOR_LABELS)) this.probeColor.append(h('option', { value: choice, text: label }));
         for (const [choice, label] of Object.entries(ATLAS_LABELS)) this.atlas.append(h('option', { value: choice, text: label }));
@@ -419,6 +439,8 @@ export class Panel {
             rebake,
         );
         this.vxgiSettings.append(h('div', { className: 'label', text: 'Bounces' }), this.vxgiBounces);
+        withHelp(this.radianceCacheView, 'rcScreenView');
+        this.radianceCacheSettings.append(withHelp(h('div', { className: 'label', text: 'Debug view' }), 'rcScreenView'), this.radianceCacheView);
         return h(
             'section',
             {},
@@ -433,6 +455,7 @@ export class Panel {
             h('div', { className: 'label', text: 'Technique' }),
             this.techniqueSelect,
             this.ddgiSettings,
+            this.radianceCacheSettings,
             this.probeSettings,
             this.vxgiSettings,
             this.status,
@@ -548,6 +571,10 @@ export class Panel {
         this.probeBounces.addEventListener('change', probeChanged);
         this.probeBudget.addEventListener('change', probeChanged);
         this.vxgiBounces.addEventListener('change', () => handlers.onVxgiSettings({ bounces: Number(this.vxgiBounces.value) }));
+        this.radianceCacheView.addEventListener('change', () => {
+            const view = this.radianceCacheView.value;
+            handlers.onRadianceCacheDebug(view === 'none' ? null : (view as RadianceCacheScreenViewName));
+        });
         const wipeChanged = () =>
             handlers.onWipe(this.wipeToggle.checked, this.wipeLeft.value as TechniqueId, this.wipeRight.value as TechniqueId);
         this.wipeToggle.addEventListener('change', wipeChanged);
@@ -662,6 +689,7 @@ export class Panel {
         this.probeBounces.value = String(state.probeBounces);
         this.probeBudget.value = String(state.maxProbes);
         this.vxgiBounces.value = String(state.vxgiBounces);
+        this.radianceCacheView.value = state.radianceCacheDebug ?? 'none';
         this.wipeToggle.checked = state.wipe !== null;
         this.wipeLeft.value = state.wipe?.left ?? 'ddgi';
         this.wipeRight.value = state.wipe?.right ?? 'cycles';
@@ -679,6 +707,7 @@ export class Panel {
         this.atlasEvRow.hidden = state.ddgi.atlas !== 'irradiance';
         this.probeSettings.hidden = !(giShown && onScreen.includes('lpg'));
         this.vxgiSettings.hidden = !(giShown && onScreen.includes('vxgi'));
+        this.radianceCacheSettings.hidden = !(giShown && onScreen.includes('rc'));
         this.techniqueSelect.disabled = state.wipe !== null;
         this.wipeLeft.disabled = state.wipe === null;
         this.wipeRight.disabled = state.wipe === null;

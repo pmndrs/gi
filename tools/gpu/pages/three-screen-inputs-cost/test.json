@@ -1,0 +1,5 @@
+{
+    "description": "RC1.1 cost on Sponza with curtains, bookmark 1: filling FrameScreen (extra MRT outputs and the handover) against the T1.14 composite's own MRT pass, GPU-bound and interleaved, at 1280x720 and 2560x1440. A timing page: run it through run.ts under the bench lock. Needs the downloaded Sponza.",
+    "timeoutMs": 1200000,
+    "manual": true
+}

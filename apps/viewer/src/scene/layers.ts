@@ -14,6 +14,7 @@
  *   DDGI_PROBES      DDGI's probe spheres (DDGI's camera, when they are switched on)
  *   HELPERS          the light markers and the light gizmo (every viewing camera; never
  *                    a bake camera, and GI's rays pass through them)
+ *   RADIANCE_CACHE   the radiance cache's GI light (only its camera sees it)
  *
  * Lights follow the camera's layers too (`Renderer.js` tests `light.layers`),
  * which is what makes "GI only" possible without touching light intensities.
@@ -28,6 +29,7 @@ export const LAYER_PROBE_GRID = 3;
 export const LAYER_DDGI = 4;
 export const LAYER_DDGI_PROBES = 5;
 export const LAYER_HELPERS = 6;
+export const LAYER_RADIANCE_CACHE = 7;
 
 /**
  * - `on`: direct light plus the technique's GI.

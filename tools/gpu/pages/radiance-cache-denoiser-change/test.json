@@ -1,0 +1,4 @@
+{
+    "description": "RC4.3: the GI denoiser through a real scene change (two-room's lamp moves): with the history clamp and the soft change reset on and off, how long the denoised irradiance takes to reach its new converged value, and how much it changes frame to frame meanwhile (history kept, not dropped). A measurement with a gate on one run, the defaults or the clamp and reset VITE_RC_COMPARE names: 64 frames after the move the denoised error is at most 1.25x the raw input's, and no device errors or bad values.",
+    "timeoutMs": 1200000
+}

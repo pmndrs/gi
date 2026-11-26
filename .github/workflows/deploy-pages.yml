@@ -37,6 +37,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # Sibling libraries from local clones; an optional private one is skipped (see ci.yml).
+      - run: corepack enable && node tools/linked-siblings.ts --fetch
       - run: pnpm install --frozen-lockfile
       - name: Build the examples site
         run: pnpm examples:build

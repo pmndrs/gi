@@ -193,6 +193,33 @@ The composite node for three's pipeline (see "Dense scenes" above). Built like t
 - The targets should stay half float: 8-bit `giAlbedo` and normal miss the match by about 10× on Sponza.
 - If the platform's shading module changes shape (another technique, say), set `pipeline.needsUpdate = true`.
 
+### Screen inputs: `screenInputs(scenePass, threeGI, options?)`
+
+For screen-space techniques (RC1.1): fills the platform's `FrameScreen` from your own MRT scene pass every frame, through resizes, with no copy.
+
+```ts
+import * as THREE from 'three/webgpu';
+import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
+import { ddgi, giAlbedo, screenInputs } from '@pmndrs/gi/three';
+
+const pipeline = new THREE.RenderPipeline(renderer);
+const scenePass = pass(scene, camera);
+const screen = screenInputs(scenePass, threeGI);
+scenePass.setMRT(mrt({ output, giAlbedo, normal: packNormalToRGB(normalView), ...screen.outputs }));
+pipeline.outputNode = screen.encodeBefore(ddgi(scenePass, threeGI));
+```
+
+- **`screen.outputs`** are the MRT outputs to spread into the pass: `giNormal` (world-space normal, half float) always; `velocity` (the name `@pmndrs/upscaler` reads, so one target feeds both), `giDiffuseAlbedo` (base colour × (1 − metalness), 8-bit) and `giInstance` (the platform instance index + 1, 0 for objects GI doesn't mirror, written as three bytes in an 8-bit target and turned into the `r32uint` texture `FrameScreen` promises by a small pass each frame) when a technique asks for them (`gi.screenNeeds`, read when `screenInputs` is called) or you do (`{ channels: { instance: true } }`). Depth is the pass's own.
+- **The opaque surface under the depth sample.** Every channel describes it: a blended (transparent) material leaves the channels as they were, because each output takes the material's own blending with a coverage of 0 in alpha (three gives MRT outputs no blending otherwise, so glass or a decal would overwrite them while depth keeps the surface behind). Normal and additive blending are covered, premultiplied or not; subtractive and multiply only with `premultipliedAlpha: true` (without it three r187 logs an error and gives them no blend state, so they overwrite the channels); custom blending isn't covered and is warned about once. A transparent material that writes depth (three's default for `transparent: true`; glTF's BLEND materials don't) puts its own depth over the opaque surface's channels: set its `depthWrite` to false. Alpha-tested materials write depth and the channels.
+- **Colour bytes per pixel.** The pass's targets must fit the device's `maxColorAttachmentBytesPerSample`. With the composite's outputs and every channel it is 56; WebGPU's default is 32. The platform's `requiredLimits(adapter)` asks for the adapter's maximum (128 on the RTX 3060), and `createGIRenderer` / `requestGIDevice` pass it on. three's own device (`new WebGPURenderer()` without `device`) keeps the default 32 (register row D14), so make the device yourself. A device without enough throws `GILimitError` naming the limit and the bytes needed at the first stage.
+- **`screen.encodeBefore(node)`** runs the screen stage once per frame before `node` draws: the pass draws (if it hasn't this frame), three's targets are taken as `GPUTexture`s and `gi.encodeScreen` runs. Put whatever reads a screen technique's results inside `node`.
+- **`screen.view(channel)`** is a node showing one channel (`'depth' | 'normal' | 'velocity' | 'albedo' | 'instance'`) through the core's `ScreenInputsView`, in display values: show it without tone mapping. The viewer's "Screen inputs: …" debug views use it.
+- **`screen.screen`** is the latest `FrameScreen`.
+- The pass must be single-sampled. `pass()` copies `renderer.samples` (`PassNode.js:821`), which is 4 with `antialias: true`, so create the renderer with `antialias: false` or set the pass's samples to 1; a multisampled pass is refused with a warning.
+- Let the screen stage run before the pass first draws. three r187's pipeline cache key leaves out MRT blend modes (`WebGPUBackend.js:2491-2507`) and the stage sets them on its first run, so a pass drawn earlier (for example by another node's update-before) keeps pipelines with no blending, and transparent objects then overwrite the channels.
+- If a technique that reads a channel the pass doesn't render is added later, the stage warns once and skips screen techniques: make the screen inputs again and rebuild the pipeline.
+- **How the textures are reached:** three r187 has no public accessor, so one function reads its WebGPU backend, and it refuses any other three revision (DECISIONS 2026-11-09).
+
 ### `createGIRenderer()` and `requestGIDevice()`
 
 These make the GPU device and hand it to three (`new WebGPURenderer({ device })`). The host owns the device; the platform never makes one.
@@ -257,6 +284,7 @@ The extra submit is needed because three r187 records into its own command encod
 | `objectsPerFrame`, `editChecksPerFrame`, `lightsPerFrame` | How much of the scene is checked each frame (see "How changes are found"). |
 | `updateMatrixWorld` | Update world matrices in every `update` (see below). Default: no. |
 | `updateOnRender` | Run `update` from the GI light's render-time update (see above). Default: no. Can be switched later. |
+| `jitter` | For a scene pass drawn with a jittered camera (a temporal upscaler or TAA): a source giving this frame's jitter as an NDC offset and the camera's unjittered projection, read in every `update` and passed on as `FrameCamera.jitter` and `FrameCamera.projection` (the camera's own projection holds the jitter while the frame draws). Screen-space techniques rebuild positions from the depth with it; DDGI ignores it. Default: none. Can be set later (`threeGI.jitter`). With `@pmndrs/upscaler`: `upscalerJitter(upscaler, renderWidth, renderHeight)`, and `update` after `upscaler.beginFrame(camera)`. |
 | `warn` | Where warnings go. Each message is shown once. |
 
 Other members:
@@ -586,6 +614,7 @@ Every name `@pmndrs/gi/three` exports, in one place. A unit test (`tools/docs/do
 | `ThreeGI` | The scene's link to a platform you built yourself: `update(camera)`, `budget`, `light`, `markChanged`, `setGroupWeight`, `setEnvironmentWeight`, `timings`, `report`, `dispose` ("`ThreeGI`" above). |
 | `ThreeGIOptions` | Its options (table above). |
 | `ThreeGITimings` | The CPU time of the last `update`, in three parts. |
+| `ThreeGIJitter`, `upscalerJitter(upscaler, width, height)`, `UpscalerJitterLike`, `jitterPixelsToNdc(jitter, width, height)` | The `jitter` option's type (`ndc()`: this frame's NDC offset or null; `unjitteredProjection()`), the source for `@pmndrs/upscaler`'s `Upscaler` (its `jitter` and `unjitteredProjectionMatrix`, the only parts read), and the conversion from a jitter in render pixels with y down to NDC: `(−2x / width, +2y / height)`, since three's `setViewOffset`, which the upscaler jitters with, moves points by `−x` and `−y` pixels (a unit test checks it against three). |
 | `SceneSync` | The mirroring on its own, for hosts that call `gi.encode` themselves: `new SceneSync(gi.scene, { device })`, then `update(scene)` each frame, `markChanged`, `counts`, `report`, `dispose`. |
 | `SceneSyncOptions` | Its options: `device`, `renderer` (for GPU skinning), `warn`, `objectsPerFrame`, `editChecksPerFrame`, `lightsPerFrame`. |
 | `SyncFrameReport` | What the last update sent: objects created and destroyed, transforms, visibility, materials, meshes, lights, poses, and how many objects it looked at. |
@@ -612,6 +641,17 @@ Every name `@pmndrs/gi/three` exports, in one place. A unit test (`tools/docs/do
 | `DEFAULT_GI_OCCLUSION_RADIUS` | 1 m. |
 | `giAlbedo`, `GIAlbedoNode` | The MRT output with the weight three gives indirect diffuse light per pixel; put it in the scene pass's `mrt()`. |
 | `GI_ALBEDO_OUTPUT`, `GI_NORMAL_OUTPUT` | The MRT names `ddgi()` reads: `'giAlbedo'` and `'normal'`. |
+
+### Screen inputs (for screen-space techniques)
+
+| Name | What it is |
+| --- | --- |
+| `screenInputs(scenePass, source, options?)` | Fills the platform's `FrameScreen` from your own MRT scene pass every frame ("Screen inputs" above, RC1.1). |
+| `ScreenInputsNode` | The node `screenInputs` returns: `outputs`, `encodeBefore(node)`, `view(channel)`, `screen`, `dispose`. |
+| `ScreenInputsOptions` | Its one option, `channels`: screen channels to render even when no technique reads them. |
+| `ScreenInputsSource` | Where it finds the platform and the scene sync (`gi`, `sync`): a `ThreeGI` fits. |
+| `GIScreenChannelNode`, `giDiffuseAlbedo` | One screen channel's MRT output, which leaves the channel unchanged under blended surfaces; and the diffuse albedo channel (base colour × (1 − metalness)). |
+| `GI_SCREEN_NORMAL_OUTPUT`, `GI_SCREEN_ALBEDO_OUTPUT`, `GI_SCREEN_VELOCITY_OUTPUT`, `GI_SCREEN_INSTANCE_OUTPUT` | The MRT names the screen inputs write: `'giNormal'`, `'giDiffuseAlbedo'`, `'velocity'`, `'giInstance'`. |
 
 ### The `LightProbeGrid` export
 

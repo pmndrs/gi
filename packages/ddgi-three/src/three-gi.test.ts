@@ -1,8 +1,8 @@
-import { BoxGeometry, Color, Mesh, MeshStandardMaterial, PerspectiveCamera, PointLight, Scene, Texture } from 'three';
+import { BoxGeometry, Color, Matrix4, Mesh, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, PointLight, Scene, Texture, Vector3, type Camera } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
 import { DDGIVolume } from './ddgi-volume.ts';
-import { ThreeGI } from './three-gi.ts';
+import { jitterPixelsToNdc, ThreeGI, upscalerJitter } from './three-gi.ts';
 
 /** A shading module whose shape can be changed, like a technique switching its code. */
 function fakeShading(): ShadingModule & { version: number } {
@@ -237,6 +237,64 @@ describe('ThreeGI', () => {
         expect(() => threeGI.setGroupWeight(0, 'white')).toThrow(/voxel.*light group weights/);
     });
 
+    it("hands the platform the host's unjittered projection and its jitter (FrameCamera.jitter, RC2.2)", () => {
+        const platform = fakePlatform(fakeShading());
+        const threeGI = new ThreeGI(platform.gi, new Scene());
+        const camera = new PerspectiveCamera(60, 16 / 9, 0.1, 100);
+        camera.position.set(1, 2, 3);
+        camera.updateMatrixWorld();
+        threeGI.update(camera, 0);
+        // No jitter source: no jitter, and the camera's own matrices.
+        expect(platform.frames[0].camera.jitter).toBeUndefined();
+        expect(Array.from(platform.frames[0].camera.projection)).toEqual(camera.projectionMatrix.elements);
+        expect(threeGI.encodedFrames).toBe(1);
+
+        // An upscaler's frame: beginFrame keeps the unjittered projection, then jitters the camera.
+        const unjittered = camera.projectionMatrix.clone();
+        const upscaler = { jitter: { x: 0.25, y: -0.125 }, unjitteredProjectionMatrix: unjittered };
+        upscalerViewOffset(camera, upscaler.jitter.x, upscaler.jitter.y, 1280, 720);
+        threeGI.jitter = upscalerJitter(upscaler, 1280, 720);
+        threeGI.update(camera, 0);
+        expect(platform.frames[1].camera.jitter).toEqual([-0.5 / 1280, -0.25 / 720]);
+        // Not the camera's (jittered) projection: the jitter would count twice.
+        expect(Array.from(platform.frames[1].camera.projection)).toEqual(unjittered.elements);
+        expect(Array.from(platform.frames[1].camera.projection)).not.toEqual(camera.projectionMatrix.elements);
+        expect(platform.frames[1].camera.position).toEqual([1, 2, 3]);
+        expect(threeGI.encodedFrames).toBe(2);
+    });
+
+    // The convention against three's own setViewOffset, as @pmndrs/upscaler's beginFrame applies it
+    // (dist/index.js, the view offset helper), not against our own formula.
+    for (const kind of ['perspective', 'orthographic'] as const) {
+        it(`matches three's setViewOffset on a ${kind} camera: jitterPixelsToNdc moves projected points as the upscaler's jitter does`, () => {
+            const width = 1280;
+            const height = 720;
+            const camera = kind === 'perspective' ? new PerspectiveCamera(55, width / height, 0.1, 100) : new OrthographicCamera(-8, 8, 4.5, -4.5, 0.1, 100);
+            camera.position.set(0.5, 1, 6);
+            camera.lookAt(0, 0.3, 0);
+            camera.updateMatrixWorld();
+            camera.updateProjectionMatrix();
+            const unjittered = camera.projectionMatrix.clone();
+            const points = [new Vector3(0, 0, 0), new Vector3(1.5, -0.7, 2), new Vector3(-2, 1.2, -3)];
+            for (const [x, y] of [[0.4, 0.3], [-0.25, 0.5], [0.5, -0.5]] as const) {
+                upscalerViewOffset(camera, x, y, width, height);
+                const jitter = jitterPixelsToNdc({ x, y }, width, height);
+                // Three moves each point on screen by the NDC jitter...
+                for (const point of points) {
+                    const before = point.clone().applyMatrix4(camera.matrixWorldInverse).applyMatrix4(unjittered);
+                    const after = point.clone().applyMatrix4(camera.matrixWorldInverse).applyMatrix4(camera.projectionMatrix);
+                    expect(after.x - before.x).toBeCloseTo(jitter[0], 9);
+                    expect(after.y - before.y).toBeCloseTo(jitter[1], 9);
+                }
+                // ...and its jittered projection is FrameCamera's translate(jitter) x projection.
+                const translate = new Matrix4().makeTranslation(jitter[0], jitter[1], 0);
+                const expected = translate.multiply(unjittered).elements;
+                camera.projectionMatrix.elements.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 9));
+                camera.clearViewOffset();
+            }
+        });
+    }
+
     it('removes everything it added on dispose', () => {
         const platform = fakePlatform(fakeShading());
         const scene = new Scene();
@@ -248,3 +306,8 @@ describe('ThreeGI', () => {
         expect(threeGI.sync.counts.instances).toBe(0);
     });
 });
+
+/** @pmndrs/upscaler's beginFrame on a camera with no view offset: three's view offset by the jitter in render pixels. */
+function upscalerViewOffset(camera: Camera & { setViewOffset(fullWidth: number, fullHeight: number, x: number, y: number, width: number, height: number): void }, x: number, y: number, width: number, height: number): void {
+    camera.setViewOffset(width, height, x, y, width, height);
+}

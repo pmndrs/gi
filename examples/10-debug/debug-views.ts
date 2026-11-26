@@ -15,7 +15,7 @@
  */
 
 import * as THREE from 'three/webgpu';
-import { float, instanceIndex, int, ivec2, normalView, positionLocal, positionWorld, normalWorld, select, texture, texture3D, textureLoad, uniform, uv, varying, vec2, vec3, vec4, wgsl, wgslFn } from 'three/tsl';
+import { float, instanceIndex, int, ivec2, normalView, positionLocal, positionWorld, normalWorld, screenUV, select, texture, texture3D, textureLoad, uniform, uv, varying, vec2, vec3, vec4, wgsl, wgslFn } from 'three/tsl';
 import { type DebugView, type ShadingModule } from '@pmndrs/gi/core';
 import { DDGI_DEBUG_COLORS, DDGI_SHADING_PARAMETER_NAMES, PROBE_STATE, type DDGITechnique } from '@pmndrs/gi/ddgi';
 import { GI_USER_DATA, wgslParameterType, wrapGpuTexture } from '@pmndrs/gi/three';
@@ -67,15 +67,16 @@ export class ScreenDebugMaterial {
 
     constructor(resources: ShadingResources) {
         const module = resources.module;
-        // giDebugColor takes the view id as a u32; three hands uniforms over as floats.
+        // giDebugColor takes the view id as a u32; three hands uniforms over as floats. screenUV is the
+        // pixel's place (0..1, top left 0), for a screen-space technique's views (platform.md, RC2.2).
         const declarations = module.parameters.map((parameter) => `    ${parameter.name}: ${wgslParameterType(parameter)},`).join('\n');
         const names = module.parameters.map((parameter) => parameter.name).join(', ');
         const entry = wgslFn(
-            `fn exampleDebugColor(position: vec3f, normal: vec3f, view: f32,\n${declarations}\n) -> vec3f {\n` +
-                `    return giDebugColor(position, normal, u32(view + 0.5), ${names});\n}`,
+            `fn exampleDebugColor(position: vec3f, normal: vec3f, view: f32, screenUV: vec2f,\n${declarations}\n) -> vec3f {\n` +
+                `    return giDebugColor(position, normal, u32(view + 0.5), screenUV, ${names});\n}`,
             [wgsl(module.code)],
         );
-        const color = entry({ position: positionWorld, normal: normalWorld, view: this.viewId, ...resources.byName }) as unknown as Node<'vec3'>;
+        const color = entry({ position: positionWorld, normal: normalWorld, view: this.viewId, screenUV, ...resources.byName }) as unknown as Node<'vec3'>;
         this.material.lights = false;
         this.material.side = THREE.DoubleSide;
         this.material.colorNode = vec4(color, 1);

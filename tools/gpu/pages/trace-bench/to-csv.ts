@@ -120,6 +120,15 @@ async function main(): Promise<void> {
     for (const runs of groups.values()) {
         // Repeated runs share the first run's date and browser; the rows say how many there were.
         const context = runs[0].context;
+        // The ray cost table (RC1.5) is read beside native numbers, so its RTX rows must say the clock they ran at.
+        const isRayCostTable = runs.some((run) => run.rows.some((row) => row.metric === 'note/ray_set_rc'));
+        if (isRayCostTable && isNvidiaDeviceName(context.device) && clockNotes.length === 0) {
+            console.error(
+                `${runs[0].key}: ray cost table rows on an NVIDIA GPU need the SM clock (note/sm_clock_mhz). ` +
+                    'Run under "bench-lock.ts run" (it sets DDGI_CLOCK_FILE) or pass --clock-file. No rows written.',
+            );
+            process.exit(1);
+        }
         const rows = [...(runs.length === 1 ? runs[0].rows : repeatedRunRows(runs.map((run) => run.rows))), ...(isNvidiaDeviceName(context.device) ? clockNotes : [])];
         const prefix = [context.date, context.commit, context.device, context.browser];
         lines.push(...rows.map((row) => [...prefix, row.scene, row.metric, formatValue(row.value)].join(',')));

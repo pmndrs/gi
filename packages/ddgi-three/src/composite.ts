@@ -73,6 +73,9 @@
  * running a second GTAO. If the pass already applies AO to its materials (a
  * context with `getAO`, three's `builtinAOContext`), `giAlbedo` carries that
  * AO already, so adding the composite's occlusion as well darkens GI twice.
+ * The same holds for the radiance cache, whose E already carries its own
+ * SSGI occlusion when its `ssgi` setting is on (RC4.2; off by default):
+ * leave `occlusion` off with it, or turn its SSGI off. The node warns.
  */
 
 import { BlendMode, MaterialBlending, Node, NodeUpdateType, PhysicalLightingModel, type Camera, type NodeBuilder, type PassNode, type TextureNode } from 'three/webgpu';
@@ -284,6 +287,8 @@ export class DDGICompositeNode extends Node {
     private readonly occlusionSource: GIOcclusionSource | null = null;
     private moduleNodes: ShadingModuleNodes | null = null;
     private warnedStale = false;
+    /** Warned once that the technique's own occlusion and the composite's would both apply. */
+    private warnedDoubleOcclusion = false;
     /** The pass context the mark was last checked on. */
     private markedContext: PassNode['contextNode'] = null;
     private warnedLostMark = false;
@@ -364,6 +369,12 @@ export class DDGICompositeNode extends Node {
         const light = this.source.light;
         this.intensity.value = light.intensity;
         this.computeCoverage.value = light.computeCoverage ? 1 : 0;
+        if (this.occlusionSource && light.shading.occludesIrradiance && !this.warnedDoubleOcclusion) {
+            this.warnedDoubleOcclusion = true;
+            console.warn(
+                `@pmndrs/gi/three: the GI technique (${light.shading.techniqueId}) already occludes its irradiance (the radiance cache's SSGI), and ddgi() was given occlusion as well: GI gets occluded twice. Leave occlusion off, or turn the technique's SSGI off.`,
+            );
+        }
         const moduleNodes = new ShadingModuleNodes(light.shading);
         this.moduleNodes = moduleNodes;
         this.warnedStale = false;

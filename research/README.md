@@ -21,3 +21,4 @@ These notes were carried over unchanged from the earlier experiment, [DennisSmol
     - guided probe rays toward bright directions, an alternative to M2's planned direct emitter sampling for small-light noise (it needs weighting in the blend);
     - glossy or radiance probes in a later milestone;
     - the reference path tracer.
+- [gi-1.0/](gi-1.0/README.md): AMD GI-1.0/1.2 research and the radiance-cache plan (moved from the `ddgi` research branch on 2026-11-19).

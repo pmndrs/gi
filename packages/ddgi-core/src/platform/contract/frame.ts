@@ -56,6 +56,20 @@ export interface FrameCamera {
     readonly projection: Mat4;
     readonly near: number;
     readonly far: number;
+    /**
+     * This frame's sub-pixel jitter, when the host draws its screen buffers
+     * with a jittered projection (a temporal upscaler, TAA): the offset in NDC
+     * (x right, y up) added to every projected point, so the jittered
+     * projection is `translate(jitter.x, jitter.y, 0) × projection`, and
+     * `projection` above stays the unjittered one. From `@pmndrs/upscaler`'s
+     * `Upscaler.jitter` of `(x, y)` render pixels with y down (applied with
+     * three's `setViewOffset`, which moves points by `−x`, `−y` pixels), it is
+     * `(−2x / width, +2y / height)`. Screen-space
+     * techniques rebuild positions from `FrameScreen.depth` with it, so they
+     * land where the depth was drawn. Omitted or `[0, 0]`: no jitter.
+     * World-space techniques ignore it.
+     */
+    readonly jitter?: readonly [number, number];
 }
 
 /**
@@ -63,27 +77,64 @@ export interface FrameCamera {
  * screen-space GI). World-space techniques like DDGI ignore them. Same
  * fields as `@pmndrs/upscaler`'s temporal guides where they overlap, so one
  * set of buffers feeds GI, the upscaler and the denoiser.
+ *
+ * Every channel describes **the opaque surface under the depth sample**: a
+ * blended (transparent) surface that doesn't write depth leaves normal,
+ * velocity, albedo and instance as the surface behind it. Alpha-tested
+ * surfaces write depth, so they are the surface.
  */
 export interface FrameScreen {
     readonly width: number;
     readonly height: number;
-    /** Depth, any float format. */
+    /**
+     * Depth: a depth format (`depth24plus`, `depth32float`; read it as
+     * `texture_depth_2d`) or a one-channel float colour format. Hardware
+     * depth, 0 = near unless `reversedDepth`.
+     */
     readonly depth: GPUTexture;
     /** World-space normals in rgb, 0..1 encoded or signed float. */
     readonly normal: GPUTexture;
     readonly normalEncoding: 'unorm' | 'snorm-float';
-    /** Screen-space motion (NDC delta, current − previous). */
+    /** Screen-space motion in rg (NDC delta, current − previous). Only when a technique asks for it (`TechniqueRequirements.screen`). */
     readonly velocity?: GPUTexture;
     /**
-     * Which platform instance covers each pixel: `r32uint`, instance index + 1,
-     * 0 for none. Lets surfel-style techniques attach what they spawn to the
+     * Diffuse albedo in rgb, linear: base colour × (1 − metalness), the
+     * colour a surface's diffuse layer reflects, with any texture applied per
+     * pixel. Metalness is folded in exactly as the adapter folds it into GI
+     * albedo for rays (docs/api/platform.md: metals bounce no diffuse light),
+     * so a pixel and a ray hit on the same surface agree. Any float or unorm
+     * colour format; values 0..1. Only when a technique asks for it.
+     *
+     * Not three's composite weight (`giAlbedo`, T1.14): that one also carries
+     * the specular lobe's share, `(1 − F_ss − F_ms)`, the view-dependent part
+     * of three's indirect diffuse, and the material's AO. This is the plain
+     * surface colour a technique needs to light a pixel itself.
+     */
+    readonly albedo?: GPUTexture;
+    /**
+     * Which platform instance covers each pixel: `r32uint`, instance index + 1
+     * (`SceneApi.instanceIndex`, the index rays report in `GiHit.instance`), 0
+     * for none. Lets surfel-style techniques attach what they spawn to the
      * object under the pixel so it moves with it. Rendering this is extra
      * adapter work, so only techniques that need it ask for it.
      */
     readonly instance?: GPUTexture;
+    /**
+     * The host's own lit colour of each pixel, before any GI technique's
+     * light is added: direct light, emission and whatever else the host
+     * lights itself, as linear HDR radiance in rgb (not tone mapped). Any
+     * float colour format. Screen-space GI reads it as the light leaving
+     * nearby surfaces (the radiance cache's near-field light, RC4.2); three's
+     * adapter hands over the scene pass's `output`. Only when a technique
+     * asks for it.
+     */
+    readonly lighting?: GPUTexture;
     /** The depth is reversed-Z (1 = near). */
     readonly reversedDepth?: boolean;
 }
+
+/** The optional screen channels, by their `FrameScreen` field names. */
+export type OptionalScreenChannel = 'velocity' | 'albedo' | 'instance' | 'lighting';
 
 export interface FrameInput {
     /** Seconds since the previous frame. */

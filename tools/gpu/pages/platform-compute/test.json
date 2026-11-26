@@ -1,0 +1,4 @@
+{
+    "description": "RC1.3: the platform's prefix scan, stream compaction and indirect arguments against the CPU at sizes 0 to 10 M, subgroups and the fallback (a second device without subgroups) identical, the arguments consumed by a real dispatchWorkgroupsIndirect. VITE_PLATFORM_COMPUTE_TIMING=1 times them at 1 M and 10 M (run under the bench lock; to-csv.ts writes bench/results/compute.csv).",
+    "timeoutMs": 300000
+}

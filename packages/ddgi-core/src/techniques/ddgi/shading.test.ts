@@ -48,6 +48,8 @@ describe('the DDGI shading module', () => {
         expect(shading.code).toMatch(/fn giProbeIrradiance\(\s*point: u32,\s*direction: vec3f,/);
         expect(shading.code).not.toMatch(/fn giRadiance\(/);
         expect(shading.provides.radiance).toBe(false);
+        // A probe field: another technique can read it at its own hits (the radiance cache's second bounce, P6.3).
+        expect(shading.provides.worldSpaceIrradiance).toBe(true);
     });
 
     it('uses the parameter names as the WGSL parameter names, in order', () => {
@@ -83,7 +85,7 @@ describe('the DDGI shading module', () => {
         expect(globals).not.toMatch(/var<uniform>/);
         expect(globals).toMatch(/fn giIrradianceAt\(position: vec3f, normal: vec3f, viewDirection: vec3f, screenUV: vec2f\) -> vec3f/);
         expect(globals).toMatch(/fn giCoverageAt\(position: vec3f, normal: vec3f\) -> f32/);
-        expect(globals).toMatch(/fn giDebugColorAt\(position: vec3f, normal: vec3f, view: u32\) -> vec3f/);
+        expect(globals).toMatch(/fn giDebugColorAt\(position: vec3f, normal: vec3f, view: u32, screenUV: vec2f\) -> vec3f/);
         expect(globals).toMatch(/fn giProbeIrradianceAt\(point: u32, direction: vec3f\) -> vec3f/);
         expect(globals).not.toContain('var<storage');
     });

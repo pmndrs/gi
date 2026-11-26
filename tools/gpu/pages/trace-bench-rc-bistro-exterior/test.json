@@ -1,0 +1,5 @@
+{
+    "description": "Ray cost table (RC1.5) on bistro-exterior: Capsaicin-shaped ray sets (probe placement, 64 cosine rays per probe, multi-bounce, shadow rays) from the first bookmark at 1280x720, Mrays/s through the platform tracer and ours-tinybvh, with a loaded section per set. Timing runs under the bench lock, on their own.",
+    "timeoutMs": 900000,
+    "manual": true
+}

@@ -459,6 +459,8 @@ export class SceneSync {
     private skyMesh: SkyMeshLike | null = null;
 
     private frame = 0;
+    /** Counts instance creations and destructions (`instanceVersion`). */
+    private instanceChanges = 0;
     /** The camera's layers this update, if given (for `otherProbeLights`). */
     private cameraLayers: Layers | null = null;
     /** Set by {@link placement}: whether the object and all its parents are visible. */
@@ -520,6 +522,25 @@ export class SceneSync {
     /** The platform texture last made for a three texture, or undefined if none is (not used, or not readable). */
     sentTexture(texture: Texture): TextureHandle | undefined {
         return this.textures.get(texture)?.handle;
+    }
+
+    /**
+     * Changes whenever a platform instance is created or destroyed, so a host
+     * table keyed by instance (the screen inputs' instance ids,
+     * screen-inputs.ts) knows to rebuild. Moves and visibility don't change it.
+     */
+    get instanceVersion(): number {
+        return this.instanceChanges;
+    }
+
+    /**
+     * Every mirrored mesh with its platform instances: one for a plain mesh,
+     * one per instance for an `InstancedMesh` (instance i at index i,
+     * including hidden ones past `count`). Allocates a pair per mesh; meant
+     * for rebuilding tables when `instanceVersion` changes, not every frame.
+     */
+    *mirroredInstances(): IterableIterator<[Object3D, readonly InstanceHandle[]]> {
+        for (const record of this.objectList) yield [record.object, record.instances];
     }
 
     /** How many times the environment was sent, and how many textures uploaded for it. */
@@ -951,6 +972,7 @@ export class SceneSync {
             label: record.object.name || undefined,
         });
         record.instances.push(handle);
+        this.instanceChanges++;
         record.visible.push(visible);
         this.report.created++;
     }
@@ -988,6 +1010,7 @@ export class SceneSync {
         record.matrixSlot = -1;
         for (const instance of record.instances) this.api.destroyInstance(instance);
         this.report.destroyed += record.instances.length;
+        if (record.instances.length > 0) this.instanceChanges++;
         record.instances.length = 0;
         this.objects.delete(record.object);
         for (const material of record.materials) this.releaseMaterial(material);

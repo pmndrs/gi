@@ -1,0 +1,7 @@
+{
+    "description": "P6.4: the neural tail (pmndrs/pathtracer's @pathtracer/mlp network as the second bounce's tail behind the GI-1.2 hash grid) against analytic answers, with GI-1.2's multibounce through the same checks (recorded, not gated here): a lit floor beside a black wall reads albedo/pi x E and the wall 0, the furnace's every bounce rho(rhoE/pi)/(1-rho^2) = 0.4244, the strips' 0.1819, warm-up frames, lag after the sun doubles with flicker beside it, and a NaN scan of rays, tail answers and training targets on cornell-box, two-room and sponza. With DDGI stacked (secondBounce 'auto'), the tail stays off with one warning; with 'gi1-rays' it runs. Correctness only.",
+    "timeoutMs": 2400000,
+    "optionalSiblings": [
+        "@pathtracer/mlp"
+    ]
+}

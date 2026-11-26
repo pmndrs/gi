@@ -1,0 +1,4 @@
+{
+    "description": "RC4.2 review: GPU time of the platform SSGI (gi/ssgi, with its running means) at one, two and four slices on two-room screens at 1280x720 and 1920x1080, median and p90 from its own timestamps (the platform does not time screen-stage passes yet). A measurement: only device errors fail.",
+    "timeoutMs": 600000
+}

@@ -13,9 +13,20 @@
  * unlimited bounces, and how a surfel technique can fall back to DDGI.
  */
 
+import { LIGHT_GROUP_COUNT } from './scene';
 import type { ShadingModule } from './shading-module';
 import type { GpuTimerScope } from './timing';
 import type { WgslModule } from './wgsl';
+
+/**
+ * The bit of `giDirectChooseLight`'s `groupMask` that makes the sky one of its
+ * candidates (`GI_DIRECT_SKY_LIGHT_BIT`): the first bit above the light groups'
+ * (`1 << LIGHT_GROUP_COUNT`), so a mask of group bits alone never has it.
+ */
+export const DIRECT_SKY_LIGHT_BIT = 1 << LIGHT_GROUP_COUNT;
+
+/** The light index `giDirectChooseLight` returns for the sky (`GI_DIRECT_SKY_LIGHT`), which `giDirectLightRay` takes. */
+export const DIRECT_SKY_LIGHT = 0xfffffffe;
 
 /**
  * The hit-shading module defines (and depends on the scene and `rays` modules):
@@ -74,6 +85,37 @@ import type { WgslModule } from './wgsl';
  *
  * // The random numbers gi/direct uses for a ray of a ray scratch (see `direct`).
  * fn giDirectRandom(ray: u32, frame: u32) -> vec2f
+ *
+ * // One light per hit, its shadow ray traced by the caller (for a technique
+ * // that chooses a light in one pass and traces its shadow ray later). The
+ * // candidates and their weights are those
+ * // giDirectIrradiance uses (directional lights, then every point and spot
+ * // light or the light grid's picks for the hit's cell; weight = luminance of
+ * // the unshadowed irradiance x share). One is drawn with probability
+ * // q = weight / total, `random` uniform in [0, 1); `weight` is share / q, so
+ * // `irradiance x weight x visibility` estimates giDirectIrradiance's sum
+ * // without bias. `light` is GI_DIRECT_NO_LIGHT when nothing reaches the surface.
+ * // With GI_DIRECT_SKY_LIGHT_BIT (DIRECT_SKY_LIGHT_BIT below, 1 << LIGHT_GROUP_COUNT) set in
+ * // `groupMask`, the sky is a candidate too, weighed by its irradiance on the
+ * // normal (giSkyLightWeight), and drawn as `light` GI_DIRECT_SKY_LIGHT; the
+ * // estimate then includes the sky's irradiance. Opt-in: a technique whose
+ * // bounce light already holds the sky (DDGI's probes) leaves the bit clear.
+ * struct GiDirectLightChoice { light: u32, weight: f32 }
+ * fn giDirectChooseLight(surface: GiSurface, groupMask: u32, random: f32) -> GiDirectLightChoice
+ * // The light's unshadowed irradiance at the surface (cosine included) and the
+ * // shadow ray towards a random point of it (`random` uniform in [0, 1)^2);
+ * // trace it with giTraceAny unless `castsShadows` is false. For
+ * // GI_DIRECT_SKY_LIGHT, giSkyLightRay's sample.
+ * struct GiDirectLightRay { irradiance: vec3f, castsShadows: bool, shadowRay: GiRay }
+ * fn giDirectLightRay(surface: GiSurface, light: u32, random: vec2f) -> GiDirectLightRay
+ * // The sky as a light, for any technique: its weight in the choice (the
+ * // luminance of its SH irradiance on the shading normal, floored at 1% of
+ * // its average over normals), and one sample of its irradiance, the
+ * // direction drawn cosine-weighted about the shading normal from `random`
+ * // (used as is), the estimate pi x giSkyRadiance(direction), with an
+ * // unbounded shadow ray along it.
+ * fn giSkyLightWeight(surface: GiSurface) -> f32
+ * fn giSkyLightRay(surface: GiSurface, random: vec2f) -> GiDirectLightRay
  *
  * // Radiance seen along a ray that missed everything.
  * fn giSkyRadiance(direction: vec3f) -> vec3f

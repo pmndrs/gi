@@ -55,6 +55,13 @@ export interface PageManifest {
      * when a --filter names it exactly, never in a full run or a partial match.
      */
     manual?: boolean;
+    /**
+     * Optional sibling libraries the page needs (root package.json
+     * `linkedSiblings` with `optional: true`, tools/optional-siblings.ts). Where
+     * one isn't cloned at its pin (a public checkout, CI), the page is left out
+     * of the run, with a note: it would only test that the feature turns off.
+     */
+    optionalSiblings?: string[];
 }
 
 /** What `--json <file>` writes. Benchmark tasks read `pages[].data` from it to make CSV rows. */
@@ -112,3 +119,11 @@ export const QUERY_GPU = 'gpu';
 export const EXAMPLES_SITE_BASE = '/gi/';
 /** The test server's list of the built site's files, `[{ path, bytes }]` (paths under the base). Not part of the site. */
 export const EXAMPLES_SITE_FILES = '/__examples-site-files';
+/**
+ * The test server's list of one scene's reference files: `?scene=<id>` gives
+ * `{ url, files: [{ path, bytes }] }`, `url` the folder `bench/references/<id>`
+ * as the server serves it (`/@fs/...`) and paths `<camera>/<file>` under it
+ * (no files when there is none). Lets an accuracy page pick the files that exist
+ * without probing for missing ones, which Chrome logs as 404 errors.
+ */
+export const REFERENCE_FILES = '/__reference-files';
