@@ -2,16 +2,16 @@
  * Sibling libraries from a local clone for development, pinned in package.json's
  * `linkedSiblings` (repo, commit, clone, path, built, build; `optional` for a private one).
  *
- * - Required (a `link:` dependency): `@pmndrs/denoiser-ffx` from pmndrs/denoiser (the radiance
- *   cache's GI denoiser, RC4.3, on its branch), until a release of `denoiser` carries it. A git
- *   dependency can't stand in: pnpm installs a git subdirectory without its workspace
- *   (`@pmndrs/denoiser-core@workspace:*` doesn't resolve) and the package ships no built output.
+ * - Required (a `link:` dependency): none at the moment. The radiance cache's GI denoiser
+ *   (RC4.3) was one until `denoiser@2.1.0` put `Gi1Denoiser` on npm (`denoiser/ffx`); a git
+ *   dependency couldn't stand in for it, since pnpm installs a git subdirectory without its
+ *   workspace (`@pmndrs/denoiser-core@workspace:*` doesn't resolve).
  * - Optional (`optional: true`, no `link:`): `@pathtracer/mlp` from pmndrs/pathtracer (the
- *   radiance cache's neural tail, P6.4; a private repository, TypeScript source, nothing to
- *   build). A public checkout can't fetch it, so nothing stops without it: vite, vitest and
+ *   radiance cache's neural tail, P6.4; TypeScript source, nothing to build, marked private and
+ *   not on npm). A checkout without the clone still works: vite, vitest and
  *   TypeScript resolve it through `tools/optional-siblings.ts` and tsconfig `paths`, and the
- *   tail turns off with one warning. A published `@pathtracer/mlp` (or the repository going
- *   public) would make it a normal dependency.
+ *   tail turns off with one warning. The repository is public (CI clones it); a published
+ *   `@pathtracer/mlp` would make it a normal dependency.
  *
  *   node tools/linked-siblings.ts           checks every sibling (the root `preinstall` runs it):
  *                                           a required one missing or unbuilt stops the install
