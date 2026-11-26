@@ -21,6 +21,14 @@ Rules:
 
 ---
 
+## 2026-11-26 · SRC.1 · Apple Metal run: phase five passes · lead (main session, Opus 5.5)
+
+Did: ran [issue #43](https://github.com/pmndrs/gi/issues/43) on an Apple M5 Pro (Mac17,9, macOS 26.6.2, Chrome 158.0.8127.88, Node 24.12.0, AC power). At the pinned `75b9c67`, seven of eight correctness fixtures passed. `rc-backends` failed because every whole-frame timestamp read 0. Apple GPUs drop the timestamp of an empty pass, and a separately submitted end marker runs beside the frame instead of after it. Fixed in `examples/11-radiance-cascades/measurement.ts` (`d8b9776`): each marker dispatches one workgroup, and the end marker copies and reads one canvas texel first. Details are in [NOTES](docs/NOTES.md#webgpu).
+Verified at `d8b9776` with a clean tree. All 8 correctness fixtures, polished quality, 3 normal and 3 uncapped reflection pairs and the built examples smoke passed. `allPreflightsObservedIdleAndNominal` is true in both summaries. One preflight read busy and passed on retry. Lint, typecheck and 1,885 unit tests passed with 13 skipped. In the built-in browser pane, all five gallery scenes rendered, and native, TAA, upscaling and the reflection toggle worked with no console errors.
+Not verified: flicker and ghosting in motion, because the pane was hidden and throttled. The Windows timings were not re-measured with the new markers; D3D12 already serialized the old ones. Thermal qualification is unassessed on macOS.
+Numbers: shutter 90% at 2 frames after closure and 12 after reopening (native), matching the RTX. Polished-floor RGB MAE was 2.137/255 at 1.5× and 2.630/255 at 2×. Uncapped reflections on/off over 1,440 frames: medians 1.304/1.142 ms, p95 1.444/1.264 ms. At 60 Hz, on/off were 4.56/5.14 ms; the GPU clock follows the light load there, so this is not a cost estimate. Archive `rc-metal-results-20261126-150911.tar.gz`, SHA-256 `b4b61c6f3e71f4b242090e9a5dd75b8712c43437d812e72b2c8ac8348c2760ac`. [CSV rows](bench/results/radiance-cascades.csv)
+Next: final review of [PR #42](https://github.com/pmndrs/gi/pull/42). Someone with the pane visible should check the polished rail in motion for flicker.
+
 ## 2026-11-26 · SRC.1 · Split RC gallery and Apple Metal handoff
 
 Integrated [GI-1.2 (#41)](https://github.com/pmndrs/gi/pull/41) from main at `025ece2`. The [examples index](examples/README.md#split-radiance-cascades-scenes) exposes the lamp rail, sliding shutter, polished floor, roughness sweep and offscreen moving emitter. The GI-1.2 viewer remains available via `pnpm dev`.

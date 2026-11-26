@@ -2,7 +2,7 @@
 
 ## Phase status
 
-Four of the five original phases pass under the web acceptance criteria agreed on November 19. Chandra and S5 are comparison tools for diagnosing artifacts. Browser frame cost, memory, temporal response and visible quality at the intended display resolution drive solver choices. [Decision](../DECISIONS.md#2026-11-19)
+All five original phases pass under the web acceptance criteria agreed on November 19. Chandra and S5 are comparison tools for diagnosing artifacts. Browser frame cost, memory, temporal response and visible quality at the intended display resolution drive solver choices. [Decision](../DECISIONS.md#2026-11-19)
 
 | Original phase | Status on the RC branch | Evidence or remaining work |
 | --- | --- | --- |
@@ -10,7 +10,7 @@ Four of the five original phases pass under the web acceptance criteria agreed o
 | Interval seam | Passed | GPU fixtures cover interval boundaries, misses, near occlusion and directional splits. |
 | Shared tracer | Passed | The [transport fixture](../../tools/gpu/pages/rc-transport/) checks hit distances, misses, emission and analytical diffuse lighting before and after a blocker moves. The gallery passes the shutter-response and offscreen-light checks. The [Sponza comparison](chandra.md) records remaining visual differences for investigation when they affect the web demos. |
 | Dynamic occlusion | Passed | Both backends darken and recover on the moving shutter. The response curves and independent emitter integral are in the [progress log](../../PROGRESS.md). |
-| Reconstruction and hardware | Awaiting Metal | Windows passed the 24-pose polished-rail quality check and three idle RTX reflection pairs. Normal gallery pacing gave pooled medians of 6.29 ms on and 3.61 ms off with 0–1% GPU use before Chrome. Three clock-qualified uncapped pairs gave 2.11 ms on and 1.76 ms off over the extended rail. Intel Gen12LP passed solver, transport and reflection correctness. The [Apple Metal issue and test branch](https://github.com/pmndrs/gi/issues/43) track the corresponding Mac run and examples verification. |
+| Reconstruction and hardware | Passed | Windows passed the 24-pose polished-rail quality check and three idle RTX reflection pairs. Normal gallery pacing gave pooled medians of 6.29 ms on and 3.61 ms off with 0–1% GPU use before Chrome. Three clock-qualified uncapped pairs gave 2.11 ms on and 1.76 ms off over the extended rail. Intel Gen12LP passed solver, transport and reflection correctness. On an Apple M5 Pro (macOS 26.6.2, Chrome 158) at `d8b9776`, all eight correctness fixtures, the quality check, six idle reflection pairs and the examples smoke test passed. The shutter reached 90% at 2 frames after closure and 12 after reopening. Polished-floor RGB error was 2.137/255 at 1.5× and 2.630/255 at 2×. Uncapped reflections cost 1.30 ms on and 1.14 ms off over 1,440 frames each. The [Apple Metal issue](https://github.com/pmndrs/gi/issues/43) holds the full results. |
 
 The [upstream Chandra build](chandra.md) and three polished-floor experiments now run on Windows. See the [experiment list](../../research/radiance-cascades/reflections.md) for their individual checks.
 
