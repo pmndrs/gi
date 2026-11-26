@@ -49,7 +49,7 @@ import {
     type HashGridCacheCapacity,
     type HashGridCacheOptions,
 } from './capacity.ts';
-import { CELL_CHANGES_BINDING, CELL_SHADING_MAX_CHANGE_EVENTS, cellShadingListLayout, type CellShadingListLayout } from './cell-shading-common.ts';
+import { CELL_CHANGES_BINDING, CELL_SHADING_MAX_CHANGE_EVENTS, type CellShadingListLayout } from './cell-shading-common.ts';
 import {
     CELL_SHADING_ENTRY_POINT,
     CELL_SHADING_UNIFORM_BYTES,
@@ -114,14 +114,17 @@ const WORD_BYTES = 4;
 /** Timed as `radiance-cache/<section>`, Capsaicin's `TimedSection` names. */
 const TIMER_PREFIX = 'radiance-cache';
 
-/** The three packed buffers and the constant block. */
+/** The two packed buffers and the constant block (register D6). */
 export interface HashGridCacheBuffers {
-    /** Counters, then per tile: hash slot, decay stamp, packed tile lists 0 and 1 (`capacity.ts`). */
+    /**
+     * The words: counters, then per tile hash slot, decay stamp, packed tile
+     * lists 0 and 1 and update-listed frame; then the cells' last-reset frames
+     * (E9); then the direct and indirect update scratch, four words per cell.
+     * Offsets in `HashGridCacheBufferLayout` (`capacity.ts`).
+     */
     readonly tileWords: GPUBuffer;
     /** Direct, then indirect values: `vec2u` per cell. */
     readonly cellValues: GPUBuffer;
-    /** Direct, then indirect update scratch: four words per cell. */
-    readonly updateScratch: GPUBuffer;
     /** `HashGridCacheConstants`, written every frame. */
     readonly constants: GPUBuffer;
 }
@@ -236,8 +239,6 @@ interface Prepared {
     readonly rayListsUniform: GPUBuffer;
     /** `HashGridCacheCellShading` (E8's budget and the change events, read by E8 and E9). */
     readonly cellShadingUniform: GPUBuffer;
-    /** Bound where the cells' last reset frames and E8's lists go while they aren't made (4 words each; two, since writable bindings mustn't alias). */
-    readonly placeholders: readonly [GPUBuffer, GPUBuffer];
     readonly timer: WorldCacheContext['timer'];
     readonly memoryBytes: number;
 }
@@ -247,11 +248,6 @@ interface RayData {
     readonly rays: WorldCacheProbeRays;
     readonly layout: HashGridCacheRayListLayout;
     readonly listWords: GPUBuffer;
-    /** E8's lists for this screen, made the first frame cells are lit on a budget. */
-    cellLists: GPUBuffer | null;
-    readonly cellListLayout: CellShadingListLayout;
-    /** The cells' last-reset frames the groups were made with (the cache's, once E8 or E9 is used). */
-    groupsResetFrames: GPUBuffer | null;
     groups: Readonly<Record<RayDataPassName, GPUBindGroup>>;
     /** The ray-data group's entries, for E10's pass, whose group is made when that pass is first used with these lists (and again when the entries change). */
     entries: readonly GPUBindGroupEntry[];
@@ -273,12 +269,6 @@ export class HashGridCache implements WorldCache {
     private lastFramePingPong: number | null = null;
     /** The options whose change empties the cache, as the last `encodeFrame` read them; null before the first. */
     private lastClearOptions: HashGridCacheClearOptions | null = null;
-    /**
-     * Per finest-level cell, the frame it last forgot its history after a
-     * scene change (16 bits each, two to a word; `HashGridCache_ClaimChangeReset`),
-     * made the first frame E8 or E9 is used: 32 MiB at default capacity.
-     */
-    private resetFrames: GPUBuffer | null = null;
     /** The second-bounce estimator the last `encodeFrame` ran (experiment E10); null before the first or with multibounce off. */
     private lastSecondBounce: SecondBounceInUse | null = null;
     /** E10's pass for the current fallback module, or null when none was wanted yet. */
@@ -318,10 +308,10 @@ export class HashGridCache implements WorldCache {
         return rayData ? { buffer: rayData.listWords, layout: rayData.layout } : null;
     }
 
-    /** Lever E8's lists of the latest screen (made its first budgeted frame), for tests: the buffer and where each list starts. */
+    /** Lever E8's lists of the latest screen (there while it lights cells on a budget), for tests: the per-ray list words and where each list starts in them. */
     get cellShadingLists(): { readonly buffer: GPUBuffer; readonly layout: CellShadingListLayout } | null {
         const rayData = this.rayData;
-        return rayData?.cellLists ? { buffer: rayData.cellLists, layout: rayData.cellListLayout } : null;
+        return rayData?.layout.cellLists ? { buffer: rayData.listWords, layout: rayData.layout.cellLists } : null;
     }
 
     /** Inserts refused this frame because their bucket was full (register D23): a word of the tile words, cleared by `ClearCounters`. */
@@ -361,8 +351,6 @@ export class HashGridCache implements WorldCache {
         return (
             (this.prepared?.memoryBytes ?? 0) +
             (this.rayData?.listWords.size ?? 0) +
-            (this.rayData?.cellLists?.size ?? 0) +
-            (this.resetFrames?.size ?? 0) +
             (pass ? pass.args.memoryBytes + pass.bindings.memoryBytes : 0)
         );
     }
@@ -417,9 +405,8 @@ export class HashGridCache implements WorldCache {
         const storageUsage = BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst;
         device.pushErrorScope('out-of-memory');
         const buffers: HashGridCacheBuffers = {
-            tileWords: device.createBuffer({ label: 'radiance-cache/hash-grid tile words', size: layout.tileWords.bytes, usage: storageUsage }),
+            tileWords: device.createBuffer({ label: 'radiance-cache/hash-grid words', size: layout.words.bytes, usage: storageUsage }),
             cellValues: device.createBuffer({ label: 'radiance-cache/hash-grid cell values', size: layout.cellValues.bytes, usage: storageUsage }),
-            updateScratch: device.createBuffer({ label: 'radiance-cache/hash-grid update scratch', size: layout.updateScratch.bytes, usage: storageUsage }),
             // copySrc: the GPU pages read the words back (P6.4's page checks `use_neural_tail` on a restart frame).
             constants: device.createBuffer({ label: 'radiance-cache/hash-grid constants', size: HASH_GRID_CONSTANTS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst | BUFFER_USAGE.copySrc }),
         };
@@ -516,10 +503,6 @@ export class HashGridCache implements WorldCache {
         };
         const rayListsUniform = device.createBuffer({ label: 'radiance-cache/hash-grid ray lists', size: RAY_LISTS_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
         const cellShadingUniform = device.createBuffer({ label: 'radiance-cache/cell shading', size: CELL_SHADING_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        const placeholders = [
-            device.createBuffer({ label: 'radiance-cache/cells last reset placeholder', size: 16, usage: BUFFER_USAGE.storage }),
-            device.createBuffer({ label: 'radiance-cache/cell shading lists placeholder', size: 16, usage: BUFFER_USAGE.storage }),
-        ] as const;
         const cellShading: CellShadingPasses = {
             claimFirstBounceCells: pass(claimFirstKernel, claimFirstArgs),
             claimSecondBounceCells: pass(claimSecondKernel, claimSecondArgs),
@@ -553,7 +536,6 @@ export class HashGridCache implements WorldCache {
             firstBounceCount: word(HASH_GRID_COUNTER.visibilityCount0),
             rayListsUniform,
             cellShadingUniform,
-            placeholders,
             timer: context.timer,
             memoryBytes,
         };
@@ -624,7 +606,7 @@ export class HashGridCache implements WorldCache {
 
     /**
      * Empties the cache: the tile words (every hash slot, decay stamp, both
-     * packed lists and the counters) back to zero, as `prepare` leaves them
+     * packed lists and the counters; the words' first section) back to zero, as `prepare` leaves them
      * (Capsaicin clears the hash buffer when it makes it, gi1.cpp:478, and in
      * `clearHashGridCache`, gi1.cpp:3286-3291). The cell values and scratch
      * stay: a tile's finest cells are cleared when it is inserted again
@@ -634,10 +616,11 @@ export class HashGridCache implements WorldCache {
      * indirect scratch is not: `UpdateMultibounceCells` fills it after
      * `UpdateTiles` for the next frame, so what the last frame left there is
      * blended into whichever new tile takes those cells, once. Capsaicin's
-     * clear leaves it too.
+     * clear leaves it too. The cells' last-reset frames (E9) stay too.
      */
     reset(encoder: GPUCommandEncoder): void {
-        encoder.clearBuffer(this.require().buffers.tileWords);
+        const prepared = this.require();
+        encoder.clearBuffer(prepared.buffers.tileWords, 0, prepared.layout.tileWords.bytes);
     }
 
     /**
@@ -650,7 +633,7 @@ export class HashGridCache implements WorldCache {
         const prepared = this.require();
         // E10's estimator first: it decides the lists' size and the indirect cap in the constants.
         const secondBounce: SecondBounceInUse = this.options.useMultibounce ? this.resolveSecondBounce(prepared) : 'gi1-rays';
-        const rayData = this.rayDataFor(prepared, rays, this.options.useMultibounce && secondBounce === 'gi1-rays');
+        const rayData = this.rayDataFor(prepared, rays, this.options.useMultibounce && secondBounce === 'gi1-rays', this.options.cellShading === 'budgeted');
         // P6.4: the tail runs with GI-1.2's own rays only, once the second bounce has settled; its
         // restart (if any) comes before the constants, which read whether it is active.
         const tail = hashGridTailRuns(this.options.useMultibounce, secondBounce, this.secondBouncePending) ? this.tail : null;
@@ -673,7 +656,7 @@ export class HashGridCache implements WorldCache {
             if (last.useMultibounce !== clearOptions.useMultibounce || last.secondBounce !== clearOptions.secondBounce) {
                 const scratch = prepared.layout.updateScratch;
                 const indirectStart = scratch.updateCellValueIndirectBuffer * WORD_BYTES;
-                encoder.clearBuffer(prepared.buffers.updateScratch, indirectStart, scratch.bytes - indirectStart);
+                encoder.clearBuffer(prepared.buffers.tileWords, indirectStart, scratch.bytes / 2);
             }
         }
         this.lastClearOptions = clearOptions;
@@ -736,9 +719,6 @@ export class HashGridCache implements WorldCache {
         for (const populationPass of Object.values(prepared.population)) populationPass.args.dispose();
         const cellShading = prepared.cellShading;
         prepared.cellShadingUniform.destroy();
-        for (const placeholder of prepared.placeholders) placeholder.destroy();
-        this.resetFrames?.destroy();
-        this.resetFrames = null;
         for (const cellPass of [cellShading.claimFirstBounceCells, cellShading.claimSecondBounceCells, cellShading.scatterCells, cellShading.shadeCells]) cellPass.args.dispose();
         disposeBounceSource(this.bounceSource);
         this.bounceSource = null;
@@ -748,10 +728,11 @@ export class HashGridCache implements WorldCache {
     /**
      * Lever E8 and experiment E9: writes this frame's way of lighting cells
      * into the ray lists' uniform (every population pass reads it) and, when
-     * either is on, the budget and the change events into their uniform; makes
-     * the cells' last-reset frames (either) and E8's lists (E8) the first time
-     * they are needed; records clearing E8's per-frame counters. Returns
-     * whether the cells are lit on the budget.
+     * either is on, the budget and the change events into their uniform;
+     * records clearing E8's per-frame counters. The cells' last-reset frames
+     * are a section of the words, and E8's lists of the per-ray list words
+     * (`rayDataFor` makes them with the lists while it is on). Returns whether
+     * the cells are lit on the budget.
      */
     private writeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, changes: WorldCacheChanges | undefined): boolean {
         const { device, buffers } = prepared;
@@ -767,21 +748,13 @@ export class HashGridCache implements WorldCache {
         device.queue.writeBuffer(prepared.rayListsUniform, RAY_LISTS_CELL_SHADING_WORD * WORD_BYTES, new Uint32Array([flags]));
         if (!budgeted && !changeReset) return false;
 
-        this.resetFrames ??= device.createBuffer({
-            label: 'radiance-cache/hash-grid cells last reset',
-            size: Math.ceil((prepared.capacity.numTiles * prepared.capacity.numCellsPerTileMip[0]) / 2) * WORD_BYTES,
-            usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc,
-        });
-        if (budgeted && !rayData.cellLists) {
-            rayData.cellLists = device.createBuffer({ label: 'radiance-cache/cell shading lists', size: rayData.cellListLayout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
-            rayData.groups = this.rayDataGroups(prepared, rayData);
-        }
-        if (rayData.groupsResetFrames !== this.resetFrames) rayData.groups = this.rayDataGroups(prepared, rayData);
         device.queue.writeBuffer(prepared.cellShadingUniform, 0, cellShadingWords(budget, changes));
+        const cellLists = rayData.layout.cellLists;
         if (!budgeted) return false;
+        if (!cellLists) throw new Error('@pmndrs/gi: the per-ray lists were made without lever E8\'s lists');
         // The candidate and lit counts and the priority bins' counts start at zero (the turn period is kept).
         encoder.clearBuffer(buffers.tileWords, HASH_GRID_COUNTER.cellCandidateCount * WORD_BYTES, 2 * WORD_BYTES);
-        encoder.clearBuffer(rayData.cellLists as GPUBuffer, rayData.cellListLayout.bins * WORD_BYTES, 3 * CELL_SHADING_BINS * WORD_BYTES);
+        encoder.clearBuffer(rayData.listWords, cellLists.bins * WORD_BYTES, 3 * CELL_SHADING_BINS * WORD_BYTES);
         return true;
     }
 
@@ -856,19 +829,29 @@ export class HashGridCache implements WorldCache {
      * `ensureMemoryIsAllocated`, gi1.cpp:637-695): buffers and bind groups,
      * never pipelines.
      */
-    private rayDataFor(prepared: Prepared, rays: WorldCacheProbeRays, secondBounceRays: boolean): RayData {
+    private rayDataFor(prepared: Prepared, rays: WorldCacheProbeRays, secondBounceRays: boolean, cellShadingLists: boolean): RayData {
         const current = this.rayData;
         // E10: without second-bounce rays the lists are about a third the size (register E10); made again on a switch.
         // P6.4: with a tail the lists carry its answers (`neuralTailBuffer`), made again when one is set.
+        // E8: while cells are lit on a budget the lists end with E8's (register D6), made again on a switch.
         const withTail = this.tail !== null && secondBounceRays;
-        if (current && sameRays(current.rays, rays) && current.secondBounceRays === secondBounceRays && (current.layout.neuralTailBuffer !== 0) === withTail) return current;
+        if (
+            current &&
+            sameRays(current.rays, rays) &&
+            current.secondBounceRays === secondBounceRays &&
+            (current.layout.neuralTailBuffer !== 0) === withTail &&
+            (current.layout.cellLists !== null) === cellShadingLists
+        ) {
+            return current;
+        }
         this.releaseRayData();
         const { device } = prepared;
-        const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells, secondBounceRays, withTail);
+        const layout = hashGridCacheRayListLayout(rays.capacity, prepared.capacity.numCells, secondBounceRays, withTail, cellShadingLists);
         // The lists grow with the screen: a device that can't bind them gets GILimitError before anything is made (D14).
         checkHashGridRayListLimits(layout, device.limits);
-        const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc });
-        const cellListLayout = cellShadingListLayout(layout.maxCombinedRayCount);
+        // copyDst: E8's bins are cleared each budgeted frame (encoder.clearBuffer).
+        const listWords = device.createBuffer({ label: 'radiance-cache/hash-grid per-ray lists', size: layout.bytes, usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
+        const cellLists = layout.cellLists;
         device.queue.writeBuffer(
             prepared.rayListsUniform,
             0,
@@ -885,11 +868,11 @@ export class HashGridCache implements WorldCache {
                 layout.multibounceRayBuffer,
                 layout.firstBounceBypassBuffer,
                 layout.multibounceDirectBuffer,
-                // E8's lists, in their own buffer (made when first used).
-                cellListLayout.candidates,
-                cellListLayout.lit,
+                // E8's lists, at the end of the list words while it is used (0: none).
+                cellLists?.candidates ?? 0,
+                cellLists?.lit ?? 0,
                 0, // cell_shading: written every frame (writeCellShading)
-                cellListLayout.bins,
+                cellLists?.bins ?? 0,
                 layout.neuralTailBuffer,
             ]),
         );
@@ -897,9 +880,6 @@ export class HashGridCache implements WorldCache {
             rays,
             layout,
             listWords,
-            cellLists: null,
-            cellListLayout,
-            groupsResetFrames: null,
             groups: {} as RayData['groups'],
             entries: [],
             bounceSourceGroup: null,
@@ -910,19 +890,16 @@ export class HashGridCache implements WorldCache {
         return rayData;
     }
 
-    /** The ray-data groups of every population pass, over this screen's lists and the cache's change data (placeholders for what isn't made). */
+    /** The ray-data groups of every population pass, over this screen's lists and the cache's change data. */
     private rayDataGroups(prepared: Prepared, rayData: RayData): Readonly<Record<RayDataPassName, GPUBindGroup>> {
         const { device } = prepared;
         const rays = rayData.rays;
-        rayData.groupsResetFrames = this.resetFrames;
         const entries: GPUBindGroupEntry[] = [
             { binding: RAY_DATA_BINDING.rayLists, resource: { buffer: prepared.rayListsUniform } },
             { binding: RAY_DATA_BINDING.probeRays, resource: { buffer: rays.buffer } },
             { binding: RAY_DATA_BINDING.radiance, resource: rays.radiance },
             { binding: RAY_DATA_BINDING.listWords, resource: { buffer: rayData.listWords } },
             { binding: CELL_CHANGES_BINDING.uniform, resource: { buffer: prepared.cellShadingUniform } },
-            { binding: CELL_CHANGES_BINDING.resetFrames, resource: { buffer: this.resetFrames ?? prepared.placeholders[0] } },
-            { binding: CELL_CHANGES_BINDING.cellLists, resource: { buffer: rayData.cellLists ?? prepared.placeholders[1] } },
         ];
         // E10's pass makes its own group over these entries; it is made again with the new ones.
         rayData.entries = entries;
@@ -949,7 +926,6 @@ export class HashGridCache implements WorldCache {
 
     private releaseRayData(): void {
         this.rayData?.listWords.destroy();
-        this.rayData?.cellLists?.destroy();
         this.rayData = null;
     }
 
@@ -1102,7 +1078,6 @@ function groupEntries(buffers: HashGridCacheBuffers): GPUBindGroupEntry[] {
         { binding: HASH_GRID_CACHE_BINDING.constants, resource: { buffer: buffers.constants } },
         { binding: HASH_GRID_CACHE_BINDING.tileWords, resource: { buffer: buffers.tileWords } },
         { binding: HASH_GRID_CACHE_BINDING.cellValues, resource: { buffer: buffers.cellValues } },
-        { binding: HASH_GRID_CACHE_BINDING.updateScratch, resource: { buffer: buffers.updateScratch } },
     ];
 }
 

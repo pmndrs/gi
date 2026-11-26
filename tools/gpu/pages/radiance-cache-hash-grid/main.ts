@@ -277,7 +277,15 @@ try {
     const layout = cache.layout;
     assert(cache.memoryBytes >= layout.totalBytes && cache.memoryBytes < layout.totalBytes + 4096, `memoryBytes ${cache.memoryBytes} against the buffers' ${layout.totalBytes}`);
     data.capacity = cache.stats;
-    data.memory = { tileWords: layout.tileWords.bytes, cellValues: layout.cellValues.bytes, updateScratch: layout.updateScratch.bytes, total: cache.memoryBytes, totalMiB: cache.memoryBytes / 2 ** 20 };
+    data.memory = {
+        words: layout.words.bytes,
+        tileWords: layout.tileWords.bytes,
+        resetFrames: layout.resetFrames.bytes,
+        updateScratch: layout.updateScratch.bytes,
+        cellValues: layout.cellValues.bytes,
+        total: cache.memoryBytes,
+        totalMiB: cache.memoryBytes / 2 ** 20,
+    };
     log(`capacity: ${capacity.numBuckets} buckets x ${capacity.numTilesPerBucket} tiles x ${capacity.numCellsPerTile} cells = ${capacity.numCells} cells; memory ${(cache.memoryBytes / 2 ** 20).toFixed(1)} MiB`);
 
     const io: TestIo = createTestIo(device, MAX_INPUT_WORDS, MAX_RESULT_WORDS);
@@ -375,7 +383,8 @@ try {
     /** Empties the cache: every slot, stamp, list and counter to zero. */
     const clearCache = (): void => {
         const encoder = device.createCommandEncoder({ label: 'hash-grid clear' });
-        encoder.clearBuffer(cache.buffers.tileWords);
+        // The tile words alone: the words' later sections (the cells' last-reset frames and the update scratch) stay, as cache.reset leaves them.
+        encoder.clearBuffer(cache.buffers.tileWords, 0, cache.layout.tileWords.bytes);
         device.queue.submit([encoder.finish()]);
     };
     const runKernel = (name: TestKernelName, input: Uint32Array<ArrayBuffer>, itemCount: number, threadCount = itemCount): void => {

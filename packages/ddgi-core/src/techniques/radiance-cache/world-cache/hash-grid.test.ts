@@ -205,9 +205,18 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
         expect(layout.updateScratch.bytes).toBe(2 * 22282240 * 4 * 4);
         // Counters (64 words), then hash, decay, the two packed lists and the update-listed word (D32), one word per tile each.
         expect(layout.tileWords.bytes).toBe((64 + 5 * 262144) * 4);
-        expect(layout.totalBytes).toBe(356515840 + 713031680 + 5243136);
+        // E9's 16-bit frame per finest-level cell (64 a tile), two to a word.
+        expect(layout.resetFrames.bytes).toBe((262144 * 64) / 2 * 4);
+        // One words buffer (pmndrs/gi#49): tile words, last-reset frames, update scratch, back to back on 256-byte boundaries.
+        expect(layout.resetFrames.firstWord * 4).toBe(layout.tileWords.bytes);
+        expect(layout.updateScratch.updateCellValueBuffer * 4).toBe(layout.tileWords.bytes + layout.resetFrames.bytes);
+        expect(layout.updateScratch.updateCellValueIndirectBuffer - layout.updateScratch.updateCellValueBuffer).toBe(22282240 * 4);
+        expect(layout.words.bytes).toBe(5243136 + 33554432 + 713031680);
+        expect(layout.totalBytes).toBe(356515840 + layout.words.bytes);
         // Offsets on the 256-byte storage-binding alignment.
-        for (const offsetWords of [layout.tileWords.hashBuffer, layout.tileWords.decayTileBuffer, layout.tileWords.packedTileIndexBuffer0, layout.tileWords.packedTileIndexBuffer1, layout.tileWords.updateListedTileBuffer]) {
+        const offsets = [layout.tileWords.hashBuffer, layout.tileWords.decayTileBuffer, layout.tileWords.packedTileIndexBuffer0, layout.tileWords.packedTileIndexBuffer1, layout.tileWords.updateListedTileBuffer];
+        offsets.push(layout.resetFrames.firstWord, layout.updateScratch.updateCellValueBuffer, layout.updateScratch.updateCellValueIndirectBuffer);
+        for (const offsetWords of offsets) {
             expect((offsetWords * 4) % 256).toBe(0);
         }
         expect((layout.cellValues.valueIndirectBuffer * 8) % 256).toBe(0);
@@ -220,7 +229,7 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
             checkHashGridCacheLimits(layout, defaults);
         } catch (error) {
             expect((error as GILimitError).limit).toBe('maxStorageBufferBindingSize');
-            expect((error as GILimitError).needed).toBe(layout.updateScratch.bytes);
+            expect((error as GILimitError).needed).toBe(layout.words.bytes);
         }
     });
 

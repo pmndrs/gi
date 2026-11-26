@@ -8,7 +8,9 @@
  * population passes' head) don't import each other.
  *
  * `CELL_CHANGES_WGSL` is part of the population passes' ray-data group
- * (group 2, bindings 4-6), so every population pass can read it.
+ * (group 2, binding 4), so every population pass can read it. The per-cell
+ * frames it keeps are a section of the hash grid's words and E8's lists a
+ * section of the per-ray list words (register D6, pmndrs/gi#49).
  * `CELL_SHADING_COMMON_WGSL` needs, before it, the hash grid
  * (`hashGridCacheWgsl`), the ray data and Capsaicin's hash (`CAPSAICIN_WGSL`:
  * `rcPcgHash`).
@@ -48,14 +50,17 @@ export const CELL_SHADING_MAX_CHANGE_EVENTS = 16;
  */
 export const CELL_CHANGE_RESET_BIT = 0x80000000;
 
-/** Bindings of the change data in the population passes' ray-data group (group 2). */
+/**
+ * Bindings of the change data in the population passes' ray-data group
+ * (group 2). Per finest-level cell, the frame (low 16 bits, two to a word) it
+ * last forgot its history is in the hash grid's words
+ * (`HashGridCacheBufferLayout.resetFrames`), and E8's lists are in the per-ray
+ * list words (`HashGridCacheRayListLayout.cellLists`): sections of buffers
+ * every population pass binds already (register D6, pmndrs/gi#49).
+ */
 export const CELL_CHANGES_BINDING = {
     /** `HashGridCacheCellShading`: E8's budget and the change events. Uniform. */
     uniform: 4,
-    /** Per finest-level cell, the frame (low 16 bits) it last forgot its history: two to a word. Storage. */
-    resetFrames: 5,
-    /** E8's candidate and lit lists and its priority bins (`cellShadingListLayout`). Storage. */
-    cellLists: 6,
 } as const;
 
 /**
@@ -87,8 +92,6 @@ struct HashGridCacheCellShading {
 }
 
 @group(2) @binding(${CELL_CHANGES_BINDING.uniform}) var<uniform> g_HashGridCache_CellShading: HashGridCacheCellShading;
-@group(2) @binding(${CELL_CHANGES_BINDING.resetFrames}) var<storage, read_write> g_HashGridCache_ResetFrames: array<atomic<u32>>;
-@group(2) @binding(${CELL_CHANGES_BINDING.cellLists}) var<storage, read_write> g_HashGridCache_CellLists: array<atomic<u32>>;
 
 // The latest epoch (plus one) among the events within 'margin' of 'position'; 0 for none.
 fn HashGridCache_ChangeEpoch(position: vec3f, margin: f32) -> u32 {
@@ -121,13 +124,14 @@ fn HashGridCache_ClaimChangeReset(cell_index: u32, position: vec3f) -> bool {
     let frame = g_HashGridCacheConstants.frame_index;
     let since_epoch = frame - (epoch_plus_one - 1u);
     let slot = HashGridCache_ResetSlot(cell_index);
-    let stored = (atomicLoad(&g_HashGridCache_ResetFrames[slot.x]) >> slot.y) & 0xffffu;
+    let word = HASHGRIDCACHE_RESETFRAMESBUFFER + slot.x;
+    let stored = (atomicLoad(&g_HashGridCache_TileWords[word]) >> slot.y) & 0xffffu;
     let since_reset = (frame - stored) & 0xffffu;
     if (since_reset <= since_epoch) {
         return false; // already forgot within this epoch
     }
-    atomicAnd(&g_HashGridCache_ResetFrames[slot.x], ~(0xffffu << slot.y));
-    atomicOr(&g_HashGridCache_ResetFrames[slot.x], (frame & 0xffffu) << slot.y);
+    atomicAnd(&g_HashGridCache_TileWords[word], ~(0xffffu << slot.y));
+    atomicOr(&g_HashGridCache_TileWords[word], (frame & 0xffffu) << slot.y);
     return true;
 }
 `;
@@ -162,7 +166,7 @@ fn HashGridCache_CellSampleKey(visibility_index: u32) -> u32 {
 // the cell's direct update scratch, which is zero between frames (UpdateTiles clears what it reads)
 // and which, with cells lit on the budget, nothing else writes until ClaimCells.
 fn HashGridCache_OfferCellSample(visibility_index: u32, cell_index: u32) {
-    atomicMax(&g_HashGridCache_UpdateScratch[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index], HashGridCache_CellSampleKey(visibility_index));
+    atomicMax(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index], HashGridCache_CellSampleKey(visibility_index));
 }
 
 // A ray from 'origin' to 'position' shorter than the cell at 'position': it reads no cell and is
@@ -175,12 +179,12 @@ fn HashGridCache_ShorterThanCell(origin: vec3f, position: vec3f) -> bool {
 // frame's samples whole (with cellChangeResetHistory samples of the history beside them).
 fn HashGridCache_MarkChangeReset(cell_index: u32, position: vec3f) {
     if (HashGridCache_ChangeResetPerHit() && HashGridCache_ClaimChangeReset(cell_index, position)) {
-        atomicOr(&g_HashGridCache_UpdateScratch[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], HASHGRIDCACHE_CHANGE_RESET_BIT);
+        atomicOr(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], HASHGRIDCACHE_CHANGE_RESET_BIT);
     }
 }
 `;
 
-/** E8's lists in their own buffer, for a screen of `maxCombinedRayCount` visibility entries: word offsets. */
+/** E8's lists, for a screen of `maxCombinedRayCount` visibility entries: word offsets in the per-ray list words. */
 export interface CellShadingListLayout {
     /** Two words per candidate: its visibility entry with the changed bit (bit 31), and its bin. */
     readonly candidates: number;
@@ -188,12 +192,14 @@ export interface CellShadingListLayout {
     readonly lit: number;
     /** `CELL_SHADING_BINS` words of first slots, then as many of counts, then as many of cursors (the next slot). */
     readonly bins: number;
+    /** The lists' size: they end at word `candidates + bytes / 4`. */
     readonly bytes: number;
 }
 
-export function cellShadingListLayout(maxCombinedRayCount: number): CellShadingListLayout {
-    const candidates = 0;
+/** E8's lists starting at word `firstWord` of the per-ray list words. */
+export function cellShadingListLayout(maxCombinedRayCount: number, firstWord = 0): CellShadingListLayout {
+    const candidates = firstWord;
     const lit = candidates + 2 * maxCombinedRayCount;
     const bins = lit + maxCombinedRayCount;
-    return { candidates, lit, bins, bytes: (bins + 3 * CELL_SHADING_BINS) * 4 };
+    return { candidates, lit, bins, bytes: (bins + 3 * CELL_SHADING_BINS - firstWord) * 4 };
 }
