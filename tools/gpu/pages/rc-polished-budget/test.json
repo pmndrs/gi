@@ -1,0 +1,5 @@
+{
+    "description": "Matched native polished rail with rough reflections enabled and disabled, using whole-frame timestamps and lit-floor RGB at the 960×540 temporal preview.",
+    "timeoutMs": 240000,
+    "manual": true
+}

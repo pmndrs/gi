@@ -1,0 +1,4 @@
+{
+    "description": "Engine-independent three-level Split RC on a real GPU: diffuse furnace, near occlusion of far illumination, directional split, invalid surfaces, caller-owned HDR output, resize and reset.",
+    "timeoutMs": 120000
+}

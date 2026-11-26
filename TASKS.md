@@ -731,6 +731,14 @@ _Historical: each item was done in M2 or M3, or is now an issue (see Later)._
 - A flaky `tools/assets/fetch.test.ts` under load.
 - Nested finer DDGI volumes around thin cloth (Sponza's curtains: 0.25 m around them measured +5.5% offline, about 40k probes, 60 MB, about 1 ms of update): the quality route behind M1's GTAO fix (DECISIONS 2026-11-05).
 
+## Split Radiance Cascades
+
+| Task | Status | Scope |
+| --- | --- | --- |
+| SRC.1 | done (Windows and [Apple Metal](docs/radiance-cascades/metal.md) measured; follow-ups [#46](https://github.com/pmndrs/gi/issues/46), [#47](https://github.com/pmndrs/gi/issues/47)) | [Reference solver, architectural rail and interval consumer](docs/radiance-cascades/SPEC.md). [Native WebGPU solver, gallery A/B, moving shutter and temporal reconstruction](docs/radiance-cascades/PLAN.md). |
+| SRC.2 | done | [Build the pinned Chandra renderer and compare Sponza at matched camera, lights and exposure](docs/radiance-cascades/chandra.md). |
+| SRC.3 | done | [Rough reflections on the polished gallery rail, floor roughness sweep and offscreen emitter](research/radiance-cascades/reflections.md). |
+
 ## Later
 
 From 2026-11-19 the open follow-ups are GitHub issues on [pmndrs/gi](https://github.com/pmndrs/gi/issues) (Dennis, 2026-11-19: "the tuning and cleanup can be tracked as issues for later"). Each issue holds the details that were here. This list only maps them. Labels: `ddgi`, `tuning`, `needs-mac`, `needs-windows`, `chore`.

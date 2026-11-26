@@ -4,6 +4,10 @@ These notes were carried over unchanged from the earlier experiment, [DennisSmol
 
 **Written in this repository** (not carried over): [ddgi-dynamic-updates.md](ddgi-dynamic-updates.md), how shipped probe GI systems update under change (2026-11-06).
 
+## Radiance cascades
+
+[Method, source implementations and evaluation design](radiance-cascades/README.md) for the split radiance cascades experiment.
+
 ## References for later (not on M2's path)
 
 - **Tokuyoshi (AMD), "A Numerically Stable Implementation of the von Mises–Fisher Distribution on S²",** technical report 25-01-5053, January 2025 ([PDF](https://gpuopen.com/download/A_Numerically_Stable_Implementation_of_the_von_Mises%E2%80%93Fisher_Distribution_on_S2.pdf)). Passed on by Dennis, 2026-11-06.

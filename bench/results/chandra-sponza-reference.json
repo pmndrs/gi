@@ -1,0 +1,37 @@
+{
+  "source": "https://github.com/entropylost/chandra",
+  "chandra": "9af00e8de135a4126cb137d1ec62b451bd6b8e37",
+  "sefirot": "571a9461897b7c8d52df0caa1d533d6c5e44ad9c",
+  "luisaRust": "374e0b3d2e936f56ec93ad1a9021911b010ecb74",
+  "luisaCpp": "cbeea79a7f611ac417b988c23993af05cd789cbb",
+  "nvidiaDriver": "592.00",
+  "gpu": "NVIDIA GeForce RTX 3060 Laptop GPU",
+  "cudaToolkitRelease": "12.4.1",
+  "rustc": "1.102.0-nightly (65ce8611f 2026-11-18)",
+  "width": 640,
+  "height": 360,
+  "frames": 128,
+  "lighting": "emitter-only",
+  "outputs": {
+    "diffuse.rgb32f": {
+      "bytes": 2764800,
+      "sha256": "19a4684f3459d3c9ffbd2f2701bc78a079e7d256a4857e8d4d3af95492e85b0f"
+    },
+    "specular.rgb32f": {
+      "bytes": 2764800,
+      "sha256": "3c7adbaa0932909962fbc7478459d900867f04534275b0c6823b58fa10cf9e55"
+    },
+    "primary.u8": {
+      "bytes": 230400,
+      "sha256": "2697926c53726925aa6cf59db1d1379cab5f9e8863cd79b2d7bdb7e76584c2a7"
+    },
+    "diffuse.png": {
+      "bytes": 146181,
+      "sha256": "ac46a99bf41fe62b4155e2bebe7032dcbe3fd38a08d49371dcecd3a3d29b53fd"
+    },
+    "specular.png": {
+      "bytes": 31455,
+      "sha256": "81bbb0e7395193206b007bd78845b83d6ad51ed64400a390a6ca49ddc878ef6c"
+    }
+  }
+}

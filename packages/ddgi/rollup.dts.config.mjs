@@ -7,8 +7,8 @@ import { layerChunk } from './layer-chunks.ts';
 // package that isn't on npm; three stays external. The chunks are cut by layer,
 // as the JS build's are (layer-chunks.ts).
 export default {
-    input: { index: 'src/index.ts', core: 'src/core.ts', ddgi: 'src/ddgi.ts', three: 'src/three.ts' },
+    input: { 'radiance-cascades': 'src/radiance-cascades.ts', index: 'src/index.ts', core: 'src/core.ts', ddgi: 'src/ddgi.ts', three: 'src/three.ts' },
     output: { dir: 'dist', format: 'es', manualChunks: layerChunk, chunkFileNames: 'chunks/[name]-[hash].d.ts' },
-    external: [/^three(\/|$)/],
+    external: ['@pmndrs/rc-bvh', /^three(\/|$)/],
     plugins: [dts({ respectExternal: true, tsconfig: 'tsconfig.build.json' })],
 };

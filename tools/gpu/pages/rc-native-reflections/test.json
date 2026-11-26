@@ -1,0 +1,4 @@
+{
+    "description": "Analytic rough-specular cache test: normalized furnace, reflected perspective and orthographic directions, material roughness, fine far-interval detail, a blocking near hit, and unchanged diffuse output.",
+    "timeoutMs": 120000
+}

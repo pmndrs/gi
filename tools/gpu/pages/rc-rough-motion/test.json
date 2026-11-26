@@ -1,0 +1,5 @@
+{
+    "description": "Polished gallery under camera motion and a moving offscreen emitter. Check the specular signal, material roughness and native-only controls.",
+    "manual": true,
+    "timeoutMs": 300000
+}

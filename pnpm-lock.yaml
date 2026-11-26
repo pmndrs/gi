@@ -89,6 +89,10 @@ importers:
   packages/bvh: {}
 
   packages/ddgi:
+    dependencies:
+      '@pmndrs/rc-bvh':
+        specifier: npm:@pmndrs/bvh@0.1.0
+        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
     devDependencies:
       '@pmndrs/ddgi-core':
         specifier: workspace:*
@@ -117,6 +121,12 @@ importers:
       '@pmndrs/bvh':
         specifier: workspace:*
         version: link:../bvh
+      '@pmndrs/raytracer':
+        specifier: 0.1.0
+        version: 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
+      '@pmndrs/rc-bvh':
+        specifier: npm:@pmndrs/bvh@0.1.0
+        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
 
   packages/ddgi-three:
     dependencies:
@@ -557,6 +567,28 @@ packages:
     engines: {node: ^22.20 || ^24.12 || >=25}
     cpu: [x64]
     os: [linux]
+
+  '@pmndrs/bvh@0.1.0':
+    resolution: {integrity: sha512-5pVuSDX4Ud7WMprV197XtGwlMZDwZCVI/SYzMEihg7CZiiUOqH8NcvqQN85aPNRXmTu7taNTLZDNRPxNQF+CCg==}
+    peerDependencies:
+      '@babylonjs/core': '>=9.35.0 <10.0.0'
+      three: '>=0.187.0 <0.188.0'
+    peerDependenciesMeta:
+      '@babylonjs/core':
+        optional: true
+      three:
+        optional: true
+
+  '@pmndrs/downsampler@0.1.0':
+    resolution: {integrity: sha512-PQf5QLUEy5qRl+2e0gHVfdMcfinqHjG/HJKO4xk+EJrOgeucNzUesGuSHq/eyAy8s22hvf/4oQPV3fntM7WKSw==}
+    peerDependencies:
+      three: '>=0.170.0'
+    peerDependenciesMeta:
+      three:
+        optional: true
+
+  '@pmndrs/raytracer@0.1.0':
+    resolution: {integrity: sha512-MqSddR0bsbwlZ58/9+yeuLO8LQADocEXsy4jobnh1amEfImPHiB9WjERGoS+mUzL/jlJg7vyE3O3N2jaJkHYBA==}
 
   '@pmndrs/upscaler@0.5.0':
     resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
@@ -1664,6 +1696,23 @@ snapshots:
 
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
+
+  '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
+    optionalDependencies:
+      '@babylonjs/core': 9.33.2
+      three: 0.187.0
+
+  '@pmndrs/downsampler@0.1.0(three@0.187.0)':
+    optionalDependencies:
+      three: 0.187.0
+
+  '@pmndrs/raytracer@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
+    dependencies:
+      '@pmndrs/bvh': 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
+      '@pmndrs/downsampler': 0.1.0(three@0.187.0)
+    transitivePeerDependencies:
+      - '@babylonjs/core'
+      - three
 
   '@pmndrs/upscaler@0.5.0(three@0.187.0)':
     dependencies:
