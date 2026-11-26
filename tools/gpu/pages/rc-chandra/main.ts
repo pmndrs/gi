@@ -1,11 +1,27 @@
 import * as THREE from 'three/webgpu';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { createNativeAdapter } from '../../../../examples/11-radiance-cascades/native-adapter.ts';
+import { add, normalWorld, positionWorld } from 'three/tsl';
+import { createNativeAdapter, type NativeAdapterOverrides } from '../../../../examples/11-radiance-cascades/native-adapter.ts';
 import { RealtimeRadianceCascades } from '../../../../examples/11-radiance-cascades/RealtimeRadianceCascades.js';
 import { assert, drainDevice, reportGpuTest, summarizeAdapter, watchDevice } from '../../client.ts';
 import type { AdapterSummary } from '../../contract.ts';
 
-const width = 640, height = 360, frames = 128;
+// Diagnostic knobs for issue #47. Unset, the page runs the matched capture
+// unchanged. Each one changes a single native solver setting.
+const env = import.meta.env;
+const overrides: NativeAdapterOverrides = {};
+if (env.VITE_RC_CHANDRA_GRID) overrides.grid = env.VITE_RC_CHANDRA_GRID.split(',').map(Number) as [number, number, number];
+if (env.VITE_RC_CHANDRA_FIRST_INTERVAL) overrides.firstInterval = Number(env.VITE_RC_CHANDRA_FIRST_INTERVAL);
+if (env.VITE_RC_CHANDRA_MAX_DISTANCE) overrides.maxDistance = Number(env.VITE_RC_CHANDRA_MAX_DISTANCE);
+if (env.VITE_RC_CHANDRA_HISTORY) overrides.history = Number(env.VITE_RC_CHANDRA_HISTORY);
+if (env.VITE_RC_CHANDRA_NORMAL_BIAS) overrides.normalBias = Number(env.VITE_RC_CHANDRA_NORMAL_BIAS);
+const nativeStride = env.VITE_RC_CHANDRA_STRIDE === '1' ? 1 : 2;
+/** Skip the Three.js S5 arm, which a native-only sweep does not need. */
+const nativeOnly = env.VITE_RC_CHANDRA_NATIVE_ONLY === '1';
+/** Return the native diffuse image and the primary world position and normal as base64 float32 for offline analysis. */
+const dumpImages = env.VITE_RC_CHANDRA_DUMP === '1';
+
+const width = 640, height = 360, frames = Number(env.VITE_RC_CHANDRA_FRAMES ?? 128);
 const sceneScale = 0.0038; // Fits the entire model inside the bounded native gallery volume.
 const inputBase = '/rc-chandra-input';
 const expectedObj = 'ec7b65b793692db211e3011d71f8b02f3d3b57ec5c7da90e5805360ce44f452b';
@@ -144,7 +160,7 @@ try {
             maxProbes: 4096, blendingRadius: 2, orientations: false, rayStride: 2, secondary: false, qualityDecay: 0.94,
             quality: 1, adaptiveQuality: false, velocity: false
         }) : null;
-        const glossy = reference ? null : await createNativeAdapter(renderer, scene, 2, [], 'glossy');
+        const glossy = reference ? null : await createNativeAdapter(renderer, scene, nativeStride, [], 'glossy', overrides);
         const rc = reference ?? glossy!;
         try {
             data.stage = arm;
@@ -168,24 +184,62 @@ try {
             rc.dispose();
         }
     }
+    // World position and normal of each primary hit, from the same camera and geometry the solver sees.
+    // The material output clamps negative values, so each attribute is written as value + offset.
+    async function readSurface(node: typeof positionWorld, offset: number) {
+        const surfaceTarget = new THREE.RenderTarget(width, height, { type: THREE.FloatType });
+        const material = new THREE.MeshBasicNodeMaterial({ side: THREE.DoubleSide });
+        material.colorNode = add(node, offset);
+        material.toneMapped = false;
+        scene.overrideMaterial = material;
+        try {
+            renderer.setRenderTarget(surfaceTarget);
+            renderer.render(scene, camera);
+            renderer.setRenderTarget(null);
+            const raw = await renderer.readRenderTargetPixelsAsync(surfaceTarget, 0, 0, width, height);
+            const rgba = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+            const rgb = new Float32Array(width * height * 3);
+            // Pixels with no geometry keep the cleared zero and decode to -offset.
+            for (let i = 0; i < rgb.length; i++) rgb[i] = rgba[4 * Math.floor(i / 3) + i % 3] - offset;
+            return rgb;
+        } finally {
+            scene.overrideMaterial = null;
+            material.dispose();
+            surfaceTarget.dispose();
+        }
+    }
+    function base64(image: Float32Array) {
+        const bytes = new Uint8Array(image.buffer, image.byteOffset, image.byteLength);
+        let text = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return btoa(text);
+    }
+    data.nativeOptions = { stride: nativeStride, frames, ...overrides };
     const native = await render('webgpu');
-    const three = await render('three');
-    const directDifference = compare(native.direct, three.direct);
-    data.directDifference = directDifference;
-    assert(directDifference.meanAbsoluteError < 0.001, 'paired WebGPU primary emission disagrees');
     show('GI WebGPU · diffuse', native.indirect);
-    show('Three.js S5 · diffuse', three.indirect);
-    Object.assign(data, {
-        width, height, frames, groups, triangles, objSha256: expectedObj,
-        nativeMean: stats(native.indirect), threeMean: stats(three.indirect), nativeVsThree: compare(native.indirect, three.indirect), directDifference
-    });
+    Object.assign(data, { width, height, frames, groups, triangles, objSha256: expectedObj, nativeMean: stats(native.indirect) });
+    if (dumpImages) {
+        data.dump = {
+            nativeDiffuse: base64(native.indirect),
+            position: base64(await readSurface(positionWorld, 64)),
+            normal: base64(await readSurface(normalWorld, 2)),
+        };
+    }
+    const three = nativeOnly ? null : await render('three');
+    if (three) {
+        const directDifference = compare(native.direct, three.direct);
+        data.directDifference = directDifference;
+        assert(directDifference.meanAbsoluteError < 0.001, 'paired WebGPU primary emission disagrees');
+        show('Three.js S5 · diffuse', three.indirect);
+        Object.assign(data, { threeMean: stats(three.indirect), nativeVsThree: compare(native.indirect, three.indirect) });
+    }
     const original = new Float32Array(await (await fetch(inputBase + '/diffuse.f32')).arrayBuffer());
     assert(original.length === width * height * 3, 'Chandra capture must be top-down 640×360 RGB float32');
     const mean = stats(original);
     assert(mean.some(v => v > 0.001), 'no upstream diffuse signal');
     data.chandraMean = mean;
     data.nativeVsChandra = compare(native.indirect, original);
-    data.threeVsChandra = compare(three.indirect, original);
+    if (three) data.threeVsChandra = compare(three.indirect, original);
     show('Chandra · upstream', original);
     const reflected = new Float32Array(await (await fetch(inputBase + '/specular.f32')).arrayBuffer());
     assert(reflected.length === width * height * 3, 'Chandra specular capture size mismatch');
