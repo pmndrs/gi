@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-27 · TU.1 · `low` on the iPad (#13) · lead (main session, Opus 5.5)
+Did: no code changes. Served the GPU pages from the Mac over HTTPS on the Wi-Fi (`tools/gpu/serve-lan.ts`, `VITE_DDGI_PRESET=low`). A throwaway relay page, not committed, ran each page in an iframe and posted its `__gpuTestReport` back to the Mac. The viewer was served the same way, and Dennis read its overlay on the iPad.
+Verified (iPad, Safari 26.3, Apple GPU, at `8772d2c`), `low` throughout: `ddgi-furnace` passed (E/π 0.4991, mean error 0.19%). `ddgi-leak` passed (two-room 0.85%, thin wall 3.2%, closed door 0.10%). `platform-recompiles` passed (0). `ddgi-low-warmup` passed. All four passed in two separate runs. The viewer on two-room was lit, the dark room showed only the expected glow at the doorway, there were 0 recompiles, and frames took about 23 ms.
+Not verified: the iPad model; Safari reports a Mac user agent and "apple" for every GPU field. Sponza and Bistro in the viewer, because this checkout lacks the downloaded models. Timing beyond the warm-up, which stays deferred. Safari's `performance.now()` steps in whole milliseconds, so the frame times are coarse.
+Numbers: warm-up on two-room refined to 25,194 probes (`VITE_WARMUP_SPACING_DIVISOR=3`, as on the Intel) at `low`'s 1,024 probes a frame: 393 frames, 3.1 s, median 8 ms, p90 10 ms, worst 19 ms (first frame), no device loss. The Intel UHD took 5.9 s at a 14.4 ms median, so 1,024 stands. The thin-wall leak is 3.1% on the M5 Pro under `low` too, so it looks like the preset rather than the iPad (NOTES, DDGI). Rows in `bench/results/checks.csv`.
+Next: TU.1 is in review. #9 (the Mac preset rule) still needs Dennis's call.
+
 ## 2026-11-26 · TU.3 · Safari on the M5 Pro (#14) · lead (main session, Opus 5.5)
 Did: ran #14's pages in Safari 26.6.2 through `safaridriver`, reading each page's `window.__gpuTestReport` as the Chrome runner does. All seven failed at first. Fixes:
 - `platform/shade/light-grid.ts` and `techniques/ddgi/wgsl/schedule.ts`: Safari lacks `workgroupUniformLoad`'s atomic overload, so every GI kernel failed to compile. One thread now copies the flag into a plain `u32`, which the uniform load reads.
