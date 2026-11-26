@@ -112,8 +112,9 @@
  *    planes, each direction is the CPU's within half precision, its BRDF /
  *    pdf is ρ and its pdf cos / π. The update list holds each tile once
  *    (register D32).
- * 9. **The one-frame lag** (multibounce turned on after two frames with it
- *    off, which empties the cache and its indirect scratch; then one frame,
+ * 9. **The one-frame lag** (prepared with multibounce off, then turned on
+ *    with a new `prepare`, which makes its arrays and starts the cache
+ *    empty, its indirect scratch included (register D67); then one frame,
  *    then a second): after the first frame no ceiling cell has an indirect
  *    sample and the ceiling rays under 2 m tiles read 0, while each ceiling
  *    cell's indirect scratch holds one count per second-bounce entry whose
@@ -121,7 +122,9 @@
  *    hit, 0 a miss); after the second frame those rays read 0.3183.
  * 10. **Multibounce off** (40 frames): no second-bounce entry, no shadow ray
  *    and no resolve entry (Capsaicin resolves its shadow-ray list without
- *    multibounce, register D35), and every probe ray reads 0.
+ *    multibounce, register D35), and every probe ray reads 0. Prepared with
+ *    it off, the cache made no indirect values or scratch (register D67):
+ *    its cell values and update scratch are the direct arrays' size.
  * 11. **The bypass additions, predicted** (section 6's corner with the
  *    slab, multibounce on, 40 frames): every probe ray reads its prediction,
  *    a self-bypassed ray its own sun sample (0 in the slab's shade) plus its
@@ -628,7 +631,9 @@ async function readTiles(device: GPUDevice, cache: HashGridCache, tiles: readonl
     const tileBytes = capacity.numCellsPerTile * 8;
     const staging = device.createBuffer({ label: 'world-cache tiles', size: Math.max(4, tiles.length * tileBytes), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'world-cache tiles' });
-    const valueBase = (indirect ? cache.layout.cellValues.valueIndirectBuffer : cache.layout.cellValues.valueBuffer) * 8;
+    const indirectBase = cache.layout.cellValues.valueIndirectBuffer;
+    if (indirect && indirectBase === null) throw new Error('the world cache was prepared without multibounce: it has no indirect values (register D67)');
+    const valueBase = (indirect ? (indirectBase as number) : cache.layout.cellValues.valueBuffer) * 8;
     tiles.forEach((tile, index) => encoder.copyBufferToBuffer(cache.buffers.cellValues, valueBase + tile * tileBytes, staging, index * tileBytes, tileBytes));
     device.queue.submit([encoder.finish()]);
     const words = new Uint32Array(await readRange(device, staging, 0, tiles.length * tileBytes));
@@ -1790,8 +1795,12 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
     const capacity = cache.capacity;
     const tileOf = (cell: number): number => Math.floor(cell / capacity.numCellsPerTile);
 
-    // Started with multibounce off: turning it on empties the cache and its indirect scratch.
+    // Started with multibounce off, prepared without its arrays: turning it on takes a new prepare
+    // (register D67), which makes them and starts the cache empty, the indirect scratch included.
+    if (cache.preparedWithMultibounce !== false) fail('the scenario should start prepared without multibounce');
     scenario.technique.settings.useMultibounce = true;
+    await scenario.platform.prepare();
+    if (cache.preparedWithMultibounce !== true) fail('a prepare with useMultibounce on made no indirect arrays');
     await runFrames(device, scenario, 1);
     const first = await readFrameState(device, scenario);
     if (first.multibounceCell.length === 0) fail('no second-bounce entry in the first frame');
@@ -1820,7 +1829,9 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
     const cells = [...expectedCounts.keys()];
     const staging = device.createBuffer({ label: 'world-cache indirect scratch', size: Math.max(16, cells.length * 16), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'world-cache indirect scratch' });
-    const scratchBase = cache.layout.updateScratch.updateCellValueIndirectBuffer * 4;
+    const indirectScratch = cache.layout.updateScratch.updateCellValueIndirectBuffer;
+    if (indirectScratch === null) throw new Error('the world cache was prepared without multibounce: it has no indirect scratch (register D67)');
+    const scratchBase = indirectScratch * 4;
     cells.forEach((cell, index) => encoder.copyBufferToBuffer(cache.buffers.updateScratch, scratchBase + cell * 16, staging, index * 16, 16));
     device.queue.submit([encoder.finish()]);
     const scratch = new Uint32Array(await readRange(device, staging, 0, cells.length * 16));
@@ -1915,12 +1926,29 @@ async function checkMultibounceOff(device: GPUDevice, scenario: Scenario): Promi
         if (Math.max(state.radiance[index * 4], state.radiance[index * 4 + 1], state.radiance[index * 4 + 2]) > 0) raysLit++;
     });
     if (raysLit > 0) fail(`${raysLit} probe rays read light: there is none without the second bounce`);
-    const tiles = [...new Set(Array.from(state.visibilityCell, (cell) => Math.floor(cell / cache.capacity.numCellsPerTile)))];
-    const indirectValues = await readTiles(device, cache, tiles, true);
-    let indirectSamples = 0;
-    for (let index = 3; index < indirectValues.length; index += 4) if (indirectValues[index] > 0) indirectSamples++;
-    if (indirectSamples > 0) fail(`${indirectSamples} ceiling cells have indirect samples`);
-    return { failures, data: { hits: hits.length, secondBounceEntries: state.multibounceCell.length, shadowRays: state.visibilityRay.length, resolveEntries: state.resolve.length, raysLit, indirectSamples } };
+    // Prepared with multibounce off, the cache holds no indirect values or scratch (register D67): the
+    // direct arrays alone, and the second-bounce passes weren't made.
+    const { layout, capacity } = cache;
+    const multibounceArrays = cache.stats['multibounce arrays'];
+    if (cache.preparedWithMultibounce !== false || multibounceArrays !== 0) fail(`prepared with multibounce off, the cache says it has its arrays (preparedWithMultibounce ${String(cache.preparedWithMultibounce)}, stat ${multibounceArrays})`);
+    if (layout.cellValues.valueIndirectBuffer !== null || layout.updateScratch.updateCellValueIndirectBuffer !== null) fail('the layout has indirect offsets with multibounce off');
+    const directValueBytes = capacity.numCells * 8;
+    const directScratchBytes = capacity.numCells * 16;
+    if (cache.buffers.cellValues.size !== directValueBytes) fail(`the cell values are ${cache.buffers.cellValues.size} bytes, not the direct values' ${directValueBytes}`);
+    if (cache.buffers.updateScratch.size !== directScratchBytes) fail(`the update scratch is ${cache.buffers.updateScratch.size} bytes, not the direct scratch's ${directScratchBytes}`);
+    return {
+        failures,
+        data: {
+            hits: hits.length,
+            secondBounceEntries: state.multibounceCell.length,
+            shadowRays: state.visibilityRay.length,
+            resolveEntries: state.resolve.length,
+            raysLit,
+            cellValuesBytes: cache.buffers.cellValues.size,
+            updateScratchBytes: cache.buffers.updateScratch.size,
+            techniqueMemoryBytes: scenario.technique.memoryBytes,
+        },
+    };
 }
 
 // ---- Section 11: the bypass additions, predicted where they fire -----------------------------------

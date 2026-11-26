@@ -79,7 +79,12 @@ export interface HashGridCacheOptions {
      * `UpdateMultibounceCells` run and the indirect values are read; without
      * it the cache is GI-1.0's single bounce (register D35). Changing it
      * empties the cache, as Capsaicin's `needs_hash_grid_clear` does
-     * (gi1.cpp:1740-1745).
+     * (gi1.cpp:1740-1745). Like Capsaicin's `USE_MULTI_BOUNCE` define it also
+     * sizes the cache at `prepare` (register D67): prepared without it, the
+     * indirect values and their update scratch (535 MB at the default
+     * capacity) and the three second-bounce kernels aren't made, so turning
+     * it on takes effect at the next `prepare`; turning it off takes effect
+     * at once and frees the memory at the next `prepare`.
      */
     useMultibounce: boolean;
     /** `gi1_hash_grid_cache_discard_multibounce_ray_probability` (gi1.h:64, default 0.7): the share of first-bounce hits that trace no second-bounce ray. */
@@ -291,6 +296,13 @@ export const CELL_SHADING_BINS = CELL_SHADING_CLASSES * CELL_SHADING_SUB_BINS;
 
 /** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
 export interface HashGridCacheBufferLayout {
+    /**
+     * Whether the cache holds GI-1.2's indirect values and their update
+     * scratch (`useMultibounce` at `prepare`, Capsaicin's `USE_MULTI_BOUNCE`;
+     * register D67). Without them the indirect offsets are null and the
+     * kernels are built without the code that reads them.
+     */
+    readonly multibounce: boolean;
     /** Tile words: counters, then hash, decay, packed tile index 0 and 1, `numTiles` words each. */
     readonly tileWords: {
         readonly hashBuffer: number;
@@ -301,16 +313,16 @@ export interface HashGridCacheBufferLayout {
         readonly updateListedTileBuffer: number;
         readonly bytes: number;
     };
-    /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells`. */
+    /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells` (null without multibounce). */
     readonly cellValues: {
         readonly valueBuffer: number;
-        readonly valueIndirectBuffer: number;
+        readonly valueIndirectBuffer: number | null;
         readonly bytes: number;
     };
-    /** Update scratch, in words: `UpdateCellValueBuffer` at 0, `UpdateCellValueIndirectBuffer` at `4 × numCells`. */
+    /** Update scratch, in words: `UpdateCellValueBuffer` at 0, `UpdateCellValueIndirectBuffer` at `4 × numCells` (null without multibounce). */
     readonly updateScratch: {
         readonly updateCellValueBuffer: number;
-        readonly updateCellValueIndirectBuffer: number;
+        readonly updateCellValueIndirectBuffer: number | null;
         readonly bytes: number;
     };
     /** All three. */
@@ -322,7 +334,12 @@ export const CELL_VALUE_BYTES = 8;
 /** Words of a cell's update scratch: quantised rgb and a sample count (`HashGridCache_QuantizeRadiance`, hash_grid_cache.hlsl:301-306; `num_cells << 2`, gi1.cpp:527). */
 export const UPDATE_SCRATCH_WORDS_PER_CELL = 4;
 
-export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): HashGridCacheBufferLayout {
+/**
+ * The packed buffers for a capacity. `multibounce` false leaves out the
+ * indirect values and the indirect update scratch, as Capsaicin doesn't make
+ * them without `gi1_use_multibounce` (gi1.cpp:497-510, 535-552; register D67).
+ */
+export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity, multibounce: boolean): HashGridCacheBufferLayout {
     const { numTiles, numCells } = capacity;
     const hashBuffer = COUNTER_WORDS;
     const decayTileBuffer = hashBuffer + numTiles;
@@ -330,13 +347,16 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): Hash
     const packedTileIndexBuffer1 = packedTileIndexBuffer0 + numTiles;
     const updateListedTileBuffer = packedTileIndexBuffer1 + numTiles;
     const tileWordsBytes = (updateListedTileBuffer + numTiles) * WORD_BYTES;
-    const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
+    // The direct array, then (with multibounce) the indirect one right after it, in each buffer.
+    const arrays = multibounce ? 2 : 1;
+    const cellValuesBytes = arrays * numCells * CELL_VALUE_BYTES;
     const scratchWordsPerArray = UPDATE_SCRATCH_WORDS_PER_CELL * numCells;
-    const updateScratchBytes = 2 * scratchWordsPerArray * WORD_BYTES;
+    const updateScratchBytes = arrays * scratchWordsPerArray * WORD_BYTES;
     return {
+        multibounce,
         tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, bytes: tileWordsBytes },
-        cellValues: { valueBuffer: 0, valueIndirectBuffer: numCells, bytes: cellValuesBytes },
-        updateScratch: { updateCellValueBuffer: 0, updateCellValueIndirectBuffer: scratchWordsPerArray, bytes: updateScratchBytes },
+        cellValues: { valueBuffer: 0, valueIndirectBuffer: multibounce ? numCells : null, bytes: cellValuesBytes },
+        updateScratch: { updateCellValueBuffer: 0, updateCellValueIndirectBuffer: multibounce ? scratchWordsPerArray : null, bytes: updateScratchBytes },
         totalBytes: tileWordsBytes + cellValuesBytes + updateScratchBytes,
     };
 }

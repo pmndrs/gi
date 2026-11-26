@@ -726,7 +726,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // It extends the GI-1.2 grid only: SHaRC's paths already end in their own cache (register E3).
         // The network's package is an optional sibling, loaded here only (mlp-loader.ts): missing, at
         // another commit than its pin, or too big for the device, the tail is off with one warning.
-        if (this.settings.neuralCache === 'tail' && cache instanceof HashGridCache) {
+        // It answers GI-1.2's second hits and reads the cells' indirect values, so it needs the grid
+        // prepared with multibounce (the indirect arrays exist only then, register D67).
+        if (this.settings.neuralCache === 'tail' && cache instanceof HashGridCache && cache.preparedWithMultibounce === false) {
+            context.warn("@pmndrs/gi: the radiance cache's neuralCache 'tail' extends GI-1.2's second bounce, and the radiance cache was prepared with useMultibounce off, so it is off until a prepare with useMultibounce on");
+        } else if (this.settings.neuralCache === 'tail' && cache instanceof HashGridCache) {
             const tail = new NeuralTail(this.settings.neural);
             try {
                 await tail.prepare(context, cache, await loadMlp());

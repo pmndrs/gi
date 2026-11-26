@@ -201,6 +201,18 @@ fn unpackHalf4(packed_value: vec2u) -> vec4f {
 `;
 
 /**
+ * Code that reads or writes GI-1.2's indirect values or their update
+ * scratch (Capsaicin's `USE_MULTI_BOUNCE` lines): kept only in a cache
+ * prepared with `useMultibounce`, which has those arrays (register D67).
+ * Without them, a kernel is built without the code, as Capsaicin compiles
+ * without the define. In a cache that has them, the code still checks the
+ * `use_multibounce` constant, so turning it off works between prepares.
+ */
+export function multibounceWgsl(layout: HashGridCacheBufferLayout, code: string): string {
+    return layout.multibounce ? code : '';
+}
+
+/**
  * The shared module, with the hash grid's bindings in `group` (entries
  * {@link HASH_GRID_CACHE_GROUP_ENTRIES}). Every hash-grid pass includes it;
  * it declares no entry point.
@@ -234,9 +246,12 @@ const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1
 const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
 // In the cell values (vec2u elements) and the update scratch (words).
 const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
-const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
 const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${layout.updateScratch.updateCellValueBuffer}u;
-const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${layout.updateScratch.updateCellValueIndirectBuffer}u;
+${multibounceWgsl(
+    layout,
+    `const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
+const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${layout.updateScratch.updateCellValueIndirectBuffer}u;`,
+)}
 
 ${HASH_GRID_CONSTANTS_STRUCT_WGSL}
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.constants}) var<uniform> g_HashGridCacheConstants: HashGridCacheConstants;
@@ -482,8 +497,8 @@ fn HashGridCache_TouchTile(tile_index: u32) -> u32 {
 // "If this cell is inside a new tile, we need to add the tile to the packed storage and clear its
 // cells" (gi1.comp:1020-1036 and 1798-1812, the same block in both population passes): the tile
 // joins this frame's packed list, and its finest-level values start at zero (the coarser levels
-// are rewritten by UpdateTiles). With GI-1.2's multibounce on (Capsaicin's default) the indirect
-// values are cleared too.
+// are rewritten by UpdateTiles). In a cache made with GI-1.2's multibounce (Capsaicin's default)
+// the indirect values are cleared too (register D67).
 fn HashGridCache_AddNewTile(tile_index: u32) {
     let packed_tile_index = atomicAdd(&g_HashGridCache_TileWords[HashGridCache_PackedTileCountWord()], 1u);
     atomicStore(&g_HashGridCache_TileWords[HashGridCache_PackedTileIndexWord(packed_tile_index)], tile_index);
@@ -492,7 +507,7 @@ fn HashGridCache_AddNewTile(tile_index: u32) {
     for (var cell_offset = 0u; cell_offset < g_HashGridCacheConstants.num_cells_per_tile_mip0; cell_offset++) {
         let cell_index = HashGridCache_CellIndexLinear(cell_offset, tile_index, 0u);
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = vec2u(0u, 0u);
-        g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);
+        ${multibounceWgsl(layout, 'g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = vec2u(0u, 0u);')}
     }
 }
 
@@ -595,7 +610,9 @@ fn HashGridCache_MipCellsOf(cell_index_mip0: u32) -> HashGridCache_MipCells {
     return HashGridCache_MipCells(cell_index_mip1, cell_index_mip2, cell_index_mip3);
 }
 
-// HashGridCache_FilteredRadianceIndirect (:434-463), without its debug view: start at the cell,
+${multibounceWgsl(
+    layout,
+    `// HashGridCache_FilteredRadianceIndirect (:434-463), without its debug view: start at the cell,
 // and while the value has fewer samples than the cap and a coarser level exists, take the
 // coarser level's value instead.
 fn HashGridCache_FilteredRadianceIndirect(cell_index_mip0: u32) -> vec4f {
@@ -618,7 +635,8 @@ fn HashGridCache_FilteredRadianceIndirect(cell_index_mip0: u32) -> vec4f {
     }
     return indirect_radiance;
 }
-
+`,
+)}
 // HashGridCache_FilteredRadianceDirect (:465-494), without its debug view: as above, on the
 // direct values and their cap.
 fn HashGridCache_FilteredRadianceDirect(cell_index_mip0: u32) -> vec4f {
@@ -663,10 +681,13 @@ fn worldCacheLookup(position: vec3f, normal: vec3f, direction: vec3f) -> vec4f {
     HashGridCache_TouchTile(found.tile_index);
     let direct_radiance = HashGridCache_FilteredRadianceDirect(found.cell_index);
     var radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
-    if (g_HashGridCacheConstants.use_multibounce != 0u) {  // USE_MULTI_BOUNCE
+    ${multibounceWgsl(
+        layout,
+        `if (g_HashGridCacheConstants.use_multibounce != 0u) {  // USE_MULTI_BOUNCE
         let indirect_radiance = HashGridCache_FilteredRadianceIndirect(found.cell_index);
         radiance += indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
-    }
+    }`,
+    )}
     return vec4f(radiance, 1.0);
 }
 `;
