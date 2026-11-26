@@ -113,12 +113,12 @@ The thin wall shows the coarser distance tiles' cost: its dark side gets 3.2% of
 
 **Changing presets needs a new `prepare`.** Rays and tile sizes size DDGI's buffers and atlases, as they always have, so switching a running technique to another preset means new settings and `prepare` again (or a new technique). That's how the settings work, not a recompile bug. The texture store's size is fixed for the platform's life.
 
-**`recommendPreset(adapterInfo, limits, hints?)`** says which preset to start from: `low` for integrated and mobile GPUs, `high` otherwise. It is advice only: nothing applies it behind the host's back. Browsers say little about the GPU (Chrome gives a vendor and an architecture, and usually no chip name), so its rules are guesses from what they do say, in order:
+**`recommendPreset(adapterInfo, limits, hints?)`** says which preset to start from: `low` for integrated and mobile GPUs, `medium` for a Mac that may have a base M chip, `high` otherwise. It is advice only: nothing applies it behind the host's back. Browsers say little about the GPU (Chrome gives a vendor and an architecture, and usually no chip name), so its rules are guesses from what they do say, in order:
 
 1. a software adapter, a phone or tablet (`hints.mobile`, or read from `navigator`), or a mobile GPU maker (Qualcomm, ARM, Imagination, Samsung, MediaTek): `low`;
 2. an adapter whose buffers are capped under 1 GiB: `low`;
 3. Intel: `low` unless the architecture is an Arc card's;
-4. Apple on a Mac: `high` (the Pro and Max chips are the target hardware). A description that names a base M chip gives `low`, but Chrome doesn't show the chip, so a base Mac usually gets `high`;
+4. Apple on a Mac: a description that names the chip decides (a base M chip gives `low`, a Pro, Max or Ultra `high`). Browsers don't name it, so the CPU core count stands in (`hints.cpuCores`, or `navigator.hardwareConcurrency`): more than 10 cores gives `high`, anything else `medium`. Base M chips have 8 to 10 cores and the Pro chips start at 12. Safari reports at most 8 cores, so every Mac gets `medium` there;
 5. AMD: `low` when the description names integrated Radeon graphics, otherwise `high`; NVIDIA and anything else: `high`.
 
 ## Lights and light groups
@@ -497,7 +497,7 @@ Every name `@pmndrs/gi/ddgi` exports: DDGI, the first technique on the platform.
 | `recommendPreset(adapterInfo, limits, hints?)` | Which preset to start from on this GPU. Advice only. |
 | `DDGI_PRESET_NAMES`, `isDDGIPresetName(value)` | The names, and a check that a string is one. |
 | `DDGIPreset`, `DDGIPresetName`, `DDGIPresetSettings` | A preset, its name, and the DDGI settings it sets. |
-| `PresetAdapterInfo`, `PresetAdapterLimits`, `RecommendPresetHints` | What `recommendPreset` reads: the adapter's info and limits, and optional hints (`mobile`). |
+| `PresetAdapterInfo`, `PresetAdapterLimits`, `RecommendPresetHints` | What `recommendPreset` reads: the adapter's info and limits, and optional hints (`mobile`, `cpuCores`). |
 
 ### The spherical-harmonics export
 

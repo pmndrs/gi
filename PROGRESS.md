@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-27 · #9 · Mac preset by core count · lead (main session, Opus 5.5)
+Did: `recommendPreset` (`techniques/ddgi/presets.ts`): on a Mac whose chip the browser doesn't name, more than 10 CPU cores gives `high` and anything else `medium`. The count comes from the new `hints.cpuCores`, or `navigator.hardwareConcurrency`. A named chip still decides as before. Dennis chose this rule (DECISIONS 2026-11-27). Tests in `presets.test.ts` use what Chrome and Safari reported on the M5 Pro. Updated `docs/api/platform.md`.
+Verified (Apple M5 Pro, macOS 26.6.2): the real function with each browser's real adapter. Chrome 158 headless (18 cores, empty description) gives `high`. Safari 26.6.2 (8 cores, "apple") gives `medium`. Lint, typecheck and 1,887 unit tests pass, with 13 skipped.
+Not verified: a base M chip in Chrome (no such Mac here; the 8- and 10-core cases are unit tests only).
+Next: none. #9 closes with this.
+
 ## 2026-11-26 · SRC.2 · [#47](https://github.com/pmndrs/gi/issues/47): why WebGPU Sponza differs from Chandra · lead (main session, Opus 5.5)
 
 Did: regenerated the Chandra reference with `tools/reference/chandra/run.ps1` (237,506 rays per frame, as before) and re-ran the paired capture. Added diagnostics that leave the default capture unchanged: `createNativeAdapter` takes optional solver overrides (`examples/11-radiance-cascades/native-adapter.ts`). `tools/gpu/pages/rc-chandra/main.ts` reads `VITE_RC_CHANDRA_*` settings and can dump the WebGPU diffuse image, world position and normal. `tools/gpu/pages/rc-chandra/analyze.ts` splits the difference by pixel class, normal, distance to each emitter, position inside a probe cell and screen tile, and writes ratio maps. `run.ps1` now resolves a relative `-OutputDirectory` against the PowerShell location; before, it used the process directory and wrote into another checkout. Then I changed one solver setting per run: probe grid, first interval, ray stride, history and normal bias.
