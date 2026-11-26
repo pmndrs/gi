@@ -21,6 +21,14 @@ Rules:
 
 ---
 
+## 2026-11-26 · TU.3 · Safari on the M5 Pro (#14) · lead (main session, Opus 5.5)
+Did: ran #14's pages in Safari 26.6.2 through `safaridriver`, reading each page's `window.__gpuTestReport` as the Chrome runner does. All seven failed at first. Fixes:
+- `platform/shade/light-grid.ts` and `techniques/ddgi/wgsl/schedule.ts`: Safari lacks `workgroupUniformLoad`'s atomic overload, so every GI kernel failed to compile. One thread now copies the flag into a plain `u32`, which the uniform load reads.
+- `examples/webgpu/hello/src/renderer.ts`: Safari ignores a read-only depth attachment's contents, so hello was black. The forward pass now loads and stores depth. Details are in NOTES (WebGPU).
+Verified (Apple M5 Pro, macOS 26.6.2): in Safari 26.6.2, `ddgi-furnace`, `ddgi-leak`, `ddgi-change-still`, `platform-recompiles`, `ddgi-session-recompiles`, `trace-oracle`, `three-composite` and `examples-site` pass. The viewer showed Cornell GI with 1,728 probes and 0 recompiles. In Chrome 158 headless, the same pages plus `ddgi-direct` and the schedule pages pass. Lint, typecheck and 1,885 unit tests passed with 13 skipped.
+Not verified: the RTX and Intel after the WGSL change (same value, one extra barrier). `ddgi-light-grid-cost` and `ddgi-schedule-sponza` need the Intel Sponza asset, which this checkout lacks. Safari on the iPad is #13.
+Next: #9 has its adapter facts (NOTES): Safari hides the core count, so a core-count rule works in Chrome only.
+
 ## 2026-11-26 · SRC.1 · Apple Metal run: phase five passes · lead (main session, Opus 5.5)
 
 Did: ran [issue #43](https://github.com/pmndrs/gi/issues/43) on an Apple M5 Pro (Mac17,9, macOS 26.6.2, Chrome 158.0.8127.88, Node 24.12.0, AC power). At the pinned `75b9c67`, seven of eight correctness fixtures passed. `rc-backends` failed because every whole-frame timestamp read 0. Apple GPUs drop the timestamp of an empty pass, and a separately submitted end marker runs beside the frame instead of after it. Fixed in `examples/11-radiance-cascades/measurement.ts` (`d8b9776`): each marker dispatches one workgroup, and the end marker copies and reads one canvas texel first. Details are in [NOTES](docs/NOTES.md#webgpu).
