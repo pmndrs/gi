@@ -22,9 +22,8 @@ export interface TestSiteServer {
 /**
  * Sibling libraries from a local clone for development (root package.json
  * `linkedSiblings`): a required one through its `link:` dependency in
- * node_modules (the radiance cache's GI denoiser, RC4.3), an optional one
- * through `optionalSiblingsPlugin` (`@pathtracer/mlp` for the neural tail,
- * P6.4). They live outside this repo, so vite serves their real folders only
+ * node_modules (none at the moment), an optional one through
+ * `optionalSiblingsPlugin` (`@pathtracer/mlp` for the neural tail, P6.4). They live outside this repo, so vite serves their real folders only
  * when they are listed in `server.fs.allow`.
  */
 const LINKED_SIBLINGS = [

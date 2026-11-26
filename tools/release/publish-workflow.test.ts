@@ -448,9 +448,9 @@ describe('ci.yml', () => {
     test('runs the checks in order, each a script the repository has', () => {
         expect(runs).toEqual([
             'npm install -g npm@^11.5.1',
-            // Clones the linked siblings (root package.json `linkedSiblings`). Goes away once
-            // `Gi1Denoiser` is published in `denoiser` on npm (pmndrs/denoiser#33) and gi
-            // depends on that release instead of a clone.
+            // Clones the linked siblings (root package.json `linkedSiblings`): now only the
+            // optional `@pathtracer/mlp`, so CI also runs the radiance cache's neural tail.
+            // Goes away when that is on npm too.
             'corepack enable && node tools/linked-siblings.ts --fetch',
             'pnpm install --frozen-lockfile',
             'pnpm lint',
