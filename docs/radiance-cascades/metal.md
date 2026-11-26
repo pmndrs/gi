@@ -2,12 +2,14 @@
 
 Run the existing split radiance cascade fixtures on an Apple GPU with a recent Chrome, Node 24 and pnpm 10.23.0. The Windows evidence uses NVIDIA hardware. An Apple measurement comes from the output directory of a completed Mac run.
 
+The recorded Apple run used an M5 Pro at `d8b9776`, and its results are on [issue #43](https://github.com/pmndrs/gi/issues/43). The pinned test branch at `75b9c67` predates the frame-timing fix. On Apple GPUs, `rc-backends` fails there with "three returned no whole-frame GPU timestamps", so run from the RC branch instead. [Why](../NOTES.md#webgpu)
+
 ## Run on the Mac
 
-The [Apple Metal test issue](https://github.com/pmndrs/gi/issues/43) tracks the exact revision, example checks and results for PR #42. To use its dedicated branch, start from a fresh parent directory with Git, Corepack, Node 24 and Chrome installed.
+The [Apple Metal test issue](https://github.com/pmndrs/gi/issues/43) has the example checks and the recorded results for PR #42. Start from a fresh parent directory with Git, Corepack, Node 24 and Chrome installed.
 
 ```sh
-git clone --single-branch --branch codex/rc-metal-validation https://github.com/pmndrs/gi.git gi-rc-metal
+git clone --single-branch --branch codex/radiance-cascades https://github.com/pmndrs/gi.git gi-rc-metal
 cd gi-rc-metal
 node tools/linked-siblings.ts --fetch
 corepack pnpm install --frozen-lockfile
