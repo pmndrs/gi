@@ -644,6 +644,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 ## Split Radiance Cascades
 
 - Chandra at `9af00e8` includes a directional specular query in the interactive renderer. Its separate `render` CLI stops after loading the scene. The [headless capture](../tools/reference/chandra/capture.rs) uses upstream kernels for a repeatable Sponza comparison.
+- **Native Split RC's error against Chandra on Sponza follows probe spacing, not rays, history or interval length** (#47, RTX 3060 Laptop). At 0.5-unit world cells, ordinary surfaces match Chandra's mean within 0.4%, but low-frequency local differences of ~20% remain over 40-pixel blocks. Halving the cell size cuts that to 13%, and doubling it gives 40%. A concave emitter that lights itself loses near-field light to the cell average (71% of Chandra at 0.5-unit cells). Four times the rays and longer history change nothing. Diagnostics: `VITE_RC_CHANDRA_*` settings on the comparison page and `tools/gpu/pages/rc-chandra/analyze.ts`. Source: PROGRESS 2026-11-26.
+- **Gallery reflection timing at normal 60 Hz cadence is not a cost** on the RTX 3060 Laptop. Below 70% load the SM clock moves between 210 and ~1,500 MHz within a pair, and on/off differences ranged from −2.2 to +2.7 ms with either frame-end marker. Use the uncapped run. Source: #46, PROGRESS 2026-11-26.
 - The native WebGPU rough-specular output is incident radiance and observed support. The material adapter applies Fresnel. Opaque near hits retain the broad near-bin lobe. Sparse observations can also cause a fallback to that lobe. The narrower query can recover angular detail from distant intervals when the near interval transmits. [Implementation](../packages/ddgi-core/src/techniques/radiance-cascades/specular.ts)
 
 
