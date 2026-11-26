@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-27 · Split RC flicker in the native gallery · lead (main session, Opus 5.5)
+Did: Dennis saw the native solver flicker where the Three.js one is steady. Measured a still view (`camera=receiver&cue=amber`) frame by frame on the live site: native changed 11× more per frame than Three.js. Read the solver's cell irradiance each frame: cells jumped 20–60% in single frames because a bin averages only ~15 rays at history 0.8 (median 16 near, 8 far). Raised the default `history` to 0.94 in `packages/ddgi-core/src/techniques/radiance-cascades/native.ts` (DECISIONS 2026-11-27).
+Verified (Apple M5 Pro, macOS 26.6.2, Chrome 158, metal-3): the nine RC pages pass (`rc-transport`, `rc-native-core`, `rc-native-reflections`, `rc-door-response`, `rc-backends`, `rc-reconstruction`, `rc-rail`, `rc-rough-motion`, `rc-polished-quality`). Typecheck and the RC unit tests pass.
+Not verified: Windows (RTX, Intel), the timing pairs (the change is one uniform value, no extra work), and the gallery under the moving rail camera, where flicker can't be measured with a still frame.
+Numbers: lit gallery with 1.5× upscaling, still camera, 90 frames, 0–255 luma: mean frame-to-frame change 0.331 → 0.083, pixels with std > 2 11.1% → 2.4%; Three.js 0.042 and 0.1%. Indirect only, no TAA: 0.60 → 0.18 (Three.js 0.052). Shutter T90 41 frames after closing, 36 after reopening (was 2 and 12; Three.js 57 and 49). Polished floor against full-resolution TAA: 1.48/255 at 1.5×, 1.94 at 2× (Metal run at `d8b9776`: 2.14 and 2.63).
+Next: what flicker remains sits in the alcove that holds the lamp. Lower would need more rays per bin or finer cells near emitters (see SRC.2's probe-spacing finding). The native gallery is also darker than Three.js (mean luma 57 vs 85 here), a separate question.
+
 ## 2026-11-27 · #9 · Mac preset by core count · lead (main session, Opus 5.5)
 Did: `recommendPreset` (`techniques/ddgi/presets.ts`): on a Mac whose chip the browser doesn't name, more than 10 CPU cores gives `high` and anything else `medium`. The count comes from the new `hints.cpuCores`, or `navigator.hardwareConcurrency`. A named chip still decides as before. Dennis chose this rule (DECISIONS 2026-11-27). Tests in `presets.test.ts` use what Chrome and Safari reported on the M5 Pro. Updated `docs/api/platform.md`.
 Verified (Apple M5 Pro, macOS 26.6.2): the real function with each browser's real adapter. Chrome 158 headless (18 cores, empty description) gives `high`. Safari 26.6.2 (8 cores, "apple") gives `medium`. Lint, typecheck and 1,887 unit tests pass, with 13 skipped.
