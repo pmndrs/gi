@@ -15,7 +15,8 @@ import { parseRunnerArgs, UsageError, USAGE, type RunnerOptions } from './args.t
 import { EXIT_CODE_SIGINT as EXIT_CODE_INTERRUPTED, installShutdownHandlers, registerCleanup, shutdownSignal } from './cleanup.ts';
 import { type AdapterSummary, type RunSummary } from './contract.ts';
 import { matchesExpectation } from './evaluate.ts';
-import { discoverPages, selectPages } from './pages.ts';
+import { discoverPages, selectPages, withOptionalSiblings } from './pages.ts';
+import { optionalSiblings } from '../optional-siblings.ts';
 import { BrowserSession, WebGpuUnavailableError, WrongAdapterError, type PageResult } from './session.ts';
 import { SITE_ROOT, startTestSite, type TestSiteServer } from './server.ts';
 import { summarizePage } from './summary.ts';
@@ -130,7 +131,11 @@ async function main(): Promise<number> {
 
     const runStart = Date.now();
     const allPages = await discoverPages(join(SITE_ROOT, 'pages'));
-    const pages = selectPages(allPages, options.filters);
+    // Pages that need an optional sibling this checkout doesn't have at its pin are left out, with a note.
+    const readySiblings = new Set(optionalSiblings().filter((sibling) => sibling.state === 'ready').map((sibling) => sibling.name));
+    const siblingCheck = withOptionalSiblings(selectPages(allPages, options.filters), readySiblings);
+    for (const { page, missing } of siblingCheck.left) console.log(`left out ${page.name}: it needs ${missing.join(', ')} (an optional sibling, not at its pin here; node tools/linked-siblings.ts)`);
+    const pages = siblingCheck.kept;
     if (pages.length === 0) {
         console.error(
             `No test page matches --filter ${options.filters.join(',')}. Pages: ${allPages.map((page) => page.name).join(', ')}`,

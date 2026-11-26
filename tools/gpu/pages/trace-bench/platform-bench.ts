@@ -16,13 +16,21 @@
 
 import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { HIT_RECORD_BYTES } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
 import type { TracerId } from './config.ts';
-import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
+import type { DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
-import { readBuffer, extractHitDistances, yieldToBrowser, type OursRayBuffers, type OursTracerRun, type TimingPlan } from './ours-bench.ts';
-import type { ModeResult, PlatformBuildResult, TraceMode } from './results.ts';
-import { megaRaysPerSecond } from './statistics.ts';
+import {
+    probeGridRun,
+    probeGridSets,
+    timeRaySets,
+    yieldToBrowser,
+    type OursRayBuffers,
+    type OursTracerRun,
+    type RaySetBuffer,
+    type RaySetRun,
+    type TimingPlan,
+} from './ours-bench.ts';
+import type { PlatformBuildResult } from './results.ts';
 
 const TRACER: TracerId = 'platform';
 
@@ -49,18 +57,24 @@ export interface PlatformRun extends OursTracerRun {
     build: PlatformBuildResult;
 }
 
+export interface PlatformSetsRun {
+    sets: RaySetRun[];
+    build: PlatformBuildResult;
+}
+
 /**
  * Describes the scene through the platform, waits for the trees, then times
- * closest and any on the shared rays. Disposes the platform before returning.
+ * each set through `rays.encodeBatch` (see `timeRaySets`). Disposes the
+ * platform before returning.
  */
-export async function runPlatformTracer(
+export async function runPlatformTracerOnSets(
     device: GPUDevice,
     timer: DispatchTimer,
     meshes: readonly BenchMeshGeometry[],
     instances: readonly BenchInstance[],
-    rays: OursRayBuffers,
+    sets: readonly RaySetBuffer[],
     plan: TimingPlan,
-): Promise<PlatformRun> {
+): Promise<PlatformSetsRun> {
     const platform = new GIPlatformImpl(device, { label: 'bench platform', rayBatches: true });
     try {
         const start = performance.now();
@@ -83,78 +97,42 @@ export async function runPlatformTracer(
         }
         await yieldToBrowser();
 
-        const closestHits = device.createBuffer({
-            label: 'platform hits',
-            size: rays.closestCount * HIT_RECORD_BYTES,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-        });
-        const modes: ModeResult[] = [];
-        const summarize = (mode: TraceMode, count: number, timing: Awaited<ReturnType<typeof measureDispatches>>): ModeResult => ({
-            tracer: TRACER,
-            mode,
-            rays: count,
-            timing,
-            timingSource: timer.source,
-            mraysPerSecond: megaRaysPerSecond(count, timing.medianMs),
-        });
-        try {
-            const closestTiming = await measureDispatches(
-                () =>
-                    timer.time((encoder, timestampWrites) =>
-                        platform.rays.encodeBatch(encoder, { mode: 'closest', rays: rays.closestRays, hits: closestHits, count: rays.closestCount }, timestampWrites),
-                    ),
-                plan.warmups,
-                plan.timed,
-            );
-            modes.push(summarize('closest', rays.closestCount, closestTiming));
-            const hitRecords = await readBuffer(device, closestHits, rays.closestCount * HIT_RECORD_BYTES);
+        const runs = await timeRaySets(device, timer, TRACER, sets, plan, (encoder, set, results, timestampWrites) =>
+            platform.rays.encodeBatch(encoder, { mode: set.mode, rays: set.rays, hits: results, count: set.count }, timestampWrites),
+        );
 
-            let blocked: Uint32Array | null = null;
-            if (rays.shadowRays && rays.shadowCount > 0) {
-                const shadowRays = rays.shadowRays;
-                const occlusion = device.createBuffer({
-                    label: 'platform occlusion',
-                    size: rays.shadowCount * 4,
-                    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-                });
-                try {
-                    const anyTiming = await measureDispatches(
-                        () =>
-                            timer.time((encoder, timestampWrites) =>
-                                platform.rays.encodeBatch(encoder, { mode: 'any', rays: shadowRays, hits: occlusion, count: rays.shadowCount }, timestampWrites),
-                            ),
-                        plan.warmups,
-                        plan.timed,
-                    );
-                    modes.push(summarize('any', rays.shadowCount, anyTiming));
-                    blocked = new Uint32Array(await readBuffer(device, occlusion, rays.shadowCount * 4));
-                } finally {
-                    occlusion.destroy();
-                }
-            }
-
-            const stats = platform.stats;
-            const acceleration = platform.rays.memory;
-            return {
-                modes,
-                hitRecords,
-                closestT: extractHitDistances(hitRecords),
-                blocked,
-                build: {
-                    describeMs,
-                    readyMs,
-                    usesWorker: platform.rays.usesWorker,
-                    bytesSceneCopy: stats.memory.sceneCopy,
-                    bytesAcceleration: stats.memory.acceleration,
-                    bytesNodes: acceleration.nodes,
-                    bytesTriangles: acceleration.triangles,
-                    bytesTopLevel: acceleration.topLevel,
-                },
-            };
-        } finally {
-            closestHits.destroy();
-        }
+        const stats = platform.stats;
+        const acceleration = platform.rays.memory;
+        return {
+            sets: runs,
+            build: {
+                describeMs,
+                readyMs,
+                usesWorker: platform.rays.usesWorker,
+                bytesSceneCopy: stats.memory.sceneCopy,
+                bytesAcceleration: stats.memory.acceleration,
+                bytesNodes: acceleration.nodes,
+                bytesTriangles: acceleration.triangles,
+                bytesTopLevel: acceleration.topLevel,
+            },
+        };
     } finally {
         platform.dispose();
     }
+}
+
+/**
+ * Describes the scene through the platform, waits for the trees, then times
+ * closest and any on the shared rays. Disposes the platform before returning.
+ */
+export async function runPlatformTracer(
+    device: GPUDevice,
+    timer: DispatchTimer,
+    meshes: readonly BenchMeshGeometry[],
+    instances: readonly BenchInstance[],
+    rays: OursRayBuffers,
+    plan: TimingPlan,
+): Promise<PlatformRun> {
+    const run = await runPlatformTracerOnSets(device, timer, meshes, instances, probeGridSets(rays), plan);
+    return { ...probeGridRun(run.sets), build: run.build };
 }

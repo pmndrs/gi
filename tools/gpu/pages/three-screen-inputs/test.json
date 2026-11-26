@@ -1,0 +1,5 @@
+{
+    "description": "RC1.1 on Sponza with curtains, bookmark 1: the three adapter fills FrameScreen from the host's MRT scene pass; a test technique reads it in encodeScreen. Handover against three's read-back, world normals, instance ids against the raycaster, velocity, a moving box, a resize, and the core's debug views (contact sheet in the screenshot). Needs the downloaded Sponza.",
+    "timeoutMs": 600000,
+    "manual": true
+}

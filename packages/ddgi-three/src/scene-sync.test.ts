@@ -152,6 +152,11 @@ class RecordingSceneApi implements SceneApi {
         this.log('destroyInstance');
         this.instances.delete(instance);
     }
+    instanceIndex(instance: InstanceHandle): number {
+        if (!this.instances.has(instance)) throw new Error('destroyed instance');
+        // Handles are unique here, so the handle itself serves as the index.
+        return instance;
+    }
     createLight(descriptor: LightDescriptor): LightHandle {
         this.log('createLight');
         const handle = this.next++;
@@ -603,6 +608,32 @@ describe('see-through materials (per triangle since M4)', () => {
 });
 
 describe('instances', () => {
+    it('lists each mirrored mesh with its instances, and counts creations and destructions (RC1.1)', () => {
+        const scene = new Scene();
+        const plain = new Mesh(new BoxGeometry(), new MeshStandardMaterial());
+        const instanced = new InstancedMesh(new BoxGeometry(), new MeshStandardMaterial(), 3);
+        scene.add(plain, instanced);
+        const before = sync.instanceVersion;
+        frame(scene);
+        const listed = new Map(sync.mirroredInstances());
+        expect(listed.get(plain)).toHaveLength(1);
+        expect(listed.get(instanced)).toHaveLength(3);
+        // Instance i of the InstancedMesh is entry i: the order the screen inputs' table relies on.
+        expect([...api.instances.keys()].slice(1)).toEqual(listed.get(instanced));
+        const afterCreate = sync.instanceVersion;
+        expect(afterCreate).not.toBe(before);
+
+        // Moves and visibility don't count; creations and destructions do.
+        plain.position.x = 4;
+        instanced.count = 2;
+        frame(scene);
+        expect(sync.instanceVersion).toBe(afterCreate);
+        plain.removeFromParent();
+        frame(scene);
+        expect(sync.instanceVersion).not.toBe(afterCreate);
+        expect(new Map(sync.mirroredInstances()).has(plain)).toBe(false);
+    });
+
     it('sends each InstancedMesh instance with its world matrix', () => {
         const scene = new Scene();
         const instanced = new InstancedMesh(new BoxGeometry(), new MeshStandardMaterial(), 3);

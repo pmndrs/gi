@@ -1,0 +1,4 @@
+{
+    "description": "RC2.1: the radiance cache's screen probes on sky-plane, cornell-box and sponza at 1280x720: spawn and compaction against the CPU's spawn rule, every ray in its hemi-octahedral cell on the normal's side, a constant white sky read within 1% in every cell; the probe atlas and mask drawn for the screenshot. Correctness only.",
+    "timeoutMs": 300000
+}

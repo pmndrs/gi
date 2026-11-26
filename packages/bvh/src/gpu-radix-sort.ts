@@ -153,7 +153,7 @@ fn sortCount(
         return;   // the whole workgroup: the index is uniform
     }
     let tile = sortTile(tileIndex);
-    let order = scanTakeOrder();
+    let order = scanTakeOrder(localIndex);
     // Counting doesn't care which thread has which key, so the loads go across the tile, side by side.
     var counts: array<u32, SCAN_WORDS>;
     for (var key = 0u; key < SORT_KEYS_PER_THREAD; key += 1u) {
@@ -182,7 +182,7 @@ fn sortScatter(
         return;
     }
     let tile = sortTile(tileIndex);
-    let order = scanTakeOrder();
+    let order = scanTakeOrder(localIndex);
     if (localIndex < SORT_BINS) {
         sortTileOffsets[localIndex] = sortOffsets[tile.offsetsBase + localIndex * tile.offsetsStride];
     }

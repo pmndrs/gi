@@ -27,8 +27,9 @@ export const MIN_BIND_GROUPS = 4;
  * along x: DDGI's blend kernel (techniques/ddgi/wgsl/blend.ts,
  * `BLEND_WORKGROUP_SIZE`) and the BVH refit's repair pass
  * (packages/bvh/src/gpu-refit.ts). Other dimensions stay at 8 or less.
- * Workgroup memory isn't listed: every kernel fits 16,384 bytes, the default
- * in both modes (all GPU pages run on default limits).
+ * Workgroup memory isn't listed here: every platform kernel fits 16,384
+ * bytes, the default in both modes; `requiredLimits` asks for the adapter's
+ * maximum anyway (below), for technique kernels sized to it.
  */
 export const KERNEL_COMPUTE_LIMITS = {
     maxComputeInvocationsPerWorkgroup: 256,
@@ -54,10 +55,17 @@ export function checkComputeLimits(limits: Pick<GPUSupportedLimits, ComputeLimit
  * Limits to request from this adapter: the largest storage binding and
  * buffer, every storage buffer per stage it offers, the most texture array
  * layers (one per texture in the texture store; the default is 256, adapters
- * give 2,048), and the compute limits the kernels need
- * (KERNEL_COMPUTE_LIMITS). Never more than the adapter has, so
- * `requestDevice` can't fail because of them; an adapter below a kernel's
- * need fails in `prepare` with a `GILimitError` instead.
+ * give 2,048), the compute limits the kernels need (KERNEL_COMPUTE_LIMITS),
+ * and the adapter's `maxColorAttachmentBytesPerSample`: a host's scene pass
+ * that writes the screen inputs (`FrameScreen`) beside its own outputs needs
+ * about 48-56 bytes per pixel, past WebGPU's default of 32 (RC1.1), and the
+ * adapter's `maxComputeWorkgroupStorageSize` (DECISIONS 2026-11-20: no WebGPU
+ * default caps; 32 KiB on our GPUs against the default 16 KiB), which kernels
+ * that tile by workgroup memory read and fit themselves to (the radiance
+ * cache's neural tail, P6.4; a device at the default still works). Never more
+ * than the adapter has, so `requestDevice` can't fail because of them; an
+ * adapter below a kernel's need fails in `prepare` with a `GILimitError`
+ * instead.
  */
 export function requiredLimits(adapter: GPUAdapter): RequiredLimits {
     const limits: RequiredLimits = {
@@ -65,6 +73,8 @@ export function requiredLimits(adapter: GPUAdapter): RequiredLimits {
         maxBufferSize: adapter.limits.maxBufferSize,
         maxStorageBuffersPerShaderStage: adapter.limits.maxStorageBuffersPerShaderStage,
         maxTextureArrayLayers: adapter.limits.maxTextureArrayLayers,
+        maxColorAttachmentBytesPerSample: adapter.limits.maxColorAttachmentBytesPerSample,
+        maxComputeWorkgroupStorageSize: adapter.limits.maxComputeWorkgroupStorageSize,
     };
     for (const name of COMPUTE_LIMIT_NAMES) limits[name] = Math.min(KERNEL_COMPUTE_LIMITS[name], adapter.limits[name]);
     return limits;
@@ -78,7 +88,10 @@ export function requiredLimits(adapter: GPUAdapter): RequiredLimits {
  * - `texture-formats-tier1`: makes `rg16float` a storage format, so DDGI's
  *   distance atlas takes half the memory (without it: `rgba16float`);
  * - `texture-compression-bc`, `-etc2`, `-astc`: the texture store reads
- *   compressed sources (`CompressedPixelData`) of the families the device has.
+ *   compressed sources (`CompressedPixelData`) of the families the device has;
+ * - `shader-f16`: half-precision math where a kernel offers it (DECISIONS
+ *   2026-11-20, feature-forward: the radiance cache's neural tail runs its
+ *   network in f16), with f32 the one declared fallback where it is missing.
  */
 export function optionalFeatures(adapter: GPUAdapter): GPUFeatureName[] {
     const wanted: GPUFeatureName[] = [
@@ -89,6 +102,7 @@ export function optionalFeatures(adapter: GPUAdapter): GPUFeatureName[] {
         'texture-compression-bc',
         'texture-compression-etc2',
         'texture-compression-astc',
+        'shader-f16',
     ];
     return wanted.filter((feature) => adapter.features.has(feature));
 }

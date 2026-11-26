@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GILimitError, GINotReadyError } from './contract/errors.ts';
-import type { FrameInput } from './contract/frame.ts';
-import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
+import type { FrameCamera, FrameInput } from './contract/frame.ts';
+import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueScreenFrame } from './contract/technique.ts';
 import type { WgslModule } from './contract/wgsl.ts';
 import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
 import { checkComputeLimits, isSupported, KERNEL_COMPUTE_LIMITS, optionalFeatures, requiredLimits } from './device-requirements.ts';
@@ -232,7 +232,16 @@ describe('device requirements', () => {
 
     it("requiredLimits asks for the adapter's own maximums, never more", () => {
         // The texture store wants every layer the adapter allows (M4): one per texture.
-        const storage = { maxStorageBufferBindingSize: 2147483644, maxBufferSize: 2147483648, maxStorageBuffersPerShaderStage: 10, maxTextureArrayLayers: 2048 };
+        // The colour-attachment bytes too: a scene pass writing the screen inputs needs more than WebGPU's default 32 (RC1.1).
+        const storage = {
+            maxStorageBufferBindingSize: 2147483644,
+            maxBufferSize: 2147483648,
+            maxStorageBuffersPerShaderStage: 10,
+            maxTextureArrayLayers: 2048,
+            maxColorAttachmentBytesPerSample: 128,
+            // Workgroup memory: the adapter's maximum (DECISIONS 2026-11-20), for kernels tiled to it.
+            maxComputeWorkgroupStorageSize: 32768,
+        };
         const compute = { maxComputeInvocationsPerWorkgroup: 1024, maxComputeWorkgroupSizeX: 1024 };
         // Compute limits: what the kernels need, not the adapter's maximum.
         expect(requiredLimits(adapter({ ...storage, ...compute }, []))).toEqual({ ...storage, ...KERNEL_COMPUTE_LIMITS });
@@ -273,7 +282,8 @@ describe('device requirements', () => {
     });
 
     it('optionalFeatures requests only what the adapter has', () => {
-        expect(optionalFeatures(adapter({}, ['timestamp-query', 'subgroups', 'shader-f16']))).toEqual(['subgroups', 'timestamp-query']);
+        expect(optionalFeatures(adapter({}, ['timestamp-query', 'subgroups', 'shader-f16']))).toEqual(['subgroups', 'timestamp-query', 'shader-f16']);
+        expect(optionalFeatures(adapter({}, ['timestamp-query', 'subgroups']))).toEqual(['subgroups', 'timestamp-query']);
         // The compression families the texture store reads (CompressedPixelData), where present.
         expect(optionalFeatures(adapter({}, ['texture-compression-bc', 'texture-compression-astc']))).toEqual(['texture-compression-bc', 'texture-compression-astc']);
         expect(optionalFeatures(adapter({}, []))).toEqual([]);
@@ -466,6 +476,75 @@ describe('the platform object', () => {
         const tool = new GIPlatformImpl(createPlatformGpu().device, { rayBatches: true });
         await tool.prepare();
         expect(tool.rays.batchesReady).toBe(true);
+    });
+
+    it('tells the host which screen channels its techniques read, and refuses a screen without them (RC1.1)', async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        // DDGI-like techniques ask for no screen: hosts need not render one.
+        platform.addTechnique(new RecordingTechnique('world space', []));
+        expect(platform.screenNeeds).toEqual({ screen: false, velocity: false, albedo: false, instance: false, lighting: false });
+
+        const screenStages: string[] = [];
+        const surfels = new RecordingTechnique('surfels', []);
+        (surfels as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { instance: true } };
+        (surfels as GITechnique).encodeScreen = (_encoder, frame) => screenStages.push(`surfels ${frame.screen.width}`);
+        const spatial = new RecordingTechnique('screen space', []);
+        (spatial as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: { albedo: true, velocity: true } };
+        platform.addTechnique(surfels);
+        platform.addTechnique(spatial);
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: true, lighting: false });
+        await platform.prepare();
+
+        const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
+        const screen = { width: 4, height: 2, depth: texture, normal: texture, normalEncoding: 'snorm-float' as const };
+        // The instance channel is missing: the technique that asked for it is named, with the channel.
+        expect(() => platform.encodeScreen(gpu.createEncoder(), screen)).toThrow(/'surfels' reads the screen's instance/);
+        // A technique with no screen stage isn't checked: only stages that run read the screen.
+        platform.encodeScreen(gpu.createEncoder(), { ...screen, instance: texture });
+        expect(screenStages).toEqual(['surfels 4']);
+
+        platform.removeTechnique(surfels);
+        expect(platform.screenNeeds).toEqual({ screen: true, velocity: true, albedo: true, instance: false, lighting: false });
+    });
+
+    it("hands a screen stage the camera, frame and time step of the frame's encode, jitter included (RC2.1, RC2.2)", async () => {
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device);
+        const seen: TechniqueScreenFrame[] = [];
+        const screenTechnique = new RecordingTechnique('screen space', []);
+        (screenTechnique as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: true };
+        (screenTechnique as GITechnique).encodeScreen = (_encoder, frame) => seen.push(frame);
+        platform.addTechnique(screenTechnique);
+        await platform.prepare();
+
+        const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
+        const screen = { width: 4, height: 2, depth: texture, normal: texture, normalEncoding: 'snorm-float' as const };
+        const camera = (x: number, jitter?: [number, number]): FrameCamera => ({
+            position: [x, 2, 3],
+            view: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -x, -2, -3, 1],
+            projection: [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, -1, -1, 0, 0, -0.1, 0],
+            near: 0.1,
+            far: 100,
+            ...(jitter ? { jitter } : {}),
+        });
+        const first = camera(1, [0.001, -0.002]);
+        platform.encode(gpu.createEncoder(), { deltaTime: 0.016, budget: { units: 0 }, camera: first });
+        platform.encodeScreen(gpu.createEncoder(), screen);
+        const second = camera(5);
+        platform.encode(gpu.createEncoder(), { deltaTime: 0.02, budget: { units: 0 }, camera: second });
+        platform.encodeScreen(gpu.createEncoder(), screen);
+
+        expect(seen).toHaveLength(2);
+        // The very camera the frame's encode got, its jitter with it, and that frame's number and time step.
+        expect(seen[0].camera).toBe(first);
+        expect(seen[0].camera.jitter).toEqual([0.001, -0.002]);
+        expect(seen[1].camera).toBe(second);
+        expect(seen[1].camera.jitter).toBeUndefined();
+        expect(seen[1].frame).toBe(seen[0].frame + 1);
+        expect([seen[0].deltaTime, seen[1].deltaTime]).toEqual([0.016, 0.02]);
+        expect(seen[1].screen).toBe(screen);
+        expect(seen[1].units).toBe(0);
     });
 
     it('disposes once: buffers destroyed, techniques disposed, later calls refused', async () => {

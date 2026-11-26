@@ -347,6 +347,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `HostHitShadingSettings` | The hit-shading settings a host may change live, `gi.hitShadingSettings`: `sampleTextures` (above, "Materials and textures"). |
 | `GIPlatformOptions` | `createGI`'s options: `gpuTiming`, `label`, `buildIn`, `textureLayerSize`. |
 | `GIPlatformModule` | The contract's declaration of `createGI` and the three helpers below. |
+| `ScreenNeeds` | `gi.screenNeeds`: which screen channels the attached techniques read (`screen`, `velocity`, `albedo`, `instance`, `lighting`), so a host renders only those (RC1.1). |
 | `requiredLimits(adapter)` | The device limits to ask for: the adapter's largest bindings and buffers, and what the kernels need. |
 | `RequiredLimits` | The type `requiredLimits` returns: limit names to numbers. |
 | `optionalFeatures(adapter)` | Features worth asking for, where the adapter has them. |
@@ -382,6 +383,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `LightDescriptor` | Any light: one of the three below. |
 | `DirectionalLightDescriptor`, `PointLightDescriptor`, `SpotLightDescriptor` | The three kinds of light, with their units. |
 | `LightChanges` | What `updateLight` takes: any fields of the light's own kind except `type`. |
+| `LIGHT_GROUP_COUNT` | How many light groups there are (4): `LightDescriptor.group` is 0 to 3. |
 | `EnvironmentDescriptor` | The sky: `'none'`, `'color'`, `'texture'` (cube or equirect) or `'procedural'`. |
 
 ### The frame
@@ -392,6 +394,11 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `FrameBudget` | How much GI work a frame may do: `gpuMs`, `units`, `targetFps`, `paused`. |
 | `FrameCamera` | The camera as plain data: position, view and projection matrices, near and far. |
 | `FrameScreen` | Screen buffers (depth, normals, motion) for screen-space techniques. DDGI ignores them. |
+| `OptionalScreenChannel` | The `FrameScreen` channels a technique asks for by name: `'velocity'`, `'albedo'`, `'instance'` (RC1.1), `'lighting'` (the host's own lit colour before GI, linear HDR; RC4.2). |
+| `ScreenChannel`, `SCREEN_CHANNELS` | Every screen channel by name (`'depth'`, `'normal'`, `'velocity'`, `'albedo'`, `'instance'`), and the list of them. |
+| `ScreenInputsView` | An engine-free debug view: one `FrameScreen` channel drawn into an `rgba8unorm` texture of display values, for a host to show (RC1.1). |
+| `ScreenInputsViewSettings`, `DEFAULT_SCREEN_INPUTS_VIEW_SETTINGS`, `SCREEN_INPUTS_VIEW_FORMAT` | Its settings (velocity scale, depth range), their defaults, and its texture format. |
+| `instanceDebugColor`, `instanceDebugHash` | The colour `ScreenInputsView` gives an instance id, and the hash behind it. |
 
 ### Reading GI while shading
 
@@ -422,19 +429,32 @@ A technique gets the platform's services when attached, and never sees the host.
 | --- | --- |
 | `GITechnique` | What a technique implements: `attach`, `prepare`, `encode`, its `shading` module, `settings`, `debugViews`, `dispose`... |
 | `TechniqueRequirements` | What it needs: query kinds, ray batches, screen buffers, a fallback. |
+| `ScreenChannelRequest` | `TechniqueRequirements.screen` in its long form: which optional screen channels it reads (RC1.1). |
 | `TechniqueContext` | What it gets when attached: the device, the scene copy, queries, hit shading, the kernel builder, the timer. |
 | `TechniqueFrame`, `TechniqueScreenFrame` | What its `encode` (and screen stage) gets each frame: the camera, the changes, its share of the budget. |
 | `WorkFloorRate` | What its fewest units per frame may depend on: the frame rate and the calibrated batch. |
 | `SceneCopy` | The scene as techniques read it: WGSL accessors, counts, memory, the first directional light. |
 | `SceneFingerprint` | `SceneCopy.fingerprint()`: content hashes of the scene by part (geometry, materials, textures, lights, sky), which saved bakes match against. |
+| `fingerprintDifferences(saved, current)` | Which parts (geometry, materials, textures, lights, sky) of two `SceneFingerprint`s differ; every part when their versions differ. For saved bakes. |
+| `halfToFloat(bits)` | A binary16 value's 16 bits to a number; reads saved bakes' half-float fields. |
 | `SceneChanges`, `DirtyRegion`, `ChangeReason`, `LightChange` | The change feed ("Moving, adding and removing objects" above). |
+| `ChangeEventTracker`, `ChangeEvent`, `ChangeEventOptions` | For techniques: the change feed as events over time (`change-events.ts`): one event per source with a box grown to cover it, epochs at its start, every `rearmFrames` while it goes on and once when it stops, so a technique forgets history once per epoch rather than on every frame of a change that goes on (the radiance cache's E8, E9 and D46). |
 | `SceneQueries`, `QueryKind`, `RayQueries` | Scene queries; v1 has one backend, `rays` (`giTraceClosest`, `giTraceAny`, batches). |
 | `HitShading`, `HitShadingSettings` | Shared hit shading: the surface at a hit, direct light with shadows, the sky; and its settings. |
+| `DIRECT_SKY_LIGHT_BIT`, `DIRECT_SKY_LIGHT` | The sky as a light in hit shading's one-light choice (RC3.4): the group-mask bit that makes `giDirectChooseLight` weigh the sky (`1 << LIGHT_GROUP_COUNT`, so group bits alone never set it), and the light index it returns for the sky. |
 | `DirectLightFrame`, `DeferredDirectLight`, `DirectWorkList`, `RayScratch` | Direct light deferred to one platform pass (`gi/direct`), and its scratch buffer. |
 | `BounceSource` | Another technique's shading module used for bounce light. |
 | `WgslModule`, `BindingSlot`, `ModuleBindingEntry` | A piece of WGSL and the resources it binds. |
 | `KernelBuilder`, `ComputeKernel`, `ComputeKernelOptions` | How WGSL modules become compute pipelines, within the binding limits. |
 | `RAY_BYTES`, `HIT_RECORD_BYTES`, `HIT_RECORD_WORD` | Sizes and layout of the buffers `encodeBatch` reads and writes. |
+| `GpuComputeUtilities` | `TechniqueContext.compute`: the platform's GPU utilities for work whose size only the GPU knows (RC1.3). |
+| `GpuPrefixScan`, `PrefixScanOptions` | An exclusive prefix sum of `u32`s, recorded into the caller's pass, and its options. |
+| `GpuCompaction`, `CompactionOptions` | Stream compaction: the kept items' indices, in order, and their count on the GPU; and its options. |
+| `GpuIndirectArgs`, `IndirectArgsOptions` | Indirect dispatch arguments made from a count the GPU computed; and its options. |
+| `GpuWord` | One `u32` a pass wrote on the GPU (a total, a count) for later passes to read. |
+| `GpuScreenHistory`, `ScreenHistoryOptions`, `ScreenHistoryTextures` | `compute.createScreenHistory`: the previous frame's depth (`r32float`) and normals (decoded, `rgba16float`), copied by one compute pass at the end of a frame, for techniques that reproject (RC4.1); and its options and textures. |
+| `GpuScreenSpaceGI`, `ScreenSpaceGIOptions`, `ScreenSpaceGIInputs`, `ScreenSpaceGISettings`, `ScreenSpaceGITextures`, `DEFAULT_SCREEN_SPACE_GI_SETTINGS` | `compute.createScreenSpaceGI` (`gi/ssgi`): Capsaicin's SSGI from the depth buffer, one compute pass a frame: the ambient visibility and bent normal (`rgba16float`, world space, signed) and the near-field irradiance from a lighting image the caller gives (RC4.2; the radiance cache reads it, DDGI could). |
+| `ComputeReduction` | How a workgroup combines its threads' values: `'subgroups'` or the `'workgroup'` memory fallback. |
 
 ## Every export of `@pmndrs/gi/ddgi`
 
@@ -538,11 +558,12 @@ The functions are:
 
 - `giIrradiance(position, normal, viewDirection, screenUV, ...)` returns irradiance E. The renderer applies albedo/π.
 - `giCoverage(position, normal, ...)` returns 0..1. Renderers fade to their environment light where this is low.
+- `provides.worldSpaceIrradiance` (P6.3) says `giIrradiance` answers at any world point from the position and normal alone, `screenUV` unused (DDGI: true; the radiance cache: false). A technique that reads another as its bounce source in compute (the radiance cache's `secondBounce`) requires it.
 - `giRadiance(position, direction, roughness, ...)` is optional. DDGI doesn't provide it yet (`provides.radiance` is false): a rough-only fallback is only right at roughness 1, and anything smoother needs a blend with the host's environment specular. It isn't built yet: it is on SPEC's after-v1 list, as [issue #31](https://github.com/pmndrs/gi/issues/31).
-- `giDebugColor(position, normal, view, ...)` drives the debug views.
+- `giDebugColor(position, normal, view, screenUV, ...)` drives the debug views.
 - A technique may add its own functions. DDGI's `giProbeIrradiance(point, direction, ...)` returns the irradiance one probe holds for a surface facing `direction`, from that probe's tile alone (`point` is its index in the `points` debug view). The `points` view names it in `irradianceFunction`, so an adapter can shade each probe's sphere by its own light, RTXGI's standard probe view (TU.5, DV-03).
 
-`screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it.
+`screenUV` is there for screen-space techniques (see the surfel walk-through). DDGI ignores it. `giDebugColor` got it in RC2.2 (revision below), so the radiance cache can draw its probe atlas, probe mask and SH views by the pixel's place.
 
 ## Walk-through 1: a voxel GI technique
 
@@ -579,6 +600,7 @@ Something like EA's GIBS: spawn surfels on visible surfaces, trace rays from the
 Gaps:
 
 3. **Getting screen buffers out of three.** The three adapter would need a depth/normal (and maybe instance-ID) pre-pass, and must run `encodeScreen` between that pass and lighting. That's adapter work, not a contract problem. It only matters when we build a screen-space technique, after v1.
+   - *Closed by RC1.1 (2026-11-09):* `screenInputs(scenePass, threeGI)` adds the outputs to the host's own MRT scene pass and runs `encodeScreen` after that pass and before the node that reads the result (docs/api/three.md, "Screen inputs"). No pre-pass: the host's pass writes them. three's targets are handed over without a copy through one version-pinned backend read (DECISIONS 2026-11-09, register row D13).
 
 ## Other open gaps
 
@@ -670,6 +692,11 @@ Through three, `volume.resetProbes(what)` (three.md).
 
 ## Revisions
 
+### Radiance-cache phase 2, 2026-11-19 (RC2.2)
+
+- **Host- and technique-facing: `giDebugColor(position, normal, view, screenUV, ...)`.** The debug colour takes the pixel's screen position (0..1, top left 0), as `giIrradiance` has it, so a screen-space technique can draw its views by the pixel's place (the radiance cache's probe atlas, probe mask and SH). `globalsCode` writes `giDebugColorAt(position, normal, view, screenUV)`. DDGI's module takes the argument and ignores it; the viewer's debug material passes three's `screenUV`.
+- **Host-facing: `FrameCamera.jitter`** (optional): this frame's sub-pixel jitter as an NDC offset (x right, y up), when the host draws its screen buffers with a jittered projection; the jittered projection is `translate(jitter, 0) × projection`. Screen techniques rebuild positions from `FrameScreen.depth` with it, so they land where the depth was drawn (RC2.1 found half a pixel's error without it). `projection` stays the unjittered one. World-space techniques ignore it. The three adapter fills it, and `projection`, from `ThreeGI.jitter`, a source the host sets when it jitters, giving the NDC jitter and the unjittered projection (for `@pmndrs/upscaler`, `upscalerJitter` after `beginFrame`: `Upscaler.jitter` of `(x, y)` pixels is `(−2x / width, +2y / height)`, as three's `setViewOffset` moves points).
+
 ### Issue #20, 2026-11-19
 
 - **Host-facing through DDGI (DV-12; Dennis, 2026-11-19: "yes build it"): `DDGITechnique.resetProbes(what)` and `ProbeResetRequest`** ("Resetting offsets and states" above), and three's `DDGIVolume.resetProbes`. The engine-neutral `resetHistory()` is unchanged. Implementation-only: the `ddgi/reset-probes` kernel, compiled at `prepare` with the others, and its timed pass of that name in frames with a reset.
@@ -685,6 +712,20 @@ Through three, `volume.resetProbes(what)` (three.md).
 - **Host-facing (T5.1): `GIPlatformOptions.textureLayerSize`** (`64 | 128 | 256`, default 256): the texture store's layer size, fixed for the platform's life. At 256 the store, its kernel and the sampling module's WGSL are what M4 checked, to the character. Smaller layers have one mip fewer per halving; the ray cone's mip and the wrap's half texel are worked out in the store's own texels. Implementation-only: `storeLayout(layerSize)` and `textureStoreWgsl(layerSize)` (textures/texture-store-wgsl.ts), and `PlatformTextureStore`'s `layerSize` option. The CPU mirrors and the repository's reference tracer stay at 256.
 - **Technique-facing (T5.2): `SceneCopy.fingerprint(): SceneFingerprint`**, content hashes of the scene by part, for saved bakes ("Saved bakes" above). Worked out on the CPU when called. Meshes and textures are hashed once when created or updated, since the scene keeps no CPU copy of them after upload: 1.9 ns a word on the M5 Pro (48 MB in 22 ms), on the host's thread.
 - **Host-facing through DDGI (T5.2): `DDGITechnique.saveField` / `loadField`**, the `.ddgibake` format, `SavedFieldError` ("Saved bakes" above). Implementation-only: the irradiance and distance atlases gain `COPY_DST` usage (the load writes them).
+
+### Radiance-cache phase 2, 2026-11-09 (RC2.1)
+
+- **Technique-facing: `TechniqueScreenFrame.camera` (and `frame`, `deltaTime`) are now those of the frame's `encode`.** Before, `encodeScreen` handed screen stages an identity camera, so a technique couldn't turn the host's depth back into world positions. A screen technique reconstructs positions with `camera.projection × camera.view`, so `projection` must be the one `FrameScreen.depth` was drawn with (WebGPU's 0..1 depth); hosts call `encodeScreen` after the frame's `encode`, as before. Implementation: `GIPlatformImpl` keeps the latest `encode`'s camera. Hosts that jitter their projection for an upscaler hand GI the unjittered one (`FrameCamera`), which is half a pixel off the depth; RC2.2 decides whether `FrameScreen` needs its own projection.
+
+### Radiance-cache phase 1, 2026-11-09 (RC1.1)
+
+- **Host- and technique-facing: `FrameScreen.albedo`** (optional): the diffuse albedo, linear rgb, base colour × (1 − metalness), the fold the adapters already apply to GI albedo for rays, so a pixel and a ray hit on the same surface agree. Any float or unorm format. It is not three's composite weight `giAlbedo`, which also carries the specular lobe's share and AO. `FrameScreen.depth` now says what formats it takes: a depth format (read as `texture_depth_2d`) or a one-channel float colour format.
+- **Technique-facing: `TechniqueRequirements.screen` is `boolean | ScreenChannelRequest`**: `true` is depth and normals; `{ velocity, albedo, instance }` asks for those channels too. `encodeScreen` throws, naming the technique and channel, if a screen stage would run without a channel its technique asked for.
+- **Host-facing: `requiredLimits(adapter)` also asks for the adapter's `maxColorAttachmentBytesPerSample`**: a host scene pass that writes the screen inputs beside its own outputs needs 48-56 bytes per pixel, past WebGPU's default 32 (RC1.1 review).
+- **Stated in the contract: every `FrameScreen` channel describes the opaque surface under the depth sample**; a blended surface that writes no depth leaves the channels as the surface behind it (RC1.1 review).
+- **Host-facing: `GIPlatform.screenNeeds`** (read-only): the union of the attached techniques' screen requirements (`{ screen, velocity, albedo, instance }`), so a host renders only what is read. DDGI asks for none, so nothing changes for it.
+- **Host-facing: `SceneApi.instanceIndex(instance)`**: an instance's index on the GPU, what rays report as `GiHit.instance` and `FrameScreen.instance` holds plus 1. Fixed for the instance's life.
+- **Engine-free debug view: `ScreenInputsView`** (`platform/screen/`): one channel of a `FrameScreen` drawn into an `rgba8unorm` texture of display values, for a host to show.
 
 ### During M3, 2026-11-09
 
@@ -702,7 +743,7 @@ All optional and backward compatible (docs/design/m4-materials.md, "Contract add
 - **Host-facing: new `MaterialDescriptor` fields.** `metalness` (0–1) and `metalnessTexture: { texture, channel, uv? }`: the albedo at a hit is `albedo × albedoTexture × (1 − metalness × metalnessTexture[channel])`, as three and glTF do. `opacity` (0–1) and `alphaMode: 'opaque' | 'cutout' | 'stochastic'` (with `alphaCutoff` above 0 and no mode it is `'cutout'`, as before; `'cutout'` with no cutoff uses 0.5). Rays use `opacity` and `alphaMode` from T4.2 on.
 - **Implementation-facing for now: `HitShadingSettings.sampleTextures`** (live, default true; host-facing since 2026-11-18 as `GIPlatform.hitShadingSettings.sampleTextures`, above). Off, every texture is read at its last mip, its mean colour, the same over the whole surface: the flat colours M1's adapter folded in (albedo, emissive and metalness alike, so a glTF metal-mapped material isn't treated as fully metal). While a metalness map's layer is still being made, the material counts as metalness 0, so it doesn't go black while it loads. Hosts reach it as `GIPlatform.hitShadingSettings` (Dennis, 2026-11-18).
 - **Host-facing: `stats.memory.textures`**, the texture store's bytes (0.35 MB a layer, the array grown in doubles), counted in `total`.
-- **Host-facing: `requiredLimits` asks for `maxTextureArrayLayers`** (the default 256 would cap a scene at 256 textures; adapters give 2,048), and `optionalFeatures` for `texture-compression-bc`, `-etc2` and `-astc` where present.
+- **Host-facing: `requiredLimits` asks for `maxTextureArrayLayers`** (the default 256 would cap a scene at 256 textures; adapters give 2,048), and `optionalFeatures` for `texture-compression-bc`, `-etc2` and `-astc` where present. Since 2026-11-20 (DECISIONS) `requiredLimits` also asks for the adapter's `maxComputeWorkgroupStorageSize`, and `optionalFeatures` for `shader-f16` where present (f32 is the fallback).
 - **Technique-facing: `giSurfaceAtCone(ray, hit, spread)`.** Textures are read at the mip a ray cone's footprint covers: `log2(spread × t / max(|cos θ|, 0.1) × texels per metre)`, texels per metre from the hit triangle's uv area (scaled by the uv transform's determinant) against its world area. A technique passes its rays' spread, `sqrt(4π / rays per sphere)`; DDGI passes it from `raysPerProbe`. `giSurfaceAt` uses 0.22 (256 rays). The uv mapping (uv set, 3×2 transform, wrap per axis) is applied for each texture: `repeat` by the sampler, `clamp` and `mirror` on the uv. `GiMaterial` gains `metalness`, `metalnessTexture`, `metalnessChannel`, `metalnessUv`, `opacity` and `alphaMode`, and its texture words are store layers (`GI_NO_TEXTURE` until a layer is made). The scene module gains `giInstanceTriangleUvs`. The hit-shading module binds two more resources, the store's array and its sampler, and still no storage buffer.
 - Since T4.3 the three adapter passes real textures (images, data and compressed) and no longer folds texture averages.
 - **Technique-facing (T4.2, first half): materials in the walk.** `giTraceClosest` and `giTraceAny` now let rays through see-through materials (`blocksLight: false`) and the back faces of single-sided ones (`doubleSided: false`), triangle by triangle, in every instance (docs/design/m4-materials.md §3). `RayQueries.capabilities.perTriangleMaterials` is true; `alphaCutouts` stays false until the second half. No WGSL signature changed. **Binding cost:** the `rays` module now depends on the scene module (the walk reads its material tables), so a kernel that lists `rays` alone binds the scene copy's 2 storage buffers too: inline tracing 3 + 2, a batch kernel 7 of 8. Kernels that list hit shading had both already, so DDGI's count is unchanged. Implementation-only: `rays.requestTriangleFlags(meshSlot)` (the install hook every path that writes tree triangles calls; trace/triangle-flags.ts) and `rays.triangleFlagRewrites`. Hosts see nothing new. Since T4.3 the three adapter no longer leaves see-through meshes out of GI; the walk handles them per triangle.

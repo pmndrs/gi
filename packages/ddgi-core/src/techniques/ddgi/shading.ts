@@ -83,6 +83,7 @@ const ENTRY_POINTS: readonly { readonly name: string; readonly arguments: readon
             ['position', 'vec3f'],
             ['normal', 'vec3f'],
             ['view', 'u32'],
+            ['screenUV', 'vec2f'],
         ],
         returns: 'vec3f',
     },
@@ -106,7 +107,8 @@ export class DDGIShadingModule implements ShadingModule {
     readonly techniqueId = 'ddgi';
     readonly code = DDGI_SHADING_WGSL;
     readonly parameters: readonly ShadingParameter[];
-    readonly provides = { radiance: false } as const;
+    /** Its field answers at any point in its volumes: another technique can read it as a bounce source (P6.3). */
+    readonly provides = { radiance: false, worldSpaceIrradiance: true } as const;
     /** See the file comment: 2 since the volume table replaced the volume's uniforms. */
     readonly version = 2;
 
@@ -149,7 +151,7 @@ export class DDGIShadingModule implements ShadingModule {
     /**
      * `code`, then the resources as globals at `group`, then the wrappers
      * `giIrradianceAt(position, normal, viewDirection, screenUV)`,
-     * `giCoverageAt(position, normal)`, `giDebugColorAt(position, normal, view)`
+     * `giCoverageAt(position, normal)`, `giDebugColorAt(position, normal, view, screenUV)`
      * and `giProbeIrradianceAt(point, direction)`.
      *
      * Bindings: every texture and sampler parameter in order from 0, then one

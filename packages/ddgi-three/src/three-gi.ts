@@ -60,7 +60,7 @@
  */
 
 import { Color, type Camera, type ColorRepresentation, type Object3D, type OrthographicCamera, type PerspectiveCamera, type Scene } from 'three';
-import type { EnvironmentDescriptor, FrameBudget, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
+import type { EnvironmentDescriptor, FrameBudget, FrameCamera, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
 import type { DDGIVolume } from './ddgi-volume.ts';
@@ -103,6 +103,57 @@ export interface ThreeGIOptions {
      * CPU (gpu-skinning.ts). Without it they are posed on the CPU.
      */
     readonly renderer?: WebGPURenderer;
+    /** This frame's projection jitter, for screen-space techniques (see {@link ThreeGI.jitter}). */
+    readonly jitter?: ThreeGIJitter | null;
+}
+
+/**
+ * Where a host that draws its screen buffers with a jittered camera (a
+ * temporal upscaler, TAA) tells GI about the jitter, read in every `update`.
+ * While the frame draws, `camera.projectionMatrix` holds the jittered
+ * projection, and the platform wants the unjittered one plus the jitter
+ * (`FrameCamera.projection` and `.jitter`), so the source gives both.
+ */
+export interface ThreeGIJitter {
+    /**
+     * This frame's jitter as an NDC offset (x right, y up): how far the
+     * jittered projection moves every projected point; null for none.
+     */
+    ndc(): readonly [number, number] | null;
+    /** The camera's projection without the jitter, column-major (a three `Matrix4`'s `elements`). */
+    unjitteredProjection(): ArrayLike<number>;
+}
+
+/**
+ * An NDC jitter from one in render pixels with y down, the convention of
+ * `@pmndrs/upscaler`'s `Upscaler.jitter`: `(−2x / width, +2y / height)`. The
+ * upscaler's render texel `(i, j)` samples the unjittered image at
+ * `(i + 0.5 + x, j + 0.5 + y)`, through three's `setViewOffset(…, x, y, …)`,
+ * so a point on screen moves by `−x` pixels right and `−y` pixels down
+ * (three-gi.test.ts checks this against three's own `setViewOffset`).
+ */
+export function jitterPixelsToNdc(jitter: { readonly x: number; readonly y: number }, width: number, height: number): [number, number] {
+    return [(-2 * jitter.x) / width, (2 * jitter.y) / height];
+}
+
+/** What {@link upscalerJitter} reads from `@pmndrs/upscaler`'s `Upscaler` (structural, so no dependency on it). */
+export interface UpscalerJitterLike {
+    /** This frame's jitter in render pixels, x right, y down. */
+    readonly jitter: { readonly x: number; readonly y: number };
+    /** The camera's projection as `beginFrame` found it, before the jitter. */
+    readonly unjitteredProjectionMatrix: { readonly elements: ArrayLike<number> };
+}
+
+/**
+ * The jitter source for `@pmndrs/upscaler`'s `Upscaler` at a render size:
+ * its jitter in NDC and its unjittered projection. Call `ThreeGI.update`
+ * after `upscaler.beginFrame(camera)` each frame.
+ */
+export function upscalerJitter(upscaler: UpscalerJitterLike, renderWidth: number, renderHeight: number): ThreeGIJitter {
+    return {
+        ndc: () => jitterPixelsToNdc(upscaler.jitter, renderWidth, renderHeight),
+        unjitteredProjection: () => upscaler.unjitteredProjectionMatrix.elements,
+    };
 }
 
 /** CPU time of the last `update`, milliseconds (`performance.now()`, so steps of up to 0.1 ms in some browsers). */
@@ -133,6 +184,23 @@ export class ThreeGI {
     budget: FrameBudget;
     /** The volume the GI light follows, if any (see the option). */
     volume: DDGIVolume | null;
+    /**
+     * This frame's projection jitter, read in each `update` and handed to
+     * the platform as `FrameCamera.jitter`, so screen-space techniques (the
+     * radiance cache) rebuild positions where the jittered depth was drawn.
+     * Set it when the scene pass draws with a jittered camera (a temporal
+     * upscaler or TAA), and call `update` after the jitter for the frame is
+     * chosen: with `@pmndrs/upscaler`'s `Upscaler`, after `beginFrame`,
+     * `upscalerJitter(upscaler, renderWidth, renderHeight)`. With a source,
+     * the platform gets the source's unjittered projection, not the camera's
+     * (which holds the jitter then). Null (the default): no jitter, and the
+     * camera's own projection. World-space techniques (DDGI) ignore it.
+     */
+    jitter: ThreeGIJitter | null;
+    /** GI frames encoded so far (`update` calls that ran `gi.encode`): the screen stage checks one ran before it (screen-inputs.ts). */
+    get encodedFrames(): number {
+        return this.encodes;
+    }
     readonly timings: ThreeGITimings = { matrixWorldMs: 0, syncMs: 0, encodeMs: 0 };
     /** What the last update sent. */
     get report(): SyncFrameReport {
@@ -146,6 +214,7 @@ export class ThreeGI {
     private renderTimeUpdate: boolean;
     private readonly warnOnce: (message: string) => void;
     private updates = 0;
+    private encodes = 0;
     private disposed = false;
     /**
      * The GI light is in the scene. False while the platform is still preparing:
@@ -169,6 +238,7 @@ export class ThreeGI {
         this.scene = scene;
         this.budget = options.budget ?? DEFAULT_BUDGET;
         this.volume = options.volume ?? null;
+        this.jitter = options.jitter ?? null;
         this.alwaysUpdateMatrixWorld = options.updateMatrixWorld ?? false;
         this.renderTimeUpdate = options.updateOnRender ?? false;
         this.warnOnce = options.warn ?? ((message) => console.warn(`@pmndrs/gi/three: ${message}`));
@@ -267,8 +337,9 @@ export class ThreeGI {
         this.previousTime = start;
         const device = this.gi.device;
         const encoder = device.createCommandEncoder({ label: 'ddgi-three frame' });
-        this.gi.encode(encoder, { deltaTime: seconds, budget: this.budget, camera: frameCamera(camera) });
+        this.gi.encode(encoder, { deltaTime: seconds, budget: this.budget, camera: frameCamera(camera, this.jitter) });
         device.queue.submit([encoder.finish()]);
+        this.encodes++;
         const end = performance.now();
 
         this.timings.matrixWorldMs = afterMatrices - start;
@@ -374,15 +445,22 @@ function linearWeight(color: Color | ColorRepresentation, intensity: number): [n
     return [weightColor.r * intensity, weightColor.g * intensity, weightColor.b * intensity];
 }
 
-/** The platform's plain camera from a three camera (matrices current). */
-function frameCamera(camera: Camera): { position: [number, number, number]; view: ArrayLike<number>; projection: ArrayLike<number>; near: number; far: number } {
+/**
+ * The platform's plain camera from a three camera (matrices current). With a
+ * jitter source, its unjittered projection and this frame's jitter (the
+ * camera's own projection then holds the jitter: `FrameCamera.projection`
+ * is the unjittered one).
+ */
+export function frameCamera(camera: Camera, jitterSource: ThreeGIJitter | null = null): FrameCamera {
     const e = camera.matrixWorld.elements;
+    const jitter = jitterSource?.ndc() ?? null;
     const withPlanes = camera as PerspectiveCamera | OrthographicCamera;
     return {
         position: [e[12], e[13], e[14]],
         view: camera.matrixWorldInverse.elements,
-        projection: camera.projectionMatrix.elements,
+        projection: jitterSource ? jitterSource.unjitteredProjection() : camera.projectionMatrix.elements,
         near: typeof withPlanes.near === 'number' ? withPlanes.near : 0.1,
         far: typeof withPlanes.far === 'number' ? withPlanes.far : 1000,
+        ...(jitter ? { jitter: [jitter[0], jitter[1]] as const } : {}),
     };
 }

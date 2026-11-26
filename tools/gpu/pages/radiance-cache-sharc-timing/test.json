@@ -1,0 +1,5 @@
+{
+    "description": "P6.1: GPU time per frame of the world cache's passes and the whole radiance cache, and their GPU memory, with the GI-1.2 hash grid and the SHaRC-style hash cache (two and one bounce rays) on sponza and bistro-exterior at 1280x720, the camera still, 120 timed frames after 60. Recorded, not gated; run under the GPU lock (VALID verdict) with VITE_DDGI_MAX_TEXTURE_SIZE=1024 on a 6 GB GPU.",
+    "timeoutMs": 1200000,
+    "manual": true
+}

@@ -34,12 +34,16 @@
  *    this point), drawn through `scene.overrideMaterial`;
  *  - a probe atlas over the picture (`AtlasOverlay`);
  *  - the change per frame (`FrameChangeView`), which works on whatever DDGI
- *    draws: the normal picture, GI only, or a screen view.
+ *    draws: the normal picture, GI only, or a screen view;
+ *  - the screen inputs (RC1.1, `SCREEN_INPUT_VIEWS`): what a screen-space
+ *    technique is handed, drawn by the core's debug view from a `pass()` with
+ *    the adapter's `screenInputs` outputs, made the first time one is shown.
  * Direct light against GI is the viewer's GI off / on / GI only choice.
  */
 
 import { Color, type Object3D } from 'three';
 import type { Node } from 'three/webgpu';
+import { mrt, output, pass } from 'three/tsl';
 import type { SceneManifest } from '../../../../scenes/src/manifest';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image';
 import { AtlasOverlay, type AtlasChoice } from '../ddgi/atlas-overlay';
@@ -57,8 +61,11 @@ import {
     type EnvironmentDescriptor,
     type FrameBudget,
     type GIPlatform,
+    type ScreenChannel,
+    type ScreenInputsNode,
     type StartedGI,
     type ThreeGI,
+    screenInputs,
 } from '../ddgi/library';
 import { ProbeHistoryTexture } from '../ddgi/probe-history';
 import { AlbedoAtHitsView, albedoViewPlatform } from '../ddgi/albedo-at-hits';
@@ -75,15 +82,29 @@ export const DDGI_SCREEN_VIEWS = {
     'probe-states': DDGI_DEBUG_VIEW.probeStates,
 } as const;
 
+/** The screen-input views (RC1.1) by the name the viewer uses, and the channel each shows. */
+export const SCREEN_INPUT_VIEWS = {
+    'screen-depth': 'depth',
+    'screen-normal': 'normal',
+    'screen-velocity': 'velocity',
+    'screen-albedo': 'albedo',
+    'screen-instance': 'instance',
+} as const satisfies Record<string, ScreenChannel>;
+
 /**
  * A screen debug view: one of DDGI's own (`DDGI_SCREEN_VIEWS`, drawn through
- * `giDebugColor`), or the viewer's `gi-albedo` (the albedo GI's rays read
- * where they hit, traced by the platform: ddgi/albedo-at-hits.ts).
+ * `giDebugColor`), the viewer's `gi-albedo` (the albedo GI's rays read where
+ * they hit, traced by the platform: ddgi/albedo-at-hits.ts), or a screen input
+ * (`SCREEN_INPUT_VIEWS`, RC1.1).
  */
-export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS | 'gi-albedo';
+export type DdgiScreenView = keyof typeof DDGI_SCREEN_VIEWS | 'gi-albedo' | keyof typeof SCREEN_INPUT_VIEWS;
 
 function isCoreScreenView(view: DdgiScreenView | null): view is keyof typeof DDGI_SCREEN_VIEWS {
     return view !== null && view in DDGI_SCREEN_VIEWS;
+}
+
+function isScreenInputView(view: DdgiScreenView | null): view is keyof typeof SCREEN_INPUT_VIEWS {
+    return view !== null && view in SCREEN_INPUT_VIEWS;
 }
 
 /** A light group's weight in GI (T2.5): a linear RGB colour times an intensity. */
@@ -268,6 +289,8 @@ export class DdgiTechnique extends ScenePassTechnique {
     private probeHistory: ProbeHistoryTexture | null = null;
     private debugMaterial: DdgiDebugMaterial | null = null;
     private atlasOverlay: AtlasOverlay | null = null;
+    /** The screen-input views' scene pass and its views, made the first time one is shown. */
+    private screenInputs: { readonly stage: ScreenInputsNode; readonly views: Map<ScreenChannel, Node> } | null = null;
     /** The `gi-albedo` screen view, made when the platform can trace it (ddgi/albedo-at-hits.ts). */
     private albedoView: AlbedoAtHitsView | null = null;
     private readonly frameChange = new FrameChangeView();
@@ -691,7 +714,7 @@ export class DdgiTechnique extends ScenePassTechnique {
 
     /** What `overlay` draws; the viewer rebuilds its pipeline when this changes. */
     get overlayKey(): string {
-        return `${this.showsAlbedo ? 'albedo' : 'shaded'}|${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}`;
+        return `${this.showsAlbedo ? 'albedo' : 'shaded'}|${this.shownAtlas ?? 'no atlas'}|${this.showsChange ? 'change' : 'picture'}|screen input ${this.shownScreenInput ?? 'none'}`;
     }
 
     /**
@@ -700,11 +723,46 @@ export class DdgiTechnique extends ScenePassTechnique {
      */
     overlay(display: Node): Node {
         let node = display;
-        if (this.showsAlbedo && this.albedoView) node = this.albedoView.overlay(node);
-        if (this.showsChange) node = this.frameChange.overlay(node, this.sceneTarget);
+        const screenInput = this.shownScreenInput;
+        // A screen input replaces the picture; its colours are display values already (ScreenInputsView).
+        if (screenInput) node = this.screenInputView(screenInput);
+        else {
+            if (this.showsAlbedo && this.albedoView) node = this.albedoView.overlay(node);
+            if (this.showsChange) node = this.frameChange.overlay(node, this.sceneTarget);
+        }
         const atlas = this.shownAtlas;
         if (atlas && this.atlasOverlay) node = this.atlasOverlay.overlay(node, atlas);
         return node;
+    }
+
+    /** The screen input on screen, or null: one is chosen, GI exists and isn't off. */
+    private get shownScreenInput(): ScreenChannel | null {
+        // `settings` is still unset while the base class's constructor runs.
+        const view = (this.settings as DdgiViewerSettings | undefined)?.screenView ?? null;
+        if (!isScreenInputView(view) || !this.threeGI || this.giMode === 'off') return null;
+        return SCREEN_INPUT_VIEWS[view];
+    }
+
+    /**
+     * A screen input's view (RC1.1): a scene pass of DDGI's camera with the
+     * adapter's screen-input outputs, every channel, and the core's debug view
+     * of one of them. Made on first use; the pass draws only while a view is shown.
+     */
+    private screenInputView(channel: ScreenChannel): Node {
+        const threeGI = this.threeGI;
+        if (!threeGI) throw new Error('screen inputs need GI to exist');
+        if (!this.screenInputs) {
+            const scenePass = pass(this.context.loaded.scene, this.camera);
+            const stage = screenInputs(scenePass, threeGI, { channels: { velocity: true, albedo: true, instance: true } });
+            scenePass.setMRT(mrt({ output, ...stage.outputs }));
+            this.screenInputs = { stage, views: new Map() };
+        }
+        let view = this.screenInputs.views.get(channel);
+        if (!view) {
+            view = this.screenInputs.stage.view(channel);
+            this.screenInputs.views.set(channel, view);
+        }
+        return view;
     }
 
     /** The share of the view's height, from the top, that the stats box covers (0 when it is hidden). */
@@ -753,6 +811,8 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.refreshDebugViews();
         if (this.showsAlbedo) this.albedoView?.render(this.context.renderer, this.camera);
         const scene = this.context.loaded.scene;
+        // A screen input draws its own pass inside the pipeline: the normal picture isn't shown, so it isn't drawn.
+        if (this.shownScreenInput) return;
         const override = isCoreScreenView(this.settings.screenView) && this.debugMaterial && this.giMode !== 'off' && this.phase !== 'failed' ? this.debugMaterial : null;
         override?.refresh();
         const renderer = this.context.renderer;
@@ -891,6 +951,7 @@ export class DdgiTechnique extends ScenePassTechnique {
         this.spheres?.dispose();
         this.probeHistory?.dispose();
         this.debugMaterial?.dispose();
+        this.screenInputs?.stage.dispose();
         this.albedoView?.dispose();
         this.frameChange.dispose();
         // The GI light, ThreeGI and the platform `start` made. While `start` still runs the volume

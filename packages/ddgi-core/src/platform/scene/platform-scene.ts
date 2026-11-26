@@ -590,6 +590,11 @@ export class PlatformScene implements SceneApi, SceneCopy {
         return this.instance(instance).slot;
     }
 
+    /** `SceneApi.instanceIndex`: the host-facing name of {@link instanceSlot}. */
+    instanceIndex(instance: InstanceHandle): number {
+        return this.instanceSlot(instance);
+    }
+
     meshSlot(mesh: MeshHandle): number {
         return this.mesh(mesh).slot;
     }

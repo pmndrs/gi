@@ -3,11 +3,12 @@
  * TypeScript (including the shared client helper) with no build step.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { extname, join, relative, resolve, sep } from 'node:path';
 import type { ServerResponse } from 'node:http';
-import { createServer, type Connect, type ViteDevServer } from 'vite';
-import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES } from './contract.ts';
+import { createServer, searchForWorkspaceRoot, type Connect, type ViteDevServer } from 'vite';
+import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES, REFERENCE_FILES } from './contract.ts';
+import { optionalSiblings, optionalSiblingsPlugin } from '../optional-siblings.ts';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
 export const SITE_ROOT = import.meta.dirname;
@@ -18,8 +19,27 @@ export interface TestSiteServer {
     close(): Promise<void>;
 }
 
+/**
+ * Sibling libraries from a local clone for development (root package.json
+ * `linkedSiblings`): a required one through its `link:` dependency in
+ * node_modules (the radiance cache's GI denoiser, RC4.3), an optional one
+ * through `optionalSiblingsPlugin` (`@pathtracer/mlp` for the neural tail,
+ * P6.4). They live outside this repo, so vite serves their real folders only
+ * when they are listed in `server.fs.allow`.
+ */
+const LINKED_SIBLINGS = [
+    ...Object.keys((JSON.parse(readFileSync(resolve(SITE_ROOT, '../../package.json'), 'utf8')) as { linkedSiblings?: Record<string, unknown> }).linkedSiblings ?? {})
+        .map((name) => resolve(SITE_ROOT, '../../node_modules', name))
+        .filter((path) => existsSync(path))
+        .map((path) => realpathSync(path)),
+    ...optionalSiblings().flatMap((sibling) => (sibling.folder ? [sibling.folder] : [])),
+];
+
 /** Where `pnpm examples:build` writes the examples site. */
 const EXAMPLES_DIST = resolve(SITE_ROOT, '../../examples/dist');
+
+/** The Cycles references (gitignored; `tools/reference/README.md`). */
+const REFERENCES_ROOT = resolve(SITE_ROOT, '../../bench/references');
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
     '.html': 'text/html; charset=utf-8',
@@ -91,9 +111,11 @@ export async function startTestSite(): Promise<TestSiteServer> {
             strictPort: false,
             // Pages are reloaded by the runner; hot reload would only add noise.
             hmr: false,
+            fs: { allow: [searchForWorkspaceRoot(SITE_ROOT), ...LINKED_SIBLINGS] },
             watch: null,
         },
         plugins: [
+            optionalSiblingsPlugin(),
             {
                 // The built examples site, as a static subdirectory (contract.ts, EXAMPLES_SITE_BASE).
                 name: 'examples-site',
@@ -103,6 +125,19 @@ export async function startTestSite(): Promise<TestSiteServer> {
                         response.end(JSON.stringify(listFiles(EXAMPLES_DIST)));
                     });
                     devServer.middlewares.use(EXAMPLES_SITE_BASE, serveStatic(EXAMPLES_DIST));
+                },
+            },
+            {
+                // One scene's reference files (contract.ts, REFERENCE_FILES).
+                name: 'reference-files',
+                configureServer(devServer) {
+                    devServer.middlewares.use(REFERENCE_FILES, (request, response) => {
+                        const scene = new URL(request.url ?? '', 'http://localhost').searchParams.get('scene') ?? '';
+                        response.setHeader('Content-Type', 'application/json');
+                        const valid = /^[a-z0-9-]+$/.test(scene);
+                        const folder = join(REFERENCES_ROOT, scene);
+                        response.end(JSON.stringify({ url: `/@fs/${folder.split(sep).join('/')}`, files: valid ? listFiles(folder) : [] }));
+                    });
                 },
             },
             {

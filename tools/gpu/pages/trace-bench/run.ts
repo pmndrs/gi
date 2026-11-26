@@ -14,6 +14,9 @@
  *      each on closest and any;
  *   5. compare the closest hits between tracers.
  *
+ * With `raySet=rc` (RC1.5) a scene runs rc-bench.ts instead: Capsaicin-shaped
+ * ray sets from the first camera bookmark, through `platform` and `ours-tinybvh`.
+ *
  * Everything the GPU holds for a tracer is freed before the next one starts, so
  * a scene's peak is one tracer's structures plus the rays.
  */
@@ -29,6 +32,7 @@ import {
     parseBenchConfig,
     SHADOW_RAY_OFFSET_FRACTION,
     RAY_DIRECTION_SEED,
+    RC_RAYS_PER_PROBE,
     SYNTHETIC_SCENE_ID,
     type BenchConfig,
     type BenchProfileName,
@@ -49,6 +53,7 @@ import {
     type TimingPlan,
 } from './ours-bench.ts';
 import { makeProbeGrid, makeProbeRays, makeShadowRays, makeSphereDirections, type ShadowRays } from './rays.ts';
+import { runRcScene } from './rc-bench.ts';
 import type { AgreementResult, DeviceRecord, ModeResult, SceneResult, TraceBenchData } from './results.ts';
 import { loadBenchScene } from './scene-source.ts';
 import { compareBlocked, compareClosestDistances } from './statistics.ts';
@@ -402,7 +407,8 @@ export function newBenchData(config: BenchConfig, record: DeviceRecord, browserV
     return {
         benchmark: 'trace-bench',
         profile: config.profile,
-        raysPerProbe: config.raysPerProbe,
+        raySet: config.raySet,
+        raysPerProbe: config.raySet === 'rc' ? RC_RAYS_PER_PROBE : config.raysPerProbe,
         targetRays: config.targetRays,
         warmupDispatches: config.warmupDispatches,
         timedDispatches: config.timedDispatches,
@@ -435,7 +441,8 @@ export async function runTraceBench(
         timer,
         builder,
         config,
-        plan: { warmups: config.warmupDispatches, timed: config.timedDispatches },
+        // Only ray-set mode rc has loaded sections; the probe-grid bench times as it always has.
+        plan: { warmups: config.warmupDispatches, timed: config.timedDispatches, loadedMs: config.raySet === 'rc' ? config.rcLoadedMs : 0 },
         renderer: async () => (shared.renderer ??= await createTmbvhRenderer(device)),
         progress,
     };
@@ -449,7 +456,7 @@ export async function runTraceBench(
                 progress(`${SYNTHETIC_SCENE_ID}: ${synthetic.instanceCount} instances, rebuild ${synthetic.topLevelRebuildMsMedian.toFixed(2)} ms median`);
                 continue;
             }
-            data.scenes.push(await runScene(context, sceneId));
+            data.scenes.push(config.raySet === 'rc' ? await runRcScene(context, sceneId) : await runScene(context, sceneId));
             await yieldToBrowser();
         }
     } finally {
@@ -471,6 +478,21 @@ export function disagreements(data: TraceBenchData): string[] {
                 );
             }
         }
+        for (const set of scene.rc?.sets ?? []) {
+            if (set.agreementRate !== null && set.agreementRate < MIN_AGREEMENT_RATE) {
+                problems.push(
+                    `${scene.scene}: rc ${set.set}: ours-tinybvh and platform agree on only ${(set.agreementRate * 100).toFixed(2)}% of rays; that is a bug, not a speed result`,
+                );
+            }
+            if (set.oracleMismatches > 0) {
+                problems.push(`${scene.scene}: rc ${set.set}: ${set.oracleMismatches} of ${set.oracleRays} sampled rays disagree with the brute-force reference`);
+            }
+        }
+        if (scene.rc) {
+            // Ray-set mode rc must time both of its tracers; a skipped one leaves the table half empty.
+            const skippedTracers = scene.skipped.filter((entry) => entry.startsWith('platform:') || entry.startsWith('ours-tinybvh:'));
+            if (skippedTracers.length > 0) problems.push(`${scene.scene}: rc: ${skippedTracers.join('; ')}`);
+        }
     }
     return problems;
 }
@@ -479,7 +501,9 @@ export function disagreements(data: TraceBenchData): string[] {
  * Entry point for a page folder. `defaults` say what the folder runs when the
  * URL has no `scene=` or `profile=`. `query` adds default parameters (for
  * example `rays=16`) that the real URL can still override. The test runner
- * cannot add parameters to a page URL, which is why each scene has a folder.
+ * cannot add parameters to a page URL, which is why each scene has a folder;
+ * the environment variable `VITE_DDGI_TRACE_QUERY` (same syntax, for example
+ * `profile=quick&loadedMs=0`) overrides the folder's defaults in a run.
  */
 export async function runTraceBenchPage(defaults: { scenes: string[]; profile: BenchProfileName; query?: string }): Promise<void> {
     const startTime = performance.now();
@@ -500,16 +524,24 @@ export async function runTraceBenchPage(defaults: { scenes: string[]; profile: B
     let status: 'pass' | 'fail' = 'pass';
     let message: string | undefined;
     try {
+        // The folder's defaults, then VITE_DDGI_TRACE_QUERY (the test runner can't add URL parameters, but
+        // vite passes VITE_* environment variables to the page), then the URL's own parameters.
         const search = new URLSearchParams(defaults.query ?? '');
-        for (const [name, value] of new URLSearchParams(location.search)) search.set(name, value);
+        const environmentQuery = (import.meta.env as Record<string, unknown>).VITE_DDGI_TRACE_QUERY;
+        const overrides = [typeof environmentQuery === 'string' ? environmentQuery : '', location.search];
+        for (const override of overrides) for (const [name, value] of new URLSearchParams(override)) search.set(name, value);
         const config = parseBenchConfig(search.toString(), defaults);
         const requested = await requestBenchDevice();
         device = requested.device;
         deviceErrors = watchDevice(device);
         adapterSummary = summarizeAdapterInfo(device.adapterInfo, device.features);
         progress(
-            `profile ${config.profile}: ${config.raysPerProbe} rays per probe, about ${config.targetRays} rays, ` +
-                `${config.warmupDispatches} warm-up + ${config.timedDispatches} timed dispatches; scenes ${config.scenes.join(', ')}; tracers ${config.tracers.join(', ')}`,
+            config.raySet === 'rc'
+                ? `profile ${config.profile}, ray-set mode rc (Capsaicin-shaped sets from the first bookmark): ` +
+                      `${config.warmupDispatches} warm-up + ${config.timedDispatches} timed dispatches, then ${config.rcLoadedMs} ms back to back per set and tracer; ` +
+                      `scenes ${config.scenes.join(', ')}; tracers ${config.tracers.join(', ')}`
+                : `profile ${config.profile}: ${config.raysPerProbe} rays per probe, about ${config.targetRays} rays, ` +
+                      `${config.warmupDispatches} warm-up + ${config.timedDispatches} timed dispatches; scenes ${config.scenes.join(', ')}; tracers ${config.tracers.join(', ')}`,
         );
         progress(
             `device limits: maxStorageBufferBindingSize ${requested.record.maxStorageBufferBindingSize}, maxBufferSize ${requested.record.maxBufferSize}, timestamps ${requested.record.timestampQuery}`,

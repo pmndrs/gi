@@ -1,0 +1,4 @@
+{
+    "description": "RC3.2, RC3.3 and RC3.4: no NaN, infinite or negative values in the radiance cache's output (probe-ray radiance after ResolveCells, the probe atlas, every live world-cache cell's direct and indirect values) on cornell-box, two-room and sponza at 1280x720 from the first bookmark with GI-1.2 multibounce on, scanned after frames 1, 30 and 60; cornell-box and two-room again with multibounce off, and two-room's mean probe radiance must rise with multibounce. RC3.4: bistro-exterior with the sky as a light at cache hits and without it, its hit probe rays' mean radiance must rise with it. Correctness only.",
+    "timeoutMs": 900000
+}

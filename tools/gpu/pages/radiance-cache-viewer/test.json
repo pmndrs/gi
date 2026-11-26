@@ -1,0 +1,4 @@
+{
+    "description": "RC2.2: the radiance cache in the viewer (ViewerCore, technique rc) on cornell-box, two-room and sponza: GI on, only and off, its probe atlas, mask and SH debug views, the split wipe against DDGI; no device or logged errors; no NaN, infinite or negative value in its irradiance and probe atlas after frames 1, 30 and 60 (VITE_RC_VIEWER_SCENES picks scenes). Ends on the last scene's radiance cache for the screenshot. Correctness only.",
+    "timeoutMs": 900000
+}

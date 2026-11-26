@@ -6,7 +6,7 @@ import { scanWgsl } from './gpu-scan.ts';
 import { wgslNameProblems } from './wgsl-names.ts';
 
 describe('the B1 shaders', () => {
-    const shaders = { lbvh: lbvhWgsl(), sort: radixSortWgsl(), scan: scanWgsl(), meshRefit: meshRefitTrianglesWgsl() };
+    const shaders = { lbvh: lbvhWgsl(), sort: radixSortWgsl(), scan: scanWgsl(), scanFallback: scanWgsl({ reduction: 'workgroup' }), meshRefit: meshRefitTrianglesWgsl() };
 
     it('use no reserved word as a name, and no function shares a name with a variable', () => {
         for (const [name, code] of Object.entries(shaders)) expect(wgslNameProblems(code), name).toEqual([]);
@@ -20,5 +20,7 @@ describe('the B1 shaders', () => {
     it('enable subgroups where they use them, and the plain ones do not', () => {
         for (const code of [shaders.lbvh, shaders.sort, shaders.scan]) expect(code.startsWith('enable subgroups;')).toBe(true);
         expect(shaders.meshRefit).not.toContain('subgroup');
+        // The scan's declared fallback uses no subgroup operation or builtin (its comments may name them).
+        expect(shaders.scanFallback).not.toMatch(/enable subgroups|subgroup[A-Z]\w*\(|subgroup_/);
     });
 });

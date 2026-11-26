@@ -1,0 +1,4 @@
+{
+    "description": "RC4.1: the screen probes with history. A constant sky stays at E = pi L within 1% (mean and p95 per pixel) every frame for 320 still and 120 moving frames (D41); a bright cap piles rays into a cell without the sums wrapping (D40); ReprojectScreenProbes against its CPU port and the velocity convention; the off-screen cache LRU and MRU invariants and the patch against the CPU spawn rule. Correctness only.",
+    "timeoutMs": 600000
+}

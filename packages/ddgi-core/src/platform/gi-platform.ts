@@ -25,8 +25,8 @@
 import { GINotReadyError } from './contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from './contract/handles.ts';
 import type { Aabb, Mat4 } from './contract/math.ts';
-import type { FrameInput, FrameScreen } from './contract/frame.ts';
-import type { GIPlatform, GIPlatformOptions, HostHitShadingSettings } from './contract/platform.ts';
+import type { FrameCamera, FrameInput, FrameScreen } from './contract/frame.ts';
+import type { GIPlatform, GIPlatformOptions, HostHitShadingSettings, ScreenNeeds } from './contract/platform.ts';
 import type { QueryKind, SceneQueries } from './contract/queries.ts';
 import type {
     DeformedPositions,
@@ -46,9 +46,11 @@ import type { GIStats, MemoryReport, PassTiming } from './contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame } from './contract/technique.ts';
 import type { GpuTimerScope } from './contract/timing.ts';
 import { countComputePipelines, type CompileCounter } from './compile-counter.ts';
+import { PlatformGpuCompute } from './compute/gpu-compute.ts';
 import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
+import { mergeScreenNeeds, missingScreenChannels, screenNeedsOf } from './screen/screen-needs.ts';
 import { checkComputeLimits } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { PlatformTextureStore } from './textures/texture-store.ts';
@@ -107,6 +109,8 @@ export class GIPlatformImpl implements GIPlatform {
     readonly sceneCopy: PlatformScene;
     readonly rays: PlatformRayQueries;
     readonly kernels: PlatformKernelBuilder;
+    /** Scan, compaction and indirect arguments for techniques (RC1.3); kernels compile on first use, in a technique's `prepare`. */
+    readonly compute: PlatformGpuCompute;
 
     private readonly label: string;
     /** The `rayBatches` option: compile the batch kernels whatever the techniques ask. */
@@ -125,6 +129,12 @@ export class GIPlatformImpl implements GIPlatform {
     private lost = false;
     private disposed = false;
     private frame = 0;
+    /**
+     * The camera and time step of the latest `encode`: the screen stage of the same frame
+     * reconstructs positions from the host's depth with it (`encodeScreen`, RC2.1).
+     */
+    private frameCamera: FrameCamera = IDENTITY_CAMERA;
+    private frameDeltaTime = 0;
     private lastEncodeCpuMs = 0;
     /** Set after `encode` resolved timestamps, so the next `encode` starts their readback (the host has submitted by then). */
     private timerAwaitingReadback = false;
@@ -175,6 +185,7 @@ export class GIPlatformImpl implements GIPlatform {
             meshTrees: options.meshTrees,
         });
         this.kernels = new PlatformKernelBuilder(ownDevice, this.label);
+        this.compute = new PlatformGpuCompute(ownDevice, { label: this.label });
         this.timer = options.gpuTiming ? new GpuTimer(ownDevice, { warn: (message) => this.warnOnce(message) }) : null;
         const rays = this.rays;
         this.queries = {
@@ -307,6 +318,8 @@ export class GIPlatformImpl implements GIPlatform {
         if (!this.prepared) throw new GINotReadyError('preparing');
         const start = performance.now();
         this.frame++;
+        this.frameCamera = frame.camera;
+        this.frameDeltaTime = frame.deltaTime;
 
         if (this.timer) {
             // The previous frame's encoder has been submitted by now, so its timestamps can be read back.
@@ -382,15 +395,24 @@ export class GIPlatformImpl implements GIPlatform {
         this.lastEncodeCpuMs = performance.now() - start;
     }
 
+    get screenNeeds(): ScreenNeeds {
+        return mergeScreenNeeds(this.attached.map(({ technique }) => technique.requirements));
+    }
+
     encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void {
         this.checkUsable();
         if (!this.prepared) throw new GINotReadyError('preparing');
         for (const technique of this.encodeOrder()) {
             if (!technique.encodeScreen) continue;
+            // A technique that asked for a channel would otherwise bind nothing and fail inside WebGPU.
+            const missing = missingScreenChannels(screenNeedsOf(technique.requirements), screen);
+            if (missing.length > 0) {
+                throw new Error(`@pmndrs/gi: technique '${technique.id}' reads the screen's ${missing.join(', ')}, which the host's FrameScreen doesn't have (see GIPlatform.screenNeeds)`);
+            }
             technique.encodeScreen(encoder, {
                 frame: this.frame,
-                deltaTime: 0,
-                camera: IDENTITY_CAMERA,
+                deltaTime: this.frameDeltaTime,
+                camera: this.frameCamera,
                 changes: NO_CHANGES,
                 units: 0,
                 screen,
@@ -490,6 +512,7 @@ export class GIPlatformImpl implements GIPlatform {
             queries: this.queries,
             shade: this.shade,
             kernels: this.kernels,
+            compute: this.compute,
             // A getter: setFallback may be called after the technique was attached.
             get fallback(): BounceSource | undefined {
                 const fallback = entry.fallback;
@@ -618,7 +641,7 @@ function escapeRegExp(text: string): string {
 /** Timestamps off: every pass goes untimed, which `beginComputePass({ timestampWrites })` accepts. */
 const NO_TIMER: GpuTimerScope = { computePass: () => undefined };
 
-/** `encodeScreen` has no camera of its own; screen stages take what they need from `screen`. */
+/** The camera `encodeScreen` hands on before the first `encode` (a host calls `encode` first in every frame). */
 const IDENTITY_CAMERA = {
     position: [0, 0, 0],
     view: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
@@ -699,6 +722,10 @@ class GuardedScene implements SceneApi {
     destroyInstance(instance: InstanceHandle): void {
         this.check();
         this.target.destroyInstance(instance);
+    }
+    instanceIndex(instance: InstanceHandle): number {
+        this.check();
+        return this.target.instanceIndex(instance);
     }
     createLight(descriptor: LightDescriptor): LightHandle {
         this.check();

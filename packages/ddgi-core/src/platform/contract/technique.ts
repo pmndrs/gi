@@ -7,7 +7,8 @@
  * comes through {@link TechniqueContext}.
  */
 
-import type { FrameCamera, FrameScreen } from './frame';
+import type { GpuComputeUtilities } from './compute';
+import type { FrameCamera, FrameScreen, OptionalScreenChannel } from './frame';
 import type { ColorRGB } from './math';
 import type { QueryKind, SceneQueries } from './queries';
 import type { SceneChanges, SceneCopy } from './scene-copy';
@@ -16,6 +17,12 @@ import type { ShadingModule } from './shading-module';
 import type { DebugView } from './stats';
 import type { GpuTimerScope } from './timing';
 import type { KernelBuilder } from './wgsl';
+
+/**
+ * The screen channels a technique reads beyond depth and normals. Each costs
+ * the host an extra render target, so a technique asks only for what it uses.
+ */
+export type ScreenChannelRequest = { readonly [Channel in OptionalScreenChannel]?: boolean };
 
 /** What a technique needs from the platform, checked before `prepare`. */
 export interface TechniqueRequirements {
@@ -29,8 +36,13 @@ export interface TechniqueRequirements {
      * compiles on first use.
      */
     readonly rayBatches?: boolean;
-    /** Needs {@link FrameScreen} every frame (screen-space techniques). */
-    readonly screen?: boolean;
+    /**
+     * Needs {@link FrameScreen} every frame (screen-space techniques): `true`
+     * for depth and normals, or the optional channels it reads as well. The
+     * host learns the union from `GIPlatform.screenNeeds`, and
+     * `encodeScreen` refuses a screen without a channel a technique asked for.
+     */
+    readonly screen?: boolean | ScreenChannelRequest;
     /** Needs another technique as a bounce source or fallback. */
     readonly fallback?: boolean;
 }
@@ -42,6 +54,8 @@ export interface TechniqueContext {
     readonly queries: SceneQueries;
     readonly shade: HitShading;
     readonly kernels: KernelBuilder;
+    /** GPU utilities: prefix scan, stream compaction, indirect dispatch arguments (RC1.3). */
+    readonly compute: GpuComputeUtilities;
     /** Another technique's output, when the host stacked one under this one. */
     readonly fallback: BounceSource | undefined;
     /** Timestamps for this technique's passes; does nothing without `timestamp-query`. */
@@ -71,7 +85,14 @@ export interface WorkFloorRate {
     readonly calibratedUnits: number;
 }
 
-/** Per-frame inputs for the optional screen stage. */
+/**
+ * Per-frame inputs for the optional screen stage. `frame`, `deltaTime` and
+ * `camera` are those of the frame's `encode`, which the host calls before
+ * `encodeScreen` (RC2.1): a screen technique reconstructs world positions
+ * from `screen.depth` with `camera.projection × camera.view`, so `projection`
+ * must be the one the depth was drawn with (WebGPU's 0..1 depth range).
+ * `changes` is empty and `units` 0: the budget belongs to `encode`.
+ */
 export interface TechniqueScreenFrame extends TechniqueFrame {
     readonly screen: FrameScreen;
 }

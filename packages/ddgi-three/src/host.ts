@@ -8,7 +8,8 @@
  * runs in compatibility mode (NOTES), so this does the same; that also covers
  * the platform's optional features (subgroups, timestamp-query, ...). Limits
  * are the platform's `requiredLimits`: the adapter's largest storage bindings
- * and buffers, which large scenes need.
+ * and buffers, which large scenes need, and its colour-attachment bytes
+ * per pixel, which a scene pass with the screen inputs needs (RC1.1).
  */
 
 import { WebGPURenderer } from 'three/webgpu';

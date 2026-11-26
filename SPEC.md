@@ -137,7 +137,7 @@ Checked against the r187 source. Runtime confirmation is an M0 spike.
 - It never walks an engine's scene graph.
 - It never touches an engine's internals.
 
-"The core" here means the platform packages plus every technique. Everything engine-specific lives in an adapter. A lint rule and a CI check enforce this: platform and technique packages may only import from each other.
+"The core" here means the platform packages plus every technique. Everything engine-specific lives in an adapter. Lint rules in `eslint.config.mjs` enforce this inside `ddgi-core` (`pnpm lint`; there is no separate CI check yet): no engine or adapter import anywhere in the core; a technique imports only `platform/contract` and its own folder (not the platform's internals, `@pmndrs/bvh` or another technique); the platform never imports a technique. Tests may use platform internals as fixtures.
 
 ### Packages
 
@@ -151,7 +151,7 @@ Checked against the r187 source. Runtime confirmation is an M0 spike.
 
 Engines are optional peer dependencies.
 
-**Inside the repo,** the platform and the technique stay separate modules (the `@gi/*` names below), with a lint-enforced boundary. When the second technique arrives, the platform can move into its own package (for example `@pmndrs/gi-core`) without changing its API.
+**Inside the repo,** the platform and the technique stay separate modules (the `@gi/*` names below), with a lint-enforced boundary (techniques reach the platform only through `platform/contract`). When the second technique arrives, the platform can move into its own package (for example `@pmndrs/gi-core`) without changing its API.
 
 **Platform: shared by every GI method**
 
