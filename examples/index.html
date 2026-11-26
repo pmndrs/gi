@@ -86,7 +86,7 @@
                 border-top: 1px solid var(--border);
                 font-size: 13px;
             }
-            .foot a {
+            .presets a, .foot a {
                 color: var(--accent);
             }
         </style>
@@ -95,7 +95,7 @@
         <div class="wrap">
             <h1><span>@pmndrs/gi</span> · Examples</h1>
             <p>Real-time global illumination for WebGPU: light bounces off walls and floors, and follows moving lights, objects and the sun. Each example is the shortest code that shows one feature.</p>
-            <p>They need WebGPU: Chrome or Edge 113+, or Safari 26+. Each one opens with a short warm-up while the probes learn the light. Drag to orbit; the line at the bottom shows what GI is doing.</p>
+            <p>These examples need WebGPU in Chrome or Edge 113+, or Safari 26+. Drag to orbit in the DDGI examples, or ride the camera rail in Split Radiance Cascades.</p>
 
             <h2>three.js</h2>
             <p>Through <code>@pmndrs/gi/three</code>: a <code>DDGIVolume</code> in the scene, like three's <code>LightProbeGrid</code>.</p>
@@ -151,6 +151,21 @@
                     <div class="description">The probes and their states, GI alone, its coverage, and the irradiance atlas the probes write.</div>
                 </a>
             </div>
+
+            <h2>Split Radiance Cascades</h2>
+            <div class="grid">
+                <a class="card" href="11-radiance-cascades/">
+                    <div class="number">11</div>
+                    <div class="title">Lamp gallery camera rail</div>
+                    <div class="description">Ride through the gallery as the side rooms change colour. Compare the native WebGPU solver and the Three.js reference in direct, indirect or combined light.</div>
+                </a>
+            </div>
+            <ul class="presets">
+                <li><a href="11-radiance-cascades/?scene=door&amp;camera=receiver&amp;view=indirect">Sliding shutter</a> · Watch the indirect light on a wall as a door covers and uncovers the lamp.</li>
+                <li><a href="11-radiance-cascades/?scene=polished">Polished gallery rail</a> · Follow the lamps’ reflections as the camera moves.</li>
+                <li><a href="11-radiance-cascades/?scene=roughness">Five floor finishes</a> · Compare the spread of a reflection across five roughness values.</li>
+                <li><a href="11-radiance-cascades/?scene=reflection-motion">Offscreen moving emitter</a> · Watch the reflection move while the camera stays still.</li>
+            </ul>
 
             <h2>No engine</h2>
             <p><code>@pmndrs/gi/core</code> and <code>@pmndrs/gi/ddgi</code> on a bare <code>GPUDevice</code>: the reference for plain WebGPU apps and for anyone writing an adapter for another engine.</p>

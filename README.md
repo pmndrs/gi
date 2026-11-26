@@ -65,6 +65,10 @@ Where to go next:
 
 The examples run from this repository: `pnpm install`, then `pnpm examples`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
+## Split Radiance Cascades experiment
+
+Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. Run `pnpm examples` and open `/11-radiance-cascades/` to compare it with the Three.js reference on the same rail, close a moving shutter, or try temporal upscaling. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
+
 ## Browser support
 
 GI runs on WebGPU only; there is no WebGL fallback.

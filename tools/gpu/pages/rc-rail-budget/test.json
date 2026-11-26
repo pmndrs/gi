@@ -1,0 +1,5 @@
+{
+    "description": "Three alternating stride 2 / stride 1 pairs over identical gallery rail frames. Reports per-frame RC compute, presentation interval, scratch and probe bytes, and fixed-receiver display RGB error against stride 1.",
+    "timeoutMs": 600000,
+    "manual": true
+}

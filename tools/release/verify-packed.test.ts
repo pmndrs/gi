@@ -37,6 +37,10 @@ throw new Error("import('nowhere') failed");`;
 describe('the import graph', () => {
     // A package cut into layer chunks as the build cuts it (packages/ddgi/layer-chunks.ts).
     const files: Record<string, string> = {
+        '/pkg/dist/radiance-cascades.js': "export * from './chunks/rc-r4.js';",
+        '/pkg/dist/radiance-cascades.d.ts': "export * from './chunks/rc-r4.js';",
+        '/pkg/dist/chunks/rc-r4.js': "import '@pmndrs/rc-bvh'; export const rc = 1;",
+        '/pkg/dist/chunks/rc-r4.d.ts': "export type { MeshGeometry } from '@pmndrs/rc-bvh';",
         '/pkg/dist/core.js': "export * from './chunks/platform-a1.js';",
         '/pkg/dist/core.d.ts': "export * from './chunks/platform-a1.js';",
         '/pkg/dist/ddgi.js': "export * from './chunks/ddgi-b2.js';",
@@ -79,6 +83,11 @@ describe('the import graph', () => {
         const failures = checkImportGraph(resolve('/pkg'), reader(leaky));
         expect(failures).toContain("dist/core.js reaches 'three', which /core must not need");
         expect(failures).toContain("dist/ddgi.js reaches 'three', which /ddgi must not need");
+    });
+
+    test('/radiance-cascades cannot acquire a Three dependency', () => {
+        const leaky = { ...files, '/pkg/dist/chunks/rc-r4.js': "import 'three';" };
+        expect(checkImportGraph(resolve('/pkg'), reader(leaky))).toContain("dist/radiance-cascades.js reaches 'three', which /radiance-cascades must not need");
     });
 
     test('a file holds the layer its name says', () => {

@@ -119,8 +119,11 @@ function writePackageFiles(): void {
     const licenses = join(PACKAGE_DIRECTORY, 'licenses');
     rmSync(licenses, { recursive: true, force: true });
     mkdirSync(licenses);
-    const texts = readdirSync(BUNDLED_LICENSES).filter((name) => name.endsWith('.txt'));
-    for (const name of texts) copyFileSync(join(BUNDLED_LICENSES, name), join(licenses, name));
+    const sources = [BUNDLED_LICENSES, join(REPOSITORY_ROOT, 'packages/ddgi-core/src/techniques/radiance-cascades/licenses')];
+    const texts = sources.flatMap(source => readdirSync(source).filter(name => name.endsWith('.txt')).map(name => {
+        copyFileSync(join(source, name), join(licenses, name));
+        return name;
+    }));
 
     console.log(`Package files: README.md (${readme.length} characters), LICENSE, licenses/ (${texts.join(', ')}).`);
 }

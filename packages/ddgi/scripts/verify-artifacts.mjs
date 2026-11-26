@@ -9,7 +9,7 @@ import { ENTRY_LAYERS, LAYER_CHUNKS } from '../layer-chunks.ts';
 
 const packageRoot = resolve(import.meta.dirname, '..');
 const dist = resolve(packageRoot, 'dist');
-const publicEntries = ['index', 'core', 'ddgi', 'three'];
+const publicEntries = ['index', 'core', 'ddgi', 'three', 'radiance-cascades'];
 const privatePackagePrefix = '@pmndrs/ddgi-';
 
 const problems = [];
@@ -24,7 +24,7 @@ for (const entry of publicEntries) {
 // The files npm ships beside dist: README and LICENSE are copied from the
 // repository root by tools/release/package-files.ts; THIRD_PARTY.md is the
 // package's own; licenses/ holds the bundled code's licence texts it points to.
-for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY.md', 'licenses/tinybvh.txt', 'licenses/emscripten-runtime.txt', 'licenses/hiprt.txt']) {
+for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY.md', 'licenses/tinybvh.txt', 'licenses/emscripten-runtime.txt', 'licenses/hiprt.txt', 'licenses/pathtracer-MIT.txt', 'licenses/pbrt-v4-Apache-2.0.txt']) {
     if (!existsSync(resolve(packageRoot, file))) problems.push(`missing ${file} in packages/ddgi`);
 }
 
@@ -64,7 +64,7 @@ for (const file of existsSync(dist) ? walk(dist) : []) {
 // The layers each entry may load (ENTRY_LAYERS). Reaching a file of a layer outside its list
 // means code of a higher layer leaked into a lower entry (the platform
 // importing DDGI, or DDGI importing three), whatever the entry's name says.
-const entryLayer = { core: 'platform', ddgi: 'ddgi', three: 'three', index: 'three' };
+const entryLayer = { 'radiance-cascades': 'rc', core: 'platform', ddgi: 'ddgi', three: 'three', index: 'three' };
 const chunksDirectory = resolve(dist, 'chunks');
 
 /** The layer a dist file belongs to: a chunk's by its name, an entry's by `entryLayer`. */

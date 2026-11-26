@@ -130,3 +130,9 @@ Frame-to-frame change of the GI image on a still, converged scene, from the `ddg
 - `probes_per_frame_mean`: what the budget gave. With `gpuMs2` it varies with the GPU's speed that second, so compare flicker with this number beside it.
 - `image_mean_drift`: the whole image's mean, last 10 frames against first 10: a check that the scene was converged.
 - The GI image is the engine-free test view's indirect image (albedo / pi times the field), 640 x 360, so it holds no noise except the probes'.
+
+## radiance-cascades.csv
+
+The lamp-gallery rail benchmark compares primary ray strides at fixed probe spacing and the same camera ticks. Each arm warms 48 frames and measures 60. `rc_compute_ms` covers the S5 compute group; `frame_interval_ms` measures the presentation callback interval. `median/` summarizes three per-arm results. Memory separates persistent probe storage from hit scratch. The center third of a 64 × 36 indirect image supplies the receiver's display-RGB MAE and RMSE relative to stride 1 after 64 fixed-pose frames. Apply the clock verdict above when interpreting timings.
+
+The `initial` rows use 5 cm spacing and six orientation groups. The `tuned` rows use 10 cm spacing and share orientations. Paths ending in `cooled` have one clock verdict per pair. The tuned 960 × 540 cooled rows are the default demo comparison on this branch.

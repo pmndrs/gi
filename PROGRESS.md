@@ -21,6 +21,112 @@ Rules:
 
 ---
 
+## 2026-11-26 · SRC.1 · Apple Metal run: phase five passes · lead (main session, Opus 5.5)
+
+Did: ran [issue #43](https://github.com/pmndrs/gi/issues/43) on an Apple M5 Pro (Mac17,9, macOS 26.6.2, Chrome 158.0.8127.88, Node 24.12.0, AC power). At the pinned `75b9c67`, seven of eight correctness fixtures passed. `rc-backends` failed because every whole-frame timestamp read 0. Apple GPUs drop the timestamp of an empty pass, and a separately submitted end marker runs beside the frame instead of after it. Fixed in `examples/11-radiance-cascades/measurement.ts` (`d8b9776`): each marker dispatches one workgroup, and the end marker copies and reads one canvas texel first. Details are in [NOTES](docs/NOTES.md#webgpu).
+Verified at `d8b9776` with a clean tree. All 8 correctness fixtures, polished quality, 3 normal and 3 uncapped reflection pairs and the built examples smoke passed. `allPreflightsObservedIdleAndNominal` is true in both summaries. One preflight read busy and passed on retry. Lint, typecheck and 1,885 unit tests passed with 13 skipped. In the built-in browser pane, all five gallery scenes rendered, and native, TAA, upscaling and the reflection toggle worked with no console errors.
+Not verified: ghosting judged by eye. The pane renders too small for that, so motion stability rests on the quality fixture's frame-to-frame change against native TAA: 1.418/255 at 1.5× and 1.633/255 at 2×. Windows measured 1.417 and 1.630. With the pane visible at 120 Hz, the HUD showed 8.33 ms intervals and a 5.6 ms GPU span. The Windows timings were not re-measured with the new markers; D3D12 already serialized the old ones. Thermal qualification is unassessed on macOS.
+Numbers: shutter 90% at 2 frames after closure and 12 after reopening (native), matching the RTX. Polished-floor RGB MAE was 2.137/255 at 1.5× and 2.630/255 at 2×. Uncapped reflections on/off over 1,440 frames: medians 1.304/1.142 ms, p95 1.444/1.264 ms. At 60 Hz, on/off were 4.56/5.14 ms; the GPU clock follows the light load there, so this is not a cost estimate. Archive `rc-metal-results-20261126-150911.tar.gz`, SHA-256 `b4b61c6f3e71f4b242090e9a5dd75b8712c43437d812e72b2c8ac8348c2760ac`. [CSV rows](bench/results/radiance-cascades.csv)
+Next: SRC.1 is done, and [PR #42](https://github.com/pmndrs/gi/pull/42) goes to final review. Follow-ups: [#46](https://github.com/pmndrs/gi/issues/46) re-times the RTX pairs with the new marker, and [#47](https://github.com/pmndrs/gi/issues/47) traces the Sponza differences against Chandra.
+
+## 2026-11-26 · SRC.1 · Split RC gallery and Apple Metal handoff
+
+Integrated [GI-1.2 (#41)](https://github.com/pmndrs/gi/pull/41) from main at `025ece2`. The [examples index](examples/README.md#split-radiance-cascades-scenes) exposes the lamp rail, sliding shutter, polished floor, roughness sweep and offscreen moving emitter. The GI-1.2 viewer remains available via `pnpm dev`.
+The frozen install, packed consumers, viewer and Pages builds passed. The RTX examples-site smoke rendered examples 01–11 and the standalone WebGPU example.
+Four of five phases pass. [Issue #43](https://github.com/pmndrs/gi/issues/43) owns Apple Silicon gallery correctness, reconstruction and matched reflection timings for [PR #42](https://github.com/pmndrs/gi/pull/42). The issue records the test branch, revision and results to return.
+
+## 2026-11-26 · SRC.1 · Public tracer and upstream integration
+
+Merged upstream main at `a3f4685` and pinned `@pmndrs/raytracer@0.1.0` from public npm. A fresh checkout with an empty pnpm store, frozen lockfile and private Git access disabled downloaded all 186 packages. The new Mac launcher uses the frozen registry install.
+
+Chrome on the RTX passed transport, native core, native reflections, door response and polished-rail quality. The three analytical fixtures and all 540 native door samples matched their archived values exactly. The shutter reached 90% at 2 frames after closure and 12 after reopening. Polished-rail full-image RGB MAE was 2.135/255 at 1.5× and 2.641/255 at 2×.
+
+Four of five original phases pass. The Windows part of reconstruction and hardware is complete. The remaining evidence is the Apple Silicon correctness, quality and timing archive. The earlier kit identifies its tested revision, and the public branch can run the same checks directly. The separate [radiance-cache base PR](https://github.com/pmndrs/gi/pull/41) precedes Split RC in the planned merge order. [Phase tracker](docs/radiance-cascades/PLAN.md) · [Mac instructions](docs/radiance-cascades/metal.md)
+
+## 2026-11-20 · SRC.1 · Idle reflection timing and Apple Silicon handoff
+
+**RTX 3060 Laptop** · Chrome 157.0.8103.79, native interval solver, 640 × 360 internal and 960 × 540 display, 1.5× temporal reconstruction. The final run supersedes a pass that overlapped unit tests. Three pairs toggled the reflection gather at the same 60 moving rail ticks after shader preparation and 48 warmup draws. Each arm advanced transport once per draw. All 15 prelaunch GPU readings were 0–1%. Both GPU and CPU reservations were held throughout. Starting temperatures were 61, 60 and 57°C. [Individual frames](bench/results/radiance-cascades-polished-frames.csv) · [Summary and conditions](bench/results/radiance-cascades.csv)
+
+**Timing** · At normal cadence the 180 frames per setting gave on/off whole-frame queue medians of 6.289 and 3.613 ms, with p95 7.830 and 4.405 ms. The paired median differences were +2.543, +2.532 and +2.634 ms. The floor changed by 22.86–22.87 RGB levels out of 255. At normal 16.7 ms presentation intervals, all three runs stayed below the clock sampler’s 70% sustained-load threshold.
+
+**Sustained load** · A separate uncapped run retained one actual cascade update per animation frame. On the same rail ticks (128–187), pooled median and p95 on/off were 2.186 / 2.785 and 1.893 / 2.385 ms. Over ticks 128–607 (1,440 frames per setting), on/off were 2.113 / 2.627 and 1.758 / 2.218 ms. All three pairs passed the sustained clock check. They started at 58, 66 and 68°C with 11, 10 and 10 loaded samples, and zero thermal throttling. These timings measure the whole queue from G-buffer through final canvas blit.
+
+**Mac** · The [portable test](docs/radiance-cascades/metal.md) runs the same gallery with Apple-device checks, image comparisons, idle sampling and three reflection pairs at each cadence. A fresh checkout installed the 79-file tracer pin from the included pnpm seed with HTTPS Git disabled. Public npm supplied the other 185 packages. Phase five awaits the returned Apple hardware evidence.
+
+**Integration** · Merged upstream main at `93176bb` into the RC branch. The clean source checkout built the gallery and npm package, and both packed-consumer tests passed. Lint, typecheck and 1,628 unit tests passed with 13 skipped, including replay of all six Windows pair reports through the Metal result checks. The public CI workflow still needs a way to install the private pathtracer pin on a cold checkout. The internal Mac dependency seed is for this handoff.
+
+**Skill feedback** · Reserve CPU and GPU together for whole-queue timing. In this test the 60 Hz gallery stayed below the sustained clock threshold, while a longer genuine animation-frame run without the cap produced 10–11 loaded clock samples per pair.
+
+## 2026-11-19 · SRC.1 · Web performance and image quality
+
+**Phase review** · Four of the five original phases pass. The shared transport passes its analytical lighting and moving-blocker checks and runs through the native gallery adapter. Chandra and S5 remain useful for inspecting an image or tracing an unexpected lighting result. The open phase covers reconstruction and hardware. [Acceptance decision](docs/DECISIONS.md#2026-11-19) · [Phase tracker](docs/radiance-cascades/PLAN.md)
+
+**Integrated GPU** · Chrome on Intel Gen12LP passed `rc-native-core`, `rc-native-reflections` and `rc-transport`. Removing the blocker gave a red receiver value of 0.90031624 against the analytical 0.90031632. The specular fixture ran 169 frames with 169 transport batches. These were correctness runs.
+
+**Reconstruction on the moving polished rail** · At 960 × 540 display, roughness 0.24 and sharpness 0.3, a repeat full-resolution TRAA run reproduced every captured RGB value across all 24 sampled poses on the RTX 3060 Laptop. Against that baseline, 1.5× (640 × 360) and 2× (480 × 270) respectively gave mean display RGB errors of 2.18 and 2.64 out of 255 overall, 6.90 and 8.20 at reference edges, and 1.99 and 2.66 on the floor. The mean error in consecutive frame changes on the floor was 1.30 and 1.64 over 20 frame pairs. Scaling changes the primary ray count, raster resolution and temporal resolve together. The 1.5× default retains finer detail in this sequence. [Matched crop](docs/radiance-cascades/images/polished-resolution-crop.png) · [Reproduction](docs/radiance-cascades/PLAN.md#reproduction)
+
+**Reflections in motion** · Three alternating on/off pairs, each with 48 warmup frames and 60 measured rail frames, gave 180 GPU timestamps per mode. At the final pose, enabling rough reflections changed the lit floor by 22.85–22.86 RGB levels out of 255. The pooled whole-frame GPU median and p95 were 10.44 / 13.51 ms on and 9.64 / 13.27 ms off. Paired median differences were −1.43, +1.64 and +2.55 ms. The RTX started at 86–87°C with 70–100% utilization before Chrome launched. Sustained reflection cost remains open. [Measurements](bench/results/radiance-cascades.csv)
+
+**Instrumentation and checks** · The native gallery skips Three’s per-pass timestamp queries. All six native arms recorded one transport update and one whole-frame GPU timestamp per measured draw, with zero Three query pools. The S5 regression retained all 60 compute timestamps at each stride. Lint, typecheck and the examples build passed. The unit suite passed 1,620 tests and skipped 13.
+
+**Skill feedback** · For mixed Three/WebGPU renderers, verify one transport update per animation frame and await the temporal upscaler’s preparation before collecting GPU timestamps.
+
+## 2026-11-19 · SRC.2 and SRC.3 · Chandra and rough reflections
+
+**Original phases** · Three of five passed. The shared tracer still has a diffuse parity investigation. Reconstruction runs on Windows and awaits Metal validation and sustained comparative timings. [Phase table](docs/radiance-cascades/PLAN.md)
+
+**Reflections** · The new vanilla WebGPU gather reuses the directional data that diffuse transport already collected. At low roughness it composes nine reflected directions through three intervals. Bilinear directional interpolation in the farther intervals reduced visible faceting. The gallery handles material Fresnel and presents the result through Three.js. [Experiment list, stills and recording](research/radiance-cascades/reflections.md)
+
+**Gallery checks** · On the RTX 3060 Laptop at 480 × 270, moving the offscreen blue lamp with the camera fixed shifted the floor response centroid from 0.4372 to 0.5620 of the image width (59.9 pixels). At the right-hand pose increasing roughness from 0.15 to 0.85 increased the horizontal standard deviation from 0.1323 to 0.2182 of image width and reduced peak display response from 0.8880 to 0.4831. Disabling specular produced a black reflection-only image. With the lamp fixed, moving the camera from rail tick 115 to 155 changed floor RGB by 16.0/255 on average. [GPU test](tools/gpu/pages/rc-rough-motion/)
+
+**Core checks** · The NVIDIA analytical fixture found a 0.00073 change in red radiance across a far-cascade angular-bin boundary. Two directions inside the same coarse near bin remained distinguishable at 0.0230 and 0.9063 red. An opaque near blocker suppressed the distant signal. The solver issued 169 transport batches in 169 frames with specular enabled. The integrated demo's 1.5× temporal rail stayed ready through 751 updates at 320 × 180 internal and 480 × 270 display. The recording's final specular-only frame reached 238/255. Some rectangular probe-cell boundaries remain visible at roughness 0.15. [Analytical fixture](tools/gpu/pages/rc-native-reflections/)
+
+**Matched Sponza** · Built the authors' interactive Rust/CUDA executable at `9af00e8`. A local headless driver ran the upstream single-bounce kernels for 128 updates on the RTX 3060 Laptop. The two browser arms used the same 262,267-triangle OBJ, material IDs, camera, black environment, disabled sun and constant red/cyan emitters. The directly visible emitters matched on all 4,071 pixels. Both browser direct images matched exactly. [Build, local launcher and fixture](docs/radiance-cascades/chandra.md) · [Capture comparison](docs/radiance-cascades/images/chandra-sponza-comparison.png)
+
+| Solver | Mean scene-linear diffuse RGB | RGB RMSE vs Chandra | Relative RMS vs Chandra |
+| --- | --- | ---: | ---: |
+| Chandra | 0.02030, 0.05170, 0.05170 | 0 | 0 |
+| Vanilla WebGPU | 0.02054, 0.04973, 0.04973 | 0.04597 | 38.8% |
+| Three.js S5 | 0.02182, 0.05117, 0.05117 | 0.04424 | 37.4% |
+
+Mean linear diffuse luminance was 0.04353 for WebGPU, 0.04493 for Three.js and 0.04503 for Chandra. WebGPU was 3.3% dimmer on average. Local brightness differences remain visible in the central passage. Relative RMS divides RGB error energy by Chandra's image energy and takes the square root. The three solvers use different cache layouts and ray budgets. The polished WebGPU cone at roughness 0.15 produces a broader distribution than Chandra's directional specular query (pre-Fresnel RGB RMSE 0.20151). A converged path-traced image would be needed to assign absolute lighting error. The run did not qualify for a sustained speed comparison.
+
+**Verification** · Full lint, package build, TypeScript checks and all 1,620 active unit tests passed. The suite skipped 13 tests. The unit suite ran with two workers after the default parallel run hit timer and I/O timeouts on the compiling host.
+
+**Shader-compile skill feedback** · None.
+
+## 2026-11-19 · Native Split RC, gallery A/B and shutter response
+
+The public `@pmndrs/gi/radiance-cascades` entry runs on a bare GPUDevice. The interval transport uses the pathtracer for closest hits and shadow visibility. The gallery offers the native solver, the S5 Three.js reference, a moving shutter and native, TAA or reduced-resolution temporal presentation. [Spec and API](docs/radiance-cascades/SPEC.md) · [Reproduction](docs/radiance-cascades/PLAN.md)
+
+At 320 × 180, stride 2, the shutter moved over 30 frames while the recessed emitter stayed constant. Time is measured from the end of travel to the first of eight consecutive samples past the threshold. Luminance is linear and measured on a fixed receiver before tone mapping or upscaling.
+
+| Solver | Open luminance | Closed / open | Close T50 / T90 | Reopen T50 / T90 | Reopened / open |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native WebGPU | 0.13462 | 0.79% | 0 / 2 frames | 0 / 12 frames | 96.5% |
+| Three.js reference | 0.28246 | 9.53% | 8 / 58 frames | 4 / 49 frames | 100.8% |
+
+A CPU single-bounce integration of the same 144 receiver samples gives 0.16962 with the shutter open and zero with it closed. Doubling the samples per emitting face axis changed the integral by 0.42%. The native open value was 20.6% below this emitter-only estimate. The estimate omits the guide light and secondary bounces. [CPU check](tools/gpu/pages/rc-door-response/emitter-oracle.ts)
+
+Native close/reopen T90 was 33/200 ms of observed wall time. Three.js took 1,050/933 ms. The laptop started the response run at 87°C. [Per-frame data](bench/results/radiance-cascades-shutter.csv) · [Response plot](docs/radiance-cascades/images/shutter-response.png)
+
+At the same 640 × 360 rail poses, the native and reference direct-only frames were byte-identical. At amber/blue ticks 183/359 the native composite differed from the reference by 28.22/25.01 mean absolute 8-bit RGB values. Native average displayed indirect luminance was 0.189/0.305, versus 0.332/0.473 for the reference. Native used 27.19 MB of probe storage and 8.06 MB of ray and transport scratch. Three.js used 50.06 MB and 2.30 MB respectively. GPU queue-span medians were 4.88/4.85 ms for native and 5.50/5.93 ms for Three.js. This first A/B started at 73°C and did not qualify for a sustained performance verdict. A separate 64°C run returned 4.90/4.58 ms for native and 6.52/4.98 ms for Three.js. Vsync kept utilization below the clock validator’s 70% load threshold, so this run also gives no speed verdict. The two solvers use different probe layouts, and the reference adds secondary bounces. [Measured rail and reconstruction data](bench/results/radiance-cascades.csv)
+
+At the 960 × 540 preview size, whole-frame GPU-span medians at ticks 183/359 were 7.63/7.01 ms for native and 7.77/8.06 ms for the reference, with 24 timestamps per pose and backend. Direct images again matched byte for byte. This 65°C run also produced zero high-load clock samples.
+
+Temporal reconstruction passed live resize, camera-cut reset, camera jitter and one solver update per displayed frame. Native used a 320 × 180 source at 481 × 271 display and 1.5×. On the reference gallery's fixed direct-only pose, 2× temporal reconstruction reduced mean RGB error across 3,839 edge pixels from 12.21 to 8.36 code values relative to converged native-resolution Three TRAA. The comparison used bilinear reconstruction of the same half-resolution input and zero sharpening.
+
+The analytic no-engine GPU tests covered constant incoming radiance, near occlusion, split intervals, moving-instance shadows, external output textures and resize. Two clean npm consumers imported the packed subpath with Three.js absent. Frozen install, package build, typecheck, lint and the complete unit suite passed (1,620 tests, 13 skipped). Hardware validation used Chrome on the RTX 3060 Laptop.
+
+## 2026-11-19 · SRC.1 · Split Radiance Cascades rail and interval tracer
+Did: added the [lamp gallery and spec](docs/radiance-cascades/SPEC.md), [plan](docs/radiance-cascades/PLAN.md), [research collection](research/radiance-cascades/README.md), and [GPU interval fixture](experiments/rc-intervals/README.md). The rail freezes pose/history for direct, indirect and composite inspection. Hit scratch is indexed by ray lane.
+Verified: locked install, Pages-base examples build, typecheck and lint. The full unit suite with two workers passed 1,617 tests with 13 skips. The first parallel run timed out in an existing archive-unpack test. Six interval results matched the analytical fixture through both Vite dev and build on NVIDIA Ampere.
+Verified: Windows, RTX 3060 Laptop, driver 592.00, Chrome 157.0.8103.79, Three.js r187. The final rc-rail test measured a blue receiver display luma of 0.037 direct and 0.359 composite. Indirect luma fell from 0.337 to 0.161 after 64 frames with colored emitters off (the guide lamp remains). Both odd-size resize checks passed.
+Quality: at the fixed receiver the initial four pools filled. With 10 cm finest spacing and shared orientations, peak occupancy across the diagnostic exposure fell to 1467/4096, 397/1707, 111/569 and 48/190. In the 192 × 230 sculpture region of the 1280 × 720 indirect capture, pixels with all display channels ≤2/255 fell from 33.63% to 0%. The screenshots in the spec use the tuned settings.
+Numbers: at 960 × 540 with the tuned settings, the median of three separately cooled paired medians was 3.789 ms for stride 2 and 15.714 ms for stride 1 (RC compute only). All three clock verdicts were VALID. Hit scratch was 5,184,000 vs 20,736,000 bytes; both arms used 50,059,472 probe bytes. Median fixed-receiver normalized display-RGB MAE was 0.00139 relative to stride 1. [Per-run results](bench/results/radiance-cascades.csv) retain the initial 480 × 270 sample with no clock verdict, the thermally throttled sustained run, and the separately cooled pairs.
+Not verified: Metal on this branch, radiometric error against converged path tracing, and deforming or moving occluders.
+Next: port the surface-ray generator and hit-shading path to the shared tracer, compare with the Three.js reference on the same rail, then run the moving-door fixture with updated traversal and shadow geometry.
+
 ## 2026-11-26 · rc-into-main: main (#40) merged in, CI's step-list test fixed · lead (main session)
 Did: merged `origin/main` (a3f4685, #40 issue #6) into `rc-into-main`; PROGRESS and DECISIONS conflicts only, both sides kept, main's 2026-11-20 entries placed by date. PR #41's Ubuntu failure was `tools/release/publish-workflow.test.ts` pinning ci.yml's step list without the `linked-siblings.ts --fetch` step (the describe is skipped on Windows, so only Ubuntu failed); the test now lists that step, with a note on when it goes.
 Why the clone step stays for now: `Gi1Denoiser` is only on pmndrs/denoiser's `gi1-denoiser` branch (pmndrs/denoiser#33, open, green, its head is our pin 022e02b). `denoiser@2.0.0` on npm has no `Gi1Denoiser`, so gi can't move to the published denoiser until #33 merges and ships. `@pathtracer/mlp` isn't published either (stays optional and off in CI).

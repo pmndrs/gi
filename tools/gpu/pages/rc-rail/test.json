@@ -1,0 +1,4 @@
+{
+    "description": "Built Split RC rail demo: presented pixels change along the rail, indirect light reaches the receiver, and its light settles when the emitters change.",
+    "timeoutMs": 240000
+}

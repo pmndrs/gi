@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Radiance cascades · The lamp gallery</title>
+    <link rel="icon" href="data:," />
+    <style>
+        :root { color-scheme: dark; font: 14px/1.45 system-ui, sans-serif; color: #f0e9de; background: #141312; }
+        * { box-sizing: border-box; }
+        [hidden] { display: none !important; }
+        body { margin: 0; }
+        canvas { display: block; width: 100vw; height: 100dvh; }
+        #panel { position: fixed; top: 1rem; left: 1rem; z-index: 1; max-width: min(21rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow: auto; border: 1px solid #ffffff31; border-radius: .45rem; background: #191919ea; box-shadow: 0 6px 24px #0005; }
+        summary { cursor: pointer; padding: .7rem 1rem; font-weight: 650; }
+        #controls { padding: 0 1rem 1rem; }
+        p { margin: .1rem 0 .9rem; color: #c3beb6; }
+        label, .row { display: flex; align-items: center; justify-content: space-between; gap: .4rem; margin: .4rem 0; }
+        select, button { color: #f8f5f0; background: #343230; border: 1px solid #65615a; border-radius: .25rem; padding: .32rem .5rem; font: inherit; }
+        select { width: 10.4rem; }
+        label input[type="range"] { width: 7rem; min-width: 0; }
+        button { cursor: pointer; }
+        button:hover, select:hover { background: #47433e; }
+        button:disabled { opacity: .5; }
+        .row { justify-content: flex-start; margin-top: .7rem; }
+        output { display: block; font: .83rem/1.6 ui-monospace, monospace; white-space: pre-line; color: #ede0cb; }
+        #status { margin-top: .7rem; }
+        :focus-visible { outline: 2px solid #ffd084; outline-offset: 2px; }
+    </style>
+</head>
+<body>
+    <details id="panel" open>
+        <summary>Radiance cascades</summary>
+        <div id="controls">
+            <p id="description">Follow the amber and blue light along the gallery rail.</p>
+            <label>Solver <select id="backend"><option value="interval">Native WebGPU</option><option value="three">Three.js reference</option></select></label>
+            <label>Scene <select id="scene"><option value="gallery">Lamp gallery</option><option value="door">Sliding shutter</option><option value="polished">Polished gallery rail</option><option value="roughness">Roughness sweep</option><option value="reflection-motion">Offscreen moving emitter</option></select></label>
+            <label>View <select id="view"><option value="lit">Lit</option><option value="indirect">Indirect only</option><option value="direct">Direct only</option><option value="specular">Indirect specular</option><option value="diffuse">Indirect diffuse</option></select></label>
+            <label>Camera <select id="camera"><option value="rail">Gallery rail</option><option value="receiver">Inspect sculpture</option></select></label>
+            <label>Emitters <select id="cue"><option value="sequence">Scripted sequence</option><option value="amber">Amber only</option><option value="blue">Blue only</option><option value="off">Both off</option></select></label>
+            <label>Shutter <select id="door"><option value="sequence">Scripted travel</option><option value="open">Open</option><option value="closed">Closed</option></select></label>
+            <label>Directional reflections <select id="specular"><option value="on">On</option><option value="off">Off</option></select></label>
+            <label>Floor roughness <input id="roughness" type="range" min="0" max="1" step=".01" value=".24"><output id="roughness-value" for="roughness">0.24</output></label>
+            <label>Overhead emitter <select id="motion"><option value="still">Center</option><option value="sequence">Moving</option><option value="left">Left</option><option value="right">Right</option></select></label>
+            <label>Presentation <select id="resolve"><option value="native">Native</option><option value="taa">Native + TAA</option><option value="upscale">Temporal upscale</option></select></label>
+            <label>Display / render <select id="ratio"><option>1.5</option><option selected>2</option><option>3</option></select></label>
+            <label>Sharpness <input id="sharpness" type="range" min="0" max="1" step=".05" value=".3"></label>
+            <label>Display size <select id="outputSize"><option value="preview">Up to 960 × 540</option><option value="full">Full viewport</option></select></label>
+            <div class="row"><button id="play" disabled>Pause</button><button id="step" disabled>Step</button><button id="replay" disabled title="Restart from frame zero with fresh probe history">Replay</button></div>
+            <output id="status" role="status">Starting WebGPU…</output>
+            <output id="metrics" aria-live="off"></output>
+        </div>
+    </details>
+    <script type="module" src="./main.ts"></script>
+</body>
+</html>

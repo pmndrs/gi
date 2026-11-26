@@ -160,6 +160,8 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **WGSL's only compare-exchange is weak** (`atomicCompareExchangeWeak` may report `exchanged: false` although the value matched), so a port of HLSL's strong `InterlockedCompareExchange` retries while `!exchanged && old_value == compare`; without that a slot claim can spuriously move on to the next slot. The hash grid does this (register D22); 65,536 threads inserting one tile got one slot on both GPUs. Source: RC3.1.
 - **The radiance cache's hash grid at Capsaicin's default capacity is 1,073,742,272 bytes (1,024.0 MiB) in three buffers:** update scratch 713,031,680 (the largest binding), cell values 356,515,840, tile words 4,194,560. Both laptop GPUs' adapters offer 2,147,483,644-byte bindings and 2 GiB buffers in Chrome 157, and allocate it; a default-limits device is refused with `GILimitError` on `maxStorageBufferBindingSize` before anything is made. Source: RC3.1, `radiance-cache-hash-grid`.
 - **Capsaicin's `HashGridCache_FindCell` stops at a bucket's first empty slot** (`hash_grid_cache.hlsl:290-291`), and `PurgeTiles` frees slots anywhere in a bucket. So after slot 0's tile is purged, a live tile in slot 1 is no longer found, and the next insert of it claims slot 0 as a new tile (its cells start empty); the old copy in slot 1 is never touched again and is purged 50 frames later. Kept as Capsaicin has it; checked on both GPUs. Source: RC3.1.
+- **On Apple GPUs a timestamp pass submitted on its own does not wait for earlier work** (M5 Pro, macOS 26.6.2, Chrome 158.0.8127.88). An empty compute pass never writes its `beginningOfPassWriteIndex` timestamp, so the resolve reads 0. A pass with one dispatch writes it, but separate submissions run side by side: two markers placed around a 30 ms render or compute pass read 0.004–0.05 ms apart, and both landed at the heavy pass's start. Give the end marker a dependency on the measured work, such as a copy of a texel the work wrote, and the bracket matches the pass's own timestamps to within 0.01 ms. On D3D12 the markers already serialize, so Windows numbers taken with empty markers are unaffected. Source: Split RC phase 5, `examples/11-radiance-cascades/measurement.ts`.
+- **A frame-end marker that reads the canvas texture also waits for the compositor to release it.** In the hidden built-in browser pane, the gallery HUD's GPU span read about 354 ms, close to the throttled frame interval. In the visible pane at 120 Hz the span was 5.6 ms, and headless runs showed 1–5 ms. Treat the normal 60 Hz span as a paced-frame figure and the uncapped run as the workload figure. Source: Split RC phase 5.
 - **Hidden tabs** do no GPU work, so benchmarks must run in a visible or headless-active page. Source: the HomeFig branch, and this project's audit (the built-in browser pane throttles when hidden).
 
 ## Tooling and environment
@@ -637,6 +639,17 @@ One bullet per fact, each with its source. Add a bullet when something cost you 
 - **The platform hands 0 units to a technique that says `warmingUp` at the frame's start,** so the frame in which a warm-up ends updates nothing. DDGI's loaded-field wait reports `warmingUp` only while the trees are building, so its first frame with trees already updates. Source: T5.2.
 - **The engine-free test view traces its primary rays through the platform's trees,** so it reads 0 until a frame after `rays.whenBuilt()` has placed them (as `createDdgiScene` does). Source: T5.2.
 - **JavaScript hashing: a method call a word ran 10 ns a word, one inlined loop on locals 1.9 ns** (Node 24 on the M5 Pro, two 32-bit multiply-rotate lanes, 48 MB). Source: T5.2, `ContentHasher.words`.
+
+
+## Split Radiance Cascades
+
+- Chandra at `9af00e8` includes a directional specular query in the interactive renderer. Its separate `render` CLI stops after loading the scene. The [headless capture](../tools/reference/chandra/capture.rs) uses upstream kernels for a repeatable Sponza comparison.
+- The native WebGPU rough-specular output is incident radiance and observed support. The material adapter applies Fresnel. Opaque near hits retain the broad near-bin lobe. Sparse observations can also cause a fallback to that lobe. The narrower query can recover angular detail from distant intervals when the near interval transmits. [Implementation](../packages/ddgi-core/src/techniques/radiance-cascades/specular.ts)
+
+
+The native solver accepts world-position and signed normal textures. Its output is linear diffuse irradiance; multiply by albedo / π before display. The gallery can render reduced-resolution inputs and reconstruct from color, depth and motion.
+
+The S5 solver snapshots opaque triangles in world space at `setScene`. Camera motion and changes to existing lights or materials can share that snapshot. Rigid motion requires updating the geometry seen by both the closest-hit and shadow paths. The [project spec](radiance-cascades/SPEC.md) describes the interval-tracer boundary.
 
 ## Radiance cache (measured lessons)
 

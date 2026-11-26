@@ -1,0 +1,5 @@
+{
+    "description": "Built gallery reconstruction on a real WebGPU device: native, Three TRAA, temporal upscaler, camera jitter, resize and history reset.",
+    "manual": true,
+    "timeoutMs": 300000
+}
