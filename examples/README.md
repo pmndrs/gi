@@ -3,12 +3,13 @@
 Small, single-purpose pages, each the shortest code that shows one feature. WebGPU only: Chrome or Edge 113+, or Safari 26+.
 
 ```bash
-pnpm install
+node tools/linked-siblings.ts --fetch  # prepare the pinned denoiser on a fresh checkout (Git and Corepack required)
+pnpm install --frozen-lockfile
 pnpm examples          # http://localhost:5203, the landing page links every example
 pnpm examples:build    # the site, into examples/dist
 ```
 
-The library is read straight from `packages/` (aliased as `@pmndrs/gi`, `/core`, `/ddgi` and `/three`), so a change to it shows up here at once. Each example's `main.ts` imports only the library, three.js, `@pmndrs/upscaler` (02) and the helpers in `shared/`.
+The examples read the library straight from `packages/`, so a change to it shows up here at once. Examples 02 and 11 also use `@pmndrs/upscaler`.
 
 ## The examples
 
@@ -24,7 +25,17 @@ The library is read straight from `packages/` (aliased as `@pmndrs/gi`, `/core`,
 | 08 | **Saved bake** (`08-saved-bake`) | The first visit warms up and saves the probes (`volume.saveBake()`) into IndexedDB; a reload starts from them (`start(..., { bake })`), with no warm-up. |
 | 09 | **Export to LightProbeGrid** (`09-lightprobegrid`) | `volume.exportLightProbeGrid()`, three's own `LightProbeGrid` as a static fallback, wiped against live GI by the mouse; download it as JSON. |
 | 10 | **Debug views** (`10-debug`) | The probes where they sit and in their state's colour, the screen debug views (GI only, coverage, probe states; `?view=`), and the irradiance atlas, drawn in three from the technique's debug outputs (`10-debug/debug-views.ts`). |
-| 11 | **Split Radiance Cascades** ([camera rail](11-radiance-cascades/)) | A procedural passage with changing emission, a repeatable camera route and direct, indirect and composite views. The example owns its Three.js reference solver. |
+| 11 | **Split Radiance Cascades** ([source](11-radiance-cascades/)) | A procedural passage with changing emission, a repeatable camera route and direct, indirect and composite views. Compare the native WebGPU solver with the Three.js reference. |
+
+## Split Radiance Cascades scenes
+
+Run `pnpm examples`, then choose a starting scene. The examples index includes these five links. The separate GI-1.2 radiance-cache viewer from [PR #41](https://github.com/pmndrs/gi/pull/41) runs with `pnpm dev` at [localhost:5200](http://localhost:5200/?technique=rc).
+
+- [Lamp gallery camera rail](http://localhost:5203/11-radiance-cascades/) follows a repeatable route past rooms with changing emission.
+- [Sliding shutter](http://localhost:5203/11-radiance-cascades/?scene=door&camera=receiver&view=indirect) holds the camera on a wall while the door blocks and reveals the lamp. Switch the door to Open or Closed to hold either endpoint.
+- [Polished gallery rail](http://localhost:5203/11-radiance-cascades/?scene=polished) shows how floor reflections change as the camera moves.
+- [Five floor finishes](http://localhost:5203/11-radiance-cascades/?scene=roughness) shows the same lighting across five roughness values.
+- [Offscreen moving emitter](http://localhost:5203/11-radiance-cascades/?scene=reflection-motion) holds the camera still while a hidden light moves across the reflected field.
 
 ## No engine
 

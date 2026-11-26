@@ -35,6 +35,7 @@ elif command -v corepack >/dev/null; then
 else
   pm=(npx --yes pnpm@10.23.0)
 fi
+node tools/linked-siblings.ts --fetch
 "${pm[@]}" install --frozen-lockfile
 name="rc-metal-results-$(date +%Y%m%d-%H%M%S)-$$"
 status=0

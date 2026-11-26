@@ -21,6 +21,12 @@ Rules:
 
 ---
 
+## 2026-11-26 · SRC.1 · Split RC gallery and Apple Metal handoff
+
+Integrated [GI-1.2 (#41)](https://github.com/pmndrs/gi/pull/41) from main at `025ece2`. The [examples index](examples/README.md#split-radiance-cascades-scenes) exposes the lamp rail, sliding shutter, polished floor, roughness sweep and offscreen moving emitter. The GI-1.2 viewer remains available via `pnpm dev`.
+The frozen install, packed consumers, viewer and Pages builds passed. The RTX examples-site smoke rendered examples 01–11 and the standalone WebGPU example.
+Four of five phases pass. [Issue #43](https://github.com/pmndrs/gi/issues/43) owns Apple Silicon gallery correctness, reconstruction and matched reflection timings for [PR #42](https://github.com/pmndrs/gi/pull/42). The issue records the test branch, revision and results to return.
+
 ## 2026-11-26 · SRC.1 · Public tracer and upstream integration
 
 Merged upstream main at `a3f4685` and pinned `@pmndrs/raytracer@0.1.0` from public npm. A fresh checkout with an empty pnpm store, frozen lockfile and private Git access disabled downloaded all 186 packages. The new Mac launcher uses the frozen registry install.
