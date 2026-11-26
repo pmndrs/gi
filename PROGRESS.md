@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-26 · rc-into-main: main (#40) merged in, CI's step-list test fixed · lead (main session)
+Did: merged `origin/main` (a3f4685, #40 issue #6) into `rc-into-main`; PROGRESS and DECISIONS conflicts only, both sides kept, main's 2026-11-20 entries placed by date. PR #41's Ubuntu failure was `tools/release/publish-workflow.test.ts` pinning ci.yml's step list without the `linked-siblings.ts --fetch` step (the describe is skipped on Windows, so only Ubuntu failed); the test now lists that step, with a note on when it goes.
+Why the clone step stays for now: `Gi1Denoiser` is only on pmndrs/denoiser's `gi1-denoiser` branch (pmndrs/denoiser#33, open, green, its head is our pin 022e02b). `denoiser@2.0.0` on npm has no `Gi1Denoiser`, so gi can't move to the published denoiser until #33 merges and ships. `@pathtracer/mlp` isn't published either (stays optional and off in CI).
+Verified (Apple M5 Pro, macOS, Node, no GPU): `pnpm lint`, `pnpm typecheck`, `pnpm test` (1,876 passed, 12 skipped), `pnpm test:release` (28), `pnpm build`, `pnpm verify:packed --skip-build`.
+Not verified: `pnpm test:gpu` (no GPU run after this merge; the merge touched docs and one test only), Windows, RTX.
+Next: after pmndrs/denoiser#33 is released, depend on `denoiser` from npm (`denoiser/ffx`), drop the denoiser entry from `linkedSiblings` and, if mlp is the only one left, the CI and Pages fetch steps. Then `packages/bvh` gives way to `@pmndrs/bvh` (DECISIONS 2026-11-19). Split Radiance Cascades has no task row or branch yet: only the 2026-11-18 handoff note from pathtracer.
+
 ## 2026-11-24 · E9's gate on visible noise; box end error over two runs (rc-into-main) · implementer (opus)
 Did: per the lead. `radiance-cache-change-noise`'s gated noise is now the second difference with the whole image's change taken out (each neighbour frame scaled to the frame's mean), in every case and the calibration run; the plain second difference is recorded as `sharpnessMean`, not gated. The box motion runs twice per setting and its end-error gate (1.05×) takes the mean, both runs recorded. Page comment, register E9, design, DECISIONS (same 2026-11-24 line) carry what the gate can see.
 Verified (RTX 3060 Laptop, nvidia/ampere, headless Chrome, bench lock, `--no-cool-wait`, timing INVALID): change-noise PASS (802 s, on 7e69488; this commit adds only comments); typecheck, lint, unit tests (1,887 pass, 1 skipped) pass. Registry unchanged since the viewer's last PASS (with `rcfilter`), so the viewer wasn't rerun.
