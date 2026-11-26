@@ -747,7 +747,6 @@ From 2026-11-19 the open follow-ups are GitHub issues on [pmndrs/gi](https://git
 - [#6](https://github.com/pmndrs/gi/issues/6) sponza-full's blended cypress foliage draws nearly black (TU.4's verdict).
 - [#7](https://github.com/pmndrs/gi/issues/7) Intel UHD: `DXGI_ERROR_DEVICE_HUNG` in multi-page GPU batches (T3.19).
 - [#8](https://github.com/pmndrs/gi/issues/8) Unit tests time out at 5 s under CPU load (T3.19).
-- [#9](https://github.com/pmndrs/gi/issues/9) `recommendPreset` gives every Mac `high` (Chrome reports no chip name).
 
 **Accuracy and tuning**
 - [#10](https://github.com/pmndrs/gi/issues/10) Sponza is 22–25% brighter than Cycles (the curtains; nested finer volumes; DV-01 ruled out).
