@@ -314,10 +314,11 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         choices: [
             { value: 'auto', label: 'Auto (ours)' },
             { value: 'gi1-rays', label: "GI-1.2's own rays (Capsaicin's)" },
+            { value: 'shared-cell', label: 'One ray per selected cell' },
             { value: 'fallback', label: 'The technique stacked under it' },
         ],
         capsaicin: 'gi1-rays',
-        help: "Where the hash grid's second bounce comes from. Capsaicin traces its own second-bounce rays; ours (auto) reads it from the DDGI volume under the radiance cache when one is there, else the same rays. 'Stacked' asks for DDGI and warns without it. Changing what runs empties the world cache.",
+        help: "Where the hash grid's second bounce comes from. Capsaicin traces its own second-bounce rays; ours (auto) reads it from the DDGI volume under the radiance cache when one is there, else the same rays. 'Stacked' asks for DDGI and warns without it. Shared-cell uses the cell lighting budget for both direct lighting and one indirect bounce per selected cell. Changing what runs empties the world cache.",
     }),
     toggle<CompareNumberToggle>({
         kind: 'number',

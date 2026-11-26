@@ -114,6 +114,7 @@ export interface HashGridCacheOptions {
      *   out the sky (the fallback's field has it; register E10). Unavailable
      *   (nothing stacked, a screen-space module, a failed compile), it traces
      *   rays and warns.
+     * - `'shared-cell'`: schedule budgeted first-hit representatives and trace one diffuse continuation for each.
      * - `'gi1-rays'`: GI-1.2's second-bounce ray per kept first-bounce hit.
      * - `'auto'` (the default, lead decision 2026-11-19): `'fallback'` when a
      *   world-space fallback is stacked, `'gi1-rays'` otherwise, with no warning.
@@ -132,10 +133,10 @@ export interface HashGridCacheOptions {
 }
 
 /** Experiment E10's setting for the second-bounce estimator (`HashGridCacheOptions.secondBounce`). */
-export type SecondBounceSource = 'auto' | 'gi1-rays' | 'fallback';
+export type SecondBounceSource = 'auto' | SecondBounceInUse;
 
 /** The estimator that runs: `'auto'` resolved. */
-export type SecondBounceInUse = 'gi1-rays' | 'fallback';
+export type SecondBounceInUse = 'gi1-rays' | 'fallback' | 'shared-cell';
 
 /** Capsaicin's defaults (gi1.h:58-65). */
 export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = Object.freeze({

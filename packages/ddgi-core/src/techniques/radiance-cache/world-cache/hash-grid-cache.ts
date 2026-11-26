@@ -58,6 +58,7 @@ import {
     prioritizeCellsWgsl,
     scatterCellsWgsl,
     shadeCellsWgsl,
+    sharedBounceWgsl,
 } from './cell-shading-wgsl.ts';
 import {
     BOUNCE_SOURCE_GROUP,
@@ -186,10 +187,12 @@ interface CellShadingPasses {
     readonly prioritizeCells: Omit<PopulationPass, 'args'>;
     readonly scatterCells: PopulationPass;
     readonly shadeCells: PopulationPass;
+    readonly sharedCellBounce: PopulationPass;
+    readonly shortRayBounce: PopulationPass;
 }
 
 type PopulationPassName = keyof PopulationPasses;
-type CellShadingPassName = 'claimFirstBounceCells' | 'claimSecondBounceCells' | 'prioritizeCells' | 'scatterCells' | 'shadeCells';
+type CellShadingPassName = keyof CellShadingPasses;
 type RayDataPassName = PopulationPassName | CellShadingPassName;
 
 /** Experiment E10's pass and the fallback's resources it binds in group 3. */
@@ -485,7 +488,8 @@ export class HashGridCache implements WorldCache {
         ]);
         // Lever E8 (compiled always, run only with cellShading 'budgeted').
         const claimCode = claimCellsWgsl(layout);
-        const [claimFirstKernel, claimSecondKernel, prioritizeKernel, scatterKernel, shadeKernel, claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs] = await Promise.all([
+        const sharedCode = sharedBounceWgsl(layout);
+        const [claimFirstKernel, claimSecondKernel, prioritizeKernel, scatterKernel, shadeKernel, claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs, sharedKernel, shortKernel, shortArgs] = await Promise.all([
             populationKernel('ClaimCells (first bounce)', claimCode, CELL_SHADING_ENTRY_POINT.claimFirstBounceCells, false),
             populationKernel('ClaimCells (second bounce)', claimCode, CELL_SHADING_ENTRY_POINT.claimSecondBounceCells, false),
             populationKernel('PrioritizeCells', prioritizeCellsWgsl(layout), CELL_SHADING_ENTRY_POINT.prioritizeCells, false),
@@ -495,6 +499,9 @@ export class HashGridCache implements WorldCache {
             indirectArgs('ClaimCells (second bounce) args', HASH_GRID_COUNTER.visibilityCount1, CELL_SHADING_WORKGROUP_SIZE.claimCells),
             indirectArgs('ScatterCells args', HASH_GRID_COUNTER.cellCandidateCount, CELL_SHADING_WORKGROUP_SIZE.scatterCells),
             indirectArgs('ShadeCells args', HASH_GRID_COUNTER.cellShadedCount, CELL_SHADING_WORKGROUP_SIZE.shadeCells),
+            populationKernel('SharedCellBounce', sharedCode, 'SharedCellBounce', true),
+            populationKernel('ShortRayBounce', sharedCode, 'ShortRayBounce', true),
+            indirectArgs('ShortRayBounce args', HASH_GRID_COUNTER.resolveCount, 32),
         ]);
         const [populateScreenProbes, generateReservoirs, populateCells, updateTiles, resolveCells, populateMultibounceCells, generateMultibounceReservoirs, updateMultibounceCells] =
             population.slice(0, 8) as ComputeKernel[];
@@ -529,10 +536,12 @@ export class HashGridCache implements WorldCache {
             },
             scatterCells: pass(scatterKernel, scatterArgs),
             shadeCells: pass(shadeKernel, shadeArgs),
+            sharedCellBounce: pass(sharedKernel, shadeArgs),
+            shortRayBounce: pass(shortKernel, shortArgs),
         };
 
         const purgeArgs = [purgeArgs0, purgeArgs1] as const;
-        const allArgs = [...purgeArgs, ...Object.values(populationPasses).map((populationPass) => populationPass.args), claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs];
+        const allArgs = [...purgeArgs, ...Object.values(populationPasses).map((populationPass) => populationPass.args), claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs, shortArgs];
         const argsBytes = allArgs.reduce((sum, args) => sum + args.memoryBytes, 0);
         const memoryBytes = layout.totalBytes + HASH_GRID_CONSTANTS_BYTES + RAY_LISTS_UNIFORM_BYTES + CELL_SHADING_UNIFORM_BYTES + argsBytes;
         this.prepared = {
@@ -563,7 +572,7 @@ export class HashGridCache implements WorldCache {
         this.lastSecondBounce = null;
         // E10: build the pass now when the setting can use it and a world-space fallback is stacked
         // (only then: 'gi1-rays' compiles nothing), so the first frame has it.
-        const module = this.options.secondBounce === 'gi1-rays' ? undefined : worldSpaceFallback(context);
+        const module = this.options.secondBounce === 'auto' || this.options.secondBounce === 'fallback' ? worldSpaceFallback(context) : undefined;
         if (module) await this.buildBounceSource(this.prepared, module);
     }
 
@@ -597,7 +606,7 @@ export class HashGridCache implements WorldCache {
     private resolveSecondBounce(prepared: Prepared): SecondBounceInUse {
         this.secondBouncePending = false;
         const asked = this.options.secondBounce;
-        if (asked === 'gi1-rays') return 'gi1-rays';
+        if (asked === 'gi1-rays' || asked === 'shared-cell') return asked;
         const warnAsked = (message: string): void => {
             if (asked === 'fallback') prepared.context.warn?.(message);
         };
@@ -678,7 +687,7 @@ export class HashGridCache implements WorldCache {
         }
         this.lastClearOptions = clearOptions;
         const useMultibounce = clearOptions.useMultibounce;
-        const budgeted = this.writeCellShading(encoder, prepared, rayData, frame.changes);
+        const budgeted = this.writeCellShading(encoder, prepared, rayData, frame.changes, secondBounce);
         this.lastSecondBounce = useMultibounce ? secondBounce : null;
         // GI-1.2's second-bounce rays, or experiment E10's lookup into the bounce source.
         const traceSecondBounce = useMultibounce && secondBounce === 'gi1-rays';
@@ -703,7 +712,7 @@ export class HashGridCache implements WorldCache {
         this.encodePopulationPass(encoder, prepared, rayData, 'generateReservoirs', 'GenerateReservoirs');
         if (traceSecondBounce) this.encodePopulationPass(encoder, prepared, rayData, 'generateMultibounceReservoirs', 'GenerateMultibounceReservoirs');
         this.encodePopulationPass(encoder, prepared, rayData, 'populateCells', 'PopulateRadianceCache');
-        if (budgeted) this.encodeCellShading(encoder, prepared, rayData, traceSecondBounce);
+        if (budgeted) this.encodeCellShading(encoder, prepared, rayData, traceSecondBounce, secondBounce === 'shared-cell');
         // E10: after GenerateReservoirs (the first-bounce bypass flags) and PopulateCells (its
         // additions to bypassing probe rays), before UpdateTiles, which blends its samples this frame.
         if (bounceSource) this.encodeBounceSourcePass(encoder, prepared, bounceSource, rayData);
@@ -739,7 +748,7 @@ export class HashGridCache implements WorldCache {
         for (const placeholder of prepared.placeholders) placeholder.destroy();
         this.resetFrames?.destroy();
         this.resetFrames = null;
-        for (const cellPass of [cellShading.claimFirstBounceCells, cellShading.claimSecondBounceCells, cellShading.scatterCells, cellShading.shadeCells]) cellPass.args.dispose();
+        for (const cellPass of [cellShading.claimFirstBounceCells, cellShading.claimSecondBounceCells, cellShading.scatterCells, cellShading.shadeCells, cellShading.shortRayBounce]) cellPass.args.dispose();
         disposeBounceSource(this.bounceSource);
         this.bounceSource = null;
         this.prepared = null;
@@ -753,10 +762,10 @@ export class HashGridCache implements WorldCache {
      * they are needed; records clearing E8's per-frame counters. Returns
      * whether the cells are lit on the budget.
      */
-    private writeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, changes: WorldCacheChanges | undefined): boolean {
+    private writeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, changes: WorldCacheChanges | undefined, secondBounce: SecondBounceInUse): boolean {
         const { device, buffers } = prepared;
         const options = this.options;
-        const budgeted = options.cellShading === 'budgeted';
+        const budgeted = options.cellShading === 'budgeted' || secondBounce === 'shared-cell';
         if (!budgeted && options.cellShading !== 'per-hit') throw new RangeError(`@pmndrs/gi: cellShading is 'per-hit' or 'budgeted', got ${String(options.cellShading)}`);
         const changeReset = !budgeted && options.cellChangeReset === true;
         const history = options.cellChangeResetHistory ?? 0;
@@ -786,7 +795,7 @@ export class HashGridCache implements WorldCache {
     }
 
     /** Lever E8's passes (cell-shading-wgsl.ts): claim, prioritise and scatter, light. */
-    private encodeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, useMultibounce: boolean): void {
+    private encodeCellShading(encoder: GPUCommandEncoder, prepared: Prepared, rayData: RayData, useMultibounce: boolean, sharedBounce: boolean): void {
         const cellShading = prepared.cellShading;
         const indirect = (pass: GPUComputePassEncoder, name: Exclude<CellShadingPassName, 'prioritizeCells'>): void => {
             const cellPass = cellShading[name];
@@ -810,6 +819,12 @@ export class HashGridCache implements WorldCache {
         indirect(prioritize, 'scatterCells');
         prioritize.end();
 
+        if (sharedBounce) {
+            const bounce = this.beginPass(encoder, prepared, 'SharedCellBounce');
+            indirect(bounce, 'sharedCellBounce');
+            indirect(bounce, 'shortRayBounce');
+            bounce.end();
+        }
         const shade = this.beginPass(encoder, prepared, 'ShadeCells');
         indirect(shade, 'shadeCells');
         shade.end();
@@ -944,6 +959,8 @@ export class HashGridCache implements WorldCache {
             prioritizeCells: groupFor(cellShading.prioritizeCells.kernel),
             scatterCells: groupFor(cellShading.scatterCells.kernel),
             shadeCells: groupFor(cellShading.shadeCells.kernel),
+            sharedCellBounce: groupFor(cellShading.sharedCellBounce.kernel),
+            shortRayBounce: groupFor(cellShading.shortRayBounce.kernel),
         };
     }
 

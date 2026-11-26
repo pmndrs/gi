@@ -69,7 +69,7 @@
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_EVENTS, CELL_SHADING_SALT } from './cell-shading-common.ts';
-import { LIGHT_MASK_WGSL, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
+import { LIGHT_MASK_WGSL, MULTIBOUNCE_SAMPLING_WGSL, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
 
 /** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes an event. */
 export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_EVENTS;
@@ -435,6 +435,76 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
     atomicStore(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+}
+`;
+}
+
+/** One continuation per selected representative. Both dispatches read direct
+ * history before ShadeCells and UpdateTiles modify it. A short first segment
+ * bypasses the grid and must receive its own roulette-weighted estimate. */
+export function sharedBounceWgsl(layout: HashGridCacheBufferLayout): string {
+    return /* wgsl */ `
+${cellShadingHeadWgsl(layout)}
+${PROBE_RAY_SURFACE_WGSL}
+${LIGHT_MASK_WGSL}
+${MULTIBOUNCE_SAMPLING_WGSL}
+
+fn sharedIndirect(surface: GiSurface, random: ptr<function, RcRandom>) -> vec3f {
+    let sample = HashGridCache_SampleBRDFAndEvaluateDiffuse(surface.albedo, rcRand2(random), surface.normal);
+    let ray = GiRay(giShadeOffsetRayOrigin(surface.position, giShadeRaySide(surface)), 0.0, sample.direction, RC_MAX_HIT_DISTANCE);
+    let hit = giTraceClosest(ray);
+    // The first vertex already samples environment lighting.
+    if (hit.t < 0.0) { return vec3f(0.0); }
+    let position = ray.origin + hit.t * ray.direction;
+    if (!HashGridCache_ShorterThanCell(ray.origin, position)) {
+        let key = HashGridCache_Data(g_HashGridCacheConstants.eye_position, position, ray.direction, hit.t);
+        let cell = HashGridCache_FindCell(key).cell_index;
+        if (cell != kGI1_InvalidId) {
+            // New tiles have cleared finest-level values. Their coarse mips
+            // still belong to the previous occupant until UpdateTiles runs.
+            let direct = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell]);
+            if (direct.w >= 1.0 && direct.w != HASHGRIDCACHE_CELL_CHANGED_COUNT) { return surface.albedo * direct.rgb / direct.w; }
+        }
+    }
+    // Cold or bypassed destination. Sample its direct light, including the sky,
+    // with the same estimator as ShadeCells. Lambert BRDF / cosine PDF = albedo.
+    let second_surface = giSurfaceAt(ray, hit);
+    let choice = giDirectChooseLight(second_surface, HashGridCache_LightMask(), rcRand(random));
+    if (choice.light == GI_DIRECT_NO_LIGHT) { return vec3f(0.0); }
+    let light = giDirectLightRay(second_surface, choice.light, rcRand2(random));
+    if (light.castsShadows && giTraceAny(light.shadowRay)) { return vec3f(0.0); }
+    return surface.albedo * second_surface.albedo * HASHGRIDCACHE_MULTIBOUNCE_INV_PI * light.irradiance * choice.weight;
+}
+
+@compute @workgroup_size(32)
+fn SharedCellBounce(@builtin(workgroup_id) group: vec3u, @builtin(num_workgroups) groups: vec3u, @builtin(local_invocation_index) lane: u32) {
+    let index = HashGridCache_WorkgroupIndex(group, groups) * 32u + lane;
+    let count = min(atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT]), atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDTARGET]));
+    if (index >= count) { return; }
+    let entry = HashGridCache_CellListWord(g_HashGridCache_RayLists.cell_shade_buffer, index) & HASHGRIDCACHE_CELL_ENTRY_MASK;
+    let cell = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, entry);
+    var random = rcMakeRandom(cell ^ 0xb487261du, g_HashGridCacheConstants.frame_index);
+    let value = HashGridCache_QuantizeRadiance(sharedIndirect(HashGridCache_ProbeSurface(HashGridCache_VisibilityRay(entry)), &random));
+    let scratch = HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell;
+    atomicStore(&g_HashGridCache_UpdateScratch[scratch], value.x);
+    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], value.y);
+    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 2u], value.z);
+    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 3u], value.w);
+}
+
+@compute @workgroup_size(32)
+fn ShortRayBounce(@builtin(workgroup_id) group: vec3u, @builtin(num_workgroups) groups: vec3u, @builtin(local_invocation_index) lane: u32) {
+    let index = HashGridCache_WorkgroupIndex(group, groups) * 32u + lane;
+    if (index >= atomicLoad(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER])) { return; }
+    let packed = HashGridCache_RayListWord(g_HashGridCache_RayLists.resolve_buffer, index);
+    if ((packed & HASHGRIDCACHE_BYPASS_BIT) == 0u) { return; }
+    let entry = packed & ~HASHGRIDCACHE_BYPASS_BIT;
+    let probe = HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_query_buffer, entry);
+    var random = rcMakeRandom(probe ^ 0x1d6545afu, g_HashGridCacheConstants.frame_index);
+    let discard_probability = g_HashGridCacheConstants.discard_multibounce_ray_probability;
+    if (rcRand(&random) <= discard_probability) { return; }
+    let radiance = sharedIndirect(HashGridCache_ProbeSurface(g_ProbeRays.rays[probe]), &random);
+    ScreenProbes_AccumulateRadiance(probe, GIDenoiser_RemoveNaNs(radiance / (1.0 - discard_probability)));
 }
 `;
 }

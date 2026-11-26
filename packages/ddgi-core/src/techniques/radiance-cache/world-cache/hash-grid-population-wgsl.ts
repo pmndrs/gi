@@ -1070,7 +1070,7 @@ fn ${POPULATION_ENTRY_POINT.resolveCells}(
  * GGX at roughness 1 with the diffuse compensation there. The CPU twin is
  * `multibounce-cpu.ts`.
  */
-const MULTIBOUNCE_SAMPLING_WGSL = /* wgsl */ `
+export const MULTIBOUNCE_SAMPLING_WGSL = /* wgsl */ `
 // INV_PI and TWO_PI (math/math_constants.hlsl).
 const HASHGRIDCACHE_MULTIBOUNCE_INV_PI: f32 = 0.318309886183791;
 const HASHGRIDCACHE_MULTIBOUNCE_TWO_PI: f32 = 6.28318530717959;

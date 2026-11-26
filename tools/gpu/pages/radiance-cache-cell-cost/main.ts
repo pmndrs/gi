@@ -42,6 +42,8 @@ import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '.
 import { loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
+// Opt in with VITE_RC_SHARED_BOUNCE_BENCH=1. Keep the original cost suite intact.
+const sharedComparison = import.meta.env.VITE_RC_SHARED_BOUNCE_BENCH === '1';
 const WIDTH = 1280;
 const HEIGHT = 720;
 const WARM_FRAMES = 60;
@@ -82,7 +84,7 @@ const WORLD_CACHE_SECTIONS = [
 ] as const;
 
 /** The loaded scene's update, and a way to nudge the intensity of a dim point light the page adds in front of the camera. */
-async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<{ update: () => void; nudge: (on: boolean) => void }> {
+async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manifest: SceneManifest): Promise<{ update: () => void; nudge: (on: boolean) => void; changeScene?: (changed: boolean) => void }> {
     const loaded = await loadScene(manifest, () => {});
     const content = new Set<object>();
     loaded.content.traverse((object) => content.add(object));
@@ -92,6 +94,25 @@ async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manif
     loaded.scene.updateMatrixWorld();
     const sync = new SceneSync(platform.scene, { device, warn: () => {} });
     sync.environment = platformSkyEnvironment(manifest);
+    if (sharedComparison) {
+        const light = loaded.manifestLights[0];
+        const intensity = light.intensity;
+        const crate = loaded.content.getObjectByName('crate-red');
+        if (manifest.id === 'two-room' && !crate) throw new Error('two-room has no crate-red');
+        const startX = crate?.matrix.elements[12] ?? 0;
+        return {
+            update: () => sync.update(loaded.scene),
+            nudge: () => {},
+            changeScene: (changed) => {
+                if (!crate) return;
+                light.intensity = changed ? 2 * intensity : intensity;
+                // Procedural meshes have matrixAutoUpdate disabled.
+                crate.matrix.elements[12] = startX + (changed ? -1 : 0);
+                crate.matrixWorldNeedsUpdate = true;
+                loaded.scene.updateMatrixWorld();
+            },
+        };
+    }
     const bookmark = manifest.cameras[0];
     const position: [number, number, number] = [
         (bookmark.position[0] + bookmark.target[0]) / 2,
@@ -125,7 +146,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
     await timer.ready;
     if (!timer.enabled) throw new Error(`the GPU timer is ${timer.status}: timestamp-query is needed`);
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-cell-cost ${id}` });
-    const technique = new RadianceCacheTechnique();
+    const technique = new RadianceCacheTechnique(sharedComparison ? { secondBounce: 'gi1-rays' } : {});
     // The technique's context with the page's timer (the context's other members, getters included, as they are).
     const attach = technique.attach.bind(technique);
     technique.attach = (context: TechniqueContext) => attach(Object.create(context, { timer: { value: timer } }) as TechniqueContext);
@@ -155,6 +176,10 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
     try {
         frame();
         await platform.rays.whenBuilt();
+        if (sharedComparison) {
+            const { compareSharedBounce } = await import('./shared-bounce.ts');
+            return await compareSharedBounce(device, technique, timer, frame, WIDTH, HEIGHT, id === 'two-room' ? described.changeScene : undefined);
+        }
         technique.resetHistory();
         for (let index = 0; index < WARM_FRAMES; index++) {
             frame();
@@ -224,11 +249,11 @@ try {
     releaseDeviceOnPageHide(device);
     deviceErrors = watchDevice(device);
     const scenes: Record<string, unknown> = {};
-    for (const id of ['sponza', 'bistro-exterior']) scenes[id] = await measureScene(device, id);
+    for (const id of sharedComparison ? ['two-room', 'sponza'] : ['sponza', 'bistro-exterior']) scenes[id] = await measureScene(device, id);
     await drainDevice(device);
     reportGpuTest({
         status: deviceErrors.length === 0 ? 'pass' : 'fail',
-        data: { width: WIDTH, height: HEIGHT, warmFrames: WARM_FRAMES, settleFrames: SETTLE_FRAMES, timedFrames: TIMED_FRAMES, scenes },
+        data: { width: WIDTH, height: HEIGHT, ...(sharedComparison ? { comparison: 'shared-cell' } : { warmFrames: WARM_FRAMES, settleFrames: SETTLE_FRAMES, timedFrames: TIMED_FRAMES }), scenes },
         adapter: summarizeAdapterInfo(device.adapterInfo, device.features),
         deviceErrors,
         startTime,
