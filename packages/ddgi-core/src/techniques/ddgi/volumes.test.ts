@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GILimitError } from '../../platform/contract/errors.ts';
 import { withDefaults } from './settings.ts';
 import { DEFAULT_MAX_PASSES_PER_FRAME } from '../../platform/timing/gpu-timer.ts';
-import { MAX_VOLUMES, planVolumes, TIMED_PASSES_PER_VOLUME, UnitSharer, VOLUME_TABLE_ROW_FLOATS, volumeEdgeCoverage, volumeFloorUnits, volumeSettingsList, writeVolumeParameters } from './volumes.ts';
+import { MAX_VOLUMES, planVolumes, TIMED_PASSES_PER_VOLUME, UnitSharer, VOLUME_TABLE_ROW_FLOATS, VOLUME_TABLE_TEXEL, volumeEdgeCoverage, volumeFloorUnits, volumeSettingsList, writeVolumeParameters, writeVolumeWindow } from './volumes.ts';
 
 // Two-room's volume (17 x 7 x 9 probes at 0.5 m) and a dense one inside it (13 x 12 x 13 at 0.25 m).
 const COARSE = { center: [4.1, 1.4, 2.0], size: [8.4, 3.0, 4.2], spacing: 0.5 } as const;
@@ -60,6 +60,19 @@ describe('several DDGI volumes (m3-moving.md §4.1)', () => {
         expect([...row.subarray(4, 8)]).toEqual([...coarse.spacing, 0.04].map(Math.fround));
         expect([...row.subarray(8, 12)]).toEqual([17, 7, 9, 12]);
         expect([...row.subarray(12, 16)]).toEqual([6, 14, 17, 13]);
+    });
+
+    it('writes the window, the fade with the weight-floors flag (DV-06) in its w, and the valid extent', () => {
+        const row = new Float32Array(VOLUME_TABLE_ROW_FLOATS);
+        const extent = { min: [0, 1, 2], max: [16, 6, 8] } as const;
+        writeVolumeWindow(row, 0, [3, 0, -2], [0.5, 0.5, 0.5], extent, true);
+        const texel = (index: number): number[] => [...row.subarray(index * 4, index * 4 + 4)];
+        expect(texel(VOLUME_TABLE_TEXEL.window)).toEqual([3, 0, -2, 0]);
+        expect(texel(VOLUME_TABLE_TEXEL.fade)).toEqual([0.5, 0.5, 0.5, 1]);
+        expect(texel(VOLUME_TABLE_TEXEL.validMin)).toEqual([0, 1, 2, 0]);
+        expect(texel(VOLUME_TABLE_TEXEL.validMax)).toEqual([16, 6, 8, 0]);
+        writeVolumeWindow(row, 0, [3, 0, -2], [0.5, 0.5, 0.5], extent, false);
+        expect(texel(VOLUME_TABLE_TEXEL.fade)).toEqual([0.5, 0.5, 0.5, 0]);
     });
 
     it('shares a frame’s probe updates in proportion to the volumes’ probes, each frame adding up to the hand-out', () => {

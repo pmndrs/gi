@@ -4,7 +4,8 @@
  * with them.
  *
  *   node tools/gpu/pages/m4-textured-accuracy/run.ts [--scenes a,b,...] [--gpu nvidia|intel]
- *        [--references <dir>] [--out <dir>] [--compare-only] [--occlusion] [--material-variant cutout|opaque] [--timeout-minutes 30]
+ *        [--references <dir>] [--out <dir>] [--compare-only] [--occlusion] [--material-variant cutout|opaque]
+ *        [--gi-term everything|composite] [--diagnose] [--timeout-minutes 30]
  *
  * For each scene, every camera folder under `<references>/<scene>/` with a
  * `cycles-textured-gi.exr` is a view: its json's stored shot gives the
@@ -25,6 +26,20 @@
  *
  * `--material-variant cutout|opaque` (a foliage diagnostic, TU.4: blended materials
  * made alpha-tested or opaque on our side only; files and summary get the variant's suffix).
+ *
+ * The GI term (issue #6, 2026-11-20): everything GI adds to the colour, the
+ * composite minus a second pass of the scene drawn without the GI light, fed
+ * to the upscaler. It holds the GI three shades per fragment on blended
+ * surfaces (the composite takes opaque ones only), as Cycles' diffuse-indirect
+ * pass does. `--gi-term composite` measures the composite's own term only, the
+ * definition until then (files and summary get `-composite-term`), which
+ * reads blended foliage black.
+ *
+ * `--diagnose` (issue #6) also writes, per view and at full resolution without
+ * the upscaler, the composite's own term, everything GI adds to the colour
+ * (GI on minus GI off, which holds the GI shaded per fragment on blended
+ * surfaces too) and the final colour (`ddgi-diagnose-<name><variant>.exr`),
+ * and prints each one's mean error and per-channel ratio against the reference.
  *
  * A scene id can also be an end state of tools/reference/cycles/end-states.json
  * (TU.4: door-shut, door-open, cabinet-moved; Cycles renders them with
@@ -234,6 +249,19 @@ function compareBlocks(referencePath: string, testPath: string, outPrefix: strin
     return JSON.parse(result.stdout) as CompareJson;
 }
 
+/** Mean error and per-channel ratio (ours over the reference) of an image against the reference. */
+function describeAgainst(test: Float32Array, reference: Float32Array): string {
+    const testSums = [0, 0, 0];
+    const referenceSums = [0, 0, 0];
+    for (let index = 0; index < test.length; index++) {
+        testSums[index % 3] += test[index];
+        referenceSums[index % 3] += reference[index];
+    }
+    const mean = (testSums[0] + testSums[1] + testSums[2]) / (referenceSums[0] + referenceSums[1] + referenceSums[2]) - 1;
+    const ratios = testSums.map((sum, channel) => (sum / referenceSums[channel]).toFixed(3));
+    return `mean ${(mean * 100).toFixed(2)}%, ours / reference R ${ratios[0]} G ${ratios[1]} B ${ratios[2]}`;
+}
+
 async function main(): Promise<void> {
     const { values } = parseArgs({
         options: {
@@ -245,6 +273,8 @@ async function main(): Promise<void> {
             occlusion: { type: 'boolean', default: false },
             'material-variant': { type: 'string', default: 'default' },
             'timeout-minutes': { type: 'string', default: '30' },
+            diagnose: { type: 'boolean', default: false },
+            'gi-term': { type: 'string', default: 'everything' },
         },
     });
     if (values.gpu !== 'nvidia' && values.gpu !== 'intel') throw new Error('--gpu must be nvidia or intel');
@@ -255,7 +285,9 @@ async function main(): Promise<void> {
     const timeoutMs = Number(values['timeout-minutes']) * 60_000;
     const materialVariant = values['material-variant'] as 'default' | 'cutout' | 'opaque';
     if (!['default', 'cutout', 'opaque'].includes(materialVariant)) throw new Error('--material-variant must be default, cutout or opaque');
-    const variant = `${values.occlusion ? '' : '-no-ao'}${materialVariant === 'default' ? '' : `-${materialVariant}`}`;
+    const giTerm = values['gi-term'] as 'everything' | 'composite';
+    if (!['everything', 'composite'].includes(giTerm)) throw new Error('--gi-term must be everything or composite');
+    const variant = `${values.occlusion ? '' : '-no-ao'}${materialVariant === 'default' ? '' : `-${materialVariant}`}${giTerm === 'composite' ? '-composite-term' : ''}`;
     const testImage = `ddgi-textured-gi${variant}.exr`;
     const summaryPath = join(outRoot, `m4-textured-accuracy-${gpu}${variant}.json`);
     const earlier = existsSync(summaryPath) ? (JSON.parse(await readFile(summaryPath, 'utf8')) as { rows: Row[]; scenes: Record<string, unknown> }) : { rows: [], scenes: {} };
@@ -281,18 +313,27 @@ async function main(): Promise<void> {
             });
             const maxTextureSize = TEXTURE_CAPS[scene] ?? null;
             const endState = !scene.startsWith('$') && typeof END_STATES[scene] === 'object' ? (END_STATES[scene] as { scene: string }) : null;
-            const job: Partial<TexturedAccuracyJob> = { scene: endState ? endState.scene : scene, endState: endState ? scene : null, views: accuracyViews, width, height, maxTextureSize, occlusion: values.occlusion === true, materialVariant };
+            const job: Partial<TexturedAccuracyJob> = { scene: endState ? endState.scene : scene, endState: endState ? scene : null, views: accuracyViews, width, height, maxTextureSize, occlusion: values.occlusion === true, materialVariant, giTerm, diagnose: values.diagnose === true };
             console.log(`${scene}: ${views.map((view) => view.camera).join(', ')} on ${gpu}${maxTextureSize ? `, three's textures capped at ${maxTextureSize}` : ''}`);
             const { data, images } = await withBenchLock(() => runPage(job, gpu, timeoutMs, join(outRoot, 'logs')), { what: `m4-textured-accuracy ${scene} on ${gpu}` });
             for (const view of views) {
                 const posted = images.get(view.camera);
                 if (!posted || posted.byteLength !== width * height * 3 * 4) throw new Error(`${scene}/${view.camera}: the page posted ${posted?.byteLength ?? 'no'} bytes, expected ${width * height * 12}`);
-                let test = floatsOf(posted);
+                const asRead = floatsOf(posted);
                 const reference = readExr(await readFile(join(view.directory, REFERENCE_IMAGE))).rgb;
-                // The read-back's row order: keep the one that agrees with the reference.
-                if (blockError(flipRows(test, width, height), reference, width, height) < blockError(test, reference, width, height)) test = flipRows(test, width, height);
+                // The read-back's row order: keep the one that agrees with the reference (the diagnostic images share it).
+                const flipped = blockError(flipRows(asRead, width, height), reference, width, height) < blockError(asRead, reference, width, height);
+                const test = flipped ? flipRows(asRead, width, height) : asRead;
                 await mkdir(outDirectory(view.camera), { recursive: true });
                 await writeFile(join(outDirectory(view.camera), testImage), writeExr({ width, height, rgb: test }));
+                for (const [name, image] of images) {
+                    if (!name.startsWith(`${view.camera}~`)) continue;
+                    const rgb = flipped ? flipRows(floatsOf(image), width, height) : floatsOf(image);
+                    const label = name.slice(view.camera.length + 1);
+                    await writeFile(join(outDirectory(view.camera), `ddgi-diagnose-${label}${variant}.exr`), writeExr({ width, height, rgb }));
+                    console.log(`  ${view.camera} ${label}: ${describeAgainst(rgb, reference)}`);
+                }
+                console.log(`  ${view.camera} GI term: ${describeAgainst(test, reference)}`);
             }
             record = {
                 probeCount: data.probeCount as number,

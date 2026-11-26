@@ -53,7 +53,11 @@ export interface DDGISettings {
      * them; when not, `volume` is the one volume. New `prepare` when changed.
      */
     volumes?: readonly DDGIVolumeSettings[];
-    /** Rays per probe and update: a multiple of 32, from 64 to 512. The first 32 are the fixed rays. */
+    /**
+     * Rays per probe and update: a multiple of 32, from 64 to 512. While
+     * `relocation` or `classification` is on, the first 32 are the fixed rays
+     * they read, and aren't blended; with both off every ray is blended (DV-07).
+     */
     raysPerProbe: number;
     /** Interior texels per side of a probe's irradiance tile. New `prepare` when changed. */
     irradianceTexels: number;
@@ -227,6 +231,20 @@ export interface DDGISettings {
     maxBrightnessChange: number;
     /** Exponent of the cosine weight when blending distances. */
     distanceSharpness: number;
+    /**
+     * RTXGI's floors on the sampling weights (DV-06 in docs/divergence.md;
+     * `Irradiance.hlsl`, `DDGIGetVolumeIrradiance`): each corner probe's
+     * trilinear weight is at least 0.001 per axis, and its weight before the
+     * crush at least 1e-6. Where a point sits on a probe plane (or is clamped
+     * to the volume's edge) the far plane's probes keep a tiny weight instead
+     * of none, so a point whose near probes are all off still gets an answer.
+     * Off by default (DECISIONS 2026-11-19): on the RTX 3060 it moved
+     * two-room's leak from 0.8362% to 0.8368% and changed nothing else
+     * measurable, and our coverage fade already catches the black spots it
+     * is for. Kept for matching native RTXGI. Read every frame (it travels in
+     * the volume table); no recompile.
+     */
+    samplingWeightFloors: boolean;
     /** How far a sample point moves along its normal before probes are looked up, metres. `auto` = 0.1 × the smallest spacing. */
     normalBias: number | 'auto';
     /** How far a sample point moves back towards the viewer, metres. `auto` = 0.1 × the smallest spacing. */
@@ -532,6 +550,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume' | 'volu
     backFaceRayThreshold: null,
     maxBrightnessChange: 2.0,
     distanceSharpness: 50,
+    samplingWeightFloors: false,
     normalBias: 'auto',
     viewBias: 'auto',
     maxRayDistance: Infinity,
@@ -545,7 +564,7 @@ export const DEFAULT_DDGI_SETTINGS: Readonly<Omit<DDGISettings, 'volume' | 'volu
     minProbesPerFrame: 'auto',
 };
 
-/** The first rays of every probe point in fixed directions and are never blended (design: "Rays"). */
+/** The first rays of every probe point in fixed directions and are never blended (design: "Rays"), while relocation or classification is on. */
 export const FIXED_RAYS = 32;
 export const MIN_RAYS_PER_PROBE = 64;
 export const MAX_RAYS_PER_PROBE = 512;
@@ -651,6 +670,22 @@ export function probeGrid(volume: DDGIVolumeSettings): ProbeGrid {
 export function effectiveRaysPerProbe(raysPerProbe: number): number {
     const rounded = Math.round((Number.isFinite(raysPerProbe) ? raysPerProbe : DEFAULT_DDGI_SETTINGS.raysPerProbe) / FIXED_RAYS) * FIXED_RAYS;
     return Math.min(MAX_RAYS_PER_PROBE, Math.max(MIN_RAYS_PER_PROBE, rounded));
+}
+
+/**
+ * The rays of each probe set aside as fixed rays (DV-07, as RTXGI's
+ * `DDGIGetProbeRayDirection`): {@link FIXED_RAYS} while relocation or
+ * classification is on, since they are what those two read; none with both
+ * off, so every ray is blended. `ddgiSetAsideRays` in wgsl/common.ts is the
+ * kernels' side.
+ */
+export function setAsideRays(settings: Pick<DDGISettings, 'relocation' | 'classification'>): number {
+    return settings.relocation || settings.classification ? FIXED_RAYS : 0;
+}
+
+/** The rays of each probe that are blended (and shaded): those after the set-aside fixed ones. */
+export function blendedRaysPerProbe(raysPerProbe: number, settings: Pick<DDGISettings, 'relocation' | 'classification'>): number {
+    return Math.max(0, raysPerProbe - setAsideRays(settings));
 }
 
 /** A distance setting in metres, resolving `auto` to `autoShare` of the smallest spacing. */

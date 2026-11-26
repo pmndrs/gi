@@ -107,6 +107,13 @@ describe('hit shading', () => {
         expect(shade.module.version).toBe(0);
     });
 
+    it("caps the albedo of the bounce term only: giSurfaceAt keeps the surface's own, giBounceAlbedo caps it (DV-08)", () => {
+        const code = shadeModuleWgsl({ group: 0, firstBinding: 7 });
+        expect(code).toMatch(/fn giBounceAlbedo\(surface: GiSurface\) -> vec3f \{\s*return min\(surface\.albedo, vec3f\(giShade\.bounceAlbedoCap\)\);/);
+        // The cap appears nowhere else, so gi/direct (which packs surface.albedo) lights with the full albedo.
+        expect(code.match(/giShade\.bounceAlbedoCap/g)).toHaveLength(1);
+    });
+
     it("binds the texture store through a module that follows the store's version, so kernels rebind when its array grows", () => {
         const binding = { ...STORE_BINDING, version: 0 };
         const shade = new PlatformHitShading(fakeDevice(), NO_KERNELS, scene, rays, storeFor(binding));

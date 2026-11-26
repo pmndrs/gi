@@ -26,7 +26,7 @@ import type { WgslModule } from './wgsl';
  *     normal: vec3f,         // shading normal (interpolated vertex normal if the mesh has one), facing the ray's origin side
  *     geometricNormal: vec3f, // the triangle's own normal; used for front/back decisions
  *     uv: vec2f,             // uv set 0 (texture lookups use each texture's own mapping)
- *     albedo: vec3f,         // colour x albedo texture x (1 - metalness x metalness texture), capped per channel at bounceAlbedoCap
+ *     albedo: vec3f,         // colour x albedo texture x (1 - metalness x metalness texture), not capped
  *     emission: vec3f,       // emitted radiance: emissive x intensity x emissive texture
  *     material: u32,
  *     instance: u32,
@@ -40,6 +40,11 @@ import type { WgslModule } from './wgsl';
  * // 0.22 radians at 256 rays); giSurfaceAt uses that 0.22. Spread 0 reads mip 0.
  * fn giSurfaceAt(ray: GiRay, hit: GiHit) -> GiSurface
  * fn giSurfaceAtCone(ray: GiRay, hit: GiHit, spread: f32) -> GiSurface
+ *
+ * // The albedo bounce light is multiplied by: surface.albedo capped per
+ * // channel at bounceAlbedoCap. Direct light uses surface.albedo itself,
+ * // as native RTXGI's sample caps only its bounce term.
+ * fn giBounceAlbedo(surface: GiSurface) -> vec3f
  *
  * // Direct light arriving at the surface from the lights whose group bit is
  * // set in `groupMask` (bits 0-3), as irradiance (shadow rays included).
@@ -86,7 +91,7 @@ import type { WgslModule } from './wgsl';
  * renders. Implemented in `platform/shade/`.
  *
  * A technique adds bounce light itself, from its bounce source:
- * `radiance = surface.emission + surface.albedo / π * (direct + bounce)`.
+ * `radiance = surface.emission + surface.albedo / π * direct + giBounceAlbedo(surface) / π * bounce`.
  * Keeping that sum in the technique lets light groups decide which layer
  * each term goes into.
  */
@@ -262,8 +267,10 @@ export interface HitShadingSettings {
      */
     maxShadowedLightsPerHit: number;
     /**
-     * Cap on albedo used for bounces. NVIDIA's native RTXGI uses 0.9; matching
-     * it matters when comparing against the native harness (about 23%
+     * Cap on the albedo of the bounce term only (`giBounceAlbedo`): direct
+     * light at a hit uses the full albedo. NVIDIA's native RTXGI sample uses
+     * 0.9 on its bounce term alone (`ProbeTraceRGS.hlsl`, DV-08); matching it
+     * matters when comparing against the native harness (about 23%
      * difference in indirect light). Defaults to 1.0.
      */
     bounceAlbedoCap: number;

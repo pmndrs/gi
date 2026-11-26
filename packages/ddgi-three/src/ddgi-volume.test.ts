@@ -69,4 +69,15 @@ describe('DDGIVolume (LightProbeGrid-shaped)', () => {
         expect(volume.intensity).toBe(1);
         expect(volume.priority).toBeGreaterThan(0);
     });
+
+    it('resets probes only once started, and hands the request to its DDGI technique as given (DV-12)', () => {
+        const volume = new DDGIVolume();
+        expect(() => volume.resetProbes({ offsets: true })).toThrow(/no GI yet/);
+        const requests: unknown[] = [];
+        // A started volume's technique, as far as resetProbes reaches.
+        Object.assign(volume, { started: { technique: { resetProbes: (what: unknown) => requests.push(what) } } });
+        volume.resetProbes({ states: true });
+        volume.resetProbes();
+        expect(requests).toEqual([{ states: true }, {}]);
+    });
 });

@@ -59,7 +59,7 @@
  * - the normals are octahedral snorm16, about 5e-5 radians of error, which
  *   moves a cosine by well under 1e-4;
  * - albedo is unorm16 per channel over a power-of-two scale (`albedo / 2^e`,
- *   e = 0 up to 1, so a `bounceAlbedoCap` above 1 still fits): at most
+ *   e = 0 up to 15, so an albedo above 1 still fits): at most
  *   1/131,070 absolute, 0.012% of a dark 0.065 channel. `pack2x16unorm`
  *   rounds to nearest by WGSL's definition. T2.0's 10-bit albedo rounded by
  *   up to 1/2,046, 0.75% of that channel. Half floats would be worse here:
