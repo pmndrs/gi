@@ -10,7 +10,9 @@ For the portable handoff, unzip `gi-rc-metal.zip`, open Terminal in the extracte
 bash run-metal.sh
 ```
 
-The launcher prepares a fresh checkout and dependency seed, runs the fixtures and writes `rc-metal-results-<timestamp>.tar.gz` next to the launcher for return.
+The launcher verifies the bundled GI checkout, installs its locked dependencies, runs the fixtures and writes `rc-metal-results-<timestamp>.tar.gz` next to the launcher for return.
+
+If you already received the earlier kit, finish the run with its included launcher and return its results archive as usual. Its `host.json` records the source revision and lockfile digest so the results can be accepted as a historical baseline for that build.
 
 To run from source, use a checkout of `codex/radiance-cascades`. If you received just the Git bundle, this command creates the checkout:
 
@@ -24,7 +26,7 @@ pnpm install --frozen-lockfile
 node tools/gpu/pages/rc-polished-budget/metal.ts --out ../rc-metal-results
 ```
 
-The source install needs Git read access to the private `pmndrs/pathtracer` repository for the pinned `packages/raytracer` dependency at `2489a09ab1844a7effe6e845ecccd05876580c9f`. The portable handoff includes the private dependency seed. The BVH, downsampler and upscaler dependencies resolve from the registry through the lockfile. No sibling checkout is needed for these fixtures.
+Fresh checkouts install the interval tracer, `@pmndrs/raytracer@0.1.0`, from the public npm registry. The lockfile also pins the public BVH, downsampler and upscaler packages. [Published tracer](https://www.npmjs.com/package/@pmndrs/raytracer/v/0.1.0)
 
 Choose a fresh output directory for each run. The launcher builds the gallery with the `/gi/` base, acquires the repository GPU and CPU bench locks in that order and uses the shared headless Chrome test harness. Close unrelated GPU workloads before measuring. The default browser lookup includes Chrome in `/Applications`. For another installation, append `--chrome "/path/to/Google Chrome.app/Contents/MacOS/Google Chrome"`. The terminal displays each fixture result as it completes.
 

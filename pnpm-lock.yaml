@@ -119,8 +119,8 @@ importers:
         specifier: workspace:*
         version: link:../bvh
       '@pmndrs/raytracer':
-        specifier: git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer
-        version: git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer(@babylonjs/core@9.33.2)(three@0.187.0)
+        specifier: 0.1.0
+        version: 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
       '@pmndrs/rc-bvh':
         specifier: npm:@pmndrs/bvh@0.1.0
         version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
@@ -584,9 +584,8 @@ packages:
       three:
         optional: true
 
-  '@pmndrs/raytracer@git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer':
-    resolution: {commit: 2489a09ab1844a7effe6e845ecccd05876580c9f, path: packages/raytracer, repo: https://github.com/pmndrs/pathtracer.git, type: git}
-    version: 0.0.0
+  '@pmndrs/raytracer@0.1.0':
+    resolution: {integrity: sha512-MqSddR0bsbwlZ58/9+yeuLO8LQADocEXsy4jobnh1amEfImPHiB9WjERGoS+mUzL/jlJg7vyE3O3N2jaJkHYBA==}
 
   '@pmndrs/upscaler@0.5.0':
     resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
@@ -1690,7 +1689,7 @@ snapshots:
     optionalDependencies:
       three: 0.187.0
 
-  '@pmndrs/raytracer@git+https://github.com/pmndrs/pathtracer.git#2489a09ab1844a7effe6e845ecccd05876580c9f&path:packages/raytracer(@babylonjs/core@9.33.2)(three@0.187.0)':
+  '@pmndrs/raytracer@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
     dependencies:
       '@pmndrs/bvh': 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
       '@pmndrs/downsampler': 0.1.0(three@0.187.0)

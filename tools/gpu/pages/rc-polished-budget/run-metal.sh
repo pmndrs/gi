@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
-# Bootstrap the transferable Mac kit. This file, the GI bundle and the pnpm seed belong together.
+# Bootstrap the transferable Mac kit from its verified GI source bundle.
 set -eu
-kit=$(cd -- "$(dirname -- "$0")" && pwd)
+usage='Usage: bash run-metal.sh [--chrome /path/to/Chrome]'
+if [ "$#" -eq 1 ] && [ "$1" = --help ]; then
+  echo "$usage"
+  exit 0
+fi
+if [ "$#" -ne 0 ] && { [ "$#" -ne 2 ] || [ "$1" != --chrome ] || [ -z "$2" ]; }; then
+  echo "$usage" >&2
+  exit 2
+fi
 if [ "$(uname -s)" != Darwin ]; then
   echo "Run this kit on the Apple Silicon Mac." >&2
   exit 2
 fi
-if [ "$#" -ne 0 ] && { [ "$#" -ne 2 ] || [ "$1" != --chrome ]; }; then
-  echo 'Usage: bash run-metal.sh [--chrome /path/to/Chrome]' >&2
-  exit 2
-fi
+kit=$(cd -- "$(dirname -- "$0")" && pwd)
 bundle="$kit/gi-radiance-cascades.bundle"
 source_dir="$kit/gi-rc-metal"
-store_dir="$kit/.rc-deps"
 cd "$kit"
 shasum -a 256 -c SHA256SUMS
 if [ ! -d "$source_dir" ]; then
@@ -24,8 +28,6 @@ if [ "$(git rev-parse HEAD)" != "${expected%% *}" ] || ! git diff --quiet HEAD -
   echo "The checkout differs from the kit revision. Extract the kit into a new folder for a matched run." >&2
   exit 2
 fi
-mkdir -p "$store_dir"
-tar -xzf "$kit/raytracer-pnpm-seed.tgz" -C "$store_dir"
 if command -v pnpm >/dev/null && [ "$(pnpm --version)" = 10.23.0 ]; then
   pm=(pnpm)
 elif command -v corepack >/dev/null; then
@@ -33,7 +35,7 @@ elif command -v corepack >/dev/null; then
 else
   pm=(npx --yes pnpm@10.23.0)
 fi
-"${pm[@]}" install --frozen-lockfile --prefer-offline --store-dir "$store_dir/pnpm-store"
+"${pm[@]}" install --frozen-lockfile
 name="rc-metal-results-$(date +%Y%m%d-%H%M%S)-$$"
 status=0
 node tools/gpu/pages/rc-polished-budget/metal.ts --out "$kit/$name" "$@" || status=$?
