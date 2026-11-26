@@ -389,7 +389,8 @@ export class GIPlatformImpl implements GIPlatform {
         }
 
         if (this.timer) {
-            this.timer.resolve(encoder);
+            // Resolved again after the screen stage, if the host runs one (resolveFrameTimestamps).
+            this.resolveFrameTimestamps(encoder);
             this.timerAwaitingReadback = true;
         }
         this.lastEncodeCpuMs = performance.now() - start;
@@ -418,6 +419,11 @@ export class GIPlatformImpl implements GIPlatform {
                 screen,
             });
         }
+        // The screen stage's passes went into this frame's timestamp slot after encode resolved it.
+        // Not in a `finally`: a technique that threw may have left a pass open, and resolving into an
+        // encoder with an open pass is a validation error the host would see. After a throw the frame
+        // keeps encode's resolve, and the timer reads back only the passes a resolve covered.
+        if (this.timerAwaitingReadback) this.resolveFrameTimestamps(encoder);
     }
 
     get shading(): ShadingModule {
@@ -576,6 +582,25 @@ export class GIPlatformImpl implements GIPlatform {
     private forgetBudgets(): void {
         this.unitCosts.reset();
         this.budgets.clear();
+    }
+
+    /**
+     * Copies the frame's timestamps so far to the timer's readable buffer.
+     * A frame is `encode` and then, for techniques with a screen stage,
+     * `encodeScreen`, possibly into another encoder submitted after the first
+     * (the three adapter submits its screen stage at once). Both stages time
+     * their passes in the frame's one timestamp slot, and its readback starts
+     * at the next `encode`, when the host has submitted both. So this runs at
+     * the end of each stage: the screen stage's resolve covers every pass of
+     * the frame and its copy lands after encode's in queue order, replacing
+     * it, while a host that never calls `encodeScreen` (DDGI alone, or a
+     * frame whose screen stage the host skipped) keeps encode's. Resolving at
+     * the end of `encode` only read every screen-stage pass as 0 ms; resolving
+     * after the screen stage only would drop the timings of frames that have
+     * none.
+     */
+    private resolveFrameTimestamps(encoder: GPUCommandEncoder): void {
+        this.timer?.resolve(encoder);
     }
 
     private collectPasses(timer: GpuTimer): void {

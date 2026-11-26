@@ -10,8 +10,8 @@
  *
  * Each configuration warms for `WARM_FRAMES` frames from an empty cache and a
  * fresh network (the gate opens at frame 17), then times `TIMED_FRAMES`
- * frames with a `GpuTimer` of this page's (the platform's own resolves before
- * the screen stage; NOTES). Per frame it sums the hash grid's passes, the
+ * frames with a `GpuTimer` of this page's (the platform's own resolved before
+ * the screen stage until P6.6; NOTES). Per frame it sums the hash grid's passes, the
  * tail's inference (`NeuralTailInference`), its training steps
  * (`NeuralTailTraining`, every step's pass) and its gathering
  * (`NeuralTailGather`: cell records and queries; `NeuralTailScreenRecords`),
@@ -75,7 +75,7 @@ const GRID_SECTIONS = new Set([
 /** The tail's timed passes. */
 const TAIL_SECTIONS = new Set(['NeuralTailGather', 'NeuralTailInference', 'NeuralTailScreenRecords', 'NeuralTailTraining']);
 
-/** The technique with this page's timer in its context (the platform's own timer resolves before the screen stage). */
+/** The technique with this page's timer in its context (written when the platform's own timer resolved before the screen stage; since P6.6 it times it too, see radiance-cache-timing). */
 class TimedRadianceCache extends RadianceCacheTechnique {
     private readonly pageTimer: GpuTimer;
 

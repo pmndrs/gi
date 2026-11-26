@@ -62,6 +62,7 @@ import { DEFAULT_RADIANCE_CACHE_SETTINGS, PROBE_SPAWN_TILE_SIZE, SCREEN_HISTORY_
 import { RadianceCacheShadingModule } from './shading.ts';
 import { HashGridCache } from './world-cache/hash-grid-cache.ts';
 import { SharcCache } from './world-cache/sharc/sharc-cache.ts';
+import { beginTimedPass, POPULATE_TRACE_SECTION, SSGI_SECTION, timedPassName } from './timed-pass.ts';
 import { loadMlp } from './neural-cache/mlp-loader.ts';
 import { NeuralTail } from './neural-cache/neural-tail.ts';
 import type { WorldCache, WorldCacheChanges, WorldCacheProbeRays } from './world-cache/world-cache.ts';
@@ -402,7 +403,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const maxPerDimension = context.device.limits.maxComputeWorkgroupsPerDimension;
 
         // 1: a fresh frame (ClearCounters, gi1.cpp:2250-2251).
-        const clearPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/clear-counters` });
+        const clearPass = beginTimedPass(encoder, timer, 'ClearCounters');
         kernels.clearCounters.bind(clearPass);
         clearPass.setBindGroup(1, prepared.clearCountersGroup);
         clearPass.dispatchWorkgroups(1);
@@ -419,8 +420,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             probeSpawn: prepared.probeSpawn,
         });
 
-        // 3: the spawn and its compaction.
-        const spawnPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/spawn`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/spawn`) });
+        // 3: the spawn and its compaction (SpawnScreenProbes, gi1.cpp:2294-2310).
+        const spawnPass = beginTimedPass(encoder, timer, 'SpawnScreenProbes');
         kernels.spawn.bind(spawnPass);
         spawnPass.setBindGroup(1, groups.spawn);
         spawnPass.dispatchWorkgroups(Math.ceil(layout.maxProbeSpawnCount / WORKGROUP_SIZE.spawn));
@@ -433,12 +434,19 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // The probe count in front of the list, where the per-ray kernels read it.
         encoder.copyBufferToBuffer(prepared.compaction.count.buffer, prepared.compaction.count.offset, prepared.probeSpawn, 0, WORD_BYTES);
 
-        // 3-4: the empty tiles take rays from tiles that have history, then a direction per ray, then the rays.
-        const tracePass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/sample-populate`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/sample-populate`) });
-        history.encodePatch(tracePass);
-        kernels.sample.bind(tracePass);
-        tracePass.setBindGroup(1, groups.sample);
-        dispatchSplit(tracePass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
+        // 3-4: the empty tiles take rays from tiles that have history (PatchScreenProbes), then a
+        // direction per ray (SampleScreenProbes, gi1.cpp:2322-2330), then the rays: the trace half of
+        // Capsaicin's PopulateScreenProbesCells section, whose cache half (the hits' cells) the world
+        // cache times under the section's own name.
+        const patchPass = beginTimedPass(encoder, timer, 'PatchScreenProbes');
+        history.encodePatch(patchPass);
+        patchPass.end();
+        const samplePass = beginTimedPass(encoder, timer, 'SampleScreenProbes');
+        kernels.sample.bind(samplePass);
+        samplePass.setBindGroup(1, groups.sample);
+        dispatchSplit(samplePass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
+        samplePass.end();
+        const tracePass = beginTimedPass(encoder, timer, POPULATE_TRACE_SECTION);
         kernels.populate.bind(tracePass);
         tracePass.setBindGroup(1, groups.populate);
         dispatchSplit(tracePass, layout.maxRayCount / WORKGROUP_SIZE.populate, maxPerDimension);
@@ -448,7 +456,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.encodeWorldCache(encoder, frame, resources, changes);
 
         // 6: the rays into the probe atlas, the mask and the off-screen cache.
-        const blendPass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/blend`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/blend`) });
+        const blendPass = beginTimedPass(encoder, timer, 'BlendScreenProbes');
         kernels.blend.bind(blendPass);
         blendPass.setBindGroup(1, groups.blend);
         dispatchSplit(blendPass, layout.maxRayCount / WORKGROUP_SIZE.probe, maxPerDimension);
@@ -500,7 +508,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 settings: { sliceCount: settings.ssgiSliceCount, stepCount: settings.ssgiStepCount, viewRadius: settings.ssgiViewRadius, falloffRange: settings.ssgiFalloffRange, historyFrames: settings.ssgiHistoryFrames },
                 // Last frame's depth and normals (the probes' history copy, made at the end of the frame).
                 history: prepared.history.screenTexturesFor(resources.layout),
-                timestampWrites: this.context?.timer.computePass(`${TECHNIQUE_ID}/ssgi`),
+                timestampWrites: this.context?.timer.computePass(timedPassName(SSGI_SECTION)),
             }) ?? null;
         irradiance.encode(
             encoder,

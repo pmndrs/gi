@@ -28,6 +28,7 @@ import type { ChangeEvent } from '../../platform/contract/change-events.ts';
 import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import type { ScreenProbeLayout } from './settings.ts';
+import { beginTimedPass } from './timed-pass.ts';
 import { SH_BLOCK_SIZE } from './wgsl/spherical-harmonics.ts';
 import { CLEAR_PROBE_MASK_GROUP, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, CLEAR_PROBE_MASK_WGSL, COUNTER, ENTRY_POINT, PROBE_SPAWN_PROBE_BYTES, WORKGROUP_SIZE } from './wgsl/screen-probes.ts';
 import {
@@ -297,7 +298,7 @@ export class ScreenProbeHistory {
         // gfxCommandClearBuffer of the per-tile list counts (gi1.cpp:2283).
         encoder.clearBuffer(resources.scanBuffers.cachedTileListCount, 0, tiles * WORD_BYTES);
 
-        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/reproject`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/reproject`) });
+        const pass = beginTimedPass(encoder, timer, 'ReprojectScreenProbes');
         if (!hasHistory) {
             // No previous probe anywhere (ClearProbeMask, gi1.comp:242-246, on last frame's mask), and an
             // empty cache (InitCachedTileLRU, gi1.cpp:337-344).
@@ -312,16 +313,18 @@ export class ScreenProbeHistory {
         this.kernels.reproject.bind(pass);
         pass.setBindGroup(1, groups.reproject);
         pass.dispatchWorkgroups(layout.probeCount[0], layout.probeCount[1]);
-        // LookupScreenProbes (gi1.cpp:2274-2292).
-        this.kernels.count.bind(pass);
-        pass.setBindGroup(1, groups.count);
-        dispatchSplit(pass, Math.ceil(tiles / TEMPORAL_WORKGROUP.list), maxPerDimension);
-        this.listScan.encode(pass, tiles);
-        this.scatterArgs.encode(pass);
-        this.kernels.scatter.bind(pass);
-        pass.setBindGroup(1, groups.scatter);
-        pass.dispatchWorkgroupsIndirect(this.scatterArgs.buffer, 0);
         pass.end();
+        // LookupScreenProbes (gi1.cpp:2274-2292).
+        const lookup = beginTimedPass(encoder, timer, 'LookupScreenProbes');
+        this.kernels.count.bind(lookup);
+        lookup.setBindGroup(1, groups.count);
+        dispatchSplit(lookup, Math.ceil(tiles / TEMPORAL_WORKGROUP.list), maxPerDimension);
+        this.listScan.encode(lookup, tiles);
+        this.scatterArgs.encode(lookup);
+        this.kernels.scatter.bind(lookup);
+        lookup.setBindGroup(1, groups.scatter);
+        lookup.dispatchWorkgroupsIndirect(this.scatterArgs.buffer, 0);
+        lookup.end();
     }
 
     /** `PatchScreenProbes` (gi1.cpp:2311-2320), after the compaction, on the probe list. */
@@ -345,7 +348,7 @@ export class ScreenProbeHistory {
         if (!resources || !groups) throw new Error('@pmndrs/gi: encodeReprojection runs before the reorder');
         const tiles = resources.probeTileCount;
         const timer = this.context.timer;
-        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/reorder`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/reorder`) });
+        const pass = beginTimedPass(encoder, timer, 'ReorderScreenProbes');
         // gfxCommandScanSum over the flags: max_probe_count + 1 entries, so the last word counts the unused ones.
         this.lruScan.encode(pass, tiles + 1);
         this.kernels.reorder.bind(pass);

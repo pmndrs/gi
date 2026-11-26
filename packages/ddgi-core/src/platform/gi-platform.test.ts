@@ -7,7 +7,7 @@ import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
 import { checkComputeLimits, isSupported, KERNEL_COMPUTE_LIMITS, optionalFeatures, requiredLimits } from './device-requirements.ts';
 import { BLEND_WORKGROUP_SIZE } from '../techniques/ddgi/wgsl/blend.ts';
 import { countGroupStorageBuffers, countStorageBuffers, orderModules, placeModules, PlatformKernelBuilder } from './kernel-builder.ts';
-import { createFakeGpu, type FakeBuffer, type FakeGpu } from './scene/testing/fake-gpu.ts';
+import { createFakeGpu, FakeBuffer, type FakeEncoder, type FakeGpu } from './scene/testing/fake-gpu.ts';
 import { createCpuTracer } from './trace/cpu-traversal.ts';
 import { TOP_HEADER_WORD } from './trace/layout.ts';
 import type { TraceSceneData } from './trace/scene-assembly.ts';
@@ -641,6 +641,146 @@ describe('the platform object', () => {
         expect(() => platform.encode(gpu.createEncoder(), FRAME)).toThrow(GINotReadyError);
         await platform.prepare();
         encodeFrame(gpu, platform);
+        platform.dispose();
+    });
+});
+
+describe('GPU timing over the whole frame: encode and the screen stage', () => {
+    /** How long every timed pass lasts on the fake GPU's clock, in nanoseconds (1 ms). */
+    const PASS_NANOSECONDS = 1_000_000n;
+    const BYTES_PER_TIMESTAMP = 8;
+
+    /**
+     * The platform's fake GPU with `timestamp-query`, on WebGPU's queue
+     * timeline: a timed pass writes its begin and end timestamps when its
+     * encoder is submitted, and `resolveQuerySet` copies what the query set
+     * holds at that point in the queue, so a query written by a later pass
+     * (or a later submit) reads 0. Both are recorded as buffer copies, so
+     * `submit` runs them in order with the encoder's other copies.
+     */
+    function createTimedGpu(): FakeGpu {
+        const gpu = createPlatformGpu();
+        Object.assign(gpu.device as unknown as Record<string, unknown>, {
+            features: new Set<string>(['timestamp-query']),
+            pushErrorScope: () => {},
+            popErrorScope: () => Promise.resolve(null),
+            createQuerySet: (descriptor: GPUQuerySetDescriptor) => new FakeBuffer({ label: descriptor.label, size: descriptor.count * BYTES_PER_TIMESTAMP, usage: 0 }),
+        });
+        let clock = 0n;
+        const createEncoder = (): GPUCommandEncoder => {
+            const encoder = gpu.createEncoder() as unknown as FakeEncoder;
+            const writeTimestamp = (querySet: GPUQuerySet, index: number | undefined, nanoseconds: bigint): void => {
+                if (index === undefined) return;
+                const value = new FakeBuffer({ label: 'timestamp value', size: BYTES_PER_TIMESTAMP, usage: 0 });
+                new BigUint64Array(value.bytes.buffer)[0] = nanoseconds;
+                const destination = querySet as unknown as FakeBuffer;
+                encoder.commands.push({ copy: { source: value, sourceOffset: 0, destination, destinationOffset: index * BYTES_PER_TIMESTAMP, size: BYTES_PER_TIMESTAMP } });
+            };
+            return Object.assign(encoder, {
+                beginComputePass(descriptor: GPUComputePassDescriptor = {}) {
+                    const writes = descriptor.timestampWrites;
+                    const begin = clock;
+                    clock += PASS_NANOSECONDS;
+                    if (writes) writeTimestamp(writes.querySet, writes.beginningOfPassWriteIndex, begin);
+                    return { ...FAKE_COMPUTE_PASS, end: () => writes && writeTimestamp(writes.querySet, writes.endOfPassWriteIndex, begin + PASS_NANOSECONDS) };
+                },
+                resolveQuerySet(querySet: GPUQuerySet, firstQuery: number, queryCount: number, destination: GPUBuffer, destinationOffset: number) {
+                    encoder.commands.push({
+                        copy: {
+                            source: querySet as unknown as FakeBuffer,
+                            sourceOffset: firstQuery * BYTES_PER_TIMESTAMP,
+                            destination: destination as unknown as FakeBuffer,
+                            destinationOffset,
+                            size: queryCount * BYTES_PER_TIMESTAMP,
+                        },
+                    });
+                },
+            }) as unknown as GPUCommandEncoder;
+        };
+        return { ...gpu, createEncoder };
+    }
+
+    /** A technique with one timed pass in `encode` (unless `worldPass` is false) and, if asked, one in a screen stage. */
+    function timedTechnique(id: string, withScreenStage: boolean, worldPass = true): RecordingTechnique {
+        const technique = new RecordingTechnique(id, []);
+        const timedPass = (encoder: GPUCommandEncoder, name: string): void => {
+            const timer = technique.context?.timer;
+            encoder.beginComputePass({ label: name, timestampWrites: timer?.computePass(name) }).end();
+        };
+        technique.encode = (encoder) => {
+            if (worldPass) timedPass(encoder, `${id}/world`);
+        };
+        if (withScreenStage) {
+            (technique as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], screen: true };
+            (technique as GITechnique).encodeScreen = (encoder) => timedPass(encoder, `${id}/screen`);
+        }
+        return technique;
+    }
+
+    const texture = fakeTexture({ size: { width: 4, height: 2 }, format: 'rgba16float', usage: 0 }) as GPUTexture;
+    const SCREEN = { width: 4, height: 2, depth: texture, normal: texture, normalEncoding: 'snorm-float' as const };
+
+    type ScreenStage = 'none' | 'same encoder' | 'own encoder';
+
+    /**
+     * Frames as a host runs them: `encode`, then (unless 'none') `encodeScreen` into the same encoder or
+     * into one of its own submitted after it (the three adapter's way), with time for the readbacks to
+     * land before the next `encode` collects them. Returns the newest timed frame's passes, name to ms.
+     */
+    async function timedFrames(gpu: FakeGpu, platform: GIPlatformImpl, frames: number, screenStage: ScreenStage): Promise<Map<string, number>> {
+        for (let frame = 0; frame < frames; frame++) {
+            const encoder = gpu.createEncoder();
+            platform.encode(encoder, FRAME);
+            if (screenStage === 'own encoder') {
+                gpu.submit(encoder);
+                const screenEncoder = gpu.createEncoder();
+                platform.encodeScreen(screenEncoder, SCREEN);
+                gpu.submit(screenEncoder);
+            } else {
+                if (screenStage === 'same encoder') platform.encodeScreen(encoder, SCREEN);
+                gpu.submit(encoder);
+            }
+            // The timer's allocation check and each readback settle in promise callbacks.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        return new Map(platform.stats.passes.map((pass) => [pass.name, pass.gpuMs ?? Number.NaN]));
+    }
+
+    it.each(['own encoder', 'same encoder'] as const)('times the passes a screen stage records, in its %s, as well as those in encode', async (screenStage) => {
+        const gpu = createTimedGpu();
+        const platform = new GIPlatformImpl(gpu.device, { gpuTiming: true });
+        platform.addTechnique(timedTechnique('screen space', true));
+        await platform.prepare();
+        const passes = await timedFrames(gpu, platform, 6, screenStage);
+        expect(passes.get('screen space/world')).toBeCloseTo(1, 6);
+        // This read 0 ms when the timestamps were resolved only at the end of encode, before the screen stage wrote them.
+        expect(passes.get('screen space/screen')).toBeCloseTo(1, 6);
+        platform.dispose();
+    });
+
+    it.each(['own encoder', 'same encoder'] as const)('times a screen stage, in its %s, when encode timed nothing (a still scene)', async (screenStage) => {
+        const gpu = createTimedGpu();
+        const platform = new GIPlatformImpl(gpu.device, { gpuTiming: true });
+        platform.addTechnique(timedTechnique('screen space', true, false));
+        await platform.prepare();
+        // With encode's resolve alone no frame was timed at all here: it resolved nothing, so the slot was dropped.
+        expect([...(await timedFrames(gpu, platform, 6, screenStage))]).toEqual([['screen space/screen', 1]]);
+        platform.dispose();
+    });
+
+    it('keeps the timings of a host that never calls encodeScreen: the same passes, with or without a screen technique attached', async () => {
+        const gpu = createTimedGpu();
+        const platform = new GIPlatformImpl(gpu.device, { gpuTiming: true });
+        platform.addTechnique(timedTechnique('world space', false));
+        await platform.prepare();
+        expect([...(await timedFrames(gpu, platform, 6, 'none'))]).toEqual([['world space/world', 1]]);
+
+        // A screen technique attached, but this frame's host skips the screen stage: encode's passes are still timed.
+        platform.addTechnique(timedTechnique('screen space', true));
+        await platform.prepare();
+        const passes = await timedFrames(gpu, platform, 6, 'none');
+        expect([...passes.keys()]).toEqual(['world space/world', 'screen space/world']);
+        expect([...passes.values()].every((ms) => Math.abs(ms - 1) < 1e-6)).toBe(true);
         platform.dispose();
     });
 });
