@@ -18,7 +18,7 @@ import { createInventoryGpu, describeOver, recordComputePipelines, worstPipeline
 import { DDGITechnique } from '../ddgi/ddgi-technique.ts';
 import { NativeRadianceCascades } from '../radiance-cascades/native.ts';
 import { loadMlp } from './neural-cache/mlp-loader.ts';
-import { RadianceCacheTechnique } from './radiance-cache-technique.ts';
+import { RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE, RadianceCacheTechnique } from './radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from './settings.ts';
 
 /** The most storage buffers per stage Chrome gives on Apple GPUs (M5 Pro, 2026-11-26). */
@@ -111,11 +111,21 @@ describe('storage buffers per shader stage (pmndrs/gi#49)', () => {
                 if (configuration.ddgiBelow) expect(labels).toMatch(/SampleBounceSourceCells/);
                 if (configuration.needsMlp) expect(labels).toMatch(/NeuralTail/);
                 if (configuration.settings.ssgi) expect(labels).toMatch(/ssgi/i);
-                // The gate on APPLE_STORAGE_BUFFERS_PER_STAGE comes with the packing that meets it (#49).
-                expect(worstPipeline(pipelines)?.storageBuffers).toBeLessThanOrEqual(15);
+                expect(describeOver(pipelines, APPLE_STORAGE_BUFFERS_PER_STAGE)).toEqual([]);
+                // What the technique declares is its real need: the most any pass of the configuration binds.
+                expect(worstPipeline(pipelines)?.storageBuffers).toBe(RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE);
             });
         }
     }
+
+    it(`the radiance cache declares its ${APPLE_STORAGE_BUFFERS_PER_STAGE} in its requirements, so the platform reports it`, () => {
+        expect(RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE).toBeLessThanOrEqual(APPLE_STORAGE_BUFFERS_PER_STAGE);
+        expect(new RadianceCacheTechnique().requirements.limits).toEqual({ maxStorageBuffersPerShaderStage: RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE });
+        const platform = new GIPlatformImpl(createInventoryGpu().device);
+        platform.addTechnique(new RadianceCacheTechnique());
+        expect(platform.limitNeeds).toEqual({ maxStorageBuffersPerShaderStage: RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE });
+        platform.dispose();
+    });
 
     it(`DDGI binds at most ${DEFAULT_STORAGE_BUFFERS_PER_STAGE} in every pass (deferred and inline direct light)`, async () => {
         for (const { name: featureName, features } of FEATURE_SETS) {

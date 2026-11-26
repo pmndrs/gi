@@ -348,6 +348,7 @@ Every name `@pmndrs/gi/core` exports, in one place: the platform, with no techni
 | `GIPlatformOptions` | `createGI`'s options: `gpuTiming`, `label`, `buildIn`, `textureLayerSize`. |
 | `GIPlatformModule` | The contract's declaration of `createGI` and the three helpers below. |
 | `ScreenNeeds` | `gi.screenNeeds`: which screen channels the attached techniques read (`screen`, `velocity`, `albedo`, `instance`, `lighting`), so a host renders only those (RC1.1). |
+| `gi.limitNeeds` | The device limits the attached techniques declare above WebGPU's defaults (`TechniqueRequirements.limits`), the largest of each; `prepare` names the first the device is below (#49). |
 | `requiredLimits(adapter)` | The device limits to ask for: the adapter's largest bindings and buffers, and what the kernels need. |
 | `RequiredLimits` | The type `requiredLimits` returns: limit names to numbers. |
 | `optionalFeatures(adapter)` | Features worth asking for, where the adapter has them. |
@@ -428,7 +429,7 @@ A technique gets the platform's services when attached, and never sees the host.
 | Name | What it is |
 | --- | --- |
 | `GITechnique` | What a technique implements: `attach`, `prepare`, `encode`, its `shading` module, `settings`, `debugViews`, `dispose`... |
-| `TechniqueRequirements` | What it needs: query kinds, ray batches, screen buffers, a fallback. |
+| `TechniqueRequirements` | What it needs: query kinds, ray batches, screen buffers, a fallback, device limits above the defaults. |
 | `ScreenChannelRequest` | `TechniqueRequirements.screen` in its long form: which optional screen channels it reads (RC1.1). |
 | `TechniqueContext` | What it gets when attached: the device, the scene copy, queries, hit shading, the kernel builder, the timer. |
 | `TechniqueFrame`, `TechniqueScreenFrame` | What its `encode` (and screen stage) gets each frame: the camera, the changes, its share of the budget. |
@@ -691,6 +692,11 @@ ddgi.resetProbes({});                               // nothing: each flag is fal
 Through three, `volume.resetProbes(what)` (three.md).
 
 ## Revisions
+
+### Apple's storage-buffer limit, 2026-11-26 (pmndrs/gi#49)
+
+- **Technique-facing: `TechniqueRequirements.limits`** (optional, `RequiredLimits`): device limits a technique's kernels need above WebGPU's defaults. The radiance cache declares `maxStorageBuffersPerShaderStage: 10` (its most in any pass, packed to fit Apple GPUs' 10 in Chrome; a device three.js makes itself has 8). `prepare` throws a `GILimitError` naming the first declared limit the device is below, before compiling anything.
+- **Host-facing: `GIPlatform.limitNeeds`** (read-only): the largest of each limit the attached techniques declare, so a host can check a device or pass them to `requestDevice`. `requiredLimits(adapter)` already asks for the adapter's maximum storage buffers per stage, so a host using it gets them where the adapter has them.
 
 ### Radiance-cache phase 2, 2026-11-19 (RC2.2)
 

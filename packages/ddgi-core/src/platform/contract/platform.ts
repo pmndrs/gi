@@ -120,6 +120,15 @@ export interface GIPlatform {
      * removed. `encodeScreen` throws if a channel asked for is missing.
      */
     readonly screenNeeds: ScreenNeeds;
+    /**
+     * The device limits the attached techniques need above WebGPU's defaults
+     * (`TechniqueRequirements.limits`), the largest of each: for example the
+     * radiance cache's `maxStorageBuffersPerShaderStage` of 10 (Apple GPUs in
+     * Chrome allow 10, a device three.js makes itself 8). `requiredLimits`
+     * asks for at least these where the adapter has them; `prepare` throws a
+     * `GILimitError` naming the first one the device is below.
+     */
+    readonly limitNeeds: RequiredLimits;
 
     /** The output technique's shading module. Re-read `version` each frame. */
     readonly shading: ShadingModule;

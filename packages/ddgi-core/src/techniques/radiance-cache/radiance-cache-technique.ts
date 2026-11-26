@@ -101,6 +101,19 @@ const LARGEST_HALF = 65504;
 /** The technique's id: its passes are timed as `radiance-cache/<pass>`. */
 const TECHNIQUE_ID = 'radiance-cache';
 
+/**
+ * The most storage buffers any of the radiance cache's compute passes binds in
+ * one shader stage, the platform's modules included, in every configuration
+ * (worldCache, cellShading, secondBounce, neuralCache, ssgi, denoiser; with
+ * and without subgroups). Chrome on Apple GPUs allows 10 per stage (the M5
+ * Pro), so the cache's buffers are packed to fit (register D6,
+ * pmndrs/gi#49); a device three.js makes itself allows 8, which the cache
+ * doesn't fit. Declared in `requirements.limits`, so `GIPlatform.limitNeeds`
+ * reports it and `prepare` names the limit on a device below it. A unit test
+ * (storage-buffers.test.ts) counts every pass and holds this to the largest.
+ */
+export const RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE = 10;
+
 /** The GPU resources of the probes for one screen size: what tests and debug views read. */
 export interface RadianceCacheProbes {
     readonly layout: ScreenProbeLayout;
@@ -282,7 +295,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // The SHaRC overrides are copied too, so changing them never touches the frozen defaults.
         this.settings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS, ...settings, sharc: { ...settings.sharc } };
         const ssgi = this.settings.ssgi;
-        this.requirements = { queries: ['rays'], screen: { velocity: true, albedo: ssgi, lighting: ssgi } };
+        this.requirements = {
+            queries: ['rays'],
+            screen: { velocity: true, albedo: ssgi, lighting: ssgi },
+            limits: { maxStorageBuffersPerShaderStage: RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE },
+        };
         this.shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() }, ssgi);
     }
 
