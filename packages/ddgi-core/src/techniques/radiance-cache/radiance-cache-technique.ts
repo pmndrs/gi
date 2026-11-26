@@ -78,6 +78,7 @@ import {
     FRAME_UNIFORM_BYTES,
     FRAME_UNIFORM_OFFSETS,
     HISTORY_CHANGES_BYTES,
+    historyWordsLayout,
     POPULATE_GROUP,
     populateWgsl,
     PROBE_RAY_BYTES,
@@ -842,35 +843,32 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         const counters = { buffer: prepared.counters };
         const group = (label: string, kernel: ComputeKernel, entries: GPUBindingResource[]): GPUBindGroup =>
             device.createBindGroup({ label: `${TECHNIQUE_ID}/${label}`, layout: kernel.ownLayouts[0], entries: entries.map((resource, binding) => ({ binding, resource })) });
+        const sparseGroup = (label: string, kernel: ComputeKernel, entries: readonly (readonly [number, GPUBindingResource])[]): GPUBindGroup =>
+            device.createBindGroup({ label: `${TECHNIQUE_ID}/${label}`, layout: kernel.ownLayouts[0], entries: entries.map(([binding, resource]) => ({ binding, resource })) });
         const groups: ScreenInputGroups = {
             depth: screen.depth,
             normal: screen.normal,
             normalUnorm,
             resources,
             spawn: group('SpawnScreenProbes', kernels.spawn, [uniforms, depth, normal, { buffer: prepared.spawnSeeds }, { buffer: prepared.spawnFlags }]),
-            sample: group('SampleScreenProbes', kernels.sample, [
-                uniforms,
-                normal,
-                { buffer: prepared.probeSpawn },
-                { buffer: resources.probeRays },
-                depth,
-                resources.probeAtlas.createView(),
-                resources.probeMaskLevel0,
-                history.previousProbeAtlas.createView(),
-                { buffer: scanBuffers.cachedTileListCount },
-                { buffer: scanBuffers.cachedTileListIndex },
-                { buffer: history.cachedTileList },
-                { buffer: history.cachedTileLRU },
-                { buffer: history.cachedTileIndex },
-                history.cachedTileAtlas.createView(),
-                { buffer: scanBuffers.cachedTileLRUFlags },
-                counters,
-                { buffer: history.spawnProbe },
-                { buffer: history.evictedRadiance },
-                { buffer: history.cellCounts },
-                { buffer: history.previousCellCounts },
-                { buffer: history.cachedCellCounts },
-                { buffer: history.expectedRays },
+            // The history words (register D6) at 10; 11, 16-18, 20 and 21 are gone with them.
+            sample: sparseGroup('SampleScreenProbes', kernels.sample, [
+                [0, uniforms],
+                [1, normal],
+                [2, { buffer: prepared.probeSpawn }],
+                [3, { buffer: resources.probeRays }],
+                [4, depth],
+                [5, resources.probeAtlas.createView()],
+                [6, resources.probeMaskLevel0],
+                [7, history.previousProbeAtlas.createView()],
+                [8, { buffer: scanBuffers.cachedTileListCount }],
+                [9, { buffer: scanBuffers.cachedTileListIndex }],
+                [10, { buffer: history.words }],
+                [12, { buffer: history.cachedTileIndex }],
+                [13, history.cachedTileAtlas.createView()],
+                [14, { buffer: scanBuffers.cachedTileLRUFlags }],
+                [15, counters],
+                [19, { buffer: history.previousCellCounts }],
             ]),
             populate: group('PopulateScreenProbes', kernels.populate, [
                 uniforms,
@@ -880,29 +878,24 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 { buffer: resources.probeRays },
                 { buffer: resources.rayScratch.buffer },
             ]),
-            blend: group('BlendScreenProbes', kernels.blend, [
-                uniforms,
-                normal,
-                { buffer: prepared.probeSpawn },
-                { buffer: resources.probeRays },
-                resources.rayScratch.rayResults,
-                resources.probeAtlas.createView(),
-                resources.probeMaskLevel0,
-                depth,
-                history.previousProbeAtlas.createView(),
-                { buffer: history.spawnProbe },
-                { buffer: history.evictedRadiance },
-                counters,
-                { buffer: history.cachedTileLRU },
-                { buffer: scanBuffers.cachedTileLRUFlags },
-                { buffer: history.cachedTileMRU },
-                { buffer: history.cachedTileIndex },
-                history.cachedTileAtlas.createView(),
-                { buffer: prepared.historyChanges },
-                { buffer: history.cellCounts },
-                { buffer: history.previousCellCounts },
-                { buffer: history.cachedCellCounts },
-                { buffer: history.expectedRays },
+            // The history words (register D6) at 9; 10, 12, 14, 18, 20 and 21 are gone with them.
+            blend: sparseGroup('BlendScreenProbes', kernels.blend, [
+                [0, uniforms],
+                [1, normal],
+                [2, { buffer: prepared.probeSpawn }],
+                [3, { buffer: resources.probeRays }],
+                [4, resources.rayScratch.rayResults],
+                [5, resources.probeAtlas.createView()],
+                [6, resources.probeMaskLevel0],
+                [7, depth],
+                [8, history.previousProbeAtlas.createView()],
+                [9, { buffer: history.words }],
+                [11, counters],
+                [13, { buffer: scanBuffers.cachedTileLRUFlags }],
+                [15, { buffer: history.cachedTileIndex }],
+                [16, history.cachedTileAtlas.createView()],
+                [17, { buffer: prepared.historyChanges }],
+                [19, { buffer: history.previousCellCounts }],
             ]),
         };
         this.inputGroups = groups;
@@ -940,6 +933,15 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         floats[word('fillHitDistance')] = rules.fillHitDistance;
         uints[word('probeChangeReset')] = rules.probeChangeReset;
         uints[word('rayGuidingCorrection')] = rules.rayGuidingCorrection;
+        // Where each array is in the history words (register D6).
+        const history = historyWordsLayout({ probeTileCount: layout.probeCount[0] * layout.probeCount[1], atlasTexels: layout.atlasSize[0] * layout.atlasSize[1], maxRayCount: layout.maxRayCount, maxProbeSpawnCount: layout.maxProbeSpawnCount });
+        uints[word('historyCachedTileLRU')] = history.cachedTileLRU;
+        uints[word('historyCachedTileMRU')] = history.cachedTileMRU;
+        uints[word('historyCellCounts')] = history.cellCounts;
+        uints[word('historyCachedCellCounts')] = history.cachedCellCounts;
+        uints[word('historyExpectedRays')] = history.expectedRays;
+        uints[word('historyProbeSpawnProbes')] = history.probeSpawnProbes;
+        uints[word('historyEvictedRadiance')] = history.evictedRadiance;
         device.queue.writeBuffer(prepared.frameUniforms, 0, words);
     }
 
