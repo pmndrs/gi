@@ -16,6 +16,12 @@ export interface RunnerOptions {
     withoutWebGpu: boolean;
     /** Replaces every page's own timeout. */
     timeoutMs: number | null;
+    /**
+     * Cap the devices' storage buffers per shader stage at this many
+     * (device-limit-caps.ts): 10 runs the pages as Chrome on Apple GPUs
+     * allows (pmndrs/gi#49). Null: the GPU's own limits.
+     */
+    maxStorageBuffers: number | null;
     help: boolean;
 }
 
@@ -30,6 +36,9 @@ export const USAGE = `Usage: pnpm test:gpu [options]
   --out <dir>          Where screenshots go (default: a temp folder, printed at the end).
   --json <file>        Also write the whole run (adapter, per-page status, durations, data) as JSON.
   --timeout <ms>       Replace every page's timeout.
+  --max-storage-buffers <n>
+                       Cap every device at n storage buffers per shader stage, as a GPU that allows
+                       only n would (10: Chrome on Apple GPUs). Requested limits are enforced.
   --no-webgpu          Start Chrome with the GPU disabled. The run must fail clearly (self-check).
   --verbose            Print all console output, not only for failing pages.
   --help               Show this text.`;
@@ -48,6 +57,7 @@ export function parseRunnerArgs(argv: string[]): RunnerOptions {
                 out: { type: 'string' },
                 json: { type: 'string' },
                 timeout: { type: 'string' },
+                'max-storage-buffers': { type: 'string' },
                 'no-webgpu': { type: 'boolean' },
                 verbose: { type: 'boolean' },
                 help: { type: 'boolean' },
@@ -71,6 +81,14 @@ export function parseRunnerArgs(argv: string[]): RunnerOptions {
         }
     }
 
+    let maxStorageBuffers: number | null = null;
+    if (values['max-storage-buffers'] !== undefined) {
+        maxStorageBuffers = Number(values['max-storage-buffers']);
+        if (!Number.isInteger(maxStorageBuffers) || maxStorageBuffers <= 0) {
+            throw new UsageError(`--max-storage-buffers must be a positive whole number, got "${values['max-storage-buffers']}".`);
+        }
+    }
+
     const filters = (values.filter ?? [])
         .flatMap((entry) => entry.split(','))
         .map((entry) => entry.trim())
@@ -85,6 +103,7 @@ export function parseRunnerArgs(argv: string[]): RunnerOptions {
         verbose: values.verbose ?? false,
         withoutWebGpu: values['no-webgpu'] ?? false,
         timeoutMs,
+        maxStorageBuffers,
         help: values.help ?? false,
     };
 }

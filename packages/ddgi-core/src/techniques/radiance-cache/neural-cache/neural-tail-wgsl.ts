@@ -51,7 +51,7 @@
  */
 
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
-import type { HashGridCacheBufferLayout } from '../world-cache/capacity.ts';
+import { HASH_GRID_COUNTER, type HashGridCacheBufferLayout } from '../world-cache/capacity.ts';
 import { NEURAL_TAIL_WORDS, PROBE_RAY_SURFACE_WGSL, populationHeadWgsl } from '../world-cache/hash-grid-population-wgsl.ts';
 import { hashGridCacheWgsl } from '../world-cache/hash-grid-wgsl.ts';
 
@@ -66,26 +66,27 @@ export const NEURAL_TAIL_QUERY_VEC4 = 3;
 export const NEURAL_TAIL_RECORD_KIND = { cell: 1, screen: 2 } as const;
 /** Bytes of `NeuralTailParams`. */
 export const NEURAL_TAIL_PARAMS_BYTES = 160;
-/** Words of the counts buffer: the query count (for inference), the training set's count (for training), two spare. */
-export const NEURAL_TAIL_COUNT_WORD = { queries: 0, records: 1 } as const;
-export const NEURAL_TAIL_COUNTS_BYTES = 16;
 /** Workgroup size of the gather kernels. */
 export const NEURAL_TAIL_WORKGROUP = 64;
 /** Blocks across a screen-records workgroup (8 × 8). */
 export const NEURAL_TAIL_SCREEN_GROUP = 8;
 
-/** The tail's own group: group 3 beside the hash grid's two (cells, queries), group 2 beside the grid's lookup (screen). */
+/**
+ * The tail's own group: group 3 beside the hash grid's two (cells, queries),
+ * group 2 beside the grid's lookup (screen). The training set's record count
+ * is a counter of the grid's words (`HASH_GRID_COUNTER.neuralTailRecords`), not
+ * a buffer here, so the gather kernels bind 10 storage buffers or fewer
+ * (register D6, pmndrs/gi#49).
+ */
 export const NEURAL_TAIL_BINDING = {
     params: 0,
     /** Training set (cell and screen kernels) or queries (query kernel), `array<vec4f>`. */
     records: 1,
-    counts: 2,
 } as const;
 
 export const NEURAL_TAIL_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: NEURAL_TAIL_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
     { binding: NEURAL_TAIL_BINDING.records, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    { binding: NEURAL_TAIL_BINDING.counts, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
 export const NEURAL_TAIL_ENTRY_POINT = {
@@ -147,7 +148,7 @@ fn ntAngles(direction: vec3f) -> vec2f {
 }
 `;
 
-/** Gather-side: appending a record to the training set. Needs `g_NeuralTail_Records` and `g_NeuralTail_Counts`. */
+/** Gather-side: appending a record to the training set. Needs `g_NeuralTail_Records` and the hash grid's words (its record counter). */
 const APPEND_RECORD_WGSL = /* wgsl */ `
 fn NeuralTail_IsFinite(value: vec3f) -> bool {
     return all((bitcast<vec3u>(value) & vec3u(0x7f800000u)) != vec3u(0x7f800000u));
@@ -157,7 +158,7 @@ fn NeuralTail_AppendRecord(kind: f32, position: vec3f, outgoing: vec3f, normal: 
     if (!NeuralTail_IsFinite(target_value) || !NeuralTail_IsFinite(position)) {
         return;
     }
-    let slot = atomicAdd(&g_NeuralTail_Counts[${NEURAL_TAIL_COUNT_WORD.records}u], 1u);
+    let slot = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_NEURALTAILRECORDS], 1u);
     if (slot >= g_NeuralTail_Params.set_capacity) {
         return;
     }
@@ -174,7 +175,6 @@ function groupDeclarationsWgsl(group: number): string {
 ${PARAMS_STRUCT_WGSL}
 @group(${group}) @binding(${NEURAL_TAIL_BINDING.params}) var<uniform> g_NeuralTail_Params: NeuralTailParams;
 @group(${group}) @binding(${NEURAL_TAIL_BINDING.records}) var<storage, read_write> g_NeuralTail_Records: array<vec4f>;
-@group(${group}) @binding(${NEURAL_TAIL_BINDING.counts}) var<storage, read_write> g_NeuralTail_Counts: array<atomic<u32>>;
 `;
 }
 
@@ -371,6 +371,7 @@ export function neuralTailTrainHooks(encoding: string): string {
     return /* wgsl */ `
 ${PARAMS_STRUCT_WGSL}
 @group(1) @binding(0) var<storage, read> ntSet: array<vec4f>;
+// The hash grid's counter block (HASH_GRID_COUNTER): the training set's count is one of its words.
 @group(1) @binding(1) var<storage, read> ntCounts: array<u32>;
 @group(1) @binding(2) var<uniform> ntParams: NeuralTailParams;
 ${inputsWgsl(encoding)}
@@ -380,7 +381,7 @@ fn ntHash(x: u32) -> u32 {
     return (w >> 22u) ^ w;
 }
 fn nnTrainLoad(r: u32, x: ptr<function, array<f32, NN_IN>>) -> vec3f {
-    let n = max(min(ntCounts[${NEURAL_TAIL_COUNT_WORD.records}u], ntParams.set_capacity), 1u);
+    let n = max(min(ntCounts[${HASH_GRID_COUNTER.neuralTailRecords}u], ntParams.set_capacity), 1u);
     let index = ntHash(r ^ ntHash(nnState.step * 0x9e3779b9u + 17u)) % n;
     let b = ${NEURAL_TAIL_RECORD_VEC4}u * index;
     *x = ntInputs(ntSet[b], ntSet[b + 1u], ntSet[b + 2u]);

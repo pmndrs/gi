@@ -273,6 +273,14 @@ export const HASH_GRID_COUNTER = {
     cellSchedulePeriod: 11,
     /** Lever E8: the cells to light this frame, min(candidates, budget), written by `PrioritizeCells` (the lit count can fall a little short of it). */
     cellShadedTarget: 12,
+    /**
+     * P6.4's neural tail (register E11): the records appended to its training
+     * set this frame. Cleared by the tail before its gather; read by the
+     * network's training step. In the counter block rather than a buffer of
+     * the tail's own, so its gather kernels bind one storage buffer fewer
+     * (pmndrs/gi#49, register D6).
+     */
+    neuralTailRecords: 13,
 } as const;
 
 /** Lever E8's priority classes: new or changed, still converging, its turn, the rest (cell-shading-wgsl.ts). */
@@ -289,9 +297,23 @@ export const CELL_SHADING_SUB_BINS = 64;
 /** Priority bins: class × sub-bin (a candidate's word keeps the bin in 8 bits), in the per-ray lists (`cellPriorityBins`). */
 export const CELL_SHADING_BINS = CELL_SHADING_CLASSES * CELL_SHADING_SUB_BINS;
 
-/** Where each array lives: word (or element) offsets inside its packed buffer, and the buffers' sizes. */
+/**
+ * Where each array lives: word (or element) offsets inside its packed buffer,
+ * and the sizes. Two storage buffers (register D6): the words (`atomic<u32>`)
+ * and the cell values (`vec2u`). The words hold, each section starting on a
+ * 256-byte boundary, the tile words (counters and the per-tile arrays) and
+ * the update scratch. One buffer rather than two, so every population pass
+ * binds 10 storage buffers or fewer with the platform's 5 (Apple GPUs allow
+ * 10 per stage, pmndrs/gi#49). The cells' last-reset frames (experiment E9)
+ * are in the per-ray list words while E8 or E9 is used
+ * (`HashGridCacheRayListLayout.resetFrames`), so they cost nothing otherwise.
+ */
 export interface HashGridCacheBufferLayout {
-    /** Tile words: counters, then hash, decay, packed tile index 0 and 1, `numTiles` words each. */
+    /**
+     * Tile words: counters, then hash, decay, packed tile index 0 and 1, the
+     * update-listed frames, `numTiles` words each. `bytes` is this section
+     * alone: what emptying the cache clears.
+     */
     readonly tileWords: {
         readonly hashBuffer: number;
         readonly decayTileBuffer: number;
@@ -301,26 +323,46 @@ export interface HashGridCacheBufferLayout {
         readonly updateListedTileBuffer: number;
         readonly bytes: number;
     };
+    /** Update scratch, in the words: `UpdateCellValueBuffer`, then `UpdateCellValueIndirectBuffer` `4 × numCells` words later. */
+    readonly updateScratch: {
+        readonly updateCellValueBuffer: number;
+        readonly updateCellValueIndirectBuffer: number;
+        readonly bytes: number;
+    };
+    /** The whole words buffer: tile words, update scratch. */
+    readonly words: {
+        readonly bytes: number;
+    };
     /** Cell values, in `vec2u` elements: `ValueBuffer` at 0, `ValueIndirectBuffer` at `numCells`. */
     readonly cellValues: {
         readonly valueBuffer: number;
         readonly valueIndirectBuffer: number;
         readonly bytes: number;
     };
-    /** Update scratch, in words: `UpdateCellValueBuffer` at 0, `UpdateCellValueIndirectBuffer` at `4 × numCells`. */
-    readonly updateScratch: {
-        readonly updateCellValueBuffer: number;
-        readonly updateCellValueIndirectBuffer: number;
-        readonly bytes: number;
-    };
-    /** All three. */
+    /** Both buffers. */
     readonly totalBytes: number;
+}
+
+/** WebGPU's storage-binding offset alignment (256 bytes) in words: where each section of the words starts. */
+const SECTION_ALIGNMENT_WORDS = 64;
+
+function alignSection(word: number): number {
+    return Math.ceil(word / SECTION_ALIGNMENT_WORDS) * SECTION_ALIGNMENT_WORDS;
 }
 
 /** Bytes of a cell value: a `uint2` holding four halves, rgb radiance and a sample count (`hash_grid_cache.hlsl:356-365`). */
 export const CELL_VALUE_BYTES = 8;
 /** Words of a cell's update scratch: quantised rgb and a sample count (`HashGridCache_QuantizeRadiance`, hash_grid_cache.hlsl:301-306; `num_cells << 2`, gi1.cpp:527). */
 export const UPDATE_SCRATCH_WORDS_PER_CELL = 4;
+
+/**
+ * Words of experiment E9's last-reset frames: per finest-level cell, the
+ * frame (16 bits, two cells a word) it last forgot its history
+ * (`HashGridCache_ClaimChangeReset`). 32 MiB at Capsaicin's default capacity.
+ */
+export function cellResetFrameWords(capacity: HashGridCacheCapacity): number {
+    return Math.ceil((capacity.numTiles * capacity.numCellsPerTileMip[0]) / 2);
+}
 
 export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): HashGridCacheBufferLayout {
     const { numTiles, numCells } = capacity;
@@ -329,27 +371,30 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): Hash
     const packedTileIndexBuffer0 = decayTileBuffer + numTiles;
     const packedTileIndexBuffer1 = packedTileIndexBuffer0 + numTiles;
     const updateListedTileBuffer = packedTileIndexBuffer1 + numTiles;
-    const tileWordsBytes = (updateListedTileBuffer + numTiles) * WORD_BYTES;
-    const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
+    const tileWordsEnd = updateListedTileBuffer + numTiles;
+    const scratchStart = alignSection(tileWordsEnd);
     const scratchWordsPerArray = UPDATE_SCRATCH_WORDS_PER_CELL * numCells;
-    const updateScratchBytes = 2 * scratchWordsPerArray * WORD_BYTES;
+    const wordsBytes = (scratchStart + 2 * scratchWordsPerArray) * WORD_BYTES;
+    const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
     return {
-        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, bytes: tileWordsBytes },
+        tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, bytes: tileWordsEnd * WORD_BYTES },
+        updateScratch: { updateCellValueBuffer: scratchStart, updateCellValueIndirectBuffer: scratchStart + scratchWordsPerArray, bytes: 2 * scratchWordsPerArray * WORD_BYTES },
+        words: { bytes: wordsBytes },
         cellValues: { valueBuffer: 0, valueIndirectBuffer: numCells, bytes: cellValuesBytes },
-        updateScratch: { updateCellValueBuffer: 0, updateCellValueIndirectBuffer: scratchWordsPerArray, bytes: updateScratchBytes },
-        totalBytes: tileWordsBytes + cellValuesBytes + updateScratchBytes,
+        totalBytes: wordsBytes + cellValuesBytes,
     };
 }
 
 /**
  * Throws `GILimitError` naming the first limit the packed buffers pass: each
  * is bound whole as one storage binding, so it must fit both the binding
- * limit and the buffer limit. A device made with WebGPU's default limits
+ * limit and the buffer limit (the words, about 750 MB at Capsaicin's default
+ * capacity, are the larger). A device made with WebGPU's default limits
  * (128 MiB bindings, 256 MiB buffers; three's own device, register D14)
  * fails on `maxStorageBufferBindingSize`.
  */
 export function checkHashGridCacheLimits(layout: HashGridCacheBufferLayout, limits: Pick<GPUSupportedLimits, 'maxStorageBufferBindingSize' | 'maxBufferSize'>): void {
-    const largest = Math.max(layout.tileWords.bytes, layout.cellValues.bytes, layout.updateScratch.bytes);
+    const largest = Math.max(layout.words.bytes, layout.cellValues.bytes);
     if (largest > limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', largest, limits.maxStorageBufferBindingSize);
     if (largest > limits.maxBufferSize) throw new GILimitError('maxBufferSize', largest, limits.maxBufferSize);
 }

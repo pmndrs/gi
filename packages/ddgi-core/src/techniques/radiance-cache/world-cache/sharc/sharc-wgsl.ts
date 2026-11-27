@@ -70,7 +70,13 @@ export const SHARC_CLAMP = 1000;
 export const SHARC_MAX_LEVEL = 24;
 /** The most bounce rays an update path traces (`SharcSettings.bounceRays`). */
 export const SHARC_MAX_BOUNCE_RAYS = 2;
-/** Words per slot in the accumulator buffer: r, g, b, count (atomic), the frame it last had samples, and the cell (x, y, z, level and bin) for the change reset. */
+/**
+ * Words per slot in the accumulator buffer: r, g, b, count (atomic), the frame
+ * it last had samples, and the cell (x, y, z, level and bin) for the change
+ * reset. After the slots, the same buffer holds each slot's key
+ * (`sharcKeyWord`): one storage buffer instead of two, so the update passes
+ * bind 10 with the platform's 5 (register D6, pmndrs/gi#49).
+ */
 export const SHARC_SLOT_WORDS = 9;
 /** Words before the first slot in the accumulator buffer: the counters. */
 export const SHARC_COUNTER_WORDS = 16;
@@ -163,7 +169,7 @@ export const SHARC_RAY_GROUP = 2;
 
 export const SHARC_CACHE_BINDING = {
     params: 0,
-    keys: 1,
+    /** The counters, the slots' accumulators, then the slots' keys (`array<atomic<u32>>`; read-only `array<u32>` for lookups). */
     accum: 2,
     resolved: 3,
 } as const;
@@ -177,7 +183,6 @@ export const SHARC_RAY_BINDING = {
 
 export const SHARC_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: SHARC_CACHE_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-    { binding: SHARC_CACHE_BINDING.keys, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     { binding: SHARC_CACHE_BINDING.accum, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     { binding: SHARC_CACHE_BINDING.resolved, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
@@ -188,10 +193,10 @@ export const SHARC_RAY_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: SHARC_RAY_BINDING.rayWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
-/** The read-only group `WorldCacheLookup` readers bind: the params, keys and resolved values. */
+/** The read-only group `WorldCacheLookup` readers bind: the params, the accumulators (for the keys after them) and resolved values. */
 export const SHARC_LOOKUP_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: SHARC_CACHE_BINDING.params, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-    { binding: SHARC_CACHE_BINDING.keys, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: SHARC_CACHE_BINDING.accum, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: SHARC_CACHE_BINDING.resolved, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
 ];
 
@@ -241,8 +246,8 @@ export function sharcCommonWgsl(group: number, options: SharcCompileOptions, acc
     const fallback = Math.max(0, Math.floor(options.fallbackLevels));
     const pyramid = options.pyramid ? fallback : 0;
     const own = access === 'read_write';
-    const keyType = own ? 'array<atomic<u32>>' : 'array<u32>';
-    const keyLoad = own ? 'atomicLoad(&g_SharcKeys[slot])' : 'g_SharcKeys[slot]';
+    const wordType = own ? 'array<atomic<u32>>' : 'array<u32>';
+    const keyLoad = own ? 'atomicLoad(&g_SharcAccum[sharcKeyWord(slot)])' : 'g_SharcAccum[sharcKeyWord(slot)]';
     return /* wgsl */ `
 // ---- SHaRC-style hash cache (world-cache/sharc; ported from pmndrs/pathtracer's bench/nrc/hash-grid.ts) ----
 
@@ -280,8 +285,15 @@ const SHARC_COUNTER_WORDS: u32 = ${SHARC_COUNTER_WORDS}u;
 const SHARC_SCALE: f32 = ${SHARC_SCALE}.0;
 
 @group(${group}) @binding(${SHARC_CACHE_BINDING.params}) var<uniform> g_Sharc: SharcParams;
-// Per slot: the cell's checksum, 0 when the slot is empty.
-@group(${group}) @binding(${SHARC_CACHE_BINDING.keys}) var<storage, ${access}> g_SharcKeys: ${keyType};
+// The counters (SHARC_COUNTER_WORDS words), then per slot: r, g, b and the sample count as fixed
+// point (atomic adds), the frame the slot last had samples and its cell; then per slot its key:
+// the cell's checksum, 0 when the slot is empty (register D6).
+@group(${group}) @binding(${SHARC_CACHE_BINDING.accum}) var<storage, ${access}> g_SharcAccum: ${wordType};
+
+// Where a slot's key is: after every slot's accumulators.
+fn sharcKeyWord(slot: u32) -> u32 {
+    return SHARC_COUNTER_WORDS + SHARC_SLOT_WORDS * (g_Sharc.mask + 1u) + slot;
+}
 // Per slot: the resolved radiance (rgb) and its sample weight (w).
 @group(${group}) @binding(${SHARC_CACHE_BINDING.resolved}) var<storage, ${access}> g_SharcResolved: array<vec4f>;
 
@@ -439,11 +451,8 @@ fn sharcWorkgroupIndex(workgroup: vec3u, workgroups: vec3u) -> u32 {
 }
 `;
 
-/** The accumulators, declared for the cache's own kernels only. */
+/** The accumulators' helpers, for the cache's own kernels only (the binding is in `sharcCommonWgsl`). */
 const ACCUM_WGSL = /* wgsl */ `
-// The counters (SHARC_COUNTER_WORDS words), then per slot: r, g, b and the sample count as fixed
-// point (atomic adds), and the frame the slot last had samples.
-@group(${SHARC_CACHE_GROUP}) @binding(${SHARC_CACHE_BINDING.accum}) var<storage, read_write> g_SharcAccum: array<atomic<u32>>;
 
 fn sharcSlotWord(slot: u32) -> u32 {
     return SHARC_COUNTER_WORDS + SHARC_SLOT_WORDS * slot;
@@ -651,13 +660,13 @@ fn sharcInsertSample(position: vec3f, normal: vec3f, radiance: vec3f, random: pt
 // fail spuriously, so a failure that leaves the slot empty is tried once more (register D22's rule).
 fn sharcInsert(key: vec2u, cell: vec4u) -> i32 {
     for (var i = 0u; i < SHARC_BUCKET; i++) {
-        if (atomicLoad(&g_SharcKeys[key.x + i]) == key.y) {
+        if (atomicLoad(&g_SharcAccum[sharcKeyWord(key.x + i)]) == key.y) {
             return i32(key.x + i);
         }
     }
     for (var i = 0u; i < SHARC_BUCKET; i++) {
         let slot = key.x + i;
-        let current = atomicLoad(&g_SharcKeys[slot]);
+        let current = atomicLoad(&g_SharcAccum[sharcKeyWord(slot)]);
         // Another thread may have claimed a slot for this cell since the first scan: use it, or the
         // cell would get a second slot (the pathtracer's loop skips any taken slot; register E1).
         if (current == key.y) {
@@ -666,12 +675,12 @@ fn sharcInsert(key: vec2u, cell: vec4u) -> i32 {
         if (current == 0u) {
             // The weak exchange may fail spuriously (leaving the slot 0): retry, bounded, so two
             // spurious failures in a row can't send this cell on to a second slot.
-            var result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
+            var result = atomicCompareExchangeWeak(&g_SharcAccum[sharcKeyWord(slot)], 0u, key.y);
             for (var attempt = 0u; attempt < 8u; attempt++) {
                 if (result.exchanged || result.old_value != 0u) {
                     break;
                 }
-                result = atomicCompareExchangeWeak(&g_SharcKeys[slot], 0u, key.y);
+                result = atomicCompareExchangeWeak(&g_SharcAccum[sharcKeyWord(slot)], 0u, key.y);
             }
             if (result.exchanged) {
                 // The cell's place, for the change reset in SharcResolve.
@@ -933,7 +942,7 @@ fn ${SHARC_ENTRY_POINT.resolve}(
     if (slot > g_Sharc.mask) {
         return;
     }
-    if (atomicLoad(&g_SharcKeys[slot]) == 0u) {
+    if (atomicLoad(&g_SharcAccum[sharcKeyWord(slot)]) == 0u) {
         return;
     }
     let word = sharcSlotWord(slot);
@@ -957,7 +966,7 @@ fn ${SHARC_ENTRY_POINT.resolve}(
         atomicStore(&g_SharcAccum[word + 3u], 0u);
         atomicStore(&g_SharcAccum[word + 4u], g_Sharc.frame);
     } else if (g_Sharc.frame - atomicLoad(&g_SharcAccum[word + 4u]) > g_Sharc.staleFrames) {
-        atomicStore(&g_SharcKeys[slot], 0u);
+        atomicStore(&g_SharcAccum[sharcKeyWord(slot)], 0u);
         g_SharcResolved[slot] = vec4f(0.0);
     }
 }

@@ -66,8 +66,81 @@ export const ENTRY_POINT = {
     blend: 'BlendScreenProbes',
 } as const;
 
+/**
+ * The screen probes' history words (register D6, pmndrs/gi#49): the u32
+ * arrays that sampling, blending and the history passes share, in one
+ * storage buffer, so `SampleScreenProbes` binds 9 storage buffers (was 15)
+ * and `BlendScreenProbes` 8 (was 14) against Apple GPUs' 10 per stage. Word
+ * offsets, in this order: the cached tile lists (first, so
+ * `ScatterScreenProbes`, which has no frame uniform, writes them at word 0),
+ * the LRU list and MRU order (a word per probe tile each), this frame's and
+ * the cached tiles' history sample counts (a word per atlas texel each), the
+ * rays each cell expected (f32 bits, a word per ray), the spawn probes (four
+ * words each) and the replaced probes' radiance (two words per ray). Last
+ * frame's counts stay a buffer of their own: they are copied from this
+ * frame's, and a copy can't have one buffer at both ends. `RcFrame` carries
+ * the offsets.
+ */
+export interface HistoryWordsLayout {
+    readonly cachedTileList: number;
+    readonly cachedTileLRU: number;
+    readonly cachedTileMRU: number;
+    readonly cellCounts: number;
+    readonly cachedCellCounts: number;
+    readonly expectedRays: number;
+    readonly probeSpawnProbes: number;
+    readonly evictedRadiance: number;
+    readonly words: number;
+}
+
+/** The history words for a screen of `probeTileCount` probe tiles, `atlasTexels` atlas texels, `maxRayCount` rays and `maxProbeSpawnCount` spawn tiles. */
+export function historyWordsLayout(sizes: { readonly probeTileCount: number; readonly atlasTexels: number; readonly maxRayCount: number; readonly maxProbeSpawnCount: number }): HistoryWordsLayout {
+    const cachedTileList = 0;
+    const cachedTileLRU = cachedTileList + sizes.probeTileCount;
+    const cachedTileMRU = cachedTileLRU + sizes.probeTileCount;
+    const cellCounts = cachedTileMRU + sizes.probeTileCount;
+    const cachedCellCounts = cellCounts + sizes.atlasTexels;
+    const expectedRays = cachedCellCounts + sizes.atlasTexels;
+    const probeSpawnProbes = expectedRays + sizes.maxRayCount;
+    const evictedRadiance = probeSpawnProbes + 4 * sizes.maxProbeSpawnCount;
+    const words = evictedRadiance + 2 * sizes.maxRayCount;
+    return { cachedTileList, cachedTileLRU, cachedTileMRU, cellCounts, cachedCellCounts, expectedRays, probeSpawnProbes, evictedRadiance, words };
+}
+
+/**
+ * The history words' binding in group 1 at `binding`, and where each array
+ * is in them. Without the frame uniform (`withFrame` false) only the cached
+ * tile lists, which start at word 0.
+ */
+export function historyWordsWgsl(binding: number, withFrame = true): string {
+    const offsets = /* wgsl */ `
+fn rcCachedTileLRUWord(entry: u32) -> u32 {
+    return rcFrame.historyCachedTileLRU + entry;
+}
+fn rcCachedTileMRUWord(entry: u32) -> u32 {
+    return rcFrame.historyCachedTileMRU + entry;
+}
+fn rcCellCountWord(texel: u32) -> u32 {
+    return rcFrame.historyCellCounts + texel;
+}
+fn rcCachedCellCountWord(texel: u32) -> u32 {
+    return rcFrame.historyCachedCellCounts + texel;
+}
+fn rcExpectedRaysWord(ray: u32) -> u32 {
+    return rcFrame.historyExpectedRays + ray;
+}`;
+    return /* wgsl */ `
+// The history words (register D6): the cached tile lists, the LRU list and MRU order, the history
+// sample counts, the rays each cell expected, the spawn probes and the replaced probes' radiance.
+@group(1) @binding(${binding}) var<storage, read_write> rcHistoryWords: array<u32>;
+fn rcCachedTileListWord(element: u32) -> u32 {
+    return element; // first, at word 0
+}${withFrame ? offsets : ''}
+`;
+}
+
 /** Bytes of `RcFrame`. */
-export const FRAME_UNIFORM_BYTES = 288;
+export const FRAME_UNIFORM_BYTES = 320;
 
 /**
  * Words of `RcCounters`: Capsaicin's append counters (`ClearCounters`,
@@ -141,6 +214,15 @@ struct RcFrame {
     fillHitDistance: f32,            // a backup fill's hit distance: -1 (never history, D47) or 65,504 (Capsaicin)
     probeChangeReset: u32,           // 1: a scene change on a cell's last ray resets its count (D46)
     rayGuidingCorrection: u32,       // 1: a cell's step is weighted by its rays over the rays it expected (D64)
+    // Where each array starts in the history words, in words (historyWordsLayout; register D6). The
+    // cached tile lists are first, at word 0.
+    historyCachedTileLRU: u32,
+    historyCachedTileMRU: u32,
+    historyCellCounts: u32,
+    historyCachedCellCounts: u32,
+    historyExpectedRays: u32,
+    historyProbeSpawnProbes: u32,
+    historyEvictedRadiance: u32,
 }
 @group(1) @binding(0) var<uniform> rcFrame: RcFrame;
 `;
@@ -172,6 +254,13 @@ export const FRAME_UNIFORM_OFFSETS = {
     fillHitDistance: 272,
     probeChangeReset: 276,
     rayGuidingCorrection: 280,
+    historyCachedTileLRU: 284,
+    historyCachedTileMRU: 288,
+    historyCellCounts: 292,
+    historyCachedCellCounts: 296,
+    historyExpectedRays: 300,
+    historyProbeSpawnProbes: 304,
+    historyEvictedRadiance: 308,
 } as const;
 
 /** The host's depth (`FrameScreen.depth`) and the reads Capsaicin makes of its own depth buffer. */
@@ -635,18 +724,13 @@ export const SAMPLE_GROUP: GPUBindGroupLayoutDescriptor = {
         storageTexture(7, 'rgba16float'),
         storage(8, 'read-only-storage'),
         storage(9, 'read-only-storage'),
-        storage(10, 'read-only-storage'),
-        storage(11, 'read-only-storage'),
+        // The history words (historyWordsWgsl): the lists, the LRU, the counts, the expected rays, the spawn probes, the evicted radiance.
+        storage(10, 'storage'),
         storage(12, 'read-only-storage'),
         texture(13),
         storage(14, 'storage'),
         storage(15, 'storage'),
-        storage(16, 'storage'),
-        storage(17, 'storage'),
-        storage(18, 'read-only-storage'),
         storage(19, 'storage'),
-        storage(20, 'read-only-storage'),
-        storage(21, 'storage'),
     ],
 };
 
@@ -688,6 +772,32 @@ struct RcProbeSpawnProbe {
     previousSeed: u32,
     reserved: u32,
 }
+
+// The spawn probes and the replaced probes' radiance are sections of the history words (register D6):
+// four words a spawned probe, two (four halves) a ray.
+fn rcLoadProbeSpawnProbe(probe: u32) -> RcProbeSpawnProbe {
+    let word = rcFrame.historyProbeSpawnProbes + 4u * probe;
+    return RcProbeSpawnProbe(rcHistoryWords[word], rcHistoryWords[word + 1u], rcHistoryWords[word + 2u], rcHistoryWords[word + 3u]);
+}
+
+fn rcStoreProbeSpawnProbe(probe: u32, value: RcProbeSpawnProbe) {
+    let word = rcFrame.historyProbeSpawnProbes + 4u * probe;
+    rcHistoryWords[word] = value.evicted;
+    rcHistoryWords[word + 1u] = value.updated;
+    rcHistoryWords[word + 2u] = value.previousSeed;
+    rcHistoryWords[word + 3u] = value.reserved;
+}
+
+fn rcLoadEvictedRadiance(ray: u32) -> vec2u {
+    let word = rcFrame.historyEvictedRadiance + 2u * ray;
+    return vec2u(rcHistoryWords[word], rcHistoryWords[word + 1u]);
+}
+
+fn rcStoreEvictedRadiance(ray: u32, packed: vec2u) {
+    let word = rcFrame.historyEvictedRadiance + 2u * ray;
+    rcHistoryWords[word] = packed.x;
+    rcHistoryWords[word + 1u] = packed.y;
+}
 `;
 
 export const SAMPLE_WGSL = /* wgsl */ `
@@ -704,13 +814,9 @@ ${HISTORY_WGSL}
 ${PROBE_CELL_WGSL}
 ${PROBE_SPAWN_PROBE_WGSL}
 @group(1) @binding(2) var<storage, read> rcProbeSpawn: RcProbeSpawn;
-// The history sample count of each atlas cell (D46): this frame's (as reprojected), the
-// previous one this kernel writes for the blend, and the cached tiles'.
-@group(1) @binding(18) var<storage, read> rcCellCounts: array<u32>;
+// The previous history sample count of each atlas cell (D46), which this kernel writes for the
+// blend. This frame's (as reprojected) and the cached tiles' are in the history words.
 @group(1) @binding(19) var<storage, read_write> rcPreviousCellCounts: array<u32>;
-@group(1) @binding(20) var<storage, read> rcCachedCellCounts: array<u32>;
-// The rays each cell can expect this frame under ray guiding, for the blend's weight (register D64).
-@group(1) @binding(21) var<storage, read_write> rcExpectedRays: array<f32>;
 // The probe rays: this kernel writes their count and directions.
 @group(1) @binding(3) var<storage, read_write> rcProbeRays: RcProbeRays;
 // g_ScreenProbes_ProbeBuffer: the atlas as ReprojectScreenProbes left it (last frame's probes, moved).
@@ -725,16 +831,14 @@ ${PROBE_SPAWN_PROBE_WGSL}
 // its radiance, and the LRU entries' flags.
 @group(1) @binding(8) var<storage, read> rcCachedTileListCount: array<u32>;
 @group(1) @binding(9) var<storage, read> rcCachedTileListIndex: array<u32>;
-@group(1) @binding(10) var<storage, read> rcCachedTileList: array<u32>;
-@group(1) @binding(11) var<storage, read> rcCachedTileLRU: array<u32>;
+${historyWordsWgsl(10)}
 @group(1) @binding(12) var<storage, read> rcCachedTileIndex: array<vec4u>;
 @group(1) @binding(13) var rcCachedTileBuffer: texture_2d<f32>;
 @group(1) @binding(14) var<storage, read_write> rcCachedTileLRUFlags: array<atomic<u32>>;
 @group(1) @binding(15) var<storage, read_write> rcCounters: array<atomic<u32>, 16>;
-@group(1) @binding(16) var<storage, read_write> rcProbeSpawnProbe: array<RcProbeSpawnProbe>;
-// The radiance of the probe each spawned probe replaces, a cell per ray, for BlendScreenProbes
-// to copy into the cache (register D43).
-@group(1) @binding(17) var<storage, read_write> rcEvictedProbeRadiance: array<vec2u>;
+// The spawn probes (rcStoreProbeSpawnProbe) and the radiance of the probe each spawned probe
+// replaces, a cell per ray, for BlendScreenProbes to copy into the cache (register D43), are in
+// the history words.
 
 var<workgroup> rcRadianceReuseSampleCount: atomic<u32>;
 // lds_ScreenProbes_Radiance: the cells' sampling CDF (exclusive sums over the total).
@@ -916,7 +1020,7 @@ fn ${ENTRY_POINT.sample}(
                 let probeNormal = rcLoadNormal(probeSeed);
                 let probeCell = (probeSeed / RC_PROBE_SIZE) * RC_PROBE_SIZE + cell;
                 let probeRadiance = textureLoad(rcProbeBuffer, probeCell, 0);
-                if (rcReuseCell(probeRadiance, probePosition, probeNormal, cell, worldPosition, normal, false, rcCellCounts[rcAtlasIndex(probeCell)]) && isCentre) {
+                if (rcReuseCell(probeRadiance, probePosition, probeNormal, cell, worldPosition, normal, false, rcHistoryWords[rcCellCountWord(rcAtlasIndex(probeCell))]) && isCentre) {
                     atomicAdd(&rcRadianceReuseSampleCount, 1u);
                 }
             }
@@ -954,8 +1058,8 @@ fn ${ENTRY_POINT.sample}(
                 let cachedTileCount = rcCachedTileListCount[tapIndex];
                 let cachedTileStart = rcCachedTileListIndex[tapIndex];
                 for (var i = 0u; i < cachedTileCount; i++) {
-                    let cachedTile = rcCachedTileList[cachedTileStart + i];
-                    let cachedIndex = rcCachedTileLRU[cachedTile];
+                    let cachedTile = rcHistoryWords[rcCachedTileListWord(cachedTileStart + i)];
+                    let cachedIndex = rcHistoryWords[rcCachedTileLRUWord(cachedTile)];
                     let cachedProbe = vec2u(cachedIndex % rcFrame.probeCount.x, cachedIndex / rcFrame.probeCount.x);
                     let cachedEntry = rcCachedTileIndex[cachedIndex];
                     let cachedProbePosition = bitcast<vec3f>(cachedEntry.xyz);
@@ -969,7 +1073,7 @@ fn ${ENTRY_POINT.sample}(
                         }
                         let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
                         let cachedProbeRadiance = textureLoad(rcCachedTileBuffer, cachedCell, 0);
-                        _ = rcReuseCell(cachedProbeRadiance, cachedProbePosition, cachedProbeNormal, cell, worldPosition, normal, true, rcCachedCellCounts[rcAtlasIndex(cachedCell)]);
+                        _ = rcReuseCell(cachedProbeRadiance, cachedProbePosition, cachedProbeNormal, cell, worldPosition, normal, true, rcHistoryWords[rcCachedCellCountWord(rcAtlasIndex(cachedCell))]);
                     }
 
                     if (previousProbeMask != RC_INVALID_ID) {
@@ -997,7 +1101,7 @@ fn ${ENTRY_POINT.sample}(
             if (updatedProbeMask != RC_INVALID_ID && !rcClaimCachedTile(updatedProbeMask)) {
                 updatedProbeMask = RC_INVALID_ID;
             }
-            rcProbeSpawnProbe[probeIndex] = RcProbeSpawnProbe(evictedProbeMask, updatedProbeMask, previousProbeMask, 0u);
+            rcStoreProbeSpawnProbe(probeIndex, RcProbeSpawnProbe(evictedProbeMask, updatedProbeMask, previousProbeMask, 0u));
         }
     }
     workgroupBarrier();
@@ -1022,7 +1126,7 @@ fn ${ENTRY_POINT.sample}(
 
     // BlendScreenProbes copies the probe this one replaces into the cache (g_ScreenProbes_ProbeBuffer[pos],
     // gi1.comp:1308); it writes the atlas itself, so the cell is read here (register D43).
-    rcEvictedProbeRadiance[did] = rcPackRadiance(textureLoad(rcProbeBuffer, pos, 0));
+    rcStoreEvictedRadiance(did, rcPackRadiance(textureLoad(rcProbeBuffer, pos, 0)));
 
     // Capsaicin's draws in the order of its DISABLE_SPECULAR_MATERIALS build: rand2() for the GGX
     // sample (gi1.comp:950), the CDF draw of ray guiding (gi1.comp:971), then the point inside the
@@ -1056,7 +1160,7 @@ fn ${ENTRY_POINT.sample}(
     } else if (rcCellCdfTotal > 0.0 && uniformShare < 1.0) {
         expectedRays = select(1.0, uniformShare, totalWeight > 0.0) + guidedRays * (1.0 - uniformShare) * cdfStep;
     }
-    rcExpectedRays[did] = expectedRays;
+    rcHistoryWords[rcExpectedRaysWord(did)] = bitcast<u32>(expectedRays);
 
     textureStore(rcPreviousProbeBuffer, pos, rcNearestHalf4(previousRadiance));
     // The samples the previous radiance stands for: the contributions' mean count (D46).
@@ -1178,19 +1282,14 @@ export const BLEND_GROUP: GPUBindGroupLayoutDescriptor = {
         storageTexture(6, 'r32uint'),
         texture(7),
         texture(8),
-        storage(9, 'read-only-storage'),
-        storage(10, 'read-only-storage'),
+        // The history words (historyWordsWgsl).
+        storage(9, 'storage'),
         storage(11, 'storage'),
-        storage(12, 'storage'),
         storage(13, 'storage'),
-        storage(14, 'storage'),
         storage(15, 'storage'),
         storageTexture(16, 'rgba16float'),
         { binding: 17, visibility: COMPUTE, buffer: { type: 'uniform' } },
-        storage(18, 'storage'),
         storage(19, 'read-only-storage'),
-        storage(20, 'storage'),
-        storage(21, 'read-only-storage'),
     ],
 };
 
@@ -1269,23 +1368,18 @@ ${HISTORY_CHANGES_WGSL}
 @group(1) @binding(6) var rcProbeMaskBuffer: texture_storage_2d<r32uint, write>;
 // g_ScreenProbes_PreviousProbeBuffer: each cell's previous radiance, from SampleScreenProbes.
 @group(1) @binding(8) var rcPreviousProbeBuffer: texture_2d<f32>;
-@group(1) @binding(9) var<storage, read> rcProbeSpawnProbe: array<RcProbeSpawnProbe>;
-@group(1) @binding(10) var<storage, read> rcEvictedProbeRadiance: array<vec2u>;
+// The spawn probes and the replaced probes' radiance (from SampleScreenProbes), the LRU list and
+// its MRU order, and the history sample counts (D46): this frame's atlas (written here) and the
+// cached tiles', with the rays each cell expected this frame (register D64).
+${historyWordsWgsl(9)}
 @group(1) @binding(11) var<storage, read_write> rcCounters: array<atomic<u32>, 16>;
-// The off-screen probe cache: the LRU list and its flags and MRU order, each cached tile's
-// position and normal, and its radiance.
-@group(1) @binding(12) var<storage, read_write> rcCachedTileLRU: array<u32>;
+// The off-screen probe cache: the LRU list's flags, each cached tile's position and normal, and
+// its radiance.
 @group(1) @binding(13) var<storage, read_write> rcCachedTileLRUFlags: array<atomic<u32>>;
-@group(1) @binding(14) var<storage, read_write> rcCachedTileMRU: array<u32>;
 @group(1) @binding(15) var<storage, read_write> rcCachedTileIndex: array<vec4u>;
 @group(1) @binding(16) var rcCachedTileBuffer: texture_storage_2d<rgba16float, write>;
-// The history sample counts (D46): this frame's atlas (written here), the previous ones from
-// SampleScreenProbes, and the cached tiles'.
-@group(1) @binding(18) var<storage, read_write> rcCellCounts: array<u32>;
+// The previous history sample counts (D46), from SampleScreenProbes.
 @group(1) @binding(19) var<storage, read> rcPreviousCellCounts: array<u32>;
-@group(1) @binding(20) var<storage, read_write> rcCachedCellCounts: array<u32>;
-// The rays each cell expected this frame (SampleScreenProbes, register D64).
-@group(1) @binding(21) var<storage, read> rcExpectedRays: array<f32>;
 
 // BlendScreenProbes (gi1.comp:1166-1331), each cell a running mean (register D46).
 //
@@ -1372,7 +1466,7 @@ fn ${ENTRY_POINT.blend}(
             // the rays it expected, E[k] / E[k] = 1, the step is 1 / n whatever the cell reads, and the
             // mean is the radiance's. n counts the frames since the cell's history began, up to the cap.
             count = min(historyCount + 1u, historySampleCap);
-            weight = min(f32(sampleCount) / (max(rcExpectedRays[did], 1e-6) * f32(count)), 1.0);
+            weight = min(f32(sampleCount) / (max(bitcast<f32>(rcHistoryWords[rcExpectedRaysWord(did)]), 1e-6) * f32(count)), 1.0);
         }
         if (rcFrame.capsaicinHysteresis != 0u) {
             radiance = frameMean; // the hysteresis below (gi1.comp:1249-1254)
@@ -1405,7 +1499,7 @@ fn ${ENTRY_POINT.blend}(
     }
 
     // The off-screen probe cache (gi1.comp:1271-1323).
-    let spawnProbe = rcProbeSpawnProbe[probeIndex];
+    let spawnProbe = rcLoadProbeSpawnProbe(probeIndex);
     let cachedTileLRUCount = atomicLoad(&rcCounters[RC_COUNTER_CACHED_TILE_LRU]);
 
     // The tile's old probe goes into the cache, unless its entry is being reused this frame.
@@ -1413,13 +1507,13 @@ fn ${ENTRY_POINT.blend}(
     if (evictedProbeMask != RC_INVALID_ID && evictedProbeMask >= cachedTileLRUCount) {
         let entry = evictedProbeMask & ~RC_CACHED_TILE_NEW;
         // Every thread takes the slot with the flag cleared; one clears it in the list.
-        let cachedIndex = rcCachedTileLRU[entry] & ~RC_CACHED_TILE_NEW;
+        let cachedIndex = rcHistoryWords[rcCachedTileLRUWord(entry)] & ~RC_CACHED_TILE_NEW;
         if (cellIndex == 0u) {
             if ((evictedProbeMask & RC_CACHED_TILE_NEW) != 0u) {
-                rcCachedTileLRU[entry] = cachedIndex; // unmask
+                rcHistoryWords[rcCachedTileLRUWord(entry)] = cachedIndex; // unmask
                 atomicStore(&rcCachedTileLRUFlags[entry], 0u);
             }
-            rcCachedTileMRU[entry] = atomicAdd(&rcCounters[RC_COUNTER_CACHED_TILE_MRU], 1u);
+            rcHistoryWords[rcCachedTileMRUWord(entry)] = atomicAdd(&rcCounters[RC_COUNTER_CACHED_TILE_MRU], 1u);
             let previousSeed = rcUnpackSeed(spawnProbe.previousSeed);
             let previousUv = (vec2f(previousSeed) + 0.5) / vec2f(rcFrame.bufferDimensions);
             let previousWorld = rcTransformPointProjection(previousUv, rcLoadDepth(previousSeed));
@@ -1428,22 +1522,22 @@ fn ${ENTRY_POINT.blend}(
         }
         let cachedProbe = vec2u(cachedIndex % rcFrame.probeCount.x, cachedIndex / rcFrame.probeCount.x);
         let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
-        textureStore(rcCachedTileBuffer, cachedCell, rcUnpackRadiance(rcEvictedProbeRadiance[did]));
+        textureStore(rcCachedTileBuffer, cachedCell, rcUnpackRadiance(rcLoadEvictedRadiance(did)));
         // The replaced probe's count, read before this frame's is written below.
-        rcCachedCellCounts[rcAtlasIndex(cachedCell)] = rcCellCounts[atlasIndex];
+        rcHistoryWords[rcCachedCellCountWord(rcAtlasIndex(cachedCell))] = rcHistoryWords[rcCellCountWord(atlasIndex)];
     }
 
     // The cached probe this one stands on gets its new radiance.
     let updatedProbeMask = spawnProbe.updated;
     if (updatedProbeMask != RC_INVALID_ID && updatedProbeMask >= cachedTileLRUCount) {
-        let cachedIndex = rcCachedTileLRU[updatedProbeMask];
+        let cachedIndex = rcHistoryWords[rcCachedTileLRUWord(updatedProbeMask)];
         if (cellIndex == 0u) {
             atomicStore(&rcCachedTileLRUFlags[updatedProbeMask], 1u);
         }
         let cachedProbe = vec2u(cachedIndex % rcFrame.probeCount.x, cachedIndex / rcFrame.probeCount.x);
         let cachedCell = cachedProbe * RC_PROBE_SIZE + cell;
         textureStore(rcCachedTileBuffer, cachedCell, rcNearestHalf4(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
-        rcCachedCellCounts[rcAtlasIndex(cachedCell)] = count;
+        rcHistoryWords[rcCachedCellCountWord(rcAtlasIndex(cachedCell))] = count;
     }
 
     // gi1.comp:1325-1330. The hit distance is kept below the half range (register D19).
@@ -1451,6 +1545,6 @@ fn ${ENTRY_POINT.blend}(
         textureStore(rcProbeMaskBuffer, probe, vec4u(rcPackSeed(seed), 0u, 0u, 0u));
     }
     textureStore(rcProbeBuffer, pos, rcNearestHalf4(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
-    rcCellCounts[atlasIndex] = count;
+    rcHistoryWords[rcCellCountWord(atlasIndex)] = count;
 }
 `;
