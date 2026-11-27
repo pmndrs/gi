@@ -23,7 +23,7 @@
 //
 // Steps 4 to 6 install from the npm registry, so they need the network.
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -459,7 +459,9 @@ function viteBuild(directory: string): void {
 export async function checkViteDevServer(directory: string): Promise<void> {
     // The app's own vite, not the repository's: the one a user would run.
     const vite = (await import(pathToFileURL(join(directory, 'node_modules/vite/dist/node/index.js')).href)) as typeof Vite;
-    const server = await vite.createServer({ root: directory, configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
+    // The real path: vite serves only files under its root, compared after resolving
+    // them, so a root with a Windows short name (C:\Users\RUNNER~1, on CI) refuses /main.ts with a 403.
+    const server = await vite.createServer({ root: realpathSync.native(directory), configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
     await server.listen();
     const failures: string[] = [];
     try {
