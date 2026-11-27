@@ -129,6 +129,28 @@ export interface HashGridCacheOptions {
      * (two-room's lamp: 30 frames against 24; the furnace's sun 43 against 11 at 4).
      */
     fallbackIndirectSampleCount: number;
+    /**
+     * Experiment E12 (RC3.6, not Capsaicin's): with GI-1.2's own second-bounce
+     * rays, each second hit brings its cell's filtered *indirect* value as well as
+     * its direct one, so a first-bounce cell's indirect value is the light its
+     * second hit reflects from every bounce the cache holds, a frame old: every
+     * bounce, one more each frame. Off (the default, GI-1.2): the second hit's
+     * direct light only, two bounces. A second segment shorter than its cell
+     * keeps its own light sample alone (the leak guard of register D38), and with
+     * the neural tail on (P6.4) the tail is that estimate, so this adds nothing.
+     * No effect with the second bounce from a fallback (E10), whose field holds
+     * every bounce already. Read every frame; switching doesn't empty the cache.
+     */
+    cacheFeedback: boolean;
+    /**
+     * `gi1_use_temporal_feedback` (gi1.h:54, default false; RC3.6, register D68):
+     * a probe ray whose hit was on last frame's screen, on the same plane and
+     * facing the same way, reads last frame's lit image there (direct light and
+     * GI: every bounce the image holds) instead of its cell. Needs the host's
+     * lit image and albedo (`FrameScreen.lighting` and `.albedo`, asked for when
+     * the technique is made with it on) and `useDirectLighting`. Read every frame.
+     */
+    useTemporalFeedback: boolean;
 }
 
 /** Experiment E10's setting for the second-bounce estimator (`HashGridCacheOptions.secondBounce`). */
@@ -156,6 +178,8 @@ export const DEFAULT_HASH_GRID_CACHE_OPTIONS: Readonly<HashGridCacheOptions> = O
     environmentLightEnable: true,
     secondBounce: 'auto',
     fallbackIndirectSampleCount: 4,
+    cacheFeedback: false,
+    useTemporalFeedback: false,
 });
 
 /** Mip levels in a tile: Capsaicin's constants have four, and it asserts the chain ends there (gi1.cpp:448). */

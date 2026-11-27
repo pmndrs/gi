@@ -80,7 +80,8 @@ export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] =
  * `g_UseDirectLighting`, `gi1_use_multibounce` and `LightBuilder`'s
  * `environment_light_enable` in the padding words), for the TypeScript that
  * writes the block. 36 words, 144 bytes: P6.4's `useNeuralTail` follows
- * RC3.4's `environmentLightEnable` (word 31), the rest padding. Each field
+ * RC3.4's `environmentLightEnable` (word 31), then RC3.6's `cacheFeedback`
+ * and `temporalFeedback`, the rest padding. Each field
  * has its own words (`HASH_GRID_CONSTANTS_SPANS`, checked by a unit test).
  */
 export const HASH_GRID_CONSTANTS_WORD = {
@@ -107,6 +108,10 @@ export const HASH_GRID_CONSTANTS_WORD = {
     environmentLightEnable: 31,
     /** P6.4 (register E11): `UpdateMultibounceCells` adds the neural tail's answer to the second hit's light. */
     useNeuralTail: 32,
+    /** RC3.6 (register E12): `UpdateMultibounceCells` adds the second hit's cell's indirect value to its light. */
+    cacheFeedback: 33,
+    /** RC3.6 (register D68): `GenerateReservoirs` gives a probe ray last frame's lit image where its hit was on screen. */
+    temporalFeedback: 34,
 } as const;
 
 /** Words each field of `HASH_GRID_CONSTANTS_WORD` takes (one where not listed). */
@@ -161,8 +166,8 @@ struct HashGridCacheConstants {
     use_multibounce: u32,           // gi1_use_multibounce: Capsaicin's USE_MULTI_BOUNCE define, as a constant (register D35)
     environment_light_enable: u32,  // LightBuilder's environment_light_enable: the sky among a hit's lights (register D33, RC3.4)
     use_neural_tail: u32,           // P6.4 (register E11): add the neural tail's answer to each second hit's light
-    padding3: u32,
-    padding4: u32,
+    cache_feedback: u32,            // RC3.6 (register E12): add the second hit's cell's indirect value to its light
+    temporal_feedback: u32,         // RC3.6 (register D68): probe rays whose hit was on last frame's screen read its lit image
     padding5: u32,
 }
 `;
