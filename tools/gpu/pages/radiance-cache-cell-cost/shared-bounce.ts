@@ -10,6 +10,8 @@
  *   The calibration and both trials of both modes: well over a minute of load.
  * - `calibrate`: budgeted GI-1.2 at 20k (the target ms per frame), then a
  *   bisection for the shared-cell budget that takes as long. No reference.
+ *   With `VITE_RC_SHARED_BOUNCE_CALIBRATE_POINT=mode:budget`, that one point
+ *   (Sponza's bisection in one run throttled the laptop GPU).
  * - `trial`: one exposure of one mode (`VITE_RC_SHARED_BOUNCE_MODE`; the
  *   shared budget from `VITE_RC_SHARED_BOUNCE_BUDGET`) for 64 × the target
  *   (`VITE_RC_SHARED_BOUNCE_TARGET_MS`) of cumulative GPU time from a cold
@@ -186,6 +188,15 @@ export async function compareSharedBounce(scene: SharedBounceScene): Promise<Rec
     const referenceNote = '96 warm frames plus a 24-frame mean of per-hit GI-1.2 denoised irradiance';
 
     if (STEP === 'calibrate') {
+        // One point (`mode:budget`), when the whole bisection is too long for the clock rule (Sponza).
+        const point = env.VITE_RC_SHARED_BOUNCE_CALIBRATE_POINT as string | undefined;
+        if (point) {
+            const [mode, budgetText] = point.split(':');
+            const budget = Number(budgetText);
+            if ((mode !== 'gi1-rays' && mode !== 'shared-cell') || !Number.isInteger(budget) || budget <= 0) throw new Error(`VITE_RC_SHARED_BOUNCE_CALIBRATE_POINT is mode:budget, got ${point}`);
+            const ms = await calibrate(mode, budget);
+            return { step: STEP, calibration, point: { mode, budget, ms } };
+        }
         const { target, bestBudget } = await calibrateBoth();
         return { step: STEP, calibration, targetMs: target, sharedBudget: bestBudget };
     }
