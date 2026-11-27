@@ -95,7 +95,7 @@
         <div class="wrap">
             <h1><span>@pmndrs/gi</span> · Examples</h1>
             <p>Real-time global illumination for WebGPU: light bounces off walls and floors, and follows moving lights, objects and the sun. Each example is the shortest code that shows one feature.</p>
-            <p>These examples need WebGPU in Chrome or Edge 113+, or Safari 26+. Drag to orbit in the DDGI examples, or ride the camera rail in Split Radiance Cascades.</p>
+            <p>These examples need WebGPU in Chrome or Edge 113+, or Safari 26+. Drag to orbit in the DDGI and radiance-cache examples, or ride the camera rail in Split Radiance Cascades.</p>
 
             <h2>three.js</h2>
             <p>Through <code>@pmndrs/gi/three</code>: a <code>DDGIVolume</code> in the scene, like three's <code>LightProbeGrid</code>.</p>
@@ -152,6 +152,16 @@
                 </a>
             </div>
 
+            <h2>Radiance cache</h2>
+            <p>Through <code>@pmndrs/gi/radiance-cache</code>, wired into three's post-processing pipeline with <code>@pmndrs/gi/three</code>: screen probes over a world cache, with no volume to place.</p>
+            <div class="grid">
+                <a class="card" href="12-radiance-cache/">
+                    <div class="number">12</div>
+                    <div class="title">Radiance cache</div>
+                    <div class="description">AMD's GI-1.0/1.2 on 01's scene: screen probes where the camera looks, lit through a world-space hash grid, with DDGI under it for the later bounces.</div>
+                </a>
+            </div>
+
             <h2>Split Radiance Cascades</h2>
             <div class="grid">
                 <a class="card" href="11-radiance-cascades/">
@@ -178,7 +188,7 @@
             </div>
 
             <div class="foot">
-                The scenes are made in code (MIT). Source: <a href="https://github.com/pmndrs/gi/tree/main/examples">examples/</a> · Docs: <a href="https://github.com/pmndrs/gi/blob/main/docs/api/three.md">the three.js adapter</a>, <a href="https://github.com/pmndrs/gi/blob/main/docs/guides/adapter.md">writing an adapter</a>
+                The scenes are made in code (MIT). Source: <a href="https://github.com/pmndrs/gi/tree/main/examples">examples/</a> · Docs: <a href="https://github.com/pmndrs/gi/blob/main/docs/api/three.md">the three.js adapter</a>, <a href="https://github.com/pmndrs/gi/blob/main/docs/api/radiance-cache.md">the radiance cache</a>,<a href="https://github.com/pmndrs/gi/blob/main/docs/guides/adapter.md">writing an adapter</a>
             </div>
         </div>
     </body>
