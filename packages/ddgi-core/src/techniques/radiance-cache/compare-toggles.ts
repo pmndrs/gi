@@ -551,6 +551,109 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
     }),
 ];
 
+/** What a variant needs from the host besides the radiance cache itself (P6.5). */
+export interface VariantNeeds {
+    /** A DDGI volume stacked under the radiance cache (`setFallback`), updating probes every frame. */
+    readonly ddgiVolume: boolean;
+    /** The device's `shader-f16` feature. */
+    readonly shaderF16: boolean;
+    /** An optional sibling package the variant runs from, or null. */
+    readonly sibling: string | null;
+}
+
+/**
+ * A named variant of the radiance cache's world cache (P6.5): the compare values that make it,
+ * so the viewer's compare panel can switch whole variants at once and the GPU pages can run
+ * them by name (`VITE_RC_COMPARE=variant=sharc`). Values not named stay at ours.
+ */
+export interface RadianceCacheVariantPreset {
+    /** Its name in links and on GPU pages (lowercase letters, digits and dashes). */
+    readonly id: string;
+    /** A few words for the panel. */
+    readonly label: string;
+    /** One plain line: what it is, and what it costs or needs. */
+    readonly help: string;
+    /** The register rows it is built from (docs/design/radiance-cache.md). */
+    readonly register: readonly string[];
+    /** The compare values that differ from ours. */
+    readonly values: CompareValues;
+    readonly needs: VariantNeeds;
+}
+
+/**
+ * The world-cache variants P6.5 compares, in the comparison's order. DECISIONS 2026-11-23: they
+ * stay variants until Dennis picks the default from the comparison (docs/design/radiance-cache-variants.md).
+ * The first two differ only in whether a DDGI volume runs under the cache; `gi12-ddgi` is what
+ * ships today (all values ours).
+ */
+export const RADIANCE_CACHE_VARIANT_PRESETS: readonly RadianceCacheVariantPreset[] = [
+    {
+        id: 'gi12-rays',
+        label: "GI-1.2 grid, its own second-bounce rays (Capsaicin's)",
+        help: "The hash grid alone, its second bounce from GI-1.2's own rays, as Capsaicin runs it. Needs nothing from the host; two bounces, so closed rooms read dark.",
+        register: ['E10'],
+        values: { 'host.cacheAlone': true, secondBounce: 'gi1-rays' },
+        needs: { ddgiVolume: false, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'gi12-ddgi',
+        label: 'GI-1.2 grid over DDGI (ours, what ships)',
+        help: 'The hash grid with a DDGI volume under it that gives the second bounce and every bounce after (256 probes a frame). Needs a volume around the scene; DDGI costs its own GPU time and memory.',
+        register: ['E10'],
+        values: {},
+        needs: { ddgiVolume: true, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'sharc',
+        label: 'SHaRC cache alone',
+        help: "pmndrs/pathtracer's SHaRC-style hash cache in place of the GI-1.2 grid, with no DDGI. Every bounce through its own cache; smaller, and needs nothing from the host.",
+        register: ['E1'],
+        values: { worldCache: 'sharc', 'host.cacheAlone': true },
+        needs: { ddgiVolume: false, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'sharc-ddgi',
+        label: 'SHaRC cache over DDGI',
+        help: "The SHaRC cache with the viewer's DDGI volume still stacked under it. SHaRC doesn't read the volume (only the GI-1.2 grid takes its second bounce from it), so this shows SHaRC's picture at the volume's cost.",
+        register: ['E1', 'E10'],
+        values: { worldCache: 'sharc' },
+        needs: { ddgiVolume: true, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'budgeted',
+        label: 'Budgeted cells (id Tech 8), over DDGI',
+        help: 'The GI-1.2 grid over DDGI, its cells lit on a budget (20,000 a frame, one light sample each, new and changed cells first) instead of at every hit: fewer shadow rays, older cells.',
+        register: ['E8', 'E10'],
+        values: { cellShading: 'budgeted' },
+        needs: { ddgiVolume: true, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'neural-tail',
+        label: 'GI-1.2 grid with the neural tail',
+        help: "The hash grid alone with GI-1.2's rays, and a small network that learns the cells' indirect light and answers the bounces past the second. Needs shader-f16 and the optional @pathtracer/mlp package; without either it runs as the GI-1.2 grid alone.",
+        register: ['E11'],
+        values: { 'host.cacheAlone': true, secondBounce: 'gi1-rays', neuralCache: 'tail' },
+        needs: { ddgiVolume: false, shaderF16: true, sibling: '@pathtracer/mlp' },
+    },
+];
+
+/** The variant preset of this id, or undefined. */
+export function variantPreset(id: string): RadianceCacheVariantPreset | undefined {
+    return RADIANCE_CACHE_VARIANT_PRESETS.find((preset) => preset.id === id);
+}
+
+/**
+ * The variant preset `values` equal (every toggle at the preset's value or, where it names none,
+ * at ours), or undefined for a mix no preset makes.
+ */
+export function variantOfValues(values: CompareValues): RadianceCacheVariantPreset | undefined {
+    const given = values as Record<string, CompareValue | undefined>;
+    return RADIANCE_CACHE_VARIANT_PRESETS.find((preset) => {
+        const wanted = preset.values as Record<string, CompareValue | undefined>;
+        return RADIANCE_CACHE_COMPARE_TOGGLES.every((entry) => (given[entry.setting] ?? entry.defaultValue) === (wanted[entry.setting] ?? entry.defaultValue));
+    });
+}
+
 /** The toggle for a setting, or undefined. */
 export function compareToggle(setting: string): CompareToggle | undefined {
     return RADIANCE_CACHE_COMPARE_TOGGLES.find((entry) => entry.setting === setting);
@@ -659,6 +762,13 @@ export function compareValuesFromText(text: string | undefined): CompareValues {
         const [name, raw = ''] = trimmed.split('=');
         if (name === 'capsaicin' || name === 'all-capsaicin') {
             Object.assign(values, capsaicinCompareValues());
+            continue;
+        }
+        if (name === 'variant') {
+            // P6.5: a whole variant (its values; later names in the text still apply over it).
+            const preset = variantPreset(raw);
+            if (!preset) throw new Error(`@pmndrs/gi: no radiance-cache variant named "${raw}" (${RADIANCE_CACHE_VARIANT_PRESETS.map((entry) => entry.id).join(', ')})`);
+            Object.assign(values, preset.values);
             continue;
         }
         const entry = RADIANCE_CACHE_COMPARE_TOGGLES.find((candidate) => candidate.setting === name || candidate.urlName === name);
