@@ -34,6 +34,11 @@
  *   The panel's readout (GI change per frame, frames since a toggle changed)
  *   is recorded too.
  *
+ * - P6.5: each world-cache variant picked from the section's Variant list
+ *   (`RADIANCE_CACHE_VARIANT_PRESETS`) must set every toggle to the preset's
+ *   value (the DDGI volume stacked or not with it), leave no NaN, infinite or
+ *   negative value, and log no error; its picture against ours is recorded.
+ *
  * - RC4.6: the radiance cache starts with a DDGI volume stacked under it (what
  *   ships); "Run the cache alone" makes it again without, and back.
  *
@@ -62,7 +67,7 @@ import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { GiMode } from '../../../../apps/viewer/src/scene/layers.ts';
 import { RcCompareControls } from '../../../../apps/viewer/src/ui/rc-compare-controls.ts';
-import { compareSettingValue, isHostToggle, RADIANCE_CACHE_COMPARE_TOGGLES, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { compareSettingValue, isHostToggle, RADIANCE_CACHE_COMPARE_TOGGLES, RADIANCE_CACHE_VARIANT_PRESETS, type CompareToggle, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -308,6 +313,25 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
     await scan('all Capsaicin');
     results.allCapsaicin = { ...capsaicin, readout: rc().changeReadout };
     if (!(capsaicin.change > 2 * noise.change)) failures.push(`${sceneId}: "All Capsaicin" changed the picture by ${capsaicin.change} of ours, not over twice the noise ${noise.change}`);
+    // P6.5: each world-cache variant picked from the section's Variant list sets every toggle to the preset's value.
+    const variantSelect = section.querySelector<HTMLSelectElement>('select[data-compare="variant"]');
+    if (!variantSelect) throw new Error('the compare section has no Variant list');
+    const variants: Record<string, unknown> = {};
+    for (const preset of RADIANCE_CACHE_VARIANT_PRESETS) {
+        variantSelect.value = preset.id;
+        variantSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+        for (const entry of RADIANCE_CACHE_COMPARE_TOGGLES) {
+            const wanted = (preset.values as Record<string, unknown>)[entry.setting] ?? entry.defaultValue;
+            // The neural tail is read at prepare and turns itself off without its package; its setting still holds.
+            if (valueOf(entry) !== wanted) failures.push(`${sceneId}: the variant ${preset.id} left ${entry.setting} at ${String(valueOf(entry))}, not ${String(wanted)}`);
+        }
+        if (variantSelect.value !== preset.id) failures.push(`${sceneId}: after picking the variant ${preset.id} the list shows "${variantSelect.value}"`);
+        await drawFrames(core, COMPARE_FRAMES);
+        await scan(`variant ${preset.id}`);
+        variants[preset.id] = { ...imageChange(ours, await irradianceImage(core, rc())), ddgiStacked: rc().stackedDdgi !== null, readout: rc().changeReadout };
+    }
+    results.variants = variants;
     clickButton(section, 'all-ours');
     await settle();
     await drawFrames(core, COMPARE_FRAMES);
