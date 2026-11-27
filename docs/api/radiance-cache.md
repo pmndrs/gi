@@ -248,7 +248,7 @@ Three backends and levers sit beside GI-1.2's, off by default. Each is measured 
 
 | Setting | Default | What it does, and what it costs |
 | --- | --- | --- |
-| `worldCache: 'sharc'` | | A SHaRC-style hash cache, ported from pmndrs/pathtracer, in the world-cache slot. It follows each probe hit with short update paths, so its cells carry every bounce without DDGI. 56 MiB instead of about 1 GiB. A quarter of the probes update a frame; its update took 7.8 ms on Sponza against GI-1.2's 12.9 ms for its whole cache. |
+| `worldCache: 'sharc'` | | A SHaRC-style hash cache, ported from pmndrs/pathtracer, in the world-cache slot. It follows each probe hit with short update paths, so its cells carry every bounce without DDGI. 56 MiB instead of about 1 GiB. A quarter of the probes update a frame; its update paths took 7.8 ms on Sponza, where GI-1.2's whole world cache took 12.9 ms. |
 | `sharc` | `{}` | SHaRC's settings over its defaults: `log2Entries` 20 (1M slots), `minCell` 0.02, `cellPixels` 16, `normalBins` true, `historyFrames` 32, `staleFrames` 64, `fallbackLevels` 3, `pyramid` true, `minSamples` 16, `bounceRays` 2, `cacheTail` true, `updateFraction` 0.25, `changeReset` true, `changeKeepSamples` 4. `log2Entries`, `fallbackLevels` and `pyramid` are read at `prepare`. |
 | `cellShading: 'budgeted'` | | id Tech 8's "shade cells, not hits": hits only find their cells, and at most `cellShadingBudget` cells a frame are lit, by priority (new or changed first). Fewer shadow rays; each cell is noisier and older. World-cache time on Sponza 12.3 ms per hit, 11.8 ms at 20,000 cells. |
 | `cellShadingBudget` | `20000` | Cells lit a frame with `'budgeted'`. More reacts faster: a doubled sun takes 24 / 8 / 6 frames at 5k / 20k / 80k. |
@@ -267,7 +267,7 @@ It also turns off, with a warning, with `worldCache: 'sharc'`, with the second b
 
 ## Variants being compared
 
-The SHaRC cache, budgeted cells, the neural tail and DDGI underneath are first-class alternatives to GI-1.2's own world cache. Which becomes the default is Dennis's call, after a side-by-side comparison: accuracy against Cycles, lag and ghosting after changes, flicker, memory, GPU time and what each needs from the host (TASKS P6.5; DECISIONS 2026-11-23). Until then the defaults stay as above: the GI-1.2 hash grid, with DDGI's bounces when a volume is stacked.
+The SHaRC cache, budgeted cells, the neural tail and DDGI underneath are first-class alternatives to GI-1.2's own world cache. The default will be picked after a side-by-side comparison of accuracy against Cycles, lag and ghosting after changes, flicker, memory, GPU time and what each needs from the host (TASKS P6.5; DECISIONS 2026-11-23). Until then the defaults stay as above: the GI-1.2 hash grid, with DDGI's bounces when a volume is stacked.
 
 ## Reading results and debug views
 
