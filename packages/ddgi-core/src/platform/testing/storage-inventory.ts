@@ -144,7 +144,8 @@ export function recordComputePipelines(device: GPUDevice): InventoryPipeline[] {
     const createShaderModule = (target.createShaderModule as (descriptor: GPUShaderModuleDescriptor) => object).bind(device);
     target.createShaderModule = (descriptor: GPUShaderModuleDescriptor) => {
         // The fake GPU hands out plain objects, so each module gets its own wrapper to key on.
-        const module = { ...(createShaderModule(descriptor) ?? {}) };
+        // It reports no messages, as a module that compiled does (the neural tail's network checks).
+        const module = { getCompilationInfo: () => Promise.resolve({ messages: [] }), ...(createShaderModule(descriptor) ?? {}) };
         codeOf.set(module, descriptor.code);
         return module;
     };
@@ -160,7 +161,10 @@ export function recordComputePipelines(device: GPUDevice): InventoryPipeline[] {
         const original = (target[name] as (descriptor: GPUComputePipelineDescriptor) => unknown).bind(device);
         target[name] = (descriptor: GPUComputePipelineDescriptor) => {
             record(descriptor);
-            return original(descriptor);
+            // An 'auto' layout's groups are what a caller binds (the neural tail's network does).
+            const withGroups = (pipeline: unknown): unknown => Object.assign(pipeline as object, { getBindGroupLayout: (index: number) => ({ label: `${descriptor.label ?? ''} group ${index}` }) });
+            const pipeline = original(descriptor);
+            return pipeline instanceof Promise ? pipeline.then(withGroups) : withGroups(pipeline);
         };
     }
     return pipelines;
@@ -181,6 +185,12 @@ function fakeTexture(descriptor: GPUTextureDescriptor): unknown {
         destroy() {},
     };
 }
+
+/** An encoder, pass or command buffer whose every method does nothing and returns another such. */
+const recordsNothing: unknown = new Proxy(() => {}, {
+    get: (_target, key) => (key === 'then' ? undefined : recordsNothing),
+    apply: () => recordsNothing,
+});
 
 /** Limits of the inventory device: our GPUs' storage limits, with room for any count of storage buffers. */
 const INVENTORY_LIMITS: Partial<GPUSupportedLimits> = {
@@ -222,8 +232,11 @@ export function createInventoryGpu(features: readonly string[] = ['subgroups', '
             usage: descriptor.usage,
             destroy() {},
             unmap() {},
+            mapAsync: () => Promise.resolve(),
             getMappedRange: (offset = 0, size?: number) => new ArrayBuffer(size ?? descriptor.size - offset),
         }),
+        // Commands recorded while preparing (the neural tail's network fills its weights) do nothing.
+        createCommandEncoder: () => recordsNothing,
         queue: { writeBuffer() {}, writeTexture() {}, submit() {}, onSubmittedWorkDone: () => Promise.resolve() },
     });
     Object.assign(device.limits as object, INVENTORY_LIMITS);
