@@ -656,6 +656,39 @@ export const RADIANCE_CACHE_VARIANT_PRESETS: readonly RadianceCacheVariantPreset
         values: { 'host.cacheAlone': true, secondBounce: 'gi1-rays', neuralCache: 'tail' },
         needs: { ddgiVolume: false, shaderF16: true, sibling: '@pathtracer/mlp' },
     },
+    // RC3.6: more than two bounces in the GI-1.2 grid (cache feedback E12, temporal feedback D68).
+    {
+        id: 'gi12-rays-feedback',
+        label: 'GI-1.2 grid alone, cache feedback',
+        help: 'The hash grid alone on its own rays, each second bounce also bringing the light its cell holds from the bounces before: every bounce, one more each frame. Needs nothing from the host.',
+        register: ['E12'],
+        values: { 'host.cacheAlone': true, secondBounce: 'gi1-rays', cacheFeedback: true },
+        needs: { ddgiVolume: false, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'gi12-rays-temporal',
+        label: "GI-1.2 grid alone, last frame's image at hits",
+        help: "The hash grid alone on its own rays; a probe ray whose hit was on screen last frame reads last frame's lit picture there (temporal feedback). Needs the host's lit image and albedo, which the three adapter gives.",
+        register: ['D68'],
+        values: { 'host.cacheAlone': true, secondBounce: 'gi1-rays', useTemporalFeedback: true },
+        needs: { ddgiVolume: false, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'gi12-rays-feedback-temporal',
+        label: 'GI-1.2 grid alone, cache and temporal feedback',
+        help: "The hash grid alone on its own rays with both of RC3.6's feedbacks: the cells carry every bounce, and probe rays landing on last frame's screen read its lit picture.",
+        register: ['E12', 'D68'],
+        values: { 'host.cacheAlone': true, secondBounce: 'gi1-rays', cacheFeedback: true, useTemporalFeedback: true },
+        needs: { ddgiVolume: false, shaderF16: false, sibling: null },
+    },
+    {
+        id: 'gi12-ddgi-temporal',
+        label: "GI-1.2 grid over DDGI, last frame's image at hits",
+        help: "What ships (the hash grid over DDGI), plus temporal feedback: probe rays landing on last frame's screen read its lit picture instead of the cache.",
+        register: ['E10', 'D68'],
+        values: { useTemporalFeedback: true },
+        needs: { ddgiVolume: true, shaderF16: false, sibling: null },
+    },
 ];
 
 /** The variant preset of this id, or undefined. */

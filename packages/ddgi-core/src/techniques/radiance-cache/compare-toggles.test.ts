@@ -189,7 +189,7 @@ describe('the world-cache variant presets (P6.5)', () => {
     it('name each variant once, with values every toggle takes', () => {
         const ids = RADIANCE_CACHE_VARIANT_PRESETS.map((preset) => preset.id);
         expect(new Set(ids).size).toBe(ids.length);
-        expect(ids).toEqual(['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail']);
+        expect(ids).toEqual(['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail', 'gi12-rays-feedback', 'gi12-rays-temporal', 'gi12-rays-feedback-temporal', 'gi12-ddgi-temporal']);
         for (const preset of RADIANCE_CACHE_VARIANT_PRESETS) {
             expect(preset.id).toMatch(/^[a-z0-9-]+$/);
             for (const [setting, value] of Object.entries(preset.values)) {

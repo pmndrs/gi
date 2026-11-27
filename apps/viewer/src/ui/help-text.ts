@@ -144,7 +144,7 @@ export const HELP = {
     rcCompareCapsaicin: "Sets every toggle to Capsaicin's own behaviour: the port as AMD published it, before our fixes.",
     rcCompareOurs: 'Sets every toggle back to ours (the decided defaults).',
     rcCompareVariant:
-        "Switches the whole world cache to one of the variants being compared (P6.5): the GI-1.2 grid alone or over DDGI (what ships), the SHaRC cache alone or over DDGI, budgeted cells, or the neural tail. It sets the toggles below; 'Mixed' means they make no single variant. Changing it starts the radiance cache over.",
+        "Switches the whole world cache to one of the variants being compared (P6.5): the GI-1.2 grid alone or over DDGI (what ships), the SHaRC cache alone or over DDGI, budgeted cells, the neural tail, or the GI-1.2 grid with RC3.6's cache or temporal feedback. It sets the toggles below; 'Mixed' means they make no single variant. Changing it starts the radiance cache over.",
     rcCompareReadout:
         "How much the radiance cache's GI changes from one frame to the next, as the mean change per pixel (each pixel against its own brightness), sampled on a sparse grid. With the camera and scene still, this is the flicker; after a toggle it shows how long the picture takes to settle. Frames since the last change of a toggle count up beside it.",
     // Moving things: the M3 scenarios (T3.8).

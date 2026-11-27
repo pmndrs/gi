@@ -85,7 +85,7 @@ function pageData(path: string, page: string): PageSummary {
 }
 
 const SCENE_ORDER = ['cornell-box-point', 'cornell-box', 'two-room', 'furnished-room', 'sponza', 'bistro-interior', 'bistro-exterior'];
-const VARIANT_ORDER = ['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail'];
+const VARIANT_ORDER = ['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail', 'gi12-rays-feedback', 'gi12-rays-temporal', 'gi12-rays-feedback-temporal', 'gi12-ddgi-temporal'];
 /** By `order`, a `<scene>/<view>` key after its scene's first view. */
 const sortBy = (order: readonly string[]) => (a: string, b: string) => {
     const rank = (key: string): number => (order.indexOf(key.split('/')[0]) + 1 || 99) * 2 + (key.includes('/') ? 1 : 0);

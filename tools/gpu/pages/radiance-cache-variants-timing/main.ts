@@ -131,7 +131,7 @@ async function timeVariant(device: GPUDevice, loaded: Loaded, preset: RadianceCa
     await timer.ready;
     if (!timer.enabled) throw new Error(`the GPU timer is ${timer.status}: timestamp-query is needed`);
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-variants-timing ${manifest.id} ${preset.id}` });
-    const technique = new RadianceCacheTechnique();
+    const technique = new RadianceCacheTechnique({ useTemporalFeedback: values.useTemporalFeedback === true });
     setCompareValues(technique.settings, values);
     withTimer(technique, timer);
     platform.addTechnique(technique);

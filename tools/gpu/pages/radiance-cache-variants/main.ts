@@ -266,7 +266,7 @@ async function measureVariant(context: ThreePageContext, loaded: LoadedScene, pr
     };
 
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-variants ${loaded.id} ${preset.id}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique());
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ useTemporalFeedback: values.useTemporalFeedback === true }));
     setCompareValues(technique.settings, values);
     platform.setOutput(technique);
     const ddgiTechnique = stacked ? platform.addTechnique(new DDGITechnique({ volume: { center: manifest.volume.center, size: manifest.volume.size, spacing: manifest.volume.probeSpacing } })) : null;
