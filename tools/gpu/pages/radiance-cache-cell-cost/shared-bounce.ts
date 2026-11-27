@@ -269,7 +269,9 @@ async function doorwayImages(
     const panelHeight = Math.floor(scene.height / PANEL_SCALE);
     canvas.width = panelWidth * modes.length;
     canvas.height = panelHeight * (DOORWAY_VIEWS.length + 1);
-    canvas.style.cssText = 'position:fixed;left:0;top:0;z-index:10;background:#000';
+    // Scaled to the viewport, so the runner's screenshot holds all three rows.
+    canvas.style.cssText = 'position:fixed;left:0;top:0;z-index:10;background:#000;width:auto;height:auto;max-width:100vw;max-height:100vh';
+    document.body.style.overflow = 'hidden';
     document.body.append(canvas);
     const context = canvas.getContext('2d');
     if (!context) throw new Error('no 2d context');
