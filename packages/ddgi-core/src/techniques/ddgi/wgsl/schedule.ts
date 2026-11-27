@@ -254,6 +254,8 @@ var<workgroup> ddgiFillListed: u32;
 var<workgroup> ddgiFillCursor: u32;
 var<workgroup> ddgiFillUsed: u32;
 var<workgroup> ddgiFillUnordered: atomic<u32>;
+// A plain copy of ddgiFillUnordered for workgroupUniformLoad (see the fill kernel).
+var<workgroup> ddgiFillUnorderedCopy: u32;
 
 ${reductionWgsl(reduction)}
 ${fillScanWgsl(reduction)}
@@ -497,7 +499,13 @@ fn ${SCHEDULE_ENTRY_POINTS.fill}(
     let cursorProbe = workgroupUniformLoad(&ddgiFillCursor);
     let need = ddgi.updateCount - min(listed, ddgi.updateCount);
     ${reduction === 'subgroups' ? '// Subgroups hold consecutive threads in order (see fillScanWgsl), or this dispatch takes the workgroup scan.\n    if (subgroupBroadcastFirst(thread) + lane != thread) {\n        atomicStore(&ddgiFillUnordered, 1u);\n    }' : ''}
-    let ordered = workgroupUniformLoad(&ddgiFillUnordered) == 0u;
+    // Safari 26's compiler lacks workgroupUniformLoad's atomic overload (light-grid.ts has the
+    // same copy), so one thread copies the flag into a plain word after a barrier.
+    workgroupBarrier();
+    if (thread == 0u) {
+        ddgiFillUnorderedCopy = atomicLoad(&ddgiFillUnordered);
+    }
+    let ordered = workgroupUniformLoad(&ddgiFillUnorderedCopy) == 0u;
     // Positions run through the order twice at most: the first pass skips
     // probes waiting for their keys, the second takes only those, so no probe
     // is taken twice and the list is always full. Usually the first
