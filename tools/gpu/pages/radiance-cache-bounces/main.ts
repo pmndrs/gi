@@ -47,6 +47,17 @@
  *    the cell's indirect value is added again, reads more than every bounce.
  *    Before measuring, the run checks the frame's probe rays: some near
  *    ceiling hits are on screen and some aren't.
+ * 6-7. **Temporal feedback, hits last frame's camera didn't see** (the plane
+ *    test): the level view with a black slab (albedo 0) 0.5 m under the
+ *    ceiling over z from −8 to −4, facing down like the ceiling. From the
+ *    camera the slab hides the ceiling from z = −8.5 to −12; probe rays from
+ *    the floor there still reach it. Those hidden ceiling hits (|x| < 3) land
+ *    on screen where the slab's underside shows, with the same normal and
+ *    last frame's lit image black; only the plane test (the shown point 0.5 m
+ *    off the hit's plane) keeps them on their cells. Section 6 runs GI-1.2's
+ *    rays (no feedback), section 7 temporal feedback: the hidden rays' mean
+ *    within 5% of section 6's (both read the cells, whose samples the
+ *    feedback doesn't change). Reading the slab's black there reads about 0.
  *
  * Every section: no NaN, infinite or negative ray, and no device errors. The
  * frames: 600 from an emptied cache (each bounce takes a frame and the cells'
@@ -84,6 +95,11 @@ const LEVEL_CAMERA: PageCamera = { position: [0, 1.5, 0], target: [0, 1.5, -10],
 const NEAR_HIT_METRES = 8;
 /** An on-screen hit: inside last frame's screen by this share of it on every side. */
 const SCREEN_MARGIN = 0.05;
+/** Sections 6-7: the black slab under the ceiling (y, z range), and the ceiling hits it hides from the level camera. */
+const SLAB = { y: 2.5, zNear: -4, zFar: -8, halfWidth: 50 } as const;
+const HIDDEN = { zNear: -8.5, zFar: -12, halfWidth: 3 } as const;
+/** Section 7: the hidden rays' mean within this of section 6's. */
+const HIDDEN_TOLERANCE = 0.05;
 
 const FLOOR_DIRECT = (FURNACE.albedo * FURNACE.sunIntensity) / Math.PI;
 const EXPECTED = {
@@ -109,10 +125,10 @@ interface Scenario {
     dispose(): void;
 }
 
-function quad(platform: GIPlatformImpl, label: string, corners: readonly Vec3[], normal: Vec3): void {
+function quad(platform: GIPlatformImpl, label: string, corners: readonly Vec3[], normal: Vec3, albedo: number = FURNACE.albedo): void {
     const scene = platform.scene;
     const mesh = scene.createMesh({ positions: new Float32Array(corners.flat()), normals: new Float32Array([...normal, ...normal, ...normal, ...normal]), indices: new Uint32Array([0, 1, 2, 0, 2, 3]), label });
-    const material = scene.createMaterial({ albedo: [FURNACE.albedo, FURNACE.albedo, FURNACE.albedo], label });
+    const material = scene.createMaterial({ albedo: [albedo, albedo, albedo], label });
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
 }
 
@@ -136,7 +152,7 @@ function stripFloor(platform: GIPlatformImpl): void {
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label: 'strip floor' });
 }
 
-async function startScenario(device: GPUDevice, name: string, settings: Partial<RadianceCacheSettings>, camera: PageCamera, strips: boolean): Promise<Scenario> {
+async function startScenario(device: GPUDevice, name: string, settings: Partial<RadianceCacheSettings>, camera: PageCamera, strips: boolean, slab: boolean): Promise<Scenario> {
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-bounces ${name}` });
     const technique = platform.addTechnique(new RadianceCacheTechnique(settings));
     // VITE_RC_COMPARE (RC4.5) under the section's own settings.
@@ -148,6 +164,12 @@ async function startScenario(device: GPUDevice, name: string, settings: Partial<
     if (strips) stripFloor(platform);
     else quad(platform, 'floor', [[-half, 0, half], [half, 0, half], [half, 0, -half], [-half, 0, -half]], [0, 1, 0]);
     quad(platform, 'ceiling', [[-half, FURNACE.ceilingY, -half], [half, FURNACE.ceilingY, -half], [half, FURNACE.ceilingY, half], [-half, FURNACE.ceilingY, half]], [0, -1, 0]);
+    if (slab) {
+        // Black on both sides: its underside faces down like the ceiling, its top faces up.
+        const w = SLAB.halfWidth;
+        quad(platform, 'slab underside', [[-w, SLAB.y, SLAB.zFar], [w, SLAB.y, SLAB.zFar], [w, SLAB.y, SLAB.zNear], [-w, SLAB.y, SLAB.zNear]], [0, -1, 0], 0);
+        quad(platform, 'slab top', [[-w, SLAB.y, SLAB.zNear], [w, SLAB.y, SLAB.zNear], [w, SLAB.y, SLAB.zFar], [-w, SLAB.y, SLAB.zFar]], [0, 1, 0], 0);
+    }
     platform.scene.createLight(FURNACE_SUN);
     platform.scene.setEnvironment({ type: 'color', color: [0, 0, 0], intensity: 1 });
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
@@ -201,6 +223,8 @@ interface RayReading {
     readonly near: { readonly mean: number; readonly rays: number };
     readonly onScreen: { readonly mean: number; readonly rays: number };
     readonly offScreen: { readonly mean: number; readonly rays: number };
+    /** Sections 6-7: ceiling hits the slab hides from the camera (|x| < 3, z from −8.5 to −12), any distance. */
+    readonly hidden: { readonly mean: number; readonly rays: number };
     readonly bad: number;
 }
 
@@ -213,7 +237,7 @@ async function readRays(device: GPUDevice, scenario: Scenario): Promise<RayReadi
     const results = probes.rayScratch.rayResults;
     const radianceWords = new Uint32Array(await readRange(device, results.buffer, results.offset ?? 0, rayCount * 8));
     const eye = scenario.camera.position;
-    const sums = { near: [0, 0], onScreen: [0, 0], offScreen: [0, 0] };
+    const sums = { near: [0, 0], onScreen: [0, 0], offScreen: [0, 0], hidden: [0, 0] };
     let bad = 0;
     for (let ray = 0; ray < rayCount; ray++) {
         const base = (WORLD_CACHE_PROBE_RAYS_HEADER_BYTES + ray * WORLD_CACHE_PROBE_RAY_BYTES) / 4;
@@ -226,7 +250,12 @@ async function readRays(device: GPUDevice, scenario: Scenario): Promise<RayReadi
             bad++;
             continue;
         }
-        if (Math.abs(hit[1] - FURNACE.ceilingY) > 1e-3 || Math.hypot(hit[0] - eye[0], hit[2] - eye[2]) > NEAR_HIT_METRES) continue;
+        const onCeiling = Math.abs(hit[1] - FURNACE.ceilingY) <= 1e-3;
+        if (onCeiling && Math.abs(hit[0]) < HIDDEN.halfWidth && hit[2] < HIDDEN.zNear && hit[2] > HIDDEN.zFar) {
+            sums.hidden[0] += value;
+            sums.hidden[1]++;
+        }
+        if (!onCeiling || Math.hypot(hit[0] - eye[0], hit[2] - eye[2]) > NEAR_HIT_METRES) continue;
         sums.near[0] += value;
         sums.near[1]++;
         const uv = screenUv(scenario.camera, hit);
@@ -241,7 +270,7 @@ async function readRays(device: GPUDevice, scenario: Scenario): Promise<RayReadi
         }
     }
     const tally = ([sum, rays]: number[]) => ({ mean: sum / Math.max(rays, 1), rays });
-    return { near: tally(sums.near), onScreen: tally(sums.onScreen), offScreen: tally(sums.offScreen), bad };
+    return { near: tally(sums.near), onScreen: tally(sums.onScreen), offScreen: tally(sums.offScreen), hidden: tally(sums.hidden), bad };
 }
 
 async function runFrames(device: GPUDevice, scenario: Scenario, frames: number): Promise<void> {
@@ -257,8 +286,10 @@ interface Section {
     readonly settings: Partial<RadianceCacheSettings>;
     readonly camera: PageCamera;
     readonly strips: boolean;
-    /** Checks the reading; returns the section's numbers. */
-    judge(reading: RayReading, failures: string[]): Record<string, unknown>;
+    /** Sections 6-7: the black slab under the ceiling. */
+    readonly slab?: boolean;
+    /** Checks the reading (with the earlier sections' readings by number); returns the section's numbers. */
+    judge(reading: RayReading, failures: string[], earlier: ReadonlyMap<string, RayReading>): Record<string, unknown>;
 }
 
 const within = (value: number, expected: number) => Math.abs(value / expected - 1) <= TOLERANCE;
@@ -326,6 +357,37 @@ const SECTIONS: readonly Section[] = [
             };
         },
     },
+    {
+        name: "6 furnace with a slab, GI-1.2's rays (the control for 7)",
+        settings: { secondBounce: 'gi1-rays', useTemporalFeedback: false },
+        camera: LEVEL_CAMERA,
+        strips: false,
+        slab: true,
+        judge(reading, failures) {
+            if (reading.hidden.rays < 1000) failures.push(`${this.name}: only ${reading.hidden.rays} ceiling hits hidden behind the slab`);
+            return { hiddenMean: round(reading.hidden.mean), hiddenRays: reading.hidden.rays };
+        },
+    },
+    {
+        name: "7 furnace with a slab, temporal feedback, hits last frame's camera didn't see",
+        settings: { secondBounce: 'gi1-rays', useTemporalFeedback: true },
+        camera: LEVEL_CAMERA,
+        strips: false,
+        slab: true,
+        judge(reading, failures, earlier) {
+            const control = earlier.get('6');
+            if (!control) {
+                failures.push(`${this.name}: needs section 6's reading`);
+                return {};
+            }
+            if (reading.hidden.rays < 1000) failures.push(`${this.name}: only ${reading.hidden.rays} ceiling hits hidden behind the slab`);
+            const ratio = reading.hidden.mean / Math.max(control.hidden.mean, 1e-12);
+            if (Math.abs(ratio - 1) > HIDDEN_TOLERANCE) {
+                failures.push(`${this.name}: the hidden ceiling rays read ${round(reading.hidden.mean)}, ${round(ratio)} x section 6's ${round(control.hidden.mean)} (within ${HIDDEN_TOLERANCE * 100}%: the slab's black taken for the ceiling's light?)`);
+            }
+            return { hiddenMean: round(reading.hidden.mean), hiddenRays: reading.hidden.rays, overControl: round(ratio) };
+        },
+    },
 ];
 
 const startTime = performance.now();
@@ -339,15 +401,18 @@ try {
     const failures: string[] = [];
     const sections: Record<string, unknown> = {};
     const only = String((import.meta.env as Record<string, unknown>).VITE_RC_BOUNCES_SECTIONS ?? '');
+    const readings = new Map<string, RayReading>();
     for (const section of SECTIONS) {
-        if (only && !only.split(',').includes(section.name.split(' ')[0])) continue;
-        const scenario = await startScenario(device, section.name, section.settings, section.camera, section.strips);
+        const number = section.name.split(' ')[0];
+        if (only && !only.split(',').includes(number)) continue;
+        const scenario = await startScenario(device, section.name, section.settings, section.camera, section.strips, section.slab ?? false);
         try {
             await runFrames(device, scenario, FRAMES);
             const reading = await readRays(device, scenario);
             if (reading.bad > 0) failures.push(`${section.name}: ${reading.bad} rays NaN, infinite or negative`);
             if (reading.near.rays < 1000) failures.push(`${section.name}: only ${reading.near.rays} near ceiling rays`);
-            sections[section.name] = { nearMean: round(reading.near.mean), nearRays: reading.near.rays, ...section.judge(reading, failures) };
+            sections[section.name] = { nearMean: round(reading.near.mean), nearRays: reading.near.rays, ...section.judge(reading, failures, readings) };
+            readings.set(number, reading);
             console.log(section.name, JSON.stringify(sections[section.name]));
         } finally {
             scenario.dispose();
