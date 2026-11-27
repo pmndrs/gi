@@ -55,9 +55,10 @@ function meanOf(frames: readonly Float32Array[], from: number, to: number, block
 /**
  * `before`: each block's mean over the frames before the change. `after`: each block's mean per
  * frame, starting with the first frame drawn after the change. The last `settleFrames` frames
- * are the settled picture.
+ * are the settled picture. Blocks `exclude` marks are left out (a moved box's own footprint,
+ * whose pixels change surface at once, so only the light around it is measured).
  */
-export function stepResponse(before: Float32Array, after: readonly Float32Array[], options: StepOptions = DEFAULT_STEP_OPTIONS): StepResponse | null {
+export function stepResponse(before: Float32Array, after: readonly Float32Array[], options: StepOptions = DEFAULT_STEP_OPTIONS, exclude?: Uint8Array): StepResponse | null {
     const frames = after.length;
     const settleFrom = frames - options.settleFrames;
     if (settleFrom < 16) throw new Error(`stepResponse: ${frames} frames after the change leave too few before the ${options.settleFrames} settled frames`);
@@ -74,6 +75,7 @@ export function stepResponse(before: Float32Array, after: readonly Float32Array[
     let sumEnd = 0;
     let stepSize = 0;
     for (let block = 0; block < blocks; block++) {
+        if (exclude?.[block]) continue;
         const larger = Math.max(before[block], end[block]);
         if (!(larger > options.darkShare * frameMean)) continue;
         if (!(Math.abs(end[block] - before[block]) > options.minRelativeChange * larger)) continue;

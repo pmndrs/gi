@@ -35,6 +35,12 @@ describe('P6.5 step response', () => {
         expect(response.framesTo90).toBe(3);
     });
 
+    it('leaves out the blocks it is told to', () => {
+        const response = stepResponse(new Float32Array([1, 1]), frames(80, 2, (frame, block) => (block === 0 ? 3 : frame < 10 ? 1 : 2)), undefined, new Uint8Array([1, 0]))!;
+        expect(response.changedBlocks).toBe(1);
+        expect(response.framesTo90).toBe(11);
+    });
+
     it('gives null when nothing changed, and when the run never settles', () => {
         expect(stepResponse(new Float32Array([1, 1]), frames(60, 2, () => 1))).toBeNull();
         const slow = stepResponse(new Float32Array([1]), frames(60, 1, (frame) => 1 + frame / 59))!;

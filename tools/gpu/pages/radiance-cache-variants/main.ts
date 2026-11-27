@@ -40,8 +40,10 @@
  * 5. a box moves: a box (12% of the volume's smallest side, light grey) is
  *    put on the surface below the screen's centre, settles for
  *    `BOX_SETTLE_FRAMES`, then moves sideways by 1.5 times its size; the same
- *    step numbers over the blocks the move changed (its old place lit again
- *    is the ghost); the box is taken out after;
+ *    step numbers over the blocks the move changed, leaving out the blocks
+ *    the box itself covers before or after (they change surface at once), so
+ *    what is measured is the light around it: its old shadow lit again (the
+ *    ghost) and its new shadow; the box is taken out after;
  * 6. memory: the radiance cache's GPU bytes and DDGI's, and what ran
  *    (the second bounce the grid used, whether the neural tail ran, warnings).
  *
@@ -175,8 +177,9 @@ function countNonFinite(values: Float32Array): number {
 function sceneLights(scene: Object3D): Light[] {
     const lights: Light[] = [];
     scene.traverse((object) => {
-        const light = object as Light & { isAmbientLight?: boolean; isHemisphereLight?: boolean; isLightProbe?: boolean };
-        if (light.isLight && !light.isAmbientLight && !light.isHemisphereLight && !light.isLightProbe && light.intensity > 0) lights.push(light);
+        // ThreeGI's own GILight carries GI into three's lighting; it is not a scene light.
+        const light = object as Light & { isAmbientLight?: boolean; isHemisphereLight?: boolean; isLightProbe?: boolean; isGILight?: boolean };
+        if (light.isLight && !light.isAmbientLight && !light.isHemisphereLight && !light.isLightProbe && !light.isGILight && light.intensity > 0) lights.push(light);
     });
     return lights;
 }
@@ -322,6 +325,13 @@ async function measureVariant(context: ThreePageContext, loaded: LoadedScene, pr
         return mean;
     };
     const readShown = async (): Promise<Float32Array> => meanRgb(halves(await readTexture(device, shown(), 8, width, height)));
+    /** The scene pass's depth as the last frame drew it. */
+    const readDepth = async (): Promise<Float32Array<ArrayBuffer>> => {
+        const rgba = await reader.read(vec4(scenePass.getTextureNode('depth').sample(uv()).r, 0, 0, 1) as unknown as Node, false);
+        const out = new Float32Array(width * height);
+        for (let pixel = 0; pixel < out.length; pixel++) out[pixel] = rgba[pixel * 4];
+        return out;
+    };
 
     try {
         // 1. Warm-up from an empty cache (and DDGI's field from nothing).
@@ -350,13 +360,9 @@ async function measureVariant(context: ThreePageContext, loaded: LoadedScene, pr
         const nonFinite = countNonFinite(meanShown) + countNonFinite(meanRaw) + countNonFinite(lastShown);
         assert(nonFinite === 0, `${loaded.id} ${preset.id}: ${nonFinite} non-finite irradiance values`);
         const albedo = await reader.read(scenePass.getTextureNode(GI_ALBEDO_OUTPUT) as unknown as Node, false);
-        const depthRgba = await reader.read(vec4(scenePass.getTextureNode('depth').sample(uv()).r, 0, 0, 1) as unknown as Node, false);
-        const depth = new Float32Array(width * height);
+        const depth = await readDepth();
         const surface = new Uint8Array(width * height);
-        for (let pixel = 0; pixel < depth.length; pixel++) {
-            depth[pixel] = depthRgba[pixel * 4];
-            surface[pixel] = depth[pixel] < 1 ? 1 : 0;
-        }
+        for (let pixel = 0; pixel < depth.length; pixel++) surface[pixel] = depth[pixel] < 1 ? 1 : 0;
         const gi = accuracyNumbers(loaded.referenceGi, giTerm(albedo, meanShown, width, height));
         const giRaw = accuracyNumbers(loaded.referenceGi, giTerm(albedo, meanRaw, width, height));
         const giOneFrame = accuracyNumbers(loaded.referenceGi, giTerm(albedo, lastShown, width, height));
@@ -410,10 +416,23 @@ async function measureVariant(context: ThreePageContext, loaded: LoadedScene, pr
             await platform.rays.whenBuilt();
             await run(BOX_SETTLE_FRAMES);
             const beforeBox = averageBlocks(await blockFrames(BEFORE_FRAMES));
+            const footprint = new Uint8Array(blockMeans.blocksX * blockMeans.blocksY);
+            const markFootprint = (boxDepth: Float32Array): void => {
+                for (let pixel = 0; pixel < boxDepth.length; pixel++) {
+                    if (Math.abs(boxDepth[pixel] - depth[pixel]) > 1e-6) footprint[Math.floor(pixel / width / 8) * blockMeans.blocksX + Math.floor((pixel % width) / 8)] = 1;
+                }
+            };
+            markFootprint(await readDepth());
             box.position.copy(placement.end);
             box.updateMatrixWorld(true);
             const afterBox = await blockFrames(AFTER_FRAMES);
-            boxMoves = { what: `a ${placement.side.toFixed(2)} m box moved ${(BOX_MOVE * placement.side).toFixed(2)} m`, response: stepResponse(beforeBox, afterBox) };
+            markFootprint(await readDepth());
+            let footprintBlocks = 0;
+            for (const marked of footprint) footprintBlocks += marked;
+            boxMoves = {
+                what: `a ${placement.side.toFixed(2)} m box moved ${(BOX_MOVE * placement.side).toFixed(2)} m (its own ${footprintBlocks} blocks left out)`,
+                response: stepResponse(beforeBox, afterBox, undefined, footprint),
+            };
         }
 
         const radianceCacheBytes = technique.memoryBytes;
