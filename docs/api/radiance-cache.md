@@ -12,8 +12,7 @@ There is no volume to place. In exchange it needs the host's depth, normals and 
 
 It is built from AMD's GI-1.0, as GI-1.2 in [Capsaicin](https://github.com/GPUOpen-LibrariesAndSDKs/Capsaicin) v1.3 ships it (MIT). It isn't a one-to-one port. Capsaicin's errors are fixed, among them:
 
-- the SH projection's weight, which reads a constant sky 30% bright at the first frame;
-- the empty probe cells' backup, which darkens the probes over time (0.87 of the right value at steady state);
+- the SH projection's weight and the empty probe cells' backup: together, Capsaicin reads a constant sky 1.30 times too bright at the first frame and 0.87 times at steady state;
 - the second bounce's 1 / (1 − p) weight and its misses, which counted no sample;
 - the bypass paths that added light to the wrong probe ray.
 
@@ -131,13 +130,13 @@ gi.encodeScreen(encoder, { width, height, depth, normal, normalEncoding: 'snorm-
 
 - **`gi.screenNeeds`** says which screen channels to draw. The cache always reads `depth`, `normal` and `velocity` (motion in NDC, current minus previous). With `ssgi: true` it also reads `albedo` (base colour × (1 − metalness)) and `lighting` (your lit colour before GI). The textures must be the screen's size and single-sampled.
 - **`camera`** is the unjittered camera. If your depth is drawn with a jittered projection, pass the jitter as `camera.jitter` in NDC; the cache rebuilds positions from depth with it.
-- **Reading the result.** `gi.shading` is the cache's shading module, the same shape every technique publishes (adapter guide, step 9). Its `giIrradiance` reads the denoised irradiance at `screenUV` and ignores position and normal, so it answers only for the pixel being shaded on this screen. Its coverage is 1 everywhere. You can also read `cache.probes.denoisedIrradiance` (an `rgba16float` texture, E in rgb) in a full-screen pass of your own: that is what three's composite does.
+- **Reading the result.** `gi.shading` is the cache's shading module, the same shape every technique publishes (adapter guide, step 9). Its `giIrradiance` reads the denoised irradiance (the raw one with `denoiser: false`) at `screenUV` and ignores position and normal, so it answers only for the pixel being shaded on this screen. Its coverage is 1 everywhere. You can also read `cache.probes.denoisedIrradiance` (an `rgba16float` texture, E in rgb) in a full-screen pass of your own: that is what three's composite does.
 
 ## What it needs from the device
 
 | Need | Why | Without it |
 | --- | --- | --- |
-| `maxStorageBuffersPerShaderStage` ≥ 10 | The largest passes bind 10 storage buffers, the platform's 5 included (pmndrs/gi#49). Chrome on Apple GPUs allows exactly 10; the RTX 3060 and Intel UHD allow 16; three's own device asks for 8. Declared in the technique's `requirements.limits`, so `gi.limitNeeds` lists it. | `prepare` throws `GILimitError` naming the limit. |
+| `maxStorageBuffersPerShaderStage` ≥ 10 | The largest passes bind 10 storage buffers, the platform's 5 included (pmndrs/gi#49). Chrome on Apple GPUs allows exactly 10; the RTX 3060 and Intel UHD allow 16; three's own device gets WebGPU's default, 8. Declared in the technique's `requirements.limits`, so `gi.limitNeeds` lists it. | `prepare` throws `GILimitError` naming the limit. |
 | A storage binding and buffer far above 128 MiB | The world cache's hash grid is about 1 GiB at Capsaicin's capacity, in two buffers. | `prepare` throws `GILimitError` naming `maxStorageBufferBindingSize`. |
 | `maxColorAttachmentBytesPerSample` above 32 | three's MRT pass with the composite's outputs and the screen inputs needs up to 56 bytes a pixel. | The screen stage throws `GILimitError` at its first run. |
 | `shader-f16` and the adapter's `maxComputeWorkgroupStorageSize` | Only for `neuralCache: 'tail'`. f32 and smaller tiles are the fallback. | The tail runs in f32, or turns off with a warning if its network doesn't fit. |
@@ -153,7 +152,7 @@ At the default settings the cache holds about **1.1 GiB** of GPU memory at 1280 
 - `cache.memoryBytes` gives the technique's bytes, and `gi.stats.memory` the platform's total.
 - The world cache's capacity comes from `hashGridCacheNumBuckets`, `hashGridCacheNumTilesPerBucket` and `hashGridCacheTileCellRatio`, read at `prepare`. Only Capsaicin's values are checked.
 - `worldCache: 'sharc'` uses 56 MiB instead (below).
-- `cellShading: 'budgeted'` and `cellChangeReset` add each cell's last-reset frame, 32 MiB, and the budgeted lists, 5.5 MB at 1280 × 720.
+- Each cell's last-reset frame, 32 MiB, is made when `cellChangeReset` (on by default) or `cellShading: 'budgeted'` is first used. The budgeted lists add 5.5 MB at 1280 × 720.
 - `neuralCache: 'tail'` adds 26 MiB at 1280 × 720.
 
 ## Settings
@@ -161,7 +160,7 @@ At the default settings the cache holds about **1.1 GiB** of GPU memory at 1280 
 `new RadianceCacheTechnique(settings)` takes any of the settings below; the rest keep their defaults (`DEFAULT_RADIANCE_CACHE_SETTINGS`). `cache.settings` is the live object:
 
 - Almost every setting is **read every frame**: change it on `cache.settings` and the next frame uses it.
-- Some are **read at `prepare`**: `worldCache`, `ssgi`, `neuralCache` and `neural`, the hash grid's capacity (`hashGridCacheNumBuckets`, `hashGridCacheNumTilesPerBucket`, `hashGridCacheTileCellRatio`) and three of SHaRC's keys. Make the technique again (or call `gi.prepare()` again) to change them.
+- Some are **read at `prepare`**: `worldCache`, `ssgi`, `neuralCache` and `neural`, the hash grid's capacity (`hashGridCacheNumBuckets`, `hashGridCacheNumTilesPerBucket`, `hashGridCacheTileCellRatio`) and three of SHaRC's keys. To change one, make the technique again (the viewer does).
 - `ssgi` is also fixed at construction, because it decides which screen channels the technique asks for.
 
 ```ts
@@ -184,7 +183,7 @@ Costs below are measured on the RTX 3060 laptop at 1280 × 720, from the design 
 | `cellShading` | `'per-hit'` | How cells are lit. `'per-hit'`: every hit draws a light and traces a shadow ray (GI-1.2). `'budgeted'` is a variant (below). |
 | `neuralCache` | `'off'` | `'tail'` is a variant (below). Read at `prepare`. |
 | `ssgi` | `false` | Capsaicin's near-field screen-space GI and bent-normal occlusion. Off because its noise outweighed what it added (Sponza changed 21–27% a frame with one slice). On, the cache also asks for `albedo` and `lighting`, six more screen-sized textures, and `ssgiHistoryFrames` of lag after an occluder moves. Read at `prepare` and fixed at construction. |
-| `cellChangeReset` | `true` | Where the scene changed, a hit's cell drops its 16-sample history once per change, so a doubled sun is followed in 2 frames instead of 37. Costs a short noise rise after a change (Sponza 3.40% → 4.08% frame to frame) and the 32 MiB of per-cell frames. |
+| `cellChangeReset` | `true` | Where the scene changed, a hit's cell drops its 16-sample history once per change, so a doubled sun is followed in 2 frames instead of 37. Costs a short noise rise after a change (Sponza 3.40% → 4.08% frame to frame) and 32 MiB for each cell's last-reset frame. |
 | `environmentLightEnable` | `true` | The sky is one of the lights a cache hit samples, as in Capsaicin. Off: cache hits get no sky light; the sky reaches the probes only through rays that miss. With DDGI under the cache the sky is left out of the cache's lights either way, because DDGI's field holds it. |
 
 ### Screen probes
@@ -196,9 +195,9 @@ Costs below are measured on the RTX 3060 laptop at 1280 × 720, from the design 
 | `probeFilterHistory` | `false` | `true` keeps the filtered probes as next frame's history (Capsaicin's), which compounds the blur under the running mean (Cornell's mean E +3.6%). |
 | `probeBlend` | `'running-mean'` | How a probe cell carries its past: a running mean over up to `historySampleCap` frames. `'capsaicin-hysteresis'` is Capsaicin's, which reads dark on noisy cells. Changing it starts the probes' history over. |
 | `historySampleCap` | `8` | Frames a cell's running mean counts. Higher is steadier and slower to follow a change; 1 makes each frame stand alone. |
-| `emptyCellFill` | `'keep-previous'` | A cell no ray reached keeps its value. `'capsaicin'` refills it with Capsaicin's divided backup, the cause of GI-1.2's drift to 0.87 of the right value. Changing it starts the history over. |
+| `emptyCellFill` | `'keep-previous'` | A cell no ray reached keeps its value. `'capsaicin'` refills it with Capsaicin's divided backup, the cause of GI-1.2's drift dark over time. Changing it starts the history over. |
 | `backupFillsAsHistory` | `false` | `true` keeps those fills as history (Capsaicin's). Changing it starts the history over. |
-| `rayGuidingUniformShare` | `0.125` | The share of each probe's rays that sample their own cell instead of following its light. Without it a cell that went dark is never sampled again (0 is Capsaicin's rule). |
+| `rayGuidingUniformShare` | `0.125` | The share of each probe's rays that sample their own cell instead of being drawn by the probe's light (ray guiding). Without it a cell that went dark is never sampled again (0 is Capsaicin's rule). |
 | `rayGuidingCorrection` | `true` | Weights each cell's step by the rays it got over the rays it expected, so ray guiding doesn't bias the running mean dark. |
 | `probeChangeReset` | `true` | Where the scene changed, a cell whose ray crosses the change forgets its count, so its next ray replaces it. |
 | `probeHistory` | `true` | `false` drops the probes' history before every frame: for comparisons, not a product setting. |
