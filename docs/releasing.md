@@ -106,13 +106,14 @@ The tree keeps `packages/ddgi/package.json` at `0.0.0` until the first release: 
 - `@pmndrs/gi/core` and `/ddgi` may import no package at all, and `@pmndrs/gi` and `/three` only three;
 - each subpath loads only its own layers' chunks (`packages/ddgi/layer-chunks.ts`): `/core` only the platform's, so it holds no DDGI code, and `/ddgi` no three code;
 - in a new folder, npm installs the tarball with only `three`, `@types/three` and `@webgpu/types`; `@pmndrs/gi`, `/core`, `/ddgi` and `/three` must import under Node (`.` and `/three` giving the same `DDGIVolume` class), and a file using each must typecheck against the packed types, under both `bundler` and `nodenext` module resolution;
-- in another new folder, with no three at all, `/core` and `/ddgi` must install, import and typecheck, and no name may be exported by both.
+- in another new folder, with no three at all, `/core` and `/ddgi` must install, import and typecheck, and no name may be exported by both;
+- a new vite app importing `/core`, `/ddgi`, `/three` and `/radiance-cascades` must build with `vite build` and run under vite's dev server, and every file its code fetches with `new URL(..., import.meta.url)` must be there. Typechecks and Node imports run no bundler, so they missed BVH workers the package build had pointed at `/assets/` (2026-11-27).
 
 It installs from the npm registry, so it needs the network. `--keep-temp` keeps the folders for a look.
 
 ## What's in the package
 
-`files` in `packages/ddgi/package.json` lists it: `dist/` (the four entries `index`, `core`, `ddgi` and `three`, their types, one chunk per layer (`platform`, `ddgi`, `three`) and two workers), `README.md`, `LICENSE`, `THIRD_PARTY.md` and `licenses/`. The build (`pnpm build`) copies the README and LICENSE from the repository root ([`tools/release/package-files.ts`](../tools/release/package-files.ts)):
+`files` in `packages/ddgi/package.json` lists it: `dist/` (the four entries `index`, `core`, `ddgi` and `three`, their types, one chunk per layer (`platform`, `ddgi`, `three`); the two BVH workers are built into the platform chunk, not shipped as files), `README.md`, `LICENSE`, `THIRD_PARTY.md` and `licenses/`. The build (`pnpm build`) copies the README and LICENSE from the repository root ([`tools/release/package-files.ts`](../tools/release/package-files.ts)):
 
 - **README.md** is the root README down to the line `<!-- The npm package README ends here. ... -->`; everything below it ("Working on this repository") stays on GitHub. Relative links become absolute `github.com/pmndrs/gi` links, since npmjs.com can't follow them. Edit the root README, never the copy (it's git-ignored).
 - **THIRD_PARTY.md** is the package's own (`packages/ddgi/THIRD_PARTY.md`, committed): only the code that ships in it, which is tinybvh's WebAssembly with the Emscripten runtime, and the GPU tree builders ported from tinybvh and HIPRT. The root `THIRD_PARTY.md` also lists test scenes and tools, which don't ship.

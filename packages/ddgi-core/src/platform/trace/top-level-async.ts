@@ -45,7 +45,8 @@ export function createTopLevelBuilder(config: TopLevelBuilderConfig = {}): TopLe
 function tryStartWorker(): Worker | null {
     if (typeof Worker === 'undefined') return null;
     try {
-        // The URL must stay inline in `new Worker(new URL(...))` so bundlers can find the worker file.
+        // Keep this exact form: bundlers find the worker file through it, and the
+        // package build (packages/ddgi/vite.config.ts, inlineWorkers) inlines it.
         return new Worker(new URL('./top-level-worker.ts', import.meta.url), { type: 'module' });
     } catch {
         return null;
