@@ -88,8 +88,8 @@ const env = import.meta.env as Record<string, unknown>;
 const listFromEnv = (name: string): string[] | null => (typeof env[name] === 'string' && env[name] ? (env[name] as string).split(',').map((item) => item.trim()).filter(Boolean) : null);
 const numberFromEnv = (name: string, fallback: number): number => (typeof env[name] === 'string' && env[name] ? Number(env[name]) : fallback);
 
-/** The scenes with Cycles references, as the accuracy page lists them (the point-light Cornell box first). */
-const DEFAULT_SCENES = ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior'];
+/** The scenes with Cycles references: the accuracy page's list (the point-light Cornell box first), and the furnished room. */
+const DEFAULT_SCENES = ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior', 'furnished-room'];
 const SCENES = listFromEnv('VITE_RC_VARIANT_SCENES') ?? DEFAULT_SCENES;
 const variantIds = listFromEnv('VITE_RC_VARIANTS');
 const VARIANTS = variantIds ? RADIANCE_CACHE_VARIANT_PRESETS.filter((preset) => variantIds.includes(preset.id)) : RADIANCE_CACHE_VARIANT_PRESETS;

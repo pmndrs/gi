@@ -52,7 +52,7 @@ const WARM_FRAMES = 240;
 const TIMED_FRAMES = 120;
 const env = import.meta.env as Record<string, unknown>;
 const listFromEnv = (name: string): string[] | null => (typeof env[name] === 'string' && env[name] ? (env[name] as string).split(',').map((item) => item.trim()).filter(Boolean) : null);
-const SCENES = listFromEnv('VITE_RC_VARIANT_SCENES') ?? ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior'];
+const SCENES = listFromEnv('VITE_RC_VARIANT_SCENES') ?? ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior', 'furnished-room'];
 const variantIds = listFromEnv('VITE_RC_VARIANTS');
 const VARIANTS = variantIds ? RADIANCE_CACHE_VARIANT_PRESETS.filter((preset) => variantIds.includes(preset.id)) : RADIANCE_CACHE_VARIANT_PRESETS;
 /** T2.17: Bistro's textures capped where they don't fit the 6 GB RTX (as the accuracy pages). */

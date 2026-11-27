@@ -83,7 +83,7 @@ function pageData(path: string, page: string): PageSummary {
     return found;
 }
 
-const SCENE_ORDER = ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior'];
+const SCENE_ORDER = ['cornell-box-point', 'cornell-box', 'two-room', 'furnished-room', 'sponza', 'bistro-interior', 'bistro-exterior'];
 const VARIANT_ORDER = ['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail'];
 const sortBy = (order: readonly string[]) => (a: string, b: string) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99);
 
