@@ -413,10 +413,6 @@ await runGpuTest(
                 frame();
                 await device.queue.onSubmittedWorkDone();
             }
-            // Let tinybvh's trees replace the GPU's, so no first-tree work is left to blur the counts below.
-            await platform.rays.whenRefined();
-            frame();
-            await device.queue.onSubmittedWorkDone();
 
             const bySlot = new Map(traced.map((instance) => [platform.sceneCopy.instanceSlot(instance.handle), instance] as const));
             const sheetSlots = new Set(traced.filter((instance) => instance.meshIndex === SHEET).map((instance) => platform.sceneCopy.instanceSlot(instance.handle)));

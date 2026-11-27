@@ -217,10 +217,12 @@ export class DeformingTrees {
 
     /**
      * A tree of the mesh's current version was placed. With its layout on the
-     * CPU (tinybvh's always; a GPU build's when it was read back), the refit
-     * takes its shape and refits it this frame from the scene copy's
-     * positions. Without one the mesh can't be refit: it keeps the pose the
-     * tree was built in until a tree with a layout arrives.
+     * CPU (tinybvh's always; a GPU build's, read back for deforming meshes),
+     * the refit takes its shape and refits it this frame from the scene
+     * copy's positions. Without one the mesh can't be refit: it keeps the pose
+     * the tree was built in until a tree with a layout arrives (the tracer
+     * refuses a deforming mesh's GPU tree whose readback failed, so its
+     * fallback brings one).
      */
     treePlaced(slot: number, placement: DeformingTreePlacement, layout: GpuLayoutMeshBvh | null): void {
         const mesh = this.meshes.get(slot);

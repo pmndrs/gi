@@ -13,16 +13,14 @@
  *   The page reaches platform internals directly (it constructs
  *   `GIPlatformImpl` for `rays.whenBuilt()` and `sceneCopy.instanceSlot()`);
  *   inline tracing from a technique's own kernel, the way DDGI traces, is
- *   checked by `trace-inline`. It traces once every tinybvh tree from the
- *   worker is in (M1's trees, after any GPU first trees were swapped out).
- *   Three more variants check the first trees from the GPU (T2.12), which
- *   need subgroups (skipped without):
- *   - `platform-gpu-trees`: every mesh on its GPU (H-PLOC) tree, copied into
- *     the tracer's buffers, tinybvh's held back;
- *   - `platform-mid-swap`: tinybvh's trees swapped in for every other mesh
- *     only (some meshes on GPU trees, some on tinybvh's);
+ *   checked by `trace-inline`. It traces the trees hosts get: every mesh on
+ *   its GPU (H-PLOC) tree with subgroups, on tinybvh's (the fallback)
+ *   without (#26). Two more variants check the fallback:
+ *   - `platform-tinybvh`: every mesh on tinybvh's tree (`gpuFirst: false`,
+ *     M1's path), on any device;
  *   - `platform-refused`: GPU trees deeper than 3 levels refused, so those
- *     meshes wait for tinybvh's while the rest keep their GPU trees;
+ *     meshes fall back to tinybvh's while the rest keep their GPU trees
+ *     (needs subgroups; skipped without);
  * - `watertight-tinybvh`: the same trees assembled and traced directly;
  * - `watertight-tmbuild`: trees built by three-mesh-bvh and converted;
  * - `watertight-lbvh`: trees built on the GPU by the LBVH builder (B1,
@@ -85,20 +83,19 @@ import {
 interface OracleVariant {
     name: string;
     treeSource: 'platform' | 'tinybvh' | 'three-mesh-bvh' | 'gpu-lbvh' | 'gpu-hploc';
-    /** For `platform`: which trees the platform's meshes are on when the rays are traced (T2.12). Default `refined`. */
+    /** For `platform`: which trees the platform's meshes are on when the rays are traced (T2.12, #26). Default `host`. */
     platformTrees?: PlatformTrees;
 }
 
 /** The states of the platform's mesh trees the oracle checks (see the file comment). */
-type PlatformTrees = 'refined' | 'gpu' | 'mid-swap' | 'refused';
+type PlatformTrees = 'host' | 'tinybvh' | 'refused';
 
-/** `platform-refused` refuses GPU trees deeper than this, so the oracle's bigger meshes wait for tinybvh. */
+/** `platform-refused` refuses GPU trees deeper than this, so the oracle's bigger meshes fall back to tinybvh. */
 const REFUSED_DEPTH = 3;
 
 const VARIANTS: OracleVariant[] = [
-    { name: 'platform', treeSource: 'platform', platformTrees: 'refined' },
-    { name: 'platform-gpu-trees', treeSource: 'platform', platformTrees: 'gpu' },
-    { name: 'platform-mid-swap', treeSource: 'platform', platformTrees: 'mid-swap' },
+    { name: 'platform', treeSource: 'platform', platformTrees: 'host' },
+    { name: 'platform-tinybvh', treeSource: 'platform', platformTrees: 'tinybvh' },
     { name: 'platform-refused', treeSource: 'platform', platformTrees: 'refused' },
     { name: 'watertight-tinybvh', treeSource: 'tinybvh' },
     { name: 'watertight-tmbuild', treeSource: 'three-mesh-bvh' },
@@ -250,8 +247,7 @@ const IDLE_FRAME: FrameInput = {
  * Traces a case through the platform object: the scene API, `prepare`, frames
  * until the mesh trees are in the state `trees` asks for (see the file
  * comment), then the `rays` backend's `encodeBatch`. Uses internals a host
- * doesn't have: `rays.whenBuilt()`, `rays.whenRefined()`,
- * `rays.releaseRefinements()`, `rays.meshTreeCounts` and
+ * doesn't have: `rays.whenBuilt()`, `rays.meshTreeCounts` and
  * `sceneCopy.instanceSlot()`. Hits report scene-copy instance slots; they
  * are mapped back to the case's own instance indices for the checks.
  */
@@ -259,7 +255,7 @@ async function traceThroughPlatform(device: GPUDevice, oracleCase: OracleCase, t
     const platform = new GIPlatformImpl(device, {
         label: `oracle ${oracleCase.name}`,
         rayBatches: true,
-        meshTrees: trees === 'refined' ? {} : { holdRefinements: true, gpuMaxDepth: trees === 'refused' ? REFUSED_DEPTH : undefined },
+        meshTrees: trees === 'host' ? {} : trees === 'tinybvh' ? { gpuFirst: false } : { gpuMaxDepth: REFUSED_DEPTH },
     });
     try {
         const material = platform.scene.createMaterial({ albedo: [1, 1, 1] });
@@ -286,26 +282,20 @@ async function traceThroughPlatform(device: GPUDevice, oracleCase: OracleCase, t
             platform.encode(encoder, IDLE_FRAME);
             device.queue.submit([encoder.finish()]);
         };
-        frame(); // uploads the scene; the GPU and the worker start building
-        // Every tinybvh tree built, so each state below is reached for sure (held ones wait for a release).
-        await platform.rays.whenRefined();
+        frame(); // uploads the scene; the GPU (or the worker, the fallback) starts building
+        await platform.rays.whenBuilt();
         frame(); // places the trees and builds the top level
         await platform.rays.whenBuilt();
         frame(); // places the top level's shape if it came after the trees
-        if (trees === 'mid-swap') {
-            // Every other mesh slot takes tinybvh's tree; the rest keep the GPU's.
-            platform.rays.releaseRefinements((slot) => slot % 2 === 1);
-            frame();
-        }
         assert(!platform.rays.building, 'the platform still reports trees building');
         const counts = platform.rays.meshTreeCounts;
         treeLog[oracleCase.name] = counts;
         const meshCount = oracleCase.meshes.length;
         assert(counts.onGpuTrees + counts.onTinybvhTrees === meshCount, `${oracleCase.name}: ${counts.onGpuTrees} + ${counts.onTinybvhTrees} meshes have trees, not ${meshCount}`);
-        if (trees === 'refined') assert(counts.onGpuTrees === 0, `${oracleCase.name}: ${counts.onGpuTrees} meshes are still on GPU trees after every tinybvh tree arrived`);
-        if (trees === 'gpu') assert(counts.onGpuTrees === meshCount, `${oracleCase.name}: only ${counts.onGpuTrees} of ${meshCount} meshes are on GPU trees`);
-        if (trees === 'mid-swap') {
-            assert(counts.onGpuTrees === Math.ceil(meshCount / 2), `${oracleCase.name}: ${counts.onGpuTrees} of ${meshCount} meshes are on GPU trees mid-swap`);
+        const hostOnGpu = trees === 'host' && device.features.has('subgroups');
+        if (hostOnGpu) assert(counts.onGpuTrees === meshCount, `${oracleCase.name}: only ${counts.onGpuTrees} of ${meshCount} meshes are on GPU trees`);
+        if (trees === 'tinybvh' || (trees === 'host' && !hostOnGpu)) {
+            assert(counts.onTinybvhTrees === meshCount, `${oracleCase.name}: only ${counts.onTinybvhTrees} of ${meshCount} meshes are on tinybvh trees`);
         }
         if (trees === 'refused') {
             assert(counts.onTinybvhTrees === counts.gpuTreesRefused, `${oracleCase.name}: ${counts.gpuTreesRefused} GPU trees were refused but ${counts.onTinybvhTrees} meshes are on tinybvh trees`);
@@ -341,7 +331,7 @@ async function traceCase(
     const built = await buildScene(builder, oracleCase, variant);
     if (variant.treeSource === 'platform') {
         const treeLog = (platformTreeLog[variant.name] ??= {});
-        return { answers: await traceThroughPlatform(device, oracleCase, variant.platformTrees ?? 'refined', treeLog), built };
+        return { answers: await traceThroughPlatform(device, oracleCase, variant.platformTrees ?? 'host', treeLog), built };
     }
     const buffers = uploadTraceScene(device, built.data, oracleCase.name);
     try {
@@ -426,8 +416,8 @@ await runGpuTest(async ({ device, log }) => {
             log(`[${variant.name}] skipped: ${gpuBuilder.fallbackReason}`);
             continue;
         }
-        // The platform builds first trees on the GPU only with subgroups (T2.12).
-        if (variant.treeSource === 'platform' && variant.platformTrees !== 'refined' && !device.features.has('subgroups')) {
+        // The platform builds trees on the GPU only with subgroups (T2.12), so without them nothing is refused.
+        if (variant.treeSource === 'platform' && variant.platformTrees === 'refused' && !device.features.has('subgroups')) {
             skipped.push(`${variant.name}: the device has no "subgroups" feature, so the platform builds no GPU trees`);
             log(`[${variant.name}] skipped: no subgroups`);
             continue;
