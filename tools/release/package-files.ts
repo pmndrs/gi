@@ -5,9 +5,10 @@
 //                PACKAGE_README_END marker, with links made absolute, since
 //                npmjs.com can't resolve a link relative to the repository.
 //   LICENSE      the repository's licence, unchanged.
-//   licenses/    the full licence texts of the code bundled from packages/bvh
-//                (tinybvh, the Emscripten runtime, HIPRT), which
-//                packages/ddgi/THIRD_PARTY.md points to.
+//   licenses/    the full licence texts of the bundled code, which
+//                packages/ddgi/THIRD_PARTY.md points to: packages/bvh's
+//                (tinybvh, the Emscripten runtime, HIPRT) and each
+//                technique's own `licenses/` folder (TECHNIQUE_LICENSES).
 //
 // packages/ddgi/THIRD_PARTY.md itself is written by hand and committed: it
 // lists only what ships in the package, unlike the root THIRD_PARTY.md, which
@@ -21,6 +22,10 @@ import { isDirectRun } from './release-version.ts';
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/ddgi');
 const BUNDLED_LICENSES = join(REPOSITORY_ROOT, 'packages/bvh/licenses');
+/** Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4) and the radiance cache's (AMD Capsaicin). */
+const TECHNIQUE_LICENSES = ['radiance-cascades', 'radiance-cache'].map((technique) =>
+    join(REPOSITORY_ROOT, 'packages/ddgi-core/src/techniques', technique, 'licenses'),
+);
 
 /** The line in the root README where the npm package's README stops. */
 export const PACKAGE_README_END = '<!-- The npm package README ends here. Below: working on this repository. -->';
@@ -119,7 +124,7 @@ function writePackageFiles(): void {
     const licenses = join(PACKAGE_DIRECTORY, 'licenses');
     rmSync(licenses, { recursive: true, force: true });
     mkdirSync(licenses);
-    const sources = [BUNDLED_LICENSES, join(REPOSITORY_ROOT, 'packages/ddgi-core/src/techniques/radiance-cascades/licenses')];
+    const sources = [BUNDLED_LICENSES, ...TECHNIQUE_LICENSES];
     const texts = sources.flatMap(source => readdirSync(source).filter(name => name.endsWith('.txt')).map(name => {
         copyFileSync(join(source, name), join(licenses, name));
         return name;
