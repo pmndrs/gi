@@ -152,7 +152,10 @@ describe('the neural tail (P6.4, register E11)', () => {
         const struct = /struct HashGridCacheRayLists \{([^}]*)\}/.exec(gatherCellRecordsWgsl(layout))?.[1] ?? '';
         const fields = struct.split(/\r?\n/).map((line) => line.replace(/\/\/.*$/, '').trim()).filter((line) => line.endsWith(','));
         expect(fields.every((field) => field.endsWith(': u32,'))).toBe(true);
-        expect(fields.at(-1)).toMatch(/^neural_tail_buffer:/);
+        // Words 16 and 17, as hash-grid-cache.ts writes them.
+        expect(fields[16]).toMatch(/^neural_tail_buffer:/);
+        expect(fields.at(-1)).toMatch(/^reset_frames_buffer:/);
+        expect(fields).toHaveLength(18);
         expect(RAY_LISTS_UNIFORM_BYTES).toBe(Math.ceil((fields.length * 4) / 16) * 16);
     });
 

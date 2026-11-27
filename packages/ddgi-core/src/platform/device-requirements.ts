@@ -10,6 +10,7 @@
 
 import { GILimitError } from './contract/errors.ts';
 import type { RequiredLimits } from './contract/platform.ts';
+import type { TechniqueRequirements } from './contract/technique.ts';
 
 /**
  * The platform's binding budget assumes the default 8 storage buffers per
@@ -105,6 +106,32 @@ export function optionalFeatures(adapter: GPUAdapter): GPUFeatureName[] {
         'shader-f16',
     ];
     return wanted.filter((feature) => adapter.features.has(feature));
+}
+
+/** The largest of each limit the techniques declare (`TechniqueRequirements.limits`). */
+export function mergeLimitNeeds(requirements: readonly Pick<TechniqueRequirements, 'limits'>[]): RequiredLimits {
+    const needs: RequiredLimits = {};
+    for (const { limits } of requirements) {
+        if (!limits) continue;
+        for (const [name, value] of Object.entries(limits) as [keyof RequiredLimits, number | undefined][]) {
+            if (value !== undefined) needs[name] = Math.max(needs[name] ?? 0, value);
+        }
+    }
+    return needs;
+}
+
+/**
+ * Throws a `GILimitError` naming the first declared limit the device is below.
+ * Called by `prepare` before anything compiles, so a device short of a
+ * technique's need (a 10-storage-buffer kernel on three's own device, with 8)
+ * fails with the limit's name instead of a pipeline validation error.
+ */
+export function checkLimitNeeds(limits: GPUSupportedLimits, needs: RequiredLimits): void {
+    for (const [name, needed] of Object.entries(needs) as [keyof RequiredLimits, number | undefined][]) {
+        if (needed === undefined) continue;
+        const available = limits[name];
+        if (available < needed) throw new GILimitError(name, needed, available);
+    }
 }
 
 /** Whether this device can run the platform at all. */

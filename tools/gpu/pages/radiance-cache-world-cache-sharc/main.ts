@@ -655,7 +655,7 @@ async function scanScene(device: GPUDevice, id: string, loader: 'manifest' | 'vi
                 if (rgb.some((value) => !(Number.isFinite(value) && value >= 0))) rayValuesBad++;
                 else raySum += (rgb[0] + rgb[1] + rgb[2]) / 3;
             }
-            const keys = new Uint32Array(await readRange(device, cache.buffers.keys, 0, cache.entries * 4));
+            const keys = new Uint32Array(await readRange(device, cache.keys.buffer, cache.keys.offset, cache.entries * 4));
             const resolved = new Float32Array(await readRange(device, cache.buffers.resolved, 0, cache.entries * 16));
             const counters = new Uint32Array(await readRange(device, cache.buffers.accum, 0, SHARC_COUNTER_WORDS * 4));
             let cellsInUse = 0;
