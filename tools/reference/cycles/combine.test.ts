@@ -26,7 +26,7 @@ interface PartMetaDraft {
         camera: { position: number[]; target: number[]; fovYDeg: number; width: number; height: number };
         scene: { manifest: string; manifestSha256: string; skySha256: string; giMaterialsSha256: string | null };
         display: { exposureEv: number; toneMapping: string };
-        render: { pixelFilter: { type: string; widthPixels: number }; device: string; git: { commit: string } | null };
+        render: { pixelFilter: { type: string; widthPixels: number }; device: string; git: { commit: string; uncommittedChanges?: boolean } | null };
     };
 }
 
@@ -53,6 +53,21 @@ describe('combine.ts: which parts may be averaged', () => {
             expect(() => checkParts(names, [part(0), part(1, change)])).toThrow(message);
         });
     }
+
+    it('accepts parts from different commits when the render inputs did not change between them', () => {
+        const other = part(1, (meta) => (meta.shot!.render.git = { commit: 'def' }));
+        expect(() => checkParts(names, [part(0), other], (a, b) => a === 'abc' && b === 'def')).not.toThrow();
+    });
+
+    it('refuses parts from different commits when the render inputs changed between them', () => {
+        const other = part(1, (meta) => (meta.shot!.render.git = { commit: 'def' }));
+        expect(() => checkParts(names, [part(0), other], () => false)).toThrow(/render inputs .* differ/);
+    });
+
+    it('refuses parts from different commits when one had uncommitted edits to the render inputs', () => {
+        const other = part(1, (meta) => (meta.shot!.render.git = { commit: 'def', uncommittedChanges: true }));
+        expect(() => checkParts(names, [part(0), other], () => true)).toThrow(/uncommitted edits/);
+    });
 
     it('refuses parts that share a seed', () => {
         expect(() => checkParts(names, [part(3), part(3)])).toThrow(/different seeds/);

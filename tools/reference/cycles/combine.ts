@@ -16,7 +16,13 @@
  * N × S samples. That holds only if the parts render the same thing the same
  * way, so `checkParts` refuses parts that differ in their shot (camera, size,
  * scene and material-table hashes, display), sample count, pixel filter,
- * device, commit or bounce count, or that share a seed.
+ * device, commit or bounce count, or that share a seed. Parts from different
+ * commits are accepted when git shows no change between those commits in the
+ * paths that can change a render (render.py's RENDER_INPUT_PATHS: the render
+ * tools, the scenes and the sky generator) and neither part had uncommitted
+ * edits there: a docs commit landing on the checkout between two parts of a
+ * long reference then no longer forces a re-render. The combined json lists
+ * the commits (`combinedFrom.commits`).
  *
  * Denoised viewing copies are not averaged; `--denoised-from -part0` keeps
  * that part's denoised copy (rendered with --denoise) as the reference's
@@ -25,6 +31,7 @@
  * Two parts also give the reference's noise: `noise.ts` compares them.
  */
 
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -46,7 +53,7 @@ export interface PartMeta {
         readonly render: {
             readonly pixelFilter: unknown;
             readonly device: string;
-            readonly git: { readonly commit: string } | null;
+            readonly git: { readonly commit: string; readonly uncommittedChanges?: boolean } | null;
         };
     };
     readonly [field: string]: unknown;
@@ -71,19 +78,41 @@ function partSettings(meta: PartMeta): ReadonlyArray<readonly [string, unknown]>
     ];
 }
 
+/** render.py's RENDER_INPUT_PATHS: the repo paths whose changes can change a render. */
+export const RENDER_INPUT_PATHS = ['tools/reference', 'scenes', 'tools/sky'] as const;
+
+/**
+ * Whether two commits render alike: git shows no difference between them in
+ * RENDER_INPUT_PATHS. Any git failure (an unknown commit, no git) counts as different.
+ */
+export function sameRenderInputs(repoRoot: string, a: string, b: string): boolean {
+    const result = spawnSync('git', ['diff', '--quiet', a, b, '--', ...RENDER_INPUT_PATHS], { cwd: repoRoot, stdio: 'ignore' });
+    return result.status === 0;
+}
+
 /**
  * Throws, naming the first difference, unless every part can be averaged
  * with the first: the same settings (`partSettings`) and all seeds different.
+ * Parts from different commits pass when `sameInputs` says the commits render
+ * alike and neither part had uncommitted edits to the render inputs.
  */
-export function checkParts(names: readonly string[], metas: readonly PartMeta[]): void {
+export function checkParts(names: readonly string[], metas: readonly PartMeta[], sameInputs: (a: string, b: string) => boolean = () => false): void {
     if (metas.length < 2) throw new Error('give at least two parts');
     const first = partSettings(metas[0]);
     metas.forEach((meta, index) => {
         const settings = partSettings(meta);
         settings.forEach(([label, value], settingIndex) => {
-            if (JSON.stringify(value) !== JSON.stringify(first[settingIndex][1])) {
-                throw new Error(`part ${names[index]} has a different ${label} than ${names[0]}`);
+            const firstValue = first[settingIndex][1];
+            if (JSON.stringify(value) === JSON.stringify(firstValue)) return;
+            if (label === 'commit' && typeof value === 'string' && typeof firstValue === 'string') {
+                const clean = !metas[0].shot?.render.git?.uncommittedChanges && !meta.shot?.render.git?.uncommittedChanges;
+                if (clean && sameInputs(firstValue, value)) return;
+                throw new Error(
+                    `part ${names[index]} has a different commit than ${names[0]}` +
+                        (clean ? `, and the render inputs (${RENDER_INPUT_PATHS.join(', ')}) differ between them` : ', and one of them had uncommitted edits to the render inputs'),
+                );
             }
+            throw new Error(`part ${names[index]} has a different ${label} than ${names[0]}`);
         });
     });
     const seeds = metas.map((meta) => meta.seed);
@@ -125,7 +154,9 @@ async function main(): Promise<void> {
 
     const readMeta = async (part: string): Promise<PartMeta> => JSON.parse(await readFile(join(directory, `${prefix}${part}.json`), 'utf8')) as PartMeta;
     const metas = await Promise.all(parts.map(readMeta));
-    checkParts(parts, metas);
+    const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
+    checkParts(parts, metas, (a, b) => sameRenderInputs(repoRoot, a, b));
+    const commits = [...new Set(metas.map((meta) => meta.shot?.render.git?.commit ?? null))];
     const seeds = metas.map((meta) => meta.seed);
 
     const files: string[] = [];
@@ -147,7 +178,12 @@ async function main(): Promise<void> {
     combined.jsonFile = `${prefix}.json`;
     combined.denoisedFile = null;
     combined.denoiseCheck = undefined;
-    combined.combinedFrom = { parts, samplesEach, note: 'the mean of independent renders with different seeds (tools/reference/cycles/combine.ts)' };
+    combined.combinedFrom = {
+        parts,
+        samplesEach,
+        ...(commits.length > 1 ? { commits: metas.map((meta) => meta.shot?.render.git?.commit ?? null), commitsNote: `different commits, no change in ${RENDER_INPUT_PATHS.join(', ')} between them` } : {}),
+        note: 'the mean of independent renders with different seeds (tools/reference/cycles/combine.ts)',
+    };
     combined.finishedAt = metas.map((meta) => meta.finishedAt as string).sort().at(-1);
     combined.shot.render.samplesPerPixel = combined.samplesPerPixel;
     combined.shot.render.seed = seeds;
