@@ -1,6 +1,6 @@
 # Radiance cache: the world-cache variants compared (P6.5)
 
-Status: in progress (2026-11-27, branch `p6-5`). Seven scenes are measured, nine views in all; the GPU times need one VALID timing run at the end. **No default changes here:** Dennis picks the default from this page (DECISIONS 2026-11-23).
+Status: in progress (2026-11-28, branch `p6-5`). Seven scenes are measured, ten views in all, with RC3.6's modes; the GPU times need one VALID timing run at the end. **No default changes here:** Dennis picks the default from this page (DECISIONS 2026-11-23).
 
 The radiance cache's world cache (the cache the screen probes' rays end in) has grown five alternatives since the GI-1.2 baseline. This page puts them side by side on the same scenes, against the path tracer (Cycles), and says what each is good and bad at.
 
@@ -16,8 +16,10 @@ Each is a preset in the viewer's compare panel ("Radiance cache · compare", the
 | `sharc-ddgi` | SHaRC with the viewer's DDGI volume still stacked. SHaRC doesn't read the volume, so the picture is SHaRC's and the volume is pure cost. Listed because it is what the viewer gives when only the world cache is switched. | a DDGI volume (unused) | E1, E10 |
 | `budgeted` | The grid over DDGI, its cells lit on a budget (20,000 a frame, one light sample each, new and changed cells first) instead of at every hit (id Tech 8). | a DDGI volume | E8, E10 |
 | `neural-tail` | The grid alone on its own rays, plus a small network that learns the cells' indirect light and answers the bounces past the second. | `shader-f16` (f32 works, slower), the optional `@pathtracer/mlp` sibling | E11 |
-
-RC3.6's modes (more bounces in the grid: cache feedback, temporal feedback) are built in parallel on `rc3-6`; they become rows here when they land.
+| `gi12-rays-feedback` | RC3.6: the grid alone on its own rays, each second bounce also bringing its cell's indirect light (`cacheFeedback`): every bounce, one more a frame. | nothing | E12 |
+| `gi12-rays-temporal` | RC3.6: the grid alone on its own rays; a probe ray whose hit was on last frame's screen reads last frame's lit picture there (`useTemporalFeedback`). | the host's lit image and albedo (the three adapter gives them) | D68 |
+| `gi12-rays-feedback-temporal` | Both of RC3.6's feedbacks on the grid alone. | as above | E12, D68 |
+| `gi12-ddgi-temporal` | What ships, plus temporal feedback. (Cache feedback does nothing over DDGI, which already carries every bounce.) | a DDGI volume, the lit image | E10, D68 |
 
 ## How it was measured
 
@@ -39,7 +41,7 @@ node tools/reference/bench-lock.ts run --what "p6.5 variants timing" --clock-fil
 node tools/reference/rc-variants-table.ts --variants bench/results/rc-variants.json --timing bench/results/rc-variants-timing.json --clock bench/results/rc-variants-timing.clock.json
 ```
 
-`VITE_RC_VARIANTS` and `VITE_RC_VARIANT_SCENES` pick a subset, and `VITE_RC_VARIANT_VIEWS` names views (by bookmark, or `<scene>/<bookmark>`; unset, each scene's first view with a reference). A scene without a reference is skipped and listed. The reports behind the tables here are in `bench/results/incoming/` (git-ignored): `rc-variants-cornell-tworoom`, `-batch2`, `-cornell-emissive` (it replaces batch2's emissive Cornell, run before the ceiling was doubled), `-bistro-interior` and `-batch3` (`.json`).
+`VITE_RC_VARIANTS` and `VITE_RC_VARIANT_SCENES` pick a subset, and `VITE_RC_VARIANT_VIEWS` names views (by bookmark, or `<scene>/<bookmark>`; unset, each scene's first view with a reference). A scene without a reference is skipped and listed. The reports behind the tables here are in `bench/results/incoming/` (git-ignored): `rc-variants-cornell-tworoom`, `-batch2`, `-cornell-emissive` (it replaces batch2's emissive Cornell, run before the ceiling was doubled), `-bistro-interior`, `-batch3`, `-across` and `-rc36` (`.json`; RC3.6's presets on every view, after merging `rc3-6` at ddd4425, whose settings are off by default, so the earlier rows are unchanged by it).
 
 ## Results
 
@@ -54,16 +56,20 @@ Measured 2026-11-27 on the RTX 3060 Laptop (Chrome, bench lock). The accuracy, w
 
 ### Summary
 
-Each view's GI bias and 8×8 mean error, then the median over the nine views for the dynamic numbers (a box move too small to read, in the furnished room's first view, left out). Memory is the radiance cache's at 1080p, DDGI's not included.
+Each view's GI bias and 8×8 mean error, then the median over the ten views for the dynamic numbers. Box moves too small to read are left out (the furnished room's first view). Memory is the radiance cache's at 1080p, DDGI's not included.
 
-| Variant | Cornell point | Cornell emissive | two-room | furnished: corner, window | Sponza | Bistro int: dining, bar | Bistro ext | mean of the bias's size | lights ×2: 90% (frames) | box moves: 90% | warm-up | memory MiB |
+| Variant | Cornell point | Cornell emissive | two-room | furnished: corner, window | Sponza | Bistro int: dining, bar | Bistro ext: street, across | mean of the bias's size | lights ×2: 90% (frames) | box moves: 90% | warm-up | memory MiB |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | −25.1 / 25.8 | −49.1 / 49.5 | −43.8 / 43.8 | −62.0 / 62.0, −61.3 / 61.3 | −6.6 / 13.4 | −4.8 / 15.5, −6.5 / 16.1 | −6.9 / 15.2 | 29.6% | 67 | 80 | 25 | 1,419 |
-| **gi12-ddgi** | −0.1 / 6.0 | −1.8 / 10.2 | −0.9 / 1.5 | −8.1 / 8.2, −7.7 / 7.9 | −2.5 / 12.6 | −0.6 / 15.3, −3.5 / 15.7 | −3.1 / 14.3 | **3.1%** | 77 | 75 | 48 | 1,389 (+12-72 DDGI) |
-| sharc | −3.2 / 7.0 | −3.8 / 10.8 | −4.4 / 4.4 | −9.7 / 9.8, −9.5 / 9.6 | −6.1 / 13.2 | −4.2 / 14.2, −5.3 / 14.9 | −5.6 / 14.3 | 5.8% | 81 | 85 | 62 | **415** |
-| sharc-ddgi | as sharc | | | | | | | 5.8% | 81 | 88 | 61 | 415 (+DDGI) |
-| budgeted | −0.4 / 6.1 | −1.8 / 10.2 | −0.8 / 1.5 | −8.1 / 8.2, −7.7 / 7.9 | −2.6 / 12.7 | −1.7 / 15.5, −4.5 / 15.9 | −3.1 / 14.3 | 3.4% | 84 | 78 | 53 | 1,395 (+DDGI) |
-| neural-tail | −3.7 / 7.6 | −49.1 / 49.5 | −7.0 / 7.1 | −13.7 / 13.7, −14.9 / 14.9 | −5.9 / 13.2 | −2.8 / 15.2, −4.3 / 15.6 | −4.9 / 14.8 | 11.8% | 82 | 83 | 35 | 1,453 |
+| gi12-rays | −25.1 / 25.8 | −49.1 / 49.5 | −43.8 / 43.8 | −62.0 / 62.0, −61.3 / 61.3 | −6.6 / 13.4 | −4.8 / 15.5, −6.5 / 16.1 | −6.9 / 15.2, −8.5 / 15.0 | 27.5% | 68 | 79 | 22 | 1,419 |
+| **gi12-ddgi** | −0.1 / 6.0 | −1.8 / 10.2 | −0.9 / 1.5 | −8.1 / 8.2, −7.7 / 7.9 | −2.5 / 12.6 | −0.6 / 15.3, −3.5 / 15.7 | −3.1 / 14.3, −3.1 / 13.8 | **3.1%** | 77 | 74 | 49 | 1,373 (+12-72 DDGI) |
+| sharc | −3.2 / 7.0 | −3.8 / 10.8 | −4.4 / 4.4 | −9.7 / 9.8, −9.5 / 9.6 | −6.1 / 13.2 | −4.2 / 14.2, −5.3 / 14.9 | −5.6 / 14.3, −6.9 / 14.0 | 5.9% | 83 | 85 | 45 | **415** |
+| sharc-ddgi | as sharc | | | | | | | 5.9% | 83 | 86 | 45 | 415 (+DDGI) |
+| budgeted | −0.4 / 6.1 | −1.8 / 10.2 | −0.8 / 1.5 | −8.1 / 8.2, −7.7 / 7.9 | −2.6 / 12.7 | −1.7 / 15.5, −4.5 / 15.9 | −3.1 / 14.3, −3.4 / 13.8 | 3.4% | 86 | 75 | 54 | 1,379 (+DDGI) |
+| neural-tail | −3.7 / 7.6 | −49.1 / 49.5 | −7.0 / 7.1 | −13.7 / 13.7, −14.9 / 14.9 | −5.9 / 13.2 | −2.8 / 15.2, −4.3 / 15.6 | −4.9 / 14.8, −6.8 / 14.3 | 11.3% | 84 | 82 | 31 | 1,453 |
+| gi12-rays-feedback | −5.8 / 9.1 | −49.1 / 49.5 | −19.7 / 19.7 | −34.1 / 34.1, −39.7 / 39.7 | −6.2 / 13.3 | −3.2 / 15.3, −5.1 / 15.7 | −5.9 / 15.0, −7.6 / 14.5 | 17.6% | 82 | 80 | 24 | 1,419 |
+| gi12-rays-temporal | −12.8 / 15.0 | +3.3 / 20.0 | −32.7 / 32.7 | −50.1 / 50.1, −52.8 / 52.8 | +3.5 / 12.6 | +21.4 / 26.7, +13.9 / 24.5 | +0.5 / 15.1, +1.1 / 17.2 | 19.2% | 82 | 84 | 51 | 1,419 |
+| gi12-rays-feedback-temporal | −6.0 / 9.4 | +3.3 / 20.0 | −18.9 / 18.9 | −33.6 / 33.6, −39.3 / 39.3 | +3.8 / 12.7 | +22.0 / 27.1, +14.8 / 24.7 | +1.1 / 15.2, +1.5 / 17.0 | 14.4% | 86 | 81 | 61 | 1,419 |
+| gi12-ddgi-temporal | −2.9 / 7.2 | +26.0 / 27.9 | −2.3 / 2.5 | −9.3 / 9.4, −8.7 / 8.9 | +6.0 / 13.2 | +22.8 / 27.5, +15.6 / 25.1 | +3.4 / 14.8, +4.2 / 16.9 | 10.1% | 84 | 78 | 50 | 1,373 (+DDGI) |
 
 Things the table shows:
 
@@ -71,6 +77,9 @@ Things the table shows:
 - **The grid over DDGI has the smallest bias in every view**, with budgeted cells (the same grid) next. SHaRC is 2-5 points behind in the rooms and 2-3 in the open scenes. In the open scenes SHaRC's block error ties or beats the grid over DDGI's, and its p95 is lower (Sponza 40% against 52%, Bistro exterior 38% against 47%): DDGI's coarse field blurs the bounce at contacts.
 - **The neural tail can't light an emissive scene.** In the emissive Cornell box it reads exactly as the grid alone. The cache's own lights don't include emitters (register D21), so the cells it learns from hold no light. In the furnished room it is 6-7 points behind DDGI.
 - **SHaRC under DDGI is SHaRC.** It doesn't read the volume, so the numbers match to the noise and the volume is pure cost.
+- **RC3.6's cache feedback closes only part of the closed rooms' gap.** On the grid alone: two-room −44% → −20%, the furnished room −62% → −34 to −40%, Cornell point −25% → −6%. It is still well behind DDGI and SHaRC, and it does nothing for the emissive Cornell box (−49%), whose cells hold no emitter light.
+- **Temporal feedback over-brightens where the lit picture shows emitters or lamps.** Bistro interior reads +14 to +23%, and the emissive Cornell box +3% on the grid alone and +26% over DDGI. In the closed rooms lit by lamps out of view it barely helps (two-room −33%, the furnished room −50%). Over DDGI it is worse than DDGI alone on every view. It also pumps on Bistro exterior's `across-the-street`, where the frame brightness changes 0.05-0.10% a frame against 0.003% without it, and the lights' 90% takes 105-107 frames.
+- **RC3.6's own numbers agree.** Its two-room run read −22.2% (cache feedback), −32.2% (temporal), −21.0% (both) and −4.0% (DDGI plus temporal). It read +24% for DDGI plus temporal on the emissive Cornell box. This page reads −19.7%, −32.7%, −18.9%, −2.3% and +26.0% on the denoised picture after 240 warm-up frames.
 - **The earlier Sponza excess is gone.** On the old references (RC4.6) the grid over DDGI read +14.5% / +20%. Against the new references it reads −2.5%. The new references and what merged since (RC3.4's sky light, RC4.2) both changed; which one moved it was not looked into.
 - Sponza, the furnished room and the Bistros warn that a node-graph material reads as grey 0.5 in GI. That is the same for every variant, so it doesn't change the comparison.
 
@@ -80,12 +89,10 @@ Things the table shows:
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -25.1% | 25.8% | 35% | 25.8% | 52% | 32 | 0.09% (0.3%) | 0.003% | 22 / 67 · 89% | 30 / 84 · 100% | 1419 (0) |
-| gi12-ddgi | -0.1% | 6.0% | 23% | 6.0% | 51% | 43 | 0.08% (0.2%) | 0.001% | 24 / 64 · 91% | 28 / 74 · 100% | 1389 (16) |
-| sharc | -3.2% | 7.0% | 19% | 7.0% | 93% | 62 | 0.08% (0.2%) | 0.003% | 23 / 68 · 90% | 37 / 90 · 101% | 415 (0) |
-| sharc-ddgi | -3.2% | 7.0% | 19% | 6.9% | 93% | 61 | 0.08% (0.2%) | 0.003% | 23 / 68 · 90% | 37 / 89 · 101% | 431 (16) |
-| budgeted | -0.4% | 6.1% | 23% | 6.0% | 51% | 40 | 0.08% (0.2%) | 0.001% | 30 / 71 · 98% | 28 / 82 · 101% | 1395 (16) |
-| neural-tail | -3.7% | 7.6% | 19% | 7.3% | 52% | 138 | 0.08% (0.3%) | 0.012% | 26 / 79 · 91% | 32 / 83 · 100% | 1453 (0) |
+| gi12-rays-feedback | -5.8% | 9.1% | 19% | 8.9% | 52% | 88 | 0.08% (0.3%) | 0.007% | 25 / 79 · 91% | 37 / 91 · 101% | 1419 (0) |
+| gi12-rays-temporal | -12.8% | 15.0% | 25% | 14.9% | 50% | 66 | 0.08% (0.2%) | 0.002% | 31 / 82 · 98% | 30 / 90 · 100% | 1419 (0) |
+| gi12-rays-feedback-temporal | -6.0% | 9.4% | 18% | 9.3% | 50% | 85 | 0.08% (0.2%) | 0.004% | 32 / 85 · 98% | 32 / 80 · 101% | 1419 (0) |
+| gi12-ddgi-temporal | -2.9% | 7.2% | 20% | 7.1% | 50% | 51 | 0.08% (0.2%) | 0.002% | 31 / 82 · 98% | 29 / 78 · 100% | 1389 (16) |
 
 Lights: x2 PointLight. Box: a 0.67 m box moved 1.01 m (its own 203 blocks left out).
 
@@ -93,12 +100,10 @@ Lights: x2 PointLight. Box: a 0.67 m box moved 1.01 m (its own 203 blocks left o
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -49.1% | 49.5% | 96% | 49.5% | 50% | 1 | 0.14% (0.6%) | 0.002% | 22 / 64 · 99% | 23 / 77 · 99% | 1419 (0) |
-| gi12-ddgi | -1.8% | 10.2% | 33% | 10.1% | 49% | 64 | 0.10% (0.3%) | 0.002% | 25 / 84 · 99% | 26 / 75 · 100% | 1389 (16) |
-| sharc | -3.8% | 10.8% | 29% | 10.7% | 93% | 68 | 0.10% (0.3%) | 0.002% | 32 / 91 · 99% | 39 / 85 · 101% | 415 (0) |
-| sharc-ddgi | -3.8% | 10.8% | 29% | 10.7% | 93% | 68 | 0.10% (0.3%) | 0.002% | 32 / 90 · 99% | 38 / 88 · 101% | 431 (16) |
-| budgeted | -1.8% | 10.2% | 33% | 10.1% | 49% | 64 | 0.10% (0.3%) | 0.002% | 25 / 84 · 99% | 26 / 75 · 100% | 1395 (16) |
-| neural-tail | -49.1% | 49.5% | 96% | 49.5% | 51% | 1 | 0.14% (0.6%) | 0.002% | 22 / 64 · 99% | 23 / 77 · 99% | 1453 (0) |
+| gi12-rays-feedback | -49.1% | 49.5% | 96% | 49.5% | 50% | 1 | 0.14% (0.6%) | 0.002% | 22 / 64 · 99% | 24 / 78 · 100% | 1419 (0) |
+| gi12-rays-temporal | +3.3% | 20.0% | 99% | 20.0% | 52% | 82 | 0.09% (0.3%) | 0.002% | 28 / 80 · 99% | 23 / 75 · 99% | 1419 (0) |
+| gi12-rays-feedback-temporal | +3.3% | 20.0% | 99% | 20.0% | 50% | 82 | 0.09% (0.3%) | 0.002% | 28 / 80 · 99% | 24 / 76 · 100% | 1419 (0) |
+| gi12-ddgi-temporal | +26.0% | 27.9% | 119% | 28.1% | 50% | 79 | 0.08% (0.2%) | 0.002% | 30 / 85 · 99% | 26 / 75 · 99% | 1389 (16) |
 
 Lights: x2 1 emissive material(s). Box: a 0.67 m box moved 1.01 m (its own 203 blocks left out).
 
@@ -106,12 +111,10 @@ Lights: x2 1 emissive material(s). Box: a 0.67 m box moved 1.01 m (its own 203 b
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -43.8% | 43.8% | 48% | 43.8% | 100% | 30 | 0.05% (0.1%) | 0.000% | 22 / 63 · 90% | 22 / 78 · 99% | 1419 (0) |
-| gi12-ddgi | -0.9% | 1.5% | 5% | 1.5% | 60% | 52 | 0.03% (0.1%) | 0.002% | 24 / 58 · 93% | 20 / 67 · 98% | 1385 (12) |
-| sharc | -4.4% | 4.4% | 7% | 4.3% | 99% | 90 | 0.04% (0.1%) | 0.005% | 25 / 73 · 92% | 23 / 84 · 97% | 415 (0) |
-| sharc-ddgi | -4.4% | 4.4% | 8% | 4.3% | 99% | 90 | 0.04% (0.1%) | 0.005% | 25 / 73 · 92% | 21 / 83 · 97% | 427 (12) |
-| budgeted | -0.8% | 1.5% | 5% | 1.5% | 60% | 52 | 0.03% (0.1%) | 0.002% | 28 / 62 · 98% | 20 / 69 · 98% | 1391 (12) |
-| neural-tail | -7.0% | 7.1% | 11% | 6.4% | 100% | 173 | 0.05% (0.1%) | 0.022% | 31 / 87 · 93% | 25 / 85 · 96% | 1453 (0) |
+| gi12-rays-feedback | -19.7% | 19.7% | 23% | 19.4% | 100% | 107 | 0.04% (0.1%) | 0.008% | 29 / 83 · 92% | 25 / 80 · 96% | 1419 (0) |
+| gi12-rays-temporal | -32.7% | 32.7% | 41% | 32.6% | 100% | 63 | 0.04% (0.1%) | 0.001% | 29 / 79 · 94% | 23 / 76 · 97% | 1419 (0) |
+| gi12-rays-feedback-temporal | -18.9% | 18.9% | 23% | 18.7% | 100% | 108 | 0.04% (0.1%) | 0.007% | 32 / 87 · 94% | 23 / 81 · 97% | 1419 (0) |
+| gi12-ddgi-temporal | -2.3% | 2.5% | 6% | 2.4% | 60% | 72 | 0.03% (0.1%) | 0.002% | 29 / 77 · 95% | 20 / 70 · 97% | 1385 (12) |
 
 Lights: x2 PointLight. Box: a 0.36 m box moved 0.54 m (its own 281 blocks left out).
 
@@ -119,12 +122,10 @@ Lights: x2 PointLight. Box: a 0.36 m box moved 0.54 m (its own 281 blocks left o
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -62.0% | 62.0% | 65% | 62.0% | 100% | 31 | 0.04% (0.1%) | 0.000% | 25 / 67 · 92% | 28 / 105 · 94% | 1419 (0) |
-| gi12-ddgi | -8.1% | 8.2% | 10% | 8.0% | 70% | 73 | 0.03% (0.1%) | 0.007% | 32 / 77 · 96% | (2 blocks) | 1402 (29) |
-| sharc | -9.7% | 9.8% | 12% | 9.2% | 100% | 157 | 0.04% (0.1%) | 0.019% | 31 / 86 · 94% | 32 / 105 · 92% | 415 (0) |
-| sharc-ddgi | -9.8% | 9.8% | 12% | 9.2% | 100% | 157 | 0.04% (0.1%) | 0.019% | 31 / 86 · 94% | 33 / 105 · 92% | 444 (29) |
-| budgeted | -8.1% | 8.2% | 10% | 8.0% | 70% | 72 | 0.03% (0.1%) | 0.007% | 34 / 78 · 99% | (6 blocks) | 1408 (29) |
-| neural-tail | -13.7% | 13.7% | 17% | 12.1% | 100% | 214 | 0.07% (0.2%) | 0.053% | 42 / 101 · 95% | 29 / 101 · 92% | 1453 (0) |
+| gi12-rays-feedback | -34.1% | 34.1% | 40% | 33.7% | 100% | 145 | 0.04% (0.1%) | 0.016% | 36 / 93 · 94% | 30 / 100 · 95% | 1419 (0) |
+| gi12-rays-temporal | -50.1% | 50.1% | 58% | 50.1% | 100% | 81 | 0.04% (0.1%) | 0.002% | 34 / 87 · 97% | 30 / 98 · 95% | 1419 (0) |
+| gi12-rays-feedback-temporal | -33.6% | 33.6% | 40% | 33.2% | 100% | 144 | 0.04% (0.1%) | 0.016% | 39 / 96 · 97% | 26 / 96 · 94% | 1419 (0) |
+| gi12-ddgi-temporal | -9.3% | 9.4% | 12% | 9.2% | 70% | 107 | 0.03% (0.1%) | 0.008% | 39 / 92 · 98% | (1 blocks) | 1402 (29) |
 
 Lights: x2 DirectionalLight, PointLight. Box: a 0.41 m box moved 0.61 m (its own 304 blocks left out).
 
@@ -132,12 +133,10 @@ Lights: x2 DirectionalLight, PointLight. Box: a 0.41 m box moved 0.61 m (its own
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -61.3% | 61.3% | 69% | 61.3% | 100% | 30 | 0.05% (0.1%) | 0.001% | 25 / 68 · 92% | 16 / 53 · 98% | 1419 (0) |
-| gi12-ddgi | -7.7% | 7.9% | 12% | 7.7% | 42% | 72 | 0.04% (0.1%) | 0.007% | 32 / 77 · 96% | 16 / 57 · 96% | 1402 (29) |
-| sharc | -9.5% | 9.6% | 14% | 9.0% | 100% | 156 | 0.05% (0.1%) | 0.020% | 31 / 88 · 94% | 17 / 68 · 95% | 415 (0) |
-| sharc-ddgi | -9.5% | 9.6% | 14% | 8.9% | 100% | 156 | 0.05% (0.1%) | 0.020% | 31 / 88 · 94% | 17 / 68 · 95% | 444 (29) |
-| budgeted | -7.7% | 7.9% | 12% | 7.7% | 42% | 74 | 0.04% (0.1%) | 0.007% | 34 / 79 · 99% | 16 / 56 · 96% | 1408 (29) |
-| neural-tail | -14.9% | 14.9% | 19% | 13.2% | 100% | 214 | 0.08% (0.2%) | 0.055% | 40 / 100 · 95% | 16 / 74 · 94% | 1453 (0) |
+| gi12-rays-feedback | -39.7% | 39.7% | 46% | 39.4% | 100% | 124 | 0.05% (0.1%) | 0.011% | 33 / 89 · 94% | 16 / 55 · 96% | 1419 (0) |
+| gi12-rays-temporal | -52.8% | 52.8% | 61% | 52.8% | 100% | 65 | 0.04% (0.1%) | 0.002% | 32 / 84 · 96% | 16 / 52 · 97% | 1419 (0) |
+| gi12-rays-feedback-temporal | -39.3% | 39.3% | 46% | 39.0% | 100% | 124 | 0.04% (0.1%) | 0.010% | 36 / 93 · 96% | 15 / 50 · 96% | 1419 (0) |
+| gi12-ddgi-temporal | -8.7% | 8.9% | 13% | 8.7% | 42% | 101 | 0.04% (0.1%) | 0.007% | 37 / 90 · 97% | 16 / 56 · 96% | 1402 (29) |
 
 Lights: x2 DirectionalLight, PointLight. Box: a 0.41 m box moved 0.61 m (its own 501 blocks left out).
 
@@ -145,12 +144,10 @@ Lights: x2 DirectionalLight, PointLight. Box: a 0.41 m box moved 0.61 m (its own
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -6.6% | 13.4% | 40% | 13.4% | 90% | 1 | 0.23% (0.8%) | 0.002% | 18 / 85 · 77% | 23 / 80 · 98% | 1419 (0) |
-| gi12-ddgi | -2.5% | 12.6% | 52% | 12.7% | 49% | 30 | 0.21% (0.8%) | 0.002% | 19 / 84 · 79% | 23 / 79 · 98% | 1428 (55) |
-| sharc | -6.1% | 13.2% | 40% | 13.3% | 76% | 1 | 0.23% (0.8%) | 0.002% | 18 / 86 · 75% | 22 / 81 · 98% | 415 (0) |
-| sharc-ddgi | -6.1% | 13.2% | 40% | 13.3% | 76% | 1 | 0.23% (0.8%) | 0.002% | 18 / 86 · 75% | 22 / 81 · 98% | 470 (55) |
-| budgeted | -2.6% | 12.7% | 52% | 12.7% | 47% | 40 | 0.21% (0.8%) | 0.002% | 34 / 92 · 94% | 23 / 80 · 99% | 1434 (55) |
-| neural-tail | -5.9% | 13.2% | 41% | 13.3% | 92% | 1 | 0.23% (0.8%) | 0.001% | 19 / 86 · 78% | 23 / 80 · 98% | 1453 (0) |
+| gi12-rays-feedback | -6.2% | 13.3% | 41% | 13.3% | 92% | 1 | 0.23% (0.8%) | 0.002% | 19 / 85 · 78% | 23 / 80 · 98% | 1419 (0) |
+| gi12-rays-temporal | +3.5% | 12.6% | 55% | 12.7% | 90% | 17 | 0.23% (0.8%) | 0.003% | 24 / 88 · 87% | 22 / 78 · 98% | 1419 (0) |
+| gi12-rays-feedback-temporal | +3.8% | 12.7% | 56% | 12.8% | 90% | 18 | 0.23% (0.8%) | 0.002% | 24 / 88 · 87% | 22 / 78 · 98% | 1419 (0) |
+| gi12-ddgi-temporal | +6.0% | 13.2% | 62% | 13.3% | 49% | 31 | 0.22% (0.8%) | 0.001% | 24 / 87 · 87% | 22 / 78 · 98% | 1428 (55) |
 
 Lights: x2 DirectionalLight. Box: a 2.40 m box moved 3.60 m (its own 959 blocks left out).
 
@@ -158,12 +155,10 @@ Lights: x2 DirectionalLight. Box: a 2.40 m box moved 3.60 m (its own 959 blocks 
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -4.8% | 15.5% | 35% | 15.5% | 100% | 25 | 0.16% (0.5%) | 0.002% | 17 / 66 · 83% | 20 / 90 · 96% | 1419 (0) |
-| gi12-ddgi | -0.6% | 15.3% | 38% | 15.3% | 91% | 40 | 0.15% (0.5%) | 0.002% | 20 / 67 · 84% | 24 / 104 · 97% | 1428 (55) |
-| sharc | -4.2% | 14.2% | 34% | 14.2% | 100% | 1 | 0.16% (0.5%) | 0.002% | 17 / 68 · 83% | 20 / 90 · 97% | 415 (0) |
-| sharc-ddgi | -4.2% | 14.2% | 34% | 14.2% | 100% | 1 | 0.16% (0.5%) | 0.002% | 17 / 68 · 83% | 20 / 89 · 97% | 470 (55) |
-| budgeted | -1.7% | 15.5% | 37% | 15.4% | 91% | 53 | 0.15% (0.5%) | 0.002% | 39 / 100 · 99% | 20 / 94 · 96% | 1434 (55) |
-| neural-tail | -2.8% | 15.2% | 37% | 15.2% | 100% | 35 | 0.15% (0.5%) | 0.003% | 17 / 68 · 84% | 20 / 84 · 97% | 1453 (0) |
+| gi12-rays-feedback | -3.2% | 15.3% | 36% | 15.4% | 100% | 28 | 0.15% (0.5%) | 0.002% | 17 / 68 · 84% | 19 / 80 · 97% | 1419 (0) |
+| gi12-rays-temporal | +21.4% | 26.7% | 72% | 26.7% | 100% | 38 | 0.15% (0.5%) | 0.002% | 24 / 73 · 94% | 19 / 104 · 95% | 1419 (0) |
+| gi12-rays-feedback-temporal | +22.0% | 27.1% | 73% | 27.1% | 100% | 39 | 0.15% (0.5%) | 0.003% | 24 / 73 · 94% | 19 / 102 · 95% | 1419 (0) |
+| gi12-ddgi-temporal | +22.8% | 27.5% | 74% | 27.6% | 91% | 44 | 0.15% (0.5%) | 0.003% | 24 / 74 · 94% | 19 / 102 · 95% | 1428 (55) |
 
 Lights: x2 PointLight, PointLight, PointLight. Box: a 0.89 m box moved 1.33 m (its own 751 blocks left out).
 
@@ -171,12 +166,10 @@ Lights: x2 PointLight, PointLight, PointLight. Box: a 0.89 m box moved 1.33 m (i
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -6.5% | 16.1% | 44% | 16.1% | 100% | 18 | 0.15% (0.5%) | 0.002% | 19 / 75 · 84% | 26 / 106 · 95% | 1419 (0) |
-| gi12-ddgi | -3.5% | 15.7% | 46% | 15.7% | 81% | 33 | 0.14% (0.5%) | 0.002% | 22 / 77 · 85% | 26 / 105 · 95% | 1428 (55) |
-| sharc | -5.3% | 14.9% | 44% | 14.9% | 100% | 1 | 0.15% (0.5%) | 0.002% | 19 / 76 · 83% | 25 / 102 · 95% | 415 (0) |
-| sharc-ddgi | -5.3% | 14.9% | 44% | 14.9% | 100% | 1 | 0.15% (0.5%) | 0.002% | 19 / 76 · 83% | 24 / 102 · 95% | 470 (55) |
-| budgeted | -4.5% | 15.9% | 45% | 15.8% | 80% | 46 | 0.14% (0.5%) | 0.003% | 38 / 88 · 98% | 32 / 106 · 95% | 1434 (55) |
-| neural-tail | -4.3% | 15.6% | 45% | 15.6% | 100% | 26 | 0.14% (0.5%) | 0.002% | 20 / 76 · 84% | 28 / 105 · 95% | 1453 (0) |
+| gi12-rays-feedback | -5.1% | 15.7% | 45% | 15.7% | 100% | 20 | 0.15% (0.5%) | 0.003% | 19 / 76 · 84% | 27 / 107 · 95% | 1419 (0) |
+| gi12-rays-temporal | +13.9% | 24.5% | 68% | 24.5% | 100% | 30 | 0.15% (0.5%) | 0.002% | 24 / 78 · 92% | 27 / 103 · 95% | 1419 (0) |
+| gi12-rays-feedback-temporal | +14.8% | 24.7% | 68% | 24.7% | 100% | 32 | 0.15% (0.5%) | 0.003% | 24 / 78 · 93% | 27 / 103 · 96% | 1419 (0) |
+| gi12-ddgi-temporal | +15.6% | 25.1% | 69% | 25.1% | 81% | 38 | 0.15% (0.5%) | 0.003% | 25 / 79 · 93% | 26 / 104 · 95% | 1428 (55) |
 
 Lights: x2 PointLight, PointLight, PointLight. Box: a 0.89 m box moved 1.33 m (its own 375 blocks left out).
 
@@ -184,16 +177,25 @@ Lights: x2 PointLight, PointLight, PointLight. Box: a 0.89 m box moved 1.33 m (i
 
 | Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| gi12-rays | -6.9% | 15.2% | 39% | 15.2% | 100% | 3 | 0.17% (0.6%) | 0.002% | 21 / 80 · 83% | 25 / 69 · 99% | 1419 (0) |
-| gi12-ddgi | -3.1% | 14.3% | 47% | 14.3% | 93% | 48 | 0.16% (0.6%) | 0.002% | 20 / 77 · 84% | 25 / 68 · 99% | 1445 (72) |
-| sharc | -5.6% | 14.3% | 38% | 14.3% | 100% | 1 | 0.17% (0.6%) | 0.002% | 20 / 81 · 82% | 25 / 71 · 99% | 415 (0) |
-| sharc-ddgi | -5.6% | 14.3% | 38% | 14.3% | 100% | 1 | 0.17% (0.6%) | 0.002% | 20 / 81 · 82% | 25 / 71 · 99% | 487 (72) |
-| budgeted | -3.1% | 14.3% | 48% | 14.3% | 94% | 55 | 0.16% (0.6%) | 0.002% | 34 / 89 · 91% | 26 / 72 · 99% | 1451 (72) |
-| neural-tail | -4.9% | 14.8% | 42% | 14.8% | 100% | 12 | 0.16% (0.6%) | 0.002% | 22 / 82 · 84% | 25 / 70 · 99% | 1453 (0) |
+| gi12-rays-feedback | -5.9% | 15.0% | 41% | 15.0% | 100% | 7 | 0.16% (0.6%) | 0.002% | 22 / 81 · 84% | 25 / 69 · 99% | 1419 (0) |
+| gi12-rays-temporal | +0.5% | 15.1% | 57% | 15.1% | 100% | 18 | 0.16% (0.6%) | 0.001% | 24 / 82 · 89% | 25 / 70 · 99% | 1419 (0) |
+| gi12-rays-feedback-temporal | +1.1% | 15.2% | 58% | 15.2% | 100% | 19 | 0.16% (0.6%) | 0.001% | 24 / 82 · 89% | 25 / 69 · 99% | 1419 (0) |
+| gi12-ddgi-temporal | +3.4% | 14.8% | 63% | 14.9% | 94% | 48 | 0.16% (0.6%) | 0.002% | 23 / 79 · 89% | 25 / 69 · 99% | 1445 (72) |
 
 Lights: x2 DirectionalLight. Box: a 6.24 m box moved 9.36 m (its own 10872 blocks left out).
 
-**Not measured:** Sponza's `upper-gallery` has no reference yet (not rendered), and Bistro exterior's `across-the-street` was still rendering on 2026-11-27. When they land, measure them with `VITE_RC_VARIANT_VIEWS=upper-gallery,across-the-street`. The page measures named views (`VITE_RC_VARIANT_VIEWS`), or else each scene's first referenced view.
+#### bistro-exterior (`across-the-street`)
+
+| Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| gi12-rays-feedback | -7.6% | 14.5% | 31% | 14.6% | 100% | 1 | 0.20% (0.7%) | 0.003% | 20 / 84 · 83% | 23 / 64 · 99% | 1419 (0) |
+| gi12-rays-temporal | +1.1% | 17.2% | 39% | 17.8% | 100% | 9 | 0.26% (0.8%) | 0.097% | 34 / 107 · 86% | 23 / 108 · 96% | 1419 (0) |
+| gi12-rays-feedback-temporal | +1.5% | 17.0% | 42% | 17.2% | 99% | 28 | 0.24% (0.8%) | 0.052% | 36 / 106 · 90% | 23 / 107 · 97% | 1419 (0) |
+| gi12-ddgi-temporal | +4.2% | 16.9% | 46% | 17.2% | 74% | 32 | 0.23% (0.7%) | 0.064% | 25 / 105 · 88% | 23 / 114 · 96% | 1445 (72) |
+
+Lights: x2 DirectionalLight. Box: a 6.24 m box moved 9.36 m (its own 9803 blocks left out).
+
+**Not measured:** Sponza's `upper-gallery` has no reference yet (not rendered). When it lands, measure it with `VITE_RC_VARIANT_VIEWS=upper-gallery`.
 
 ### Where the lag comes from
 
@@ -231,21 +233,21 @@ The GI-1.2 grid's 1 GiB is Capsaicin's default capacity (2^14 buckets × 16 tile
 
 ## Trade-offs
 
-Measured: nine views of seven scenes (both Cornell boxes, two-room, two views of the furnished room, Sponza, two views of Bistro interior, Bistro exterior). The timing run is a dry run.
+Measured: ten views of seven scenes (both Cornell boxes, two-room, two views each of the furnished room, Bistro interior and Bistro exterior, and Sponza). The timing run is a dry run, made before RC3.6 merged, so it has no RC3.6 rows.
 
 **`gi12-rays`: the GI-1.2 grid alone (Capsaicin's).**
-- For: it needs nothing from the host. It warms up fast (median 25 frames). It is the faithful baseline.
+- For: it needs nothing from the host. It warms up fast (median 22 frames). It is the faithful baseline.
 - Against: it carries only two bounces, and the cache's own lights leave out emitters. Closed rooms read 25-62% dark against Cycles, by far the worst error here. Open scenes are fine (−5 to −7%). It is also among the most expensive on the big scenes (35-46 ms in the dry run, the second-bounce rays included), and it holds the grid's 1.4 GiB at 1080p.
 - How it fails: closed rooms come out dark everywhere, and an emitter-lit room most of all. This is the bias, not noise.
 
 **`gi12-ddgi`: the grid over DDGI (what ships).**
-- For: it has the smallest bias on every view (mean size 3.1%; two-room −0.9% with 1.5% block error). Its ghost clears soonest after the box moves (median 75 frames to 90%), and its frame brightness is the calmest. On the big scenes it costs less than the grid alone (24-34 ms in the dry run), because DDGI's field replaces the second-bounce rays and their cells.
-- Against: the host must place a DDGI volume around the scene. DDGI adds 0.7-4.4 ms and 12-72 MiB, and the grid's 1.4 GiB stays. It warms up more slowly than the grid alone (median 48 frames, 72-73 in the furnished room): until DDGI's field fills there is no later bounce. In the open scenes its 8×8 p95 is the highest (Sponza 52% against 40%, Bistro exterior 47% against 38%): DDGI's coarse field blurs the bounce at contacts.
+- For: it has the smallest bias on every view (mean size 3.1%; two-room −0.9% with 1.5% block error). Its ghost clears soonest after the box moves (median 74 frames to 90%), and its frame brightness is the calmest. On the big scenes it costs less than the grid alone (24-34 ms in the dry run), because DDGI's field replaces the second-bounce rays and their cells.
+- Against: the host must place a DDGI volume around the scene. DDGI adds 0.7-4.4 ms and 12-72 MiB, and the grid's 1.4 GiB stays. It warms up more slowly than the grid alone (median 49 frames, 72-73 in the furnished room): until DDGI's field fills there is no later bounce. In the open scenes its 8×8 p95 is the highest (Sponza 52% against 40%, Bistro exterior 47% against 38%): DDGI's coarse field blurs the bounce at contacts.
 - How it fails: a hit outside every volume gets no bounce after the first (DDGI's coverage is 0 there), so a scene bigger than its volume goes dark past the edge. A coarse volume leaks light through thin walls, which DDGI's visibility only partly stops. After a cut or a load the picture is dark until the field fills: about 70 frames for Sponza's field at 256 probes a frame, about 100 for Bistro exterior's.
 
 **`sharc`: the SHaRC cache alone.**
-- For: it needs nothing from the host and still carries every bounce, emitters included. Its bias is 2-5 points behind the grid over DDGI (mean size 5.8%, worst −9.7% in the furnished room). In the open scenes its block error ties or beats the grid over DDGI's, and it has the lowest (or equal-lowest) p95 on the Cornell boxes, Sponza and both Bistros. Its memory is less than a third of the grid's: 415 MiB at 1080p in all, 83 MiB for the cache itself. Its cells cover almost every visible surface.
-- Against: it follows changes more slowly than the grid over DDGI. The lights' 90% comes at a median of 81 frames against 77, and the box's ghost at 85 against 75. Its warm-up is the longest of the cache-only variants in the rooms (156-157 in the furnished room; median 62 over all views, 1 in the open scenes). Its frame brightness moves 2-3 times more than the grid over DDGI's, though still a few thousandths of a percent. In the dry run its world cache is the costliest part on the big scenes: 15-23 ms, against the grid's 9-13 ms plus DDGI's 3-4 ms. It is a port from pmndrs/pathtracer, not Capsaicin's design.
+- For: it needs nothing from the host and still carries every bounce, emitters included. Its bias is 2-5 points behind the grid over DDGI (mean size 5.9%, worst −9.7% in the furnished room). In the open scenes its block error ties or beats the grid over DDGI's, and it has the lowest (or equal-lowest) p95 on the Cornell boxes, Sponza and both Bistros. Its memory is less than a third of the grid's: 415 MiB at 1080p in all, 83 MiB for the cache itself. Its cells cover almost every visible surface.
+- Against: it follows changes more slowly than the grid over DDGI. The lights' 90% comes at a median of 83 frames against 77, and the box's ghost at 85 against 74. Its warm-up is the longest of the cache-only variants in the rooms (156-157 in the furnished room; median 45 over all views, 1-28 in the open scenes). Its frame brightness moves 2-3 times more than the grid over DDGI's, though still a few thousandths of a percent. In the dry run its world cache is the costliest part on the big scenes: 15-23 ms, against the grid's 9-13 ms plus DDGI's 3-4 ms. It is a port from pmndrs/pathtracer, not Capsaicin's design.
 - How it fails: it lags after changes, because its 32-frame mean and quarter-rate updates trade reaction for calm. Its coarse cells (its level-of-detail rule) blur the light near contacts.
 
 **`sharc-ddgi`: SHaRC with the volume still under it.**
@@ -253,34 +255,43 @@ Measured: nine views of seven scenes (both Cornell boxes, two-room, two views of
 
 **`budgeted`: budgeted cells over DDGI.**
 - For: its accuracy, flicker and memory match the grid over DDGI. It is the cheapest variant on the big scenes in the dry run (22-31 ms against 24-34), and the gain grows with the scene.
-- Against: it reacts more slowly to light changes. Four frames after the lights double, a median 98% of the change is still missing, against 91% for the grid over DDGI. The 90% mark comes at a median of 84 frames, and at 100 in Bistro interior. On the small scenes it costs more than per hit: 5.8 ms against 4.4 on Cornell, since sorting and claiming cells is a fixed cost.
+- Against: it reacts more slowly to light changes. Four frames after the lights double, a median 98% of the change is still missing, against 91% for the grid over DDGI. The 90% mark comes at a median of 86 frames, and at 100 in Bistro interior. On the small scenes it costs more than per hit: 5.8 ms against 4.4 on Cornell, since sorting and claiming cells is a fixed cost.
 - How it fails: under heavy change, cells wait their turn, so lighting updates lag. A budget too small for the scene shows as slow convergence.
 
 **`neural-tail`: the grid with the neural tail.**
 - For: it needs no DDGI volume, and in rooms lit by lights it closes most of the grid alone's missing bounces (two-room −44% → −7%, Cornell point −25% → −3.7%).
-- Against: it can't light an emissive scene. The emissive Cornell box reads as the grid alone, −49%. Its warm-up is the slowest in the rooms (138-214 frames in the rooms lit by lights; median 35 over all views), because the network trains first. When still, it pumps: the frame brightness changes up to 10 times more than the others, as training steps. It is the most expensive variant, with 2.4-6.2 ms for the network on top of the grid alone's rays. It needs `shader-f16` for full speed and the optional `@pathtracer/mlp` package, which isn't on npm. Without either it runs as the grid alone, with a warning.
+- Against: it can't light an emissive scene. The emissive Cornell box reads as the grid alone, −49%. Its warm-up is the slowest in the rooms (138-214 frames in the rooms lit by lights; median 31 over all views), because the network trains first. When still, it pumps: the frame brightness changes up to 10 times more than the others, as training steps. It is the most expensive variant, with 2.4-6.2 ms for the network on top of the grid alone's rays. It needs `shader-f16` for full speed and the optional `@pathtracer/mlp` package, which isn't on npm. Without either it runs as the grid alone, with a warning.
 - How it fails: after a cut it reads dark until the network learns. It drifts a little from frame to frame. Emitter-lit rooms, or a missing package, leave it at the grid alone's error.
+
+**`gi12-rays-feedback`: the grid alone with cache feedback (RC3.6, E12).**
+- For: it needs nothing from the host, costs no extra rays, and halves the grid alone's error in closed rooms lit by lights (two-room −44% → −20%, Cornell point −25% → −6%). Open scenes are unchanged.
+- Against: the rooms are still 20-40% dark, well behind SHaRC and DDGI. It does nothing for an emitter-lit room (emissive Cornell −49%). It warms up slowly in the rooms (88-145 frames), since each frame adds one more bounce.
+- How it fails: a dark closed room, less dark than the grid alone. Emitter-lit rooms stay as dark as the grid alone.
+
+**`gi12-rays-temporal`, `gi12-rays-feedback-temporal`, `gi12-ddgi-temporal`: temporal feedback (RC3.6, D68).**
+- For: it costs no rays, and in the open scenes it removes the grid alone's small darkening (Bistro exterior +0.5 to +1.5%, Sponza +3.5%).
+- Against: it over-brightens where last frame's picture shows lamps or emitters: Bistro interior +14 to +23%, emissive Cornell +3% (grid alone) and +26% (over DDGI). It barely helps closed rooms whose lights are off screen (two-room −33%, the furnished room −50 to −53%). Over DDGI it is worse than DDGI alone on every view. On Bistro exterior's second view it pumps (the frame brightness changes 0.05-0.10% a frame, 15-30 times the others) and follows the lights doubling in 105-107 frames against 82. It needs the host's lit image and albedo, and changing it restarts the technique.
+- How it fails: bright where lamps or emitters are on screen, and dark where the light is off screen. It also feeds the picture's own errors back into the cache: it reads what the screen showed, including GI that is already biased.
 
 ## Recommendation
 
-**Provisional, pending a VALID timing run.** Bistro exterior, the one outdoor scene, didn't change it.
+**Provisional, pending a VALID timing run.** Neither Bistro exterior (the one outdoor scene) nor RC3.6's modes changed it.
 
-1. **Keep the GI-1.2 grid over DDGI (`gi12-ddgi`) as the default when the host has a DDGI volume.** It has the smallest bias on all nine views and is the quickest to clear a ghost. It is also the calmest when still, and on big scenes it costs less than the grid alone.
+1. **Keep the GI-1.2 grid over DDGI (`gi12-ddgi`) as the default when the host has a DDGI volume.** It has the smallest bias on all ten views and is the quickest to clear a ghost. It is also the calmest when still, and on big scenes it costs less than the grid alone.
 2. **Use SHaRC, not the grid on its own rays, when there is no DDGI volume.** Today `secondBounce: 'auto'` without a volume falls back to GI-1.2's rays, which read 25-62% dark in every closed room. SHaRC needs nothing from the host and is within 2-5 points of the grid over DDGI, matching it in the open scenes. It also uses under a third of the memory. It would mean `'auto'` picking the world cache at `prepare` by whether a fallback is stacked. Dennis's call.
 3. **Shrink the GI-1.2 grid's capacity, whichever is picked.** Its 1 GiB is Capsaicin's default and stays mostly empty on these scenes. On a Mac or a smaller GPU it is the first thing that won't fit. Sizing it from measured bucket use is a task of its own.
 4. **Keep budgeted cells as an opt-in for big scenes**, where it saves GPU time. It reacts more slowly to light changes and costs more on small scenes.
 5. **Leave the neural tail opt-in.** It can't light emitters, it is slow to warm up, it pumps, it costs the most, and its package is private. DDGI or SHaRC carry the later bounces better here.
 6. **Don't stack DDGI under SHaRC.** That costs the volume for nothing: if SHaRC is used, leave the volume out. The viewer does stack it today.
+7. **Leave RC3.6's modes off (opt-in), as they are.** Cache feedback is the cheapest way to more bounces on the grid alone, but it stays 20-40% dark in closed rooms, so it doesn't replace SHaRC in point 2. Temporal feedback over-brightens rooms with lamps or emitters in view, does worse than DDGI alone when stacked with it, and pumps in one outdoor view.
 
 What would change this:
 - **The VALID timing run:** in the dry run, SHaRC's cache is slower than the grid over DDGI on big scenes.
-- **RC3.6's modes:** if cache or temporal feedback gives the grid every bounce without DDGI, that could replace point 2.
 - **The Mac:** memory, and f16.
 
 ## Still open
 
-- **References:** Sponza's `upper-gallery` (not rendered) and Bistro exterior's `across-the-street` (rendering). To add them, run the variants page with `VITE_RC_VARIANT_VIEWS=upper-gallery,across-the-street`, then pass every report to the table script.
-- **A VALID timing run** of `radiance-cache-variants-timing`, with the cool wait, once the GPU is free of the renders.
-- **RC3.6's modes** (cache feedback and temporal feedback, on `rc3-6`), as presets and rows.
+- **References:** Sponza's `upper-gallery` is not rendered yet. To add it, run the variants page with `VITE_RC_VARIANT_VIEWS=upper-gallery`, then pass every report to the table script.
+- **A VALID timing run** of `radiance-cache-variants-timing`, with the cool wait, once the GPU is free of the renders. It will time RC3.6's presets too, which the dry run predates.
 - **The Mac** (M5 Pro, the target GPU): memory (the grid's 1 GiB), the f16 tail, and the timing.
 - **The lag every variant shares.** After the lights double, the picture takes over a second to reach 90%, about the same for every variant. Most of it is in the screen probes and the world cache, not in the choice of world cache. That needs its own look at the change resets, outside this task.

@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-28 · P6.5 RC3.6's modes and the remaining views · implementer (opus)
+Did: merged `origin/rc3-6` (ddd4425; PROGRESS conflict only, both entries kept). Four presets: `gi12-rays-feedback`, `gi12-rays-temporal`, `gi12-rays-feedback-temporal`, `gi12-ddgi-temporal`. Both variant pages now make the technique with `useTemporalFeedback` when a preset asks, since it is fixed at construction. The variants page measures named views (`VITE_RC_VARIANT_VIEWS`). The doc covers ten views with RC3.6's rows.
+Verified: typecheck, lint, unit tests (453 in techniques, viewer, variants). RTX 3060, bench lock: `radiance-cache-variants` PASS with the six earlier presets on Bistro exterior across-the-street, and PASS with RC3.6's four presets on all ten views.
+Not verified: Sponza upper-gallery (no reference); timing of RC3.6's presets (the VALID run is held for the renders).
+Numbers: mean |GI bias| over ten views: grid over DDGI 3.1%, budgeted 3.4%, SHaRC 5.9%, DDGI + temporal 10.1%, neural tail 11.3%, feedback + temporal 14.4%, cache feedback 17.6%, temporal 19.2%, grid alone 27.5%. Two-room, against RC3.6's own run: cache feedback −19.7% (RC3.6 −22.2%), temporal −32.7% (−32.2%), both −18.9% (−21.0%), DDGI + temporal −2.3% (−4.0%). Emissive Cornell, DDGI + temporal: +26.0% (+24%). Temporal feedback reads Bistro interior +14 to +23%, and it pumps on across-the-street. The recommendation is unchanged: RC3.6's modes stay opt-in.
+Next: Sponza upper-gallery when rendered; the VALID timing run when the lead says the renders are done; Dennis picks the default.
+
 ## 2026-11-27 · P6.5 the world-cache variants compared · implementer (opus)
 Did: branch `p6-5` from main. Presets `RADIANCE_CACHE_VARIANT_PRESETS` (gi12-rays, gi12-ddgi, sharc, sharc-ddgi, budgeted, neural-tail; what each needs) in compare-toggles.ts, a Variant list in the viewer's compare panel, `VITE_RC_COMPARE=variant=<id>` on the GPU pages; `radiance-cache-viewer` picks every preset. GPU pages `radiance-cache-variants` (vs Cycles at the references' cameras: accuracy, warm-up, coverage, flicker, lights x2 and box-move lag and ghost, memory; metrics.ts unit-tested) and `radiance-cache-variants-timing`; `tools/reference/rc-variants-table.ts` builds the tables. Write-up and provisional recommendation: docs/design/radiance-cache-variants.md.
 Verified: lint, typecheck, unit tests (compare toggles, metrics, viewer). RTX 3060, bench lock: `radiance-cache-variants` PASS on nine views (Cornell point and emissive, two-room, furnished room x2, Sponza, Bistro interior x2, Bistro exterior; all six variants; two-room again after merging #65); `-variants-timing` PASS on every scene (INVALID clock: hot start 82 C); `radiance-cache-viewer` PASS on two-room with every preset picked.
