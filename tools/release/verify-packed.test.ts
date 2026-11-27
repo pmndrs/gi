@@ -43,6 +43,12 @@ describe('the import graph', () => {
         '/pkg/dist/radiance-cascades.d.ts': "export * from './chunks/rc-r4.js';",
         '/pkg/dist/chunks/rc-r4.js': "import '@pmndrs/rc-bvh'; export const rc = 1;",
         '/pkg/dist/chunks/rc-r4.d.ts': "export type { MeshGeometry } from '@pmndrs/rc-bvh';",
+        '/pkg/dist/radiance-cache.js': "export * from './chunks/radiance-cache-d5.js';",
+        '/pkg/dist/radiance-cache.d.ts': "export * from './chunks/radiance-cache-d5.js';",
+        // The optional neural tail's package through the hidden import() the build writes (packages/ddgi/vite.config.ts).
+        '/pkg/dist/chunks/radiance-cache-d5.js':
+            "import { Gi1Denoiser } from 'denoiser/ffx'; import { x } from './platform-a1.js'; export const mlp = () => ((specifier) => import(/* @vite-ignore */ specifier))('@pathtracer/mlp');",
+        '/pkg/dist/chunks/radiance-cache-d5.d.ts': "export { x as cache } from './platform-a1.js'; type MlpNetwork = 'default' | 'compact';",
         '/pkg/dist/core.js': "export * from './chunks/platform-a1.js';",
         '/pkg/dist/core.d.ts': "export * from './chunks/platform-a1.js';",
         '/pkg/dist/ddgi.js': "export * from './chunks/ddgi-b2.js';",
@@ -92,9 +98,27 @@ describe('the import graph', () => {
         expect(checkImportGraph(resolve('/pkg'), reader(leaky))).toContain("dist/radiance-cascades.js reaches 'three', which /radiance-cascades must not need");
     });
 
+    test('/radiance-cache reaches its denoiser only, and loads no DDGI or three code', () => {
+        expect([...bareImports(resolve('/pkg/dist/radiance-cache.js'), read)]).toEqual(['denoiser/ffx']);
+        const withThree = { ...files, '/pkg/dist/chunks/radiance-cache-d5.d.ts': "import type { Node } from 'three/webgpu'; export * from './ddgi-b2.js';" };
+        expect(checkImportGraph(resolve('/pkg'), reader(withThree))).toEqual([
+            "dist/radiance-cache.d.ts reaches 'three/webgpu', which /radiance-cache must not need",
+            'dist/radiance-cache.d.ts reaches ddgi-b2.d.ts, which holds ddgi code; /radiance-cache may load only platform, radiance-cache',
+        ]);
+    });
+
+    test('/radiance-cache importing the optional neural package by name fails, in code or in types', () => {
+        const literal = { ...files, '/pkg/dist/chunks/radiance-cache-d5.js': "export const mlp = () => import('@pathtracer/mlp');" };
+        expect(checkImportGraph(resolve('/pkg'), reader(literal))).toEqual(["dist/radiance-cache.js reaches '@pathtracer/mlp', which /radiance-cache must not need"]);
+        const typed = { ...files, '/pkg/dist/chunks/radiance-cache-d5.d.ts': "export type { MlpNetwork } from '@pathtracer/mlp';" };
+        expect(checkImportGraph(resolve('/pkg'), reader(typed))).toEqual(["dist/radiance-cache.d.ts reaches '@pathtracer/mlp', which /radiance-cache must not need"]);
+    });
+
     test('a file holds the layer its name says', () => {
         expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/chunks/platform-a1.js'))).toBe('platform');
         expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/chunks/ddgi-b2.d.ts'))).toBe('ddgi');
+        expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/chunks/radiance-cache-d5.js'))).toBe('radiance-cache');
+        expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/radiance-cache.d.ts'))).toBe('radiance-cache');
         expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/core.js'))).toBe('platform');
         expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/index.d.ts'))).toBe('three');
         expect(layerOf(resolve('/pkg'), resolve('/pkg/dist/assets/worker.js'))).toBeUndefined();
@@ -103,7 +127,11 @@ describe('the import graph', () => {
     test('/core loading DDGI code fails, even with no package import', () => {
         const tangled = { ...files, '/pkg/dist/chunks/platform-a1.js': "import './ddgi-b2.js'; export const x = 1;" };
         const failures = checkImportGraph(resolve('/pkg'), reader(tangled));
-        expect(failures).toEqual(['dist/core.js reaches ddgi-b2.js, which holds ddgi code; /core may load only platform']);
+        expect(failures).toEqual([
+            'dist/core.js reaches ddgi-b2.js, which holds ddgi code; /core may load only platform',
+            // The radiance cache builds on the platform, so the leak reaches it too.
+            'dist/radiance-cache.js reaches ddgi-b2.js, which holds ddgi code; /radiance-cache may load only platform, radiance-cache',
+        ]);
     });
 
     test('/ddgi loading three code fails', () => {
@@ -135,6 +163,12 @@ describe('checkTarballContents', () => {
             dependencies: { '@pmndrs/ddgi-core': 'workspace:*', '@pmndrs/bvh': '0.0.0' },
         });
         expect(failures).toHaveLength(2);
+    });
+
+    test('refuses the optional neural package in any dependency field: it is not on npm', () => {
+        for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
+            expect(checkTarballContents(complete, { ...manifest, [field]: { '@pathtracer/mlp': '0.1.0' } })).toEqual([`${field} names @pathtracer/mlp@0.1.0, which isn't on npm`]);
+        }
     });
 
     test('allows workspace devDependencies, which consumers never install', () => {
