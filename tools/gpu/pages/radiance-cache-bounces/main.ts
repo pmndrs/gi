@@ -64,8 +64,11 @@
  *    carries more bounces than the cache's two, and never more than every
  *    bounce: their mean lies between 1.05 × 0.3183 and 1.02 × 0.4244, and no
  *    near ceiling ray's mean (on screen or not) is over 1.02 × 0.4244.
+ *    The near ceiling rays off the screen read their cells, which the
+ *    feedback leaves as they are: GI-1.2's second bounce within 2%.
  *    Capsaicin's way, adding the lit value into the cell as direct light while
- *    the cell's indirect value is added again, reads more than every bounce.
+ *    the cell's indirect value is added again, reads 1.064 × there (mutation
+ *    M4, 2026-11-27; the on-screen bounds alone didn't catch it).
  *    Before measuring, the run checks the frame's probe rays: some near
  *    ceiling hits are on screen and some aren't.
  * 6-7. **Temporal feedback, hits last frame's camera didn't see** (the plane
@@ -404,6 +407,10 @@ const SECTIONS: readonly Section[] = [
                 failures.push(`${this.name}: the on-screen near ceiling rays read ${round(reading.onScreen.mean)}, expected between ${round(low)} (more than two bounces) and ${round(high)} (every bounce)`);
             }
             if (reading.near.mean > high) failures.push(`${this.name}: the near ceiling rays read ${round(reading.near.mean)}, over every bounce ${round(EXPECTED.everyBounce)} (+2%)`);
+            // The feedback leaves the cells alone (D68), so the rays reading them still get GI-1.2's second bounce.
+            if (!within(reading.offScreen.mean, EXPECTED.secondBounce)) {
+                failures.push(`${this.name}: the off-screen near ceiling rays (reading their cells) read ${round(reading.offScreen.mean)}, expected the second bounce ${round(EXPECTED.secondBounce)} within 2% (the lit image added into the cells?)`);
+            }
             return {
                 onScreenOverSecondBounce: round(reading.onScreen.mean / EXPECTED.secondBounce),
                 onScreenOverEveryBounce: round(reading.onScreen.mean / EXPECTED.everyBounce),
