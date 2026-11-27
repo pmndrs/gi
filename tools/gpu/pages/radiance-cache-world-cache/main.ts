@@ -1829,10 +1829,11 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
     const cells = [...expectedCounts.keys()];
     const staging = device.createBuffer({ label: 'world-cache indirect scratch', size: Math.max(16, cells.length * 16), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'world-cache indirect scratch' });
+    // The update scratch is a section of the words (register D6): its offsets are word offsets in them.
     const indirectScratch = cache.layout.updateScratch.updateCellValueIndirectBuffer;
     if (indirectScratch === null) throw new Error('the world cache was prepared without multibounce: it has no indirect scratch (register D67)');
     const scratchBase = indirectScratch * 4;
-    cells.forEach((cell, index) => encoder.copyBufferToBuffer(cache.buffers.updateScratch, scratchBase + cell * 16, staging, index * 16, 16));
+    cells.forEach((cell, index) => encoder.copyBufferToBuffer(cache.buffers.tileWords, scratchBase + cell * 16, staging, index * 16, 16));
     device.queue.submit([encoder.finish()]);
     const scratch = new Uint32Array(await readRange(device, staging, 0, cells.length * 16));
     staging.destroy();
@@ -1932,10 +1933,13 @@ async function checkMultibounceOff(device: GPUDevice, scenario: Scenario): Promi
     const multibounceArrays = cache.stats['multibounce arrays'];
     if (cache.preparedWithMultibounce !== false || multibounceArrays !== 0) fail(`prepared with multibounce off, the cache says it has its arrays (preparedWithMultibounce ${String(cache.preparedWithMultibounce)}, stat ${multibounceArrays})`);
     if (layout.cellValues.valueIndirectBuffer !== null || layout.updateScratch.updateCellValueIndirectBuffer !== null) fail('the layout has indirect offsets with multibounce off');
+    // The words end after the direct update scratch (register D6: the scratch is their last section).
     const directValueBytes = capacity.numCells * 8;
     const directScratchBytes = capacity.numCells * 16;
+    const wordsBytes = layout.updateScratch.updateCellValueBuffer * 4 + directScratchBytes;
     if (cache.buffers.cellValues.size !== directValueBytes) fail(`the cell values are ${cache.buffers.cellValues.size} bytes, not the direct values' ${directValueBytes}`);
-    if (cache.buffers.updateScratch.size !== directScratchBytes) fail(`the update scratch is ${cache.buffers.updateScratch.size} bytes, not the direct scratch's ${directScratchBytes}`);
+    if (layout.updateScratch.bytes !== directScratchBytes) fail(`the update scratch is ${layout.updateScratch.bytes} bytes, not the direct scratch's ${directScratchBytes}`);
+    if (cache.buffers.tileWords.size !== wordsBytes) fail(`the words are ${cache.buffers.tileWords.size} bytes, not ${wordsBytes} (tile words and the direct scratch)`);
     return {
         failures,
         data: {
@@ -1945,7 +1949,8 @@ async function checkMultibounceOff(device: GPUDevice, scenario: Scenario): Promi
             resolveEntries: state.resolve.length,
             raysLit,
             cellValuesBytes: cache.buffers.cellValues.size,
-            updateScratchBytes: cache.buffers.updateScratch.size,
+            wordsBytes: cache.buffers.tileWords.size,
+            updateScratchBytes: layout.updateScratch.bytes,
             techniqueMemoryBytes: scenario.technique.memoryBytes,
         },
     };

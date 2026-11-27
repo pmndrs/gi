@@ -196,7 +196,8 @@ async function timeConfiguration(device: GPUDevice, loaded: Loaded, name: string
         if (backend?.id === 'sharc') {
             const sharc = backend as SharcCache;
             const counters = new Uint32Array(await readBuffer(device, sharc.buffers.accum, SHARC_COUNTER_WORDS * 4));
-            const keys = new Uint32Array(await readBuffer(device, sharc.buffers.keys, sharc.entries * 4));
+            // The keys follow the slots' accumulators (register D6).
+            const keys = new Uint32Array(await readBuffer(device, sharc.keys.buffer, sharc.keys.offset + sharc.entries * 4), sharc.keys.offset, sharc.entries);
             let cellsInUse = 0;
             for (const key of keys) if (key !== 0) cellsInUse++;
             result.sharc = { cellsInUse, slots: sharc.entries, ...Object.fromEntries(Object.entries(SHARC_COUNTER).map(([counter, word]) => [counter, counters[word]])) };

@@ -56,6 +56,7 @@ import {
     LAYOUT,
     previousScreenWgsl,
     HISTORY_WGSL,
+    historyWordsWgsl,
     RADIANCE_BACKUP_WGSL,
     screenDepthWgsl,
     screenNormalWgsl,
@@ -115,7 +116,7 @@ export const INIT_CACHED_TILE_LRU_WGSL = /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${FRAME_WGSL}
 ${LINEAR_INDEX_WGSL}
-@group(1) @binding(1) var<storage, read_write> rcCachedTileLRU: array<u32>;
+${historyWordsWgsl(1)}
 
 // InitCachedTileLRU (gi1.comp:286-290): every entry points at its own slot, flagged unused.
 @compute @workgroup_size(64)
@@ -124,7 +125,7 @@ fn ${TEMPORAL_ENTRY_POINT.initCachedTileLRU}(@builtin(workgroup_id) workgroup: v
     if (did >= rcProbeTileCount()) {
         return; // out of bounds
     }
-    rcCachedTileLRU[did] = did | 0x80000000u;
+    rcHistoryWords[rcCachedTileLRUWord(did)] = did | 0x80000000u;
 }
 `;
 
@@ -176,9 +177,10 @@ ${RADIANCE_BACKUP_WGSL}
 // g_ScreenProbes_EmptyTileBuffer: disoccluded tiles the spawn will not fill.
 @group(1) @binding(12) var<storage, read_write> rcEmptyTiles: array<u32>;
 @group(1) @binding(13) var<storage, read_write> rcCounters: array<atomic<u32>, 16>;
-// The history sample counts per atlas cell (D46): last frame's, and this frame's (written here).
+// The history sample counts per atlas cell (D46): last frame's, and this frame's (written here, in
+// the history words).
 @group(1) @binding(14) var<storage, read> rcPreviousCellCounts: array<u32>;
-@group(1) @binding(15) var<storage, read_write> rcCellCounts: array<u32>;
+${historyWordsWgsl(15)}
 
 // lds_ScreenProbes_Reprojection: the best pixel's score (half of distance / cell size in the
 // high 16 bits) and its lane (the low 16). One 8 x 8 probe per workgroup, so one segment.
@@ -331,7 +333,7 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
         radiance = rcRadianceBackup[0]; // a fill (D47)
     }
     textureStore(rcProbeBuffer, did, rcNearestHalf4(vec4f(radiance.xyz, min(radiance.w, RC_LARGEST_HALF))));
-    rcCellCounts[rcAtlasIndex(did)] = count;
+    rcHistoryWords[rcCellCountWord(rcAtlasIndex(did))] = count;
 }
 `;
 
@@ -339,7 +341,8 @@ fn ${TEMPORAL_ENTRY_POINT.reproject}(
 
 export const COUNT_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'radiance-cache/CountScreenProbes group 1',
-    entries: [UNIFORM_ENTRY, storage(1, 'read-only-storage'), storage(2, 'read-only-storage'), storage(3, 'storage'), storage(4, 'storage'), storage(5, 'storage'), storage(6, 'storage')],
+    // Binding 1 is the history words (read-write: other passes write them).
+    entries: [UNIFORM_ENTRY, storage(1, 'storage'), storage(2, 'read-only-storage'), storage(3, 'storage'), storage(4, 'storage'), storage(5, 'storage'), storage(6, 'storage')],
 };
 
 export const COUNT_WGSL = /* wgsl */ `
@@ -347,7 +350,7 @@ ${CAPSAICIN_WGSL}
 ${FRAME_WGSL}
 ${LINEAR_INDEX_WGSL}
 ${COUNTERS_WGSL}
-@group(1) @binding(1) var<storage, read> rcCachedTileLRU: array<u32>;
+${historyWordsWgsl(1)}
 // g_ScreenProbes_ProbeCachedTileIndexBuffer: each cached slot's position (f32 bits) and packed normal,
 // as words of a buffer rather than an rgba32float texture (register D45).
 @group(1) @binding(2) var<storage, read> rcCachedTileIndex: array<vec4u>;
@@ -365,7 +368,7 @@ fn ${TEMPORAL_ENTRY_POINT.count}(@builtin(workgroup_id) workgroup: vec3u, @built
         return; // out of bounds
     }
 
-    let cachedTileIndex = rcCachedTileLRU[did];
+    let cachedTileIndex = rcHistoryWords[rcCachedTileLRUWord(did)];
     if ((cachedTileIndex & 0x80000000u) == 0u) {
         let worldPos = bitcast<vec3f>(rcCachedTileIndex[cachedTileIndex].xyz);
         // transformPointProjection(world_pos, g_ViewProjection), camera-relative. A point behind
@@ -399,7 +402,7 @@ export const SCATTER_WGSL = /* wgsl */ `
 @group(1) @binding(1) var<storage, read> rcCachedTileListElements: array<vec4u>;
 // The platform's exclusive scan of the per-tile counts: where each tile's list starts.
 @group(1) @binding(2) var<storage, read> rcCachedTileListIndex: array<u32>;
-@group(1) @binding(3) var<storage, read_write> rcCachedTileList: array<u32>;
+${historyWordsWgsl(3, false)}
 
 // ScatterScreenProbes (gi1.comp:541-553).
 @compute @workgroup_size(64)
@@ -409,7 +412,7 @@ fn ${TEMPORAL_ENTRY_POINT.scatter}(@builtin(workgroup_id) workgroup: vec3u, @bui
         return; // out of bounds
     }
     let listElement = rcCachedTileListElements[did].xyz;
-    rcCachedTileList[rcCachedTileListIndex[listElement.y] + listElement.z] = listElement.x;
+    rcHistoryWords[rcCachedTileListWord(rcCachedTileListIndex[listElement.y] + listElement.z)] = listElement.x;
 }
 `;
 
@@ -466,19 +469,19 @@ fn ${TEMPORAL_ENTRY_POINT.patch}(@builtin(workgroup_id) workgroup: vec3u, @built
 
 export const REORDER_GROUP: GPUBindGroupLayoutDescriptor = {
     label: 'radiance-cache/ReorderScreenProbes group 1',
-    entries: [UNIFORM_ENTRY, storage(1, 'read-only-storage'), storage(2, 'read-only-storage'), storage(3, 'read-only-storage'), storage(4, 'read-only-storage'), storage(5, 'storage')],
+    // Binding 1 is the history words (the LRU list and the MRU order; read-write: other passes write them).
+    entries: [UNIFORM_ENTRY, storage(1, 'storage'), storage(2, 'read-only-storage'), storage(3, 'read-only-storage'), storage(5, 'storage')],
 };
 
 export const REORDER_WGSL = /* wgsl */ `
 ${CAPSAICIN_WGSL}
 ${FRAME_WGSL}
 ${LINEAR_INDEX_WGSL}
-@group(1) @binding(1) var<storage, read> rcCachedTileLRU: array<u32>;
+${historyWordsWgsl(1)}
 @group(1) @binding(2) var<storage, read> rcCachedTileLRUFlags: array<u32>;
 // The platform's exclusive scan of the flags over max_probe_count + 1 entries: an entry not used
 // this frame keeps its place among those (flag 1); the last word counts them.
 @group(1) @binding(3) var<storage, read> rcCachedTileLRUIndex: array<u32>;
-@group(1) @binding(4) var<storage, read> rcCachedTileMRU: array<u32>;
 // g_ScreenProbes_PreviousProbeCachedTileLRUBuffer: next frame's LRU list.
 @group(1) @binding(5) var<storage, read_write> rcNextCachedTileLRU: array<u32>;
 
@@ -492,10 +495,10 @@ fn ${TEMPORAL_ENTRY_POINT.reorder}(@builtin(workgroup_id) workgroup: vec3u, @bui
         return; // out of bounds
     }
 
-    let cachedTileIndex = rcCachedTileLRU[did];
+    let cachedTileIndex = rcHistoryWords[rcCachedTileLRUWord(did)];
     var cachedTileOffset = rcCachedTileLRUIndex[did];
     if (rcCachedTileLRUFlags[did] == 0u) {
-        cachedTileOffset = rcCachedTileMRU[did] + rcCachedTileLRUIndex[count];
+        cachedTileOffset = rcHistoryWords[rcCachedTileMRUWord(did)] + rcCachedTileLRUIndex[count];
     }
     // Every offset is below count when the flags and the MRU order agree, which the GPU page checks.
     if (cachedTileOffset < count) {

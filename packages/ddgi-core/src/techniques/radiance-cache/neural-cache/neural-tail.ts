@@ -37,16 +37,16 @@
  */
 
 import type { MlpEngine, MlpShape } from '@pathtracer/mlp';
-import type { GpuIndirectArgs } from '../../../platform/contract/compute.ts';
+import type { GpuIndirectArgs, GpuWord } from '../../../platform/contract/compute.ts';
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import type { FrameCamera } from '../../../platform/contract/frame.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../../platform/contract/wgsl.ts';
 import { cameraRelativeInverseViewProjection } from '../camera.ts';
-import { HASH_GRID_COUNTER } from '../world-cache/capacity.ts';
+import { COUNTER_WORDS, HASH_GRID_COUNTER } from '../world-cache/capacity.ts';
 import type { HashGridCache, HashGridTail, HashGridTailFrame } from '../world-cache/hash-grid-cache.ts';
 import type { WorldCacheFrame } from '../world-cache/world-cache.ts';
-import { RAY_DATA_GROUP_ENTRIES } from '../world-cache/hash-grid-population-wgsl.ts';
+import { RAY_DATA_BINDING, RAY_DATA_GROUP_ENTRIES } from '../world-cache/hash-grid-population-wgsl.ts';
 import { HASH_GRID_CACHE_GROUP_ENTRIES } from '../world-cache/hash-grid-wgsl.ts';
 import type { MlpModule } from './mlp-loader.ts';
 import { neuralTailBox, neuralTailGateOpen, neuralTailNeedsRecentre, neuralTailQueryCapacity, neuralTailSetCapacity, neuralTailStepsThisFrame } from './neural-tail-cpu.ts';
@@ -57,8 +57,6 @@ import {
     gatherQueriesWgsl,
     gatherScreenRecordsWgsl,
     NEURAL_TAIL_BINDING,
-    NEURAL_TAIL_COUNT_WORD,
-    NEURAL_TAIL_COUNTS_BYTES,
     NEURAL_TAIL_ENTRY_POINT,
     NEURAL_TAIL_GROUP_ENTRIES,
     NEURAL_TAIL_HASH_GRID_GROUP,
@@ -110,7 +108,6 @@ interface Prepared {
     readonly cellArgs: GpuIndirectArgs;
     readonly queryArgs: GpuIndirectArgs;
     readonly params: GPUBuffer;
-    readonly counts: GPUBuffer;
     readonly set: GPUBuffer;
     readonly setCapacity: number;
     readonly stepReadback: GPUBuffer;
@@ -166,17 +163,19 @@ export class NeuralTail implements HashGridTail {
         return this.prepared?.mlp ?? null;
     }
 
-    /** The training set's records and its count (word `NEURAL_TAIL_COUNT_WORD.records` of `counts`), and the queries, for tests. */
-    get buffers(): { readonly set: GPUBuffer; readonly counts: GPUBuffer; readonly setCapacity: number; readonly queries: GPUBuffer | null; readonly queryCapacity: number } | null {
+    /** The training set's records and its count (a word of the hash grid's counter block, `HASH_GRID_COUNTER.neuralTailRecords`), and the queries, for tests. */
+    get buffers(): { readonly set: GPUBuffer; readonly recordCount: GpuWord; readonly setCapacity: number; readonly queries: GPUBuffer | null; readonly queryCapacity: number } | null {
         const prepared = this.prepared;
-        return prepared ? { set: prepared.set, counts: prepared.counts, setCapacity: prepared.setCapacity, queries: this.screenData?.queries ?? null, queryCapacity: this.screenData?.queryCapacity ?? 0 } : null;
+        if (!prepared) return null;
+        const recordCount = { buffer: prepared.tileWords, offset: HASH_GRID_COUNTER.neuralTailRecords * WORD_BYTES };
+        return { set: prepared.set, recordCount, setCapacity: prepared.setCapacity, queries: this.screenData?.queries ?? null, queryCapacity: this.screenData?.queryCapacity ?? 0 };
     }
 
     /** GPU bytes the tail made: the network (weights, Adam, EMA, training scratch), the training set, the queries, small buffers. Its answers live in the grid's lists. */
     get memoryBytes(): number {
         const prepared = this.prepared;
         if (!prepared) return 0;
-        const own = prepared.params.size + prepared.counts.size + prepared.set.size + prepared.stepReadback.size + prepared.cellArgs.memoryBytes + prepared.queryArgs.memoryBytes;
+        const own = prepared.params.size + prepared.set.size + prepared.stepReadback.size + prepared.cellArgs.memoryBytes + prepared.queryArgs.memoryBytes;
         return own + prepared.mlp.bufferBytes + (this.screenData?.queries.size ?? 0);
     }
 
@@ -216,7 +215,9 @@ export class NeuralTail implements HashGridTail {
         const word = (counter: number) => ({ buffer: tileWords, offset: counter * WORD_BYTES });
         const cacheGroup = { label: 'radiance-cache/hash-grid group', entries: HASH_GRID_CACHE_GROUP_ENTRIES };
         const ownGroup = { label: 'radiance-cache/neural tail', entries: NEURAL_TAIL_GROUP_ENTRIES };
-        const ownGroups = [cacheGroup, { label: 'radiance-cache/hash-grid ray data', entries: RAY_DATA_GROUP_ENTRIES }, ownGroup];
+        // The grid's ray data without the probe rays' radiance slots, which the gathers never read: with
+        // the platform's 5, the grid's 2 and the training set, 10 storage buffers (pmndrs/gi#49).
+        const ownGroups = [cacheGroup, { label: 'radiance-cache/neural tail ray data', entries: TAIL_RAY_DATA_GROUP_ENTRIES }, ownGroup];
         const encoding = mlp.nrcEncodingWgsl(settings.positionBands);
         const [engine, gatherCells, gatherQueries, gatherScreen, cellArgs, queryArgs] = await Promise.all([
             mlp.MlpEngine.create(device, {
@@ -247,7 +248,6 @@ export class NeuralTail implements HashGridTail {
         ]);
         const storage = BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst;
         const params = device.createBuffer({ label: 'radiance-cache/neural tail params', size: NEURAL_TAIL_PARAMS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst });
-        const counts = device.createBuffer({ label: 'radiance-cache/neural tail counts', size: NEURAL_TAIL_COUNTS_BYTES, usage: storage });
         const set = device.createBuffer({ label: 'radiance-cache/neural tail training set', size: capacity * NEURAL_TAIL_RECORD_VEC4 * VEC4_BYTES, usage: storage });
         const stepReadback = device.createBuffer({ label: 'radiance-cache/neural tail step readback', size: WORD_BYTES, usage: BUFFER_USAGE.mapRead | BUFFER_USAGE.copyDst });
         const trainGroup = device.createBindGroup({
@@ -255,12 +255,13 @@ export class NeuralTail implements HashGridTail {
             layout: engine.trainLayout,
             entries: [
                 { binding: 0, resource: { buffer: set } },
-                { binding: 1, resource: { buffer: counts } },
+                // The grid's counter block: the training set's count is HASH_GRID_COUNTER.neuralTailRecords.
+                { binding: 1, resource: { buffer: tileWords, offset: 0, size: COUNTER_WORDS * WORD_BYTES } },
                 { binding: 2, resource: { buffer: params } },
             ],
         });
-        const cellGroup = device.createBindGroup({ label: 'radiance-cache/neural tail cell records', layout: gatherCells.ownLayouts[2], entries: neuralGroupEntries(params, set, counts) });
-        const screenOwnGroup = device.createBindGroup({ label: 'radiance-cache/neural tail screen records', layout: gatherScreen.ownLayouts[1], entries: neuralGroupEntries(params, set, counts) });
+        const cellGroup = device.createBindGroup({ label: 'radiance-cache/neural tail cell records', layout: gatherCells.ownLayouts[2], entries: neuralGroupEntries(params, set) });
+        const screenOwnGroup = device.createBindGroup({ label: 'radiance-cache/neural tail screen records', layout: gatherScreen.ownLayouts[1], entries: neuralGroupEntries(params, set) });
         this.prepared = {
             device,
             mlp: engine,
@@ -271,7 +272,6 @@ export class NeuralTail implements HashGridTail {
             cellArgs,
             queryArgs,
             params,
-            counts,
             set,
             setCapacity: capacity,
             stepReadback,
@@ -317,7 +317,8 @@ export class NeuralTail implements HashGridTail {
         if (tailFrame.frame.changes?.events.some((event) => event.box === null && event.epoch === frameIndex)) this.boostFramesLeft = settings.changeBoostFrames;
         const screenData = this.screenDataFor(prepared, tailFrame);
         this.writeParams(prepared, tailFrame, screenData.queryCapacity);
-        encoder.clearBuffer(prepared.counts);
+        // The training set's count starts the frame at zero.
+        encoder.clearBuffer(prepared.tileWords, HASH_GRID_COUNTER.neuralTailRecords * WORD_BYTES, WORD_BYTES);
 
         // The records: cells (indirect on the first-bounce count) and the screen.
         const gather = encoder.beginComputePass({ label: `${TIMER_PREFIX}/NeuralTailGather`, timestampWrites: context.timer.computePass(`${TIMER_PREFIX}/NeuralTailGather`) });
@@ -339,7 +340,7 @@ export class NeuralTail implements HashGridTail {
         // The frame's training steps (a step with no records is skipped on the GPU and not counted).
         const steps = neuralTailStepsThisFrame(prepared.steps.steps, settings, this.boostFramesLeft > 0);
         for (let step = 0; step < steps; step++) {
-            prepared.mlp.encodeTrainStep(encoder, prepared.counts, NEURAL_TAIL_COUNT_WORD.records, prepared.trainGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailTraining`));
+            prepared.mlp.encodeTrainStep(encoder, prepared.tileWords, HASH_GRID_COUNTER.neuralTailRecords, prepared.trainGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailTraining`));
         }
         if (this.boostFramesLeft > 0) this.boostFramesLeft--;
         if (prepared.steps.wantsCopy) {
@@ -357,8 +358,7 @@ export class NeuralTail implements HashGridTail {
             answer.dispatchWorkgroupsIndirect(prepared.queryArgs.buffer, 0);
             answer.end();
             // Inference's record count is the second-bounce entries' (its record r is entry r; past the queries' room it stores nothing).
-            encoder.copyBufferToBuffer(prepared.tileWords, HASH_GRID_COUNTER.visibilityCount1 * WORD_BYTES, prepared.counts, NEURAL_TAIL_COUNT_WORD.queries * WORD_BYTES, WORD_BYTES);
-            prepared.mlp.encodeInfer(encoder, prepared.counts, NEURAL_TAIL_COUNT_WORD.queries, screenData.inferGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailInference`));
+            prepared.mlp.encodeInfer(encoder, prepared.tileWords, HASH_GRID_COUNTER.visibilityCount1, screenData.inferGroup, context.timer.computePass(`${TIMER_PREFIX}/NeuralTailInference`));
         }
     }
 
@@ -368,7 +368,7 @@ export class NeuralTail implements HashGridTail {
         this.screenData = null;
         if (!prepared) return;
         prepared.mlp.destroy();
-        for (const buffer of [prepared.params, prepared.counts, prepared.set, prepared.stepReadback]) buffer.destroy();
+        for (const buffer of [prepared.params, prepared.set, prepared.stepReadback]) buffer.destroy();
         prepared.cellArgs.dispose();
         prepared.queryArgs.dispose();
         this.prepared = null;
@@ -430,12 +430,12 @@ export class NeuralTail implements HashGridTail {
             queryCapacity,
             cellGroups: [
                 group(prepared.gatherCells, 0, tailFrame.cacheEntries, 'radiance-cache/neural tail cells: hash grid'),
-                group(prepared.gatherCells, 1, tailFrame.rayDataEntries, 'radiance-cache/neural tail cells: ray data'),
+                group(prepared.gatherCells, 1, tailRayDataEntries(tailFrame.rayDataEntries), 'radiance-cache/neural tail cells: ray data'),
             ],
             queryGroups: [
                 group(prepared.gatherQueries, 0, tailFrame.cacheEntries, 'radiance-cache/neural tail queries: hash grid'),
-                group(prepared.gatherQueries, 1, tailFrame.rayDataEntries, 'radiance-cache/neural tail queries: ray data'),
-                group(prepared.gatherQueries, 2, neuralGroupEntries(prepared.params, queries, prepared.counts), 'radiance-cache/neural tail queries'),
+                group(prepared.gatherQueries, 1, tailRayDataEntries(tailFrame.rayDataEntries), 'radiance-cache/neural tail queries: ray data'),
+                group(prepared.gatherQueries, 2, neuralGroupEntries(prepared.params, queries), 'radiance-cache/neural tail queries'),
             ],
             screenGridGroup: group(prepared.gatherScreen, 0, tailFrame.cacheEntries, 'radiance-cache/neural tail screen: hash grid'),
             inferGroup: device.createBindGroup({
@@ -465,12 +465,23 @@ function initialWeights(mlp: MlpModule, shape: MlpShape, seed: number): Float32A
     return weights;
 }
 
-function neuralGroupEntries(params: GPUBuffer, records: GPUBuffer, counts: GPUBuffer): GPUBindGroupEntry[] {
+function neuralGroupEntries(params: GPUBuffer, records: GPUBuffer): GPUBindGroupEntry[] {
     return [
         { binding: NEURAL_TAIL_BINDING.params, resource: { buffer: params } },
         { binding: NEURAL_TAIL_BINDING.records, resource: { buffer: records } },
-        { binding: NEURAL_TAIL_BINDING.counts, resource: { buffer: counts } },
     ];
+}
+
+/**
+ * The hash grid's ray-data group as the gathers bind it: without the probe
+ * rays' radiance slots, which they never read (the population passes resolve
+ * into them). A pass's layout lists what it uses, so the gathers bind 10
+ * storage buffers (pmndrs/gi#49, register D6).
+ */
+const TAIL_RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = RAY_DATA_GROUP_ENTRIES.filter((entry) => entry.binding !== RAY_DATA_BINDING.radiance);
+
+function tailRayDataEntries(entries: readonly GPUBindGroupEntry[]): GPUBindGroupEntry[] {
+    return entries.filter((entry) => entry.binding !== RAY_DATA_BINDING.radiance);
 }
 
 /** `inverse(P × V × T(eye))` with the frame's jitter (camera.ts): a pixel's ray direction from the eye. */

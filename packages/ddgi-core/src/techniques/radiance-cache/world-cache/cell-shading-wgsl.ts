@@ -102,11 +102,11 @@ const HASHGRIDCACHE_CELL_ENTRY_MASK: u32 = ${CELL_CANDIDATE_ENTRY_MASK}u;
 const HASHGRIDCACHE_CELL_CHANGED_BIT: u32 = ${CELL_CANDIDATE_CHANGED_BIT}u;
 
 fn HashGridCache_CellListWord(offset: u32, index: u32) -> u32 {
-    return atomicLoad(&g_HashGridCache_CellLists[offset + index]);
+    return atomicLoad(&g_HashGridCache_RayListWords[offset + index]);
 }
 
 fn HashGridCache_SetCellListWord(offset: u32, index: u32, value: u32) {
-    atomicStore(&g_HashGridCache_CellLists[offset + index], value);
+    atomicStore(&g_HashGridCache_RayListWords[offset + index], value);
 }
 `;
 
@@ -168,10 +168,10 @@ fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
     // The entry that offered the cell's largest key claims it. Two entries with the same key (one
     // pair in billions) are told apart by the exchange: the first one there wins.
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
-    if (atomicLoad(&g_HashGridCache_UpdateScratch[scratch + 0u]) != HashGridCache_CellSampleKey(visibility_index)) {
+    if (atomicLoad(&g_HashGridCache_TileWords[scratch + 0u]) != HashGridCache_CellSampleKey(visibility_index)) {
         return none;
     }
-    if (atomicExchange(&g_HashGridCache_UpdateScratch[scratch + 1u], 1u) != 0u) {
+    if (atomicExchange(&g_HashGridCache_TileWords[scratch + 1u], 1u) != 0u) {
         return none;
     }
 
@@ -205,7 +205,7 @@ fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
     }
     var random = rcMakeRandom(cell_index ^ HASHGRIDCACHE_CELL_SUB_BIN_SALT, g_HashGridCacheConstants.frame_index);
     let bin = priority * HASHGRIDCACHE_CELL_SUB_BINS + rcRandIntBelow(&random, HASHGRIDCACHE_CELL_SUB_BINS);
-    atomicAdd(&g_HashGridCache_CellLists[g_HashGridCache_RayLists.cell_priority_bins + HASHGRIDCACHE_CELL_BINS + bin], 1u);
+    atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + HASHGRIDCACHE_CELL_BINS + bin], 1u);
 
     let changed_bit = select(0u, HASHGRIDCACHE_CELL_CHANGED_BIT, changed);
     return HashGridCache_Claim(HASHGRIDCACHE_CELL_CLAIMED, visibility_index | changed_bit, bin);
@@ -353,7 +353,7 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
         lit = f32(rcPcgHash(rcPcgHash(cell_index ^ HASHGRIDCACHE_CELL_THIN_SALT) + rcPcgHash(g_HashGridCacheConstants.frame_index)) >> 8u) * (1.0 / 16777216.0) < share;
     }
     if (lit) {
-        let slot = atomicAdd(&g_HashGridCache_CellLists[g_HashGridCache_RayLists.cell_priority_bins + 2u * HASHGRIDCACHE_CELL_BINS + bin], 1u);
+        let slot = atomicAdd(&g_HashGridCache_RayListWords[g_HashGridCache_RayLists.cell_priority_bins + 2u * HASHGRIDCACHE_CELL_BINS + bin], 1u);
         if (slot < lit_target) {
             HashGridCache_SetCellListWord(g_HashGridCache_RayLists.cell_shade_buffer, slot, candidate);
             atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_CELLSHADEDCOUNT], 1u);
@@ -364,8 +364,8 @@ fn ${CELL_SHADING_ENTRY_POINT.scatterCells}(
     // Not lit this frame: the key and the claim leave the scratch, which UpdateTiles then reads as
     // no sample (the cell keeps its value).
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], 0u);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], 0u);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 0u], 0u);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 1u], 0u);
 }
 `;
 }
@@ -435,10 +435,10 @@ fn ${CELL_SHADING_ENTRY_POINT.shadeCells}(
 
     // The cell's one sample, over the key and the claim.
     let quantized_radiance = HashGridCache_QuantizeRadiance(lighting);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 0u], quantized_radiance.x);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 1u], quantized_radiance.y);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 2u], quantized_radiance.z);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 3u], quantized_radiance.w);
 }
 `;
 }

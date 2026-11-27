@@ -87,6 +87,11 @@ describe('the multibounce arrays sized at prepare (register D67)', () => {
         expect(off.cellValues.bytes).toBe(capacity.numCells * 8);
         expect(off.updateScratch.bytes).toBe(capacity.numCells * 16);
         expect(off.tileWords).toEqual(on.tileWords);
+        // Main's packing (register D6) unchanged: the indirect arrays are the last section of both
+        // buffers, so without them each buffer ends where they would start and nothing else moves.
+        expect(off.updateScratch.updateCellValueBuffer).toBe(on.updateScratch.updateCellValueBuffer);
+        expect(off.words.bytes).toBe((on.updateScratch.updateCellValueIndirectBuffer ?? Number.NaN) * 4);
+        expect(off.cellValues.bytes).toBe((on.cellValues.valueIndirectBuffer ?? Number.NaN) * 8);
         expect(off.cellValues.valueIndirectBuffer).toBeNull();
         expect(off.updateScratch.updateCellValueIndirectBuffer).toBeNull();
         expect(on.multibounce).toBe(true);
@@ -106,8 +111,10 @@ describe('the multibounce arrays sized at prepare (register D67)', () => {
         const off = recordingContext();
         const cacheOff = new HashGridCache({ ...DEFAULT_HASH_GRID_CACHE_OPTIONS, useMultibounce: false });
         await cacheOff.prepare(off.context);
+        const scratchStartBytes = hashGridCacheBufferLayout(capacity, false).updateScratch.updateCellValueBuffer * 4;
         expect(off.made.buffers.get('radiance-cache/hash-grid cell values')).toBe(capacity.numCells * 8);
-        expect(off.made.buffers.get('radiance-cache/hash-grid update scratch')).toBe(capacity.numCells * 16);
+        // The words: the tile words, then the direct update scratch only.
+        expect(off.made.buffers.get('radiance-cache/hash-grid words')).toBe(scratchStartBytes + capacity.numCells * 16);
         for (const kernel of SECOND_BOUNCE_KERNELS) expect(off.made.kernels).not.toContain(kernel);
         expect(cacheOff.preparedWithMultibounce).toBe(false);
         expect(cacheOff.stats['multibounce arrays']).toBe(0);
@@ -116,7 +123,7 @@ describe('the multibounce arrays sized at prepare (register D67)', () => {
         const cacheOn = new HashGridCache({ ...DEFAULT_HASH_GRID_CACHE_OPTIONS });
         await cacheOn.prepare(on.context);
         expect(on.made.buffers.get('radiance-cache/hash-grid cell values')).toBe(capacity.numCells * 16);
-        expect(on.made.buffers.get('radiance-cache/hash-grid update scratch')).toBe(capacity.numCells * 32);
+        expect(on.made.buffers.get('radiance-cache/hash-grid words')).toBe(scratchStartBytes + capacity.numCells * 32);
         for (const kernel of SECOND_BOUNCE_KERNELS) expect(on.made.kernels).toContain(kernel);
         expect(cacheOn.preparedWithMultibounce).toBe(true);
         expect(cacheOn.stats['multibounce arrays']).toBe(1);

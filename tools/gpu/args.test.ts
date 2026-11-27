@@ -8,6 +8,13 @@ describe('parseRunnerArgs', () => {
         expect(options.filters).toEqual([]);
         expect(options.withoutWebGpu).toBe(false);
         expect(options.timeoutMs).toBeNull();
+        expect(options.maxStorageBuffers).toBeNull();
+    });
+
+    it('reads --max-storage-buffers as a positive whole number (pmndrs/gi#49)', () => {
+        expect(parseRunnerArgs(['--max-storage-buffers', '10']).maxStorageBuffers).toBe(10);
+        expect(() => parseRunnerArgs(['--max-storage-buffers', '0'])).toThrow(UsageError);
+        expect(() => parseRunnerArgs(['--max-storage-buffers', 'ten'])).toThrow(UsageError);
     });
 
     it('reads --gpu', () => {

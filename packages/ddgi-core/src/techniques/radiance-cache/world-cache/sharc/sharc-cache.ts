@@ -111,9 +111,11 @@ export function sharcRayWordsBytes(rayCapacity: number, pathCapacity: number): n
 export interface SharcCacheBuffers {
     /** `SharcParams`, written every frame. */
     readonly params: GPUBuffer;
-    /** Per slot: the cell's checksum (0 = empty). */
-    readonly keys: GPUBuffer;
-    /** The counters (`SHARC_COUNTER`, `SHARC_COUNTER_WORDS` words), then `SHARC_SLOT_WORDS` words per slot. */
+    /**
+     * The counters (`SHARC_COUNTER`, `SHARC_COUNTER_WORDS` words), then
+     * `SHARC_SLOT_WORDS` words per slot, then per slot the cell's checksum
+     * (0 = empty; register D6).
+     */
     readonly accum: GPUBuffer;
     /** Per slot: the resolved radiance and its sample weight (vec4f). */
     readonly resolved: GPUBuffer;
@@ -206,6 +208,12 @@ export class SharcCache implements WorldCache {
         return this.require().buffers;
     }
 
+    /** Where the slots' keys are, for tests and debug readbacks: `entries` words from `offset` of the accumulators (register D6). */
+    get keys(): { readonly buffer: GPUBuffer; readonly offset: number } {
+        const prepared = this.require();
+        return { buffer: prepared.buffers.accum, offset: (SHARC_COUNTER_WORDS + SHARC_SLOT_WORDS * prepared.entries) * WORD_BYTES };
+    }
+
     /** The latest screen's per-ray words (each ray's sample first, `SHARC_RAY_SAMPLE_WORDS` a ray), or null before the first `encodeFrame`. */
     get rayWords(): GPUBuffer | null {
         return this.rayData?.rayWords ?? null;
@@ -246,7 +254,7 @@ export class SharcCache implements WorldCache {
                 layout,
                 entries: [
                     { binding: SHARC_CACHE_BINDING.params, resource: { buffer: buffers.params } },
-                    { binding: SHARC_CACHE_BINDING.keys, resource: { buffer: buffers.keys } },
+                    { binding: SHARC_CACHE_BINDING.accum, resource: { buffer: buffers.accum } },
                     { binding: SHARC_CACHE_BINDING.resolved, resource: { buffer: buffers.resolved } },
                 ],
             });
@@ -257,13 +265,13 @@ export class SharcCache implements WorldCache {
         const { device, kernels, compute, shade } = context;
         const settings = resolveSharcSettings(this.options.sharc);
         const entries = 2 ** settings.log2Entries;
+        // The keys follow the slots' accumulators in one buffer (register D6, pmndrs/gi#49).
         const bytes = {
-            keys: entries * WORD_BYTES,
-            accum: (SHARC_COUNTER_WORDS + SHARC_SLOT_WORDS * entries) * WORD_BYTES,
+            accum: (SHARC_COUNTER_WORDS + SHARC_SLOT_WORDS * entries + entries) * WORD_BYTES,
             resolved: entries * 16,
         };
         // Name the limit before anything is made (register D14's rule).
-        const largest = Math.max(bytes.keys, bytes.accum, bytes.resolved);
+        const largest = Math.max(bytes.accum, bytes.resolved);
         if (largest > device.limits.maxStorageBufferBindingSize) throw new GILimitError('maxStorageBufferBindingSize', largest, device.limits.maxStorageBufferBindingSize);
         if (largest > device.limits.maxBufferSize) throw new GILimitError('maxBufferSize', largest, device.limits.maxBufferSize);
         const compile: SharcCompileOptions = { fallbackLevels: settings.fallbackLevels, pyramid: settings.pyramid };
@@ -274,14 +282,13 @@ export class SharcCache implements WorldCache {
         // Made zeroed (WebGPU clears new buffers): every key 0, the empty table.
         const buffers: SharcCacheBuffers = {
             params: device.createBuffer({ label: 'radiance-cache/sharc params', size: SHARC_PARAMS_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst }),
-            keys: device.createBuffer({ label: 'radiance-cache/sharc keys', size: bytes.keys, usage: storageUsage }),
-            accum: device.createBuffer({ label: 'radiance-cache/sharc accumulators', size: bytes.accum, usage: storageUsage }),
+            accum: device.createBuffer({ label: 'radiance-cache/sharc accumulators and keys', size: bytes.accum, usage: storageUsage }),
             resolved: device.createBuffer({ label: 'radiance-cache/sharc resolved', size: bytes.resolved, usage: storageUsage }),
         };
         const outOfMemory = await device.popErrorScope();
         if (outOfMemory) {
             for (const buffer of Object.values(buffers)) buffer.destroy();
-            throw new Error(`@pmndrs/gi: the GPU ran out of memory making the SHaRC cache's ${bytes.keys + bytes.accum + bytes.resolved} bytes: ${outOfMemory.message}`);
+            throw new Error(`@pmndrs/gi: the GPU ran out of memory making the SHaRC cache's ${bytes.accum + bytes.resolved} bytes: ${outOfMemory.message}`);
         }
 
         const cacheGroup = { label: 'radiance-cache/sharc group', entries: SHARC_CACHE_GROUP_ENTRIES };
@@ -300,7 +307,6 @@ export class SharcCache implements WorldCache {
         ]);
         const cacheEntries: GPUBindGroupEntry[] = [
             { binding: SHARC_CACHE_BINDING.params, resource: { buffer: buffers.params } },
-            { binding: SHARC_CACHE_BINDING.keys, resource: { buffer: buffers.keys } },
             { binding: SHARC_CACHE_BINDING.accum, resource: { buffer: buffers.accum } },
             { binding: SHARC_CACHE_BINDING.resolved, resource: { buffer: buffers.resolved } },
         ];
@@ -322,7 +328,7 @@ export class SharcCache implements WorldCache {
             lookupCacheGroup: group(lookup),
             rayArgs,
             timer: context.timer,
-            memoryBytes: SHARC_PARAMS_BYTES + bytes.keys + bytes.accum + bytes.resolved + argsBytes,
+            memoryBytes: SHARC_PARAMS_BYTES + bytes.accum + bytes.resolved + argsBytes,
         };
     }
 
@@ -350,7 +356,6 @@ export class SharcCache implements WorldCache {
     /** Empties the table: keys, accumulators, counters and resolved values back to zero, as `prepare` leaves them. */
     reset(encoder: GPUCommandEncoder): void {
         const { buffers } = this.require();
-        encoder.clearBuffer(buffers.keys);
         encoder.clearBuffer(buffers.accum);
         encoder.clearBuffer(buffers.resolved);
     }

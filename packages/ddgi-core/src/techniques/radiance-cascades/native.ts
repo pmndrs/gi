@@ -10,7 +10,7 @@ export interface NativeRcOptions {
     firstInterval: number;
     maxDistance: number;
     rayStride?: 1 | 2;
-    /** Fraction of the previous estimate retained when a bin receives new rays. */
+    /** Fraction of the previous estimate retained when a bin receives new rays. Defaults to 0.94. */
     history?: number;
     /** World-space origin offset along the surface normal, in metres. */
     normalBias?: number;
@@ -37,6 +37,13 @@ export interface NativeRcTransport {
      * Results: vec4f (scene-linear outgoing radiance, hit distance; -1 on a sky miss). */
     encode(encoder: GPUCommandEncoder, job: { rays: GPUBuffer; results: GPUBuffer; count: number }): void;
 }
+
+/**
+ * A bin receives only a few rays a frame, so it needs about 16 frames of them
+ * to see a small lamp steadily. At 0.8 the gallery's lit alcoves flickered
+ * (DECISIONS 2026-11-27). The Three.js reference gallery decays at 0.94 too.
+ */
+const DEFAULT_HISTORY = 0.94;
 
 const entries = ['begin', 'generate', 'deposit', 'resolveHistory', 'mergeFar', 'mergeMiddle', 'mergeNear', 'project', 'gather'] as const;
 type Entry = typeof entries[number];
@@ -93,7 +100,7 @@ export class NativeRadianceCascades {
             throw new RangeError('RC maxDistance must be greater than four times firstInterval');
         }
         if (options.rayStride !== undefined && options.rayStride !== 1 && options.rayStride !== 2) throw new RangeError('RC rayStride must be 1 or 2');
-        const retention = options.history ?? 0.8;
+        const retention = options.history ?? DEFAULT_HISTORY;
         if (!(retention >= 0 && retention < 1)) throw new RangeError('RC history must be in [0,1)');
         if (!Number.isFinite(options.normalBias ?? 0.004) || (options.normalBias ?? 0.004) < 0) throw new RangeError('RC normalBias must be finite and nonnegative');
         const maxBinding = Math.min(device.limits.maxBufferSize, device.limits.maxStorageBufferBindingSize);
@@ -211,7 +218,7 @@ export class NativeRadianceCascades {
             f.set(this.options.bounds.min);
             f.set(this.options.bounds.min.map((v, i) => 1 / (this.options.bounds.max[i] - v)), 4);
             u.set([width, height, this.rayStride, count], 8);
-            f.set([this.options.firstInterval, this.options.maxDistance, this.options.history ?? 0.8, this.options.normalBias ?? 0.004], 12);
+            f.set([this.options.firstInterval, this.options.maxDistance, this.options.history ?? DEFAULT_HISTORY, this.options.normalBias ?? 0.004], 12);
             this.layout.levels.forEach((level, i) => u.set([...level.dims, level.base], 16 + 4 * i));
             this.device.queue.writeBuffer(this.uniforms, 0, data);
             this.releaseScreen();

@@ -4,7 +4,7 @@ import type { FrameCamera, FrameInput } from './contract/frame.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueScreenFrame } from './contract/technique.ts';
 import type { WgslModule } from './contract/wgsl.ts';
 import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
-import { checkComputeLimits, isSupported, KERNEL_COMPUTE_LIMITS, optionalFeatures, requiredLimits } from './device-requirements.ts';
+import { checkComputeLimits, checkLimitNeeds, isSupported, KERNEL_COMPUTE_LIMITS, mergeLimitNeeds, optionalFeatures, requiredLimits } from './device-requirements.ts';
 import { BLEND_WORKGROUP_SIZE } from '../techniques/ddgi/wgsl/blend.ts';
 import { countGroupStorageBuffers, countStorageBuffers, orderModules, placeModules, PlatformKernelBuilder } from './kernel-builder.ts';
 import { createFakeGpu, FakeBuffer, type FakeEncoder, type FakeGpu } from './scene/testing/fake-gpu.ts';
@@ -277,6 +277,29 @@ describe('device requirements', () => {
         const error = await platform.prepare().catch((caught: unknown) => caught);
         expect(error).toBeInstanceOf(GILimitError);
         expect((error as GILimitError).limit).toBe('maxComputeWorkgroupSizeX');
+        expect(gpu.counters.pipelines).toBe(0);
+        platform.dispose();
+    });
+
+    it("reports the techniques' declared limits, the largest of each, and prepare names the first the device is below (pmndrs/gi#49)", async () => {
+        expect(mergeLimitNeeds([{}, { limits: { maxStorageBuffersPerShaderStage: 10 } }, { limits: { maxStorageBuffersPerShaderStage: 9, maxBindGroups: 4 } }])).toEqual({
+            maxStorageBuffersPerShaderStage: 10,
+            maxBindGroups: 4,
+        });
+        expect(() => checkLimitNeeds({ maxStorageBuffersPerShaderStage: 10 } as GPUSupportedLimits, { maxStorageBuffersPerShaderStage: 10 })).not.toThrow();
+
+        // A technique that needs 10 storage buffers per stage, on a device with WebGPU's default 8.
+        const gpu = createPlatformGpu();
+        const platform = new GIPlatformImpl(gpu.device, { buildIn: 'main' });
+        const technique = new RecordingTechnique('ten buffers', []);
+        (technique as { requirements: GITechnique['requirements'] }).requirements = { queries: ['rays'], limits: { maxStorageBuffersPerShaderStage: 10 } };
+        platform.addTechnique(technique);
+        expect(platform.limitNeeds).toEqual({ maxStorageBuffersPerShaderStage: 10 });
+        const error = await platform.prepare().catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(GILimitError);
+        expect((error as GILimitError).limit).toBe('maxStorageBuffersPerShaderStage');
+        expect((error as GILimitError).needed).toBe(10);
+        expect((error as GILimitError).available).toBe(8);
         expect(gpu.counters.pipelines).toBe(0);
         platform.dispose();
     });
