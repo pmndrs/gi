@@ -1820,8 +1820,9 @@ async function checkLag(device: GPUDevice, scenario: Scenario): Promise<Checks> 
     const cells = [...expectedCounts.keys()];
     const staging = device.createBuffer({ label: 'world-cache indirect scratch', size: Math.max(16, cells.length * 16), usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'world-cache indirect scratch' });
+    // The update scratch is a section of the words (register D6): its offsets are word offsets in them.
     const scratchBase = cache.layout.updateScratch.updateCellValueIndirectBuffer * 4;
-    cells.forEach((cell, index) => encoder.copyBufferToBuffer(cache.buffers.updateScratch, scratchBase + cell * 16, staging, index * 16, 16));
+    cells.forEach((cell, index) => encoder.copyBufferToBuffer(cache.buffers.tileWords, scratchBase + cell * 16, staging, index * 16, 16));
     device.queue.submit([encoder.finish()]);
     const scratch = new Uint32Array(await readRange(device, staging, 0, cells.length * 16));
     staging.destroy();

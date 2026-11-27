@@ -26,7 +26,7 @@ import { GINotReadyError } from './contract/errors.ts';
 import type { InstanceHandle, LightHandle, MaterialHandle, MeshHandle, TextureHandle } from './contract/handles.ts';
 import type { Aabb, Mat4 } from './contract/math.ts';
 import type { FrameCamera, FrameInput, FrameScreen } from './contract/frame.ts';
-import type { GIPlatform, GIPlatformOptions, HostHitShadingSettings, ScreenNeeds } from './contract/platform.ts';
+import type { GIPlatform, GIPlatformOptions, HostHitShadingSettings, RequiredLimits, ScreenNeeds } from './contract/platform.ts';
 import type { QueryKind, SceneQueries } from './contract/queries.ts';
 import type {
     DeformedPositions,
@@ -51,7 +51,7 @@ import { PlatformKernelBuilder } from './kernel-builder.ts';
 import { mergeSceneChanges } from './scene/change-log.ts';
 import { PlatformScene } from './scene/platform-scene.ts';
 import { mergeScreenNeeds, missingScreenChannels, screenNeedsOf } from './screen/screen-needs.ts';
-import { checkComputeLimits } from './device-requirements.ts';
+import { checkComputeLimits, checkLimitNeeds, mergeLimitNeeds } from './device-requirements.ts';
 import { PlatformHitShading } from './shade/hit-shading.ts';
 import { PlatformTextureStore } from './textures/texture-store.ts';
 import { GpuTimer } from './timing/gpu-timer.ts';
@@ -283,6 +283,8 @@ export class GIPlatformImpl implements GIPlatform {
         this.forgetBudgets();
         this.checkUsable();
         checkComputeLimits(this.device.limits);
+        // The techniques' own declared needs (the radiance cache's 10 storage buffers per stage).
+        checkLimitNeeds(this.device.limits, this.limitNeeds);
         // The platform's kernels and the techniques' compile side by side: every module's
         // code exists from construction, so nothing here waits on another's prepare. One
         // after the other, a cold start spent about 2.5 s compiling on the RTX 3060
@@ -397,6 +399,10 @@ export class GIPlatformImpl implements GIPlatform {
 
     get screenNeeds(): ScreenNeeds {
         return mergeScreenNeeds(this.attached.map(({ technique }) => technique.requirements));
+    }
+
+    get limitNeeds(): RequiredLimits {
+        return mergeLimitNeeds(this.attached.map(({ technique }) => technique.requirements));
     }
 
     encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void {

@@ -346,6 +346,8 @@ var<workgroup> giGridRunEnds: array<f32, GI_LIGHT_GRID_WORKGROUP>;
 var<workgroup> giGridPickRun: array<u32, GI_LIGHT_GRID_GROUP_PICKS>;
 var<workgroup> giGridPickOffset: array<f32, GI_LIGHT_GRID_GROUP_PICKS>;
 var<workgroup> giGridUnsegmented: atomic<u32>;
+// A plain copy of giGridUnsegmented for workgroupUniformLoad (see giLightGridBuildCell).
+var<workgroup> giGridUnsegmentedCopy: u32;
 
 // Rec. 709 luminance, as hit shading weighs lights (giShadeLuminance).
 fn giLightGridLuminance(rgb: vec3f) -> f32 {
@@ -484,7 +486,15 @@ fn giLightGridBuildCell(
 
     // giGridUnsegmented starts at 0: WGSL zero-initializes workgroup memory.
     ${segmentCheck}
-    let segmented = workgroupUniformLoad(&giGridUnsegmented) == 0u;
+    // WGSL lets workgroupUniformLoad read an atomic and return its value, but
+    // Safari 26's compiler lacks that overload and returns the atomic, so every
+    // kernel with this module failed to compile there. One thread copies the
+    // flag into a plain word after a barrier, and the uniform load reads that.
+    workgroupBarrier();
+    if (thread == 0u) {
+        giGridUnsegmentedCopy = atomicLoad(&giGridUnsegmented);
+    }
+    let segmented = workgroupUniformLoad(&giGridUnsegmentedCopy) == 0u;
 
     // Directional lights come first and are always evaluated at the hit, so
     // they are not in the grid. Both counts come from read-only storage, so

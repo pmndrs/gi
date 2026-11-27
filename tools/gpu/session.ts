@@ -23,6 +23,7 @@ import {
     type GpuChoice,
     type GpuTestReport,
 } from './contract.ts';
+import { deviceLimitCapsScript } from './device-limit-caps.ts';
 import { adapterMismatch, evaluatePage, type BrowserMessage, type PageVerdict } from './evaluate.ts';
 import { type TestPage } from './pages.ts';
 
@@ -38,6 +39,8 @@ export interface SessionOptions {
     gpu: GpuChoice | null;
     /** Start Chrome with the GPU disabled (a self-check of the failure path). */
     withoutGpu: boolean;
+    /** Device limits to cap in every page (device-limit-caps.ts), or null for the GPU's own. */
+    limitCaps?: Readonly<Record<string, number>> | null;
 }
 
 export interface PageResult {
@@ -122,6 +125,8 @@ export class BrowserSession {
                 cdp.send('Log.enable'),
                 cdp.send('Inspector.enable'),
             ]);
+            // Before any page's own scripts, in every document this tab opens.
+            if (options.limitCaps) await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: deviceLimitCapsScript(options.limitCaps) });
             return new BrowserSession(cdp, options, closeResources);
         } catch (error) {
             await closeResources();
@@ -156,7 +161,29 @@ export class BrowserSession {
         }
         const mismatch = adapterMismatch(this.options.gpu, probe.adapter);
         if (mismatch) throw new WrongAdapterError(mismatch);
+        if (this.options.limitCaps) await this.checkLimitCaps(this.options.limitCaps);
         return probe.adapter;
+    }
+
+    /**
+     * That the caps hold: a device asked for the adapter's own maximum of each
+     * capped limit gets at most the cap. Requested limits are what WebGPU
+     * enforces, so this is what makes the run stand for a GPU with the cap.
+     */
+    private async checkLimitCaps(caps: Readonly<Record<string, number>>): Promise<void> {
+        const got = await this.cdp.evaluate<Record<string, number | null>>(`
+            (async () => {
+                const adapter = await navigator.gpu.requestAdapter();
+                const names = ${JSON.stringify(Object.keys(caps))}.filter((name) => name in adapter.limits);
+                const device = await adapter.requestDevice({ requiredLimits: Object.fromEntries(names.map((name) => [name, adapter.limits[name]])) });
+                const limits = Object.fromEntries(names.map((name) => [name, device.limits[name]]));
+                device.destroy();
+                return limits;
+            })()`);
+        for (const [name, value] of Object.entries(got)) {
+            const cap = caps[name];
+            if (value === null || cap === undefined || value > cap) throw new Error(`the device-limit cap did not hold: ${name} is ${value} on a requested device, the cap ${cap}`);
+        }
     }
 
     async runPage(page: TestPage, run: PageRunOptions): Promise<PageResult> {

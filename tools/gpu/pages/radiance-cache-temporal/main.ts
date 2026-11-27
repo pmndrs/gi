@@ -79,9 +79,15 @@ import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/tech
 import { COUNTER, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_PROBE_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
+import type { HistorySection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-probe-history.ts';
 import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
+
+/** `byteLength` bytes of one array of the history words (register D6): a section of a shared buffer. */
+async function readSection(device: GPUDevice, section: HistorySection, byteLength: number): Promise<ArrayBuffer> {
+    return (await readBuffer(device, section.buffer, section.offset + byteLength)).slice(section.offset);
+}
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -813,7 +819,7 @@ async function checkCacheAndPatch(device: GPUDevice, fail: (message: string) => 
             totals.overrideTiles += counters[COUNTER.overrideTileCount];
 
             // The LRU list after the reorder: a permutation of the slots.
-            const lru = new Uint32Array(await readBuffer(device, history.cachedTileLRU, tiles * 4));
+            const lru = new Uint32Array(await readSection(device, history.cachedTileLRU, tiles * 4));
             const seen = new Uint8Array(tiles);
             let permutation = true;
             for (const entry of lru) {
@@ -827,7 +833,7 @@ async function checkCacheAndPatch(device: GPUDevice, fail: (message: string) => 
             }
             // This frame's flags: the used entries (0) are exactly those with an MRU number, numbered 0..n-1.
             const flags = new Uint32Array(await readBuffer(device, probes.cachedTileLRUFlags, tiles * 4));
-            const mru = new Uint32Array(await readBuffer(device, history.cachedTileMRU, tiles * 4));
+            const mru = new Uint32Array(await readSection(device, history.cachedTileMRU, tiles * 4));
             const used = Array.from(flags.keys()).filter((entry) => flags[entry] === 0);
             const numbers = new Set(used.map((entry) => mru[entry]));
             if (used.length !== mruCount || numbers.size !== mruCount || used.some((entry) => mru[entry] >= mruCount)) {
@@ -837,7 +843,7 @@ async function checkCacheAndPatch(device: GPUDevice, fail: (message: string) => 
             // Evictions and refreshes this frame (RcProbeSpawnProbe).
             const spawnWords = new Uint32Array(await readBuffer(device, probes.probeSpawn, PROBE_SPAWN_SEEDS_OFFSET + layout.maxProbeSpawnCount * 4));
             const probeCount = spawnWords[0];
-            const spawnProbe = new Uint32Array(await readBuffer(device, history.spawnProbe, Math.max(probeCount, 1) * PROBE_SPAWN_PROBE_BYTES));
+            const spawnProbe = new Uint32Array(await readSection(device, history.spawnProbe, Math.max(probeCount, 1) * PROBE_SPAWN_PROBE_BYTES));
             for (let probe = 0; probe < probeCount; probe++) {
                 const evicted = spawnProbe[probe * 4];
                 if (evicted !== INVALID_ID) {
@@ -1034,7 +1040,7 @@ async function checkOccluder(device: GPUDevice, fail: (message: string) => void)
             const [atlasWidth, atlasHeight] = layout.atlasSize;
             const [maskWidth] = layout.probeCount;
             const beforeAtlas = halvesFast(await readTexture(device, probes.probeAtlas, 8, atlasWidth, atlasHeight));
-            const beforeCounts = new Uint32Array(await readBuffer(device, history.cellCounts, atlasWidth * atlasHeight * 4));
+            const beforeCounts = new Uint32Array(await readSection(device, history.cellCounts, atlasWidth * atlasHeight * 4));
             const beforeDepth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
 
             scene.setTransform(instance, at(-1.8 + step * OCCLUDER_SPEED));
@@ -1044,10 +1050,10 @@ async function checkOccluder(device: GPUDevice, fail: (message: string) => void)
             const depth = new Float32Array((await readTexture(device, run.screen.screen.depth, 4, WIDTH, HEIGHT)).buffer);
             const spawnWords = new Uint32Array(await readBuffer(device, probes.probeSpawn, PROBE_SPAWN_SEEDS_OFFSET + layout.maxProbeSpawnCount * 4));
             const probeCount = spawnWords[0];
-            const spawnProbe = new Uint32Array(await readBuffer(device, history.spawnProbe, Math.max(probeCount, 1) * PROBE_SPAWN_PROBE_BYTES));
-            const staged = halvesFast(new Uint8Array(await readBuffer(device, history.evictedRadiance, Math.max(probeCount, 1) * PROBE_CELLS * 8)));
+            const spawnProbe = new Uint32Array(await readSection(device, history.spawnProbe, Math.max(probeCount, 1) * PROBE_SPAWN_PROBE_BYTES));
+            const staged = halvesFast(new Uint8Array(await readSection(device, history.evictedRadiance, Math.max(probeCount, 1) * PROBE_CELLS * 8)));
             const cachedAtlas = halvesFast(await readTexture(device, history.cachedTileAtlas, 8, atlasWidth, atlasHeight));
-            const cachedCounts = new Uint32Array(await readBuffer(device, history.cachedCellCounts, atlasWidth * atlasHeight * 4));
+            const cachedCounts = new Uint32Array(await readSection(device, history.cachedCellCounts, atlasWidth * atlasHeight * 4));
             const cachedIndex = new Uint32Array(await readBuffer(device, history.cachedTileIndex, history.probeTileCount * 16));
             const counters = new Uint32Array(await readBuffer(device, probes.counters, 64));
             const lruCount = counters[COUNTER.cachedTileLRUCount];
