@@ -93,7 +93,9 @@ async function describeLoaded(platform: GIPlatformImpl, device: GPUDevice, manif
     });
     loaded.scene.updateMatrixWorld();
     const sync = new SceneSync(platform.scene, { device, warn: () => {} });
-    sync.environment = platformSkyEnvironment(manifest);
+    // Two-room (the #54 comparison) has no sky: only a procedural environment has a platform sky.
+    const environment = manifest.environment;
+    sync.environment = environment.type === 'procedural' ? platformSkyEnvironment(manifest) : environment.type === 'color' ? { type: 'color', color: environment.color, intensity: environment.intensity } : { type: 'none' };
     if (sharedComparison) {
         const light = loaded.manifestLights[0];
         const intensity = light.intensity;
