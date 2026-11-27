@@ -4,7 +4,7 @@
 
 **Real-time global illumination for WebGPU.** Light bounces around your scene and keeps up as lights, objects and the sun move. An engine-free GI platform carries the techniques; the first is Dynamic Diffuse Global Illumination (DDGI): a grid of probes that trace rays every frame. Plain WebGPU and WGSL underneath, with a three.js adapter on top.
 
-**▶ [Examples](https://pmndrs.github.io/gi/)**: small pages, each showing one feature. (The site goes live once the `pmndrs/gi` repository is public and its Pages site is on; until then the examples run from a checkout, see [Working on this repository](#working-on-this-repository).)
+**▶ [Examples](https://pmndrs.github.io/gi/)**: small pages, each showing one feature, running in your browser. They need a browser with WebGPU (see [Browser support](#browser-support)).
 
 ![Cornell box lit by DDGI: the red and green walls bleed colour onto the floor, ceiling and boxes](docs/images/cornell-gi.jpg)
 
@@ -67,7 +67,9 @@ The examples run from this repository: `pnpm install`, then `pnpm examples`. The
 
 ## Split Radiance Cascades experiment
 
-Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. Run `pnpm examples` and open `/11-radiance-cascades/` to compare it with the Three.js reference on the same rail, close a moving shutter, or try temporal upscaling. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
+**▶ [Try it live](https://pmndrs.github.io/gi/11-radiance-cascades/)**: a lamp-lit gallery you can walk through. You can also watch [a shutter close over a lamp](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=door&camera=receiver&view=indirect), follow [reflections on a polished floor](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=polished), or compare [five floor finishes](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=roughness).
+
+Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. The example compares it with the Three.js reference on the same rail and offers temporal upscaling; locally it is at `/11-radiance-cascades/` under `pnpm examples`. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
 
 ## Browser support
 
@@ -105,7 +107,7 @@ MIT, see [LICENSE](LICENSE). The bundled tinybvh, Emscripten runtime and HIPRT c
 
 ## Working on this repository
 
-On the radiance-cache branches, first (once): `node tools/linked-siblings.ts --fetch`, which clones and builds the sibling pmndrs/denoiser that the GI denoiser is linked from during development ([docs/HANDOFF-radiance-cache.md](docs/HANDOFF-radiance-cache.md), "The linked denoiser").
+Optional, once: `node tools/linked-siblings.ts --fetch` clones the sibling pmndrs/pathtracer next to this repository for the radiance cache's neural tail (`@pathtracer/mlp`, not on npm). Without it everything else works and the tail stays off ([docs/HANDOFF-radiance-cache.md](docs/HANDOFF-radiance-cache.md), "The GI denoiser and linked siblings").
 
 ```bash
 pnpm install

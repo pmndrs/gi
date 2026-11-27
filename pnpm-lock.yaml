@@ -14,9 +14,6 @@ importers:
       '@eslint/js':
         specifier: ^9.18.0
         version: 9.39.5
-      '@pmndrs/denoiser-ffx':
-        specifier: link:../pmndrs-denoiser/packages/denoiser-ffx
-        version: link:../pmndrs-denoiser/packages/denoiser-ffx
       '@pmndrs/upscaler':
         specifier: 0.5.0
         version: 0.5.0(three@0.187.0)
@@ -29,6 +26,9 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.64
         version: 0.1.74
+      denoiser:
+        specifier: 2.1.0
+        version: 2.1.0(three@0.187.0)
       eslint:
         specifier: ^9.18.0
         version: 9.39.5
@@ -933,6 +933,20 @@ packages:
 
   deep-is@0.1.4:
     resolution: {integrity: sha512-oIPzksmTg4/MriiaYGO+okXDT7ztn/w3Eptv/+gSIdMdKsJo0u4CfYNFJPy+4SKMuCqGw2wxnA+URMg3t8a/bQ==}
+
+  denoiser@2.1.0:
+    resolution: {integrity: sha512-zUE+xl8VXBDIQ1b30+h97hyotBsSq2xc2iiZz3ODAacvPtNPXls8D+X3WJ6nKpyQ1DcCwEimDs3dV7GALWHwlA==}
+    peerDependencies:
+      '@huggingface/kernels': 0.0.1-preview.3
+      onnxruntime-web: ^1.27.0
+      three: '>=0.187.0'
+    peerDependenciesMeta:
+      '@huggingface/kernels':
+        optional: true
+      onnxruntime-web:
+        optional: true
+      three:
+        optional: true
 
   es-module-lexer@1.7.0:
     resolution: {integrity: sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA==}
@@ -2023,6 +2037,10 @@ snapshots:
   deep-eql@5.0.2: {}
 
   deep-is@0.1.4: {}
+
+  denoiser@2.1.0(three@0.187.0):
+    optionalDependencies:
+      three: 0.187.0
 
   es-module-lexer@1.7.0: {}
 

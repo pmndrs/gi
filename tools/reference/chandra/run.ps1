@@ -11,7 +11,8 @@ if ($BuildRoot -and !$Interactive) {
     $cudaBin = $null
 }
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $gi 'bench/references/chandra-sponza' }
-$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+# Resolve against the PowerShell location; [IO.Path]::GetFullPath would use the process directory.
+$OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 $capture = Join-Path $bin 'capture.exe'
 if (!(Test-Path -LiteralPath $capture)) { throw 'Run build.ps1 and supply its -Root as -BuildRoot, or use a staged local runtime.' }
 $previousPath = $env:PATH

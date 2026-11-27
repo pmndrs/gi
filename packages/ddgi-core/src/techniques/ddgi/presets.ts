@@ -139,6 +139,12 @@ export interface RecommendPresetHints {
      * iPad that reports itself as a Mac with a touch screen).
      */
     readonly mobile?: boolean;
+    /**
+     * How many CPU cores the machine reports. Only read on a Mac whose chip
+     * the browser doesn't name. Default: `navigator.hardwareConcurrency`.
+     * Chrome reports the real count; Safari reports at most 8 (NOTES).
+     */
+    readonly cpuCores?: number;
 }
 
 /** Mobile GPU makers, as `GPUAdapterInfo.vendor` names them (Adreno, Mali, PowerVR, Xclipse, Mali in MediaTek's chips). */
@@ -158,8 +164,15 @@ const SOFTWARE_ADAPTERS = /swiftshader|llvmpipe|lavapipe|microsoft basic render/
 const SMALL_DEVICE_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
 
 /**
+ * A Mac reporting more CPU cores than this is taken to have a Pro, Max or
+ * Ultra chip. Base M chips have 8 to 10 cores, and the Pro chips start at 12
+ * (DECISIONS 2026-11-27, issue #9).
+ */
+const APPLE_BASE_CHIP_MAX_CORES = 10;
+
+/**
  * The preset to start from on this adapter: `low` for integrated and mobile
- * GPUs, `high` otherwise. Advice only: nothing applies it behind the host's
+ * GPUs, `medium` for a Mac that may have a base M chip, `high` otherwise. Advice only: nothing applies it behind the host's
  * back, and a host may start from it and change single settings.
  *
  * Browsers say little about the GPU (Chrome gives a vendor and an
@@ -169,10 +182,12 @@ const SMALL_DEVICE_MAX_BUFFER_BYTES = 1024 * 1024 * 1024;
  * 1. a software adapter, a phone or tablet, or a mobile GPU maker: `low`;
  * 2. an adapter whose buffers are capped under 1 GiB: `low`;
  * 3. Intel: `low` unless the architecture is an Arc card's;
- * 4. Apple on a Mac: `high` (the Pro and Max chips are the target hardware).
- *    A description that names a base M chip ("Apple M2", no Pro, Max or
- *    Ultra) gives `low`, but Chrome doesn't show the chip, so a base Mac
- *    usually gets `high`;
+ * 4. Apple on a Mac: a description that names the chip decides: a base M
+ *    chip ("Apple M2", no Pro, Max or Ultra) gives `low`, a Pro, Max or
+ *    Ultra `high`. Browsers don't name it (Chrome leaves the description
+ *    empty, Safari says "apple"), so the core count stands in: more than 10
+ *    cores gives `high`, anything else `medium`. Safari reports at most 8
+ *    cores, so every Mac gets `medium` there;
  * 5. AMD: `low` when the description names integrated Radeon graphics, else
  *    `high`; NVIDIA and anything else: `high`.
  */
@@ -186,9 +201,22 @@ export function recommendPreset(adapterInfo: PresetAdapterInfo, limits: PresetAd
     if (mobile || MOBILE_VENDORS.includes(vendor)) return 'low';
     if (limits.maxBufferSize < SMALL_DEVICE_MAX_BUFFER_BYTES) return 'low';
     if (vendor === 'intel') return INTEL_DISCRETE_ARCHITECTURES.some((name) => architecture.includes(name)) ? 'high' : 'low';
-    if (vendor === 'apple') return /\bM\d+\b(?!\s*(Pro|Max|Ultra))/i.test(description) ? 'low' : 'high';
+    if (vendor === 'apple') return recommendAppleMac(description, hints.cpuCores ?? detectCpuCores());
     if (vendor === 'amd' && /radeon(\(tm\))?\s+(graphics|vega)/i.test(description)) return 'low';
     return 'high';
+}
+
+/** Rule 4: an Apple GPU on a Mac, by the chip's name when the browser gives one, else by the core count. */
+function recommendAppleMac(description: string, cpuCores: number | undefined): DDGIPresetName {
+    const chip = /\bM\d+\b(\s*(Pro|Max|Ultra))?/i.exec(description);
+    if (chip) return chip[1] ? 'high' : 'low';
+    return cpuCores !== undefined && cpuCores > APPLE_BASE_CHIP_MAX_CORES ? 'high' : 'medium';
+}
+
+/** The CPU core count from `navigator`, or undefined outside a browser. */
+function detectCpuCores(): number | undefined {
+    const cores = (globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency;
+    return typeof cores === 'number' && cores > 0 ? cores : undefined;
 }
 
 /** Whether the page runs on a phone or tablet, from `navigator` (false outside a browser). */
