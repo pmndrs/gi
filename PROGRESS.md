@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-27 · Split RC divergence from Chandra · lead (main session, Opus 5.5)
+Did: wrote [docs/radiance-cascades/divergence.md](docs/radiance-cascades/divergence.md), the Split RC counterpart of the DDGI file. It sets Chandra (`9af00e8`), the Three.js port and our native solver side by side, ranks six differences worth trying (smaller probes near the camera first), lists four we tried and keep (ray stride, history, forgetting, three levels) and three forced by WebGPU. Linked from SPEC, the research README and docs/divergence.md.
+Verified: every Chandra claim against its source at `9af00e8` (`src/cache.rs`, `src/algorithm/{rc,trace,splat}.rs`, `src/main.rs`, `scenes/sponza.json`); ours against `RC/shaders.ts` and `native.ts`. Numbers are quoted from earlier PROGRESS entries, the SPEC and DECISIONS.
+Not verified: no new measurements. The paper wasn't re-read. Chandra's flicker has never been measured. The "about 4 rays a frame per base Chandra probe" figure is an estimate from the capture camera's field of view.
+Numbers: memory of the dense grid, from the layout: 25.9 MiB at the gallery's 0.5 m cells, about 206 MiB at 0.25 m.
+Next: the file corrects two claims (§6). SRC.2's entry above says Chandra's probes sit on 6-pixel screen tiles, but its code uses a world grid of 6 scene units, about 22× smaller than our Sponza cells. And Chandra's probes get fewer rays per direction than ours, not more. RCD-01 (sparse, distance-sized probes) is the candidate for SRC.2's follow-up.
+
 ## 2026-11-27 · Split RC flicker in the native gallery · lead (main session, Opus 5.5)
 Did: Dennis saw the native solver flicker where the Three.js one is steady. Measured a still view (`camera=receiver&cue=amber`) frame by frame on the live site: native changed 11× more per frame than Three.js. Read the solver's cell irradiance each frame: cells jumped 20–60% in single frames because a bin averages only ~15 rays at history 0.8 (median 16 near, 8 far). Raised the default `history` to 0.94 in `packages/ddgi-core/src/techniques/radiance-cascades/native.ts` (DECISIONS 2026-11-27).
 Verified (Apple M5 Pro, macOS 26.6.2, Chrome 158, metal-3): the nine RC pages pass (`rc-transport`, `rc-native-core`, `rc-native-reflections`, `rc-door-response`, `rc-backends`, `rc-reconstruction`, `rc-rail`, `rc-rough-motion`, `rc-polished-quality`). Typecheck and the RC unit tests pass.
