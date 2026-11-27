@@ -48,9 +48,16 @@ import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-prob
 const WIDTH = 1280;
 const HEIGHT = 720;
 /** As the variants page: DDGI under the cache needs about 100 frames at 256 probes a frame to fill Bistro exterior's field once. */
-const WARM_FRAMES = 240;
-const TIMED_FRAMES = 120;
 const env = import.meta.env as Record<string, unknown>;
+const numberFromEnv = (name: string, fallback: number): number => (typeof env[name] === 'string' && env[name] ? Number(env[name]) : fallback);
+/**
+ * Frames before timing, and timed frames: `VITE_RC_VARIANT_TIMING_WARM_FRAMES` and `_TIMED_FRAMES`.
+ * The split runs (tools/reference/rc-variants-timing-split.ts) shorten both so a run's GPU load
+ * stays inside the clock rule's 10-15 s; the whole set at these defaults throttles the RTX 3060
+ * Laptop (2026-11-28, INVALID).
+ */
+const WARM_FRAMES = numberFromEnv('VITE_RC_VARIANT_TIMING_WARM_FRAMES', 240);
+const TIMED_FRAMES = numberFromEnv('VITE_RC_VARIANT_TIMING_TIMED_FRAMES', 120);
 const listFromEnv = (name: string): string[] | null => (typeof env[name] === 'string' && env[name] ? (env[name] as string).split(',').map((item) => item.trim()).filter(Boolean) : null);
 const SCENES = listFromEnv('VITE_RC_VARIANT_SCENES') ?? ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior', 'furnished-room'];
 const variantIds = listFromEnv('VITE_RC_VARIANTS');

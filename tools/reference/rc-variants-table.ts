@@ -12,6 +12,10 @@
  * earlier one's. `--timing`: a report of `radiance-cache-variants-timing`; `--clock`: the clock
  * file of that run (`bench-lock run --clock-file`), whose verdict (VALID, INVALID, NO VERDICT)
  * labels the GPU times. Without a clock file the times are labelled "no verdict".
+ * `--timing` may be given several times, each with its own `--clock` in the same order (the split
+ * runs of tools/reference/rc-variants-timing-split.ts). With `--valid-only` a run whose verdict
+ * isn't VALID is left out; a later run of the same scene and variant replaces an earlier one (a
+ * retry), and the heading says how many runs were kept and how many were VALID.
  * Prints Markdown to stdout.
  */
 
@@ -72,8 +76,9 @@ interface PageSummary {
 const { values } = parseArgs({
     options: {
         variants: { type: 'string', multiple: true },
-        timing: { type: 'string' },
-        clock: { type: 'string' },
+        timing: { type: 'string', multiple: true },
+        clock: { type: 'string', multiple: true },
+        'valid-only': { type: 'boolean' },
     },
 });
 
@@ -128,20 +133,37 @@ for (const sceneId of sceneIds) {
     lines.push('');
 }
 
-if (values.timing) {
-    const page = pageData(values.timing, 'radiance-cache-variants-timing');
-    const summary = values.clock ? readClockSummary(values.clock) : null;
-    const verdict = summary ? judgeTiming(summary) : null;
-    const label = verdict ? `${verdict.kind === 'valid' ? 'VALID' : verdict.kind === 'invalid' ? 'INVALID' : 'NO VERDICT'} (${verdict.reason})` : 'no verdict (no clock file)';
-    const data = page.data as { width: number; height: number; scenes: Record<string, Record<string, TimingResult>> };
-    lines.push(`#### GPU ms per frame at ${data.width}×${data.height}: radiance cache + DDGI (world cache; DDGI) — timing ${label}`, '');
-    const timingScenes = Object.keys(data.scenes).sort(sortBy(SCENE_ORDER));
+const timingPaths = values.timing ?? [];
+if (timingPaths.length > 0) {
+    const clocks = values.clock ?? [];
+    if (clocks.length > 0 && clocks.length !== timingPaths.length) throw new Error(`${timingPaths.length} --timing reports but ${clocks.length} --clock files: give one clock per report, in order`);
+    const merged: Record<string, Record<string, TimingResult>> = {};
+    const verdicts: string[] = [];
+    let size = '?';
+    let kept = 0;
+    for (const [index, path] of timingPaths.entries()) {
+        const page = pageData(path, 'radiance-cache-variants-timing');
+        const summary = clocks[index] ? readClockSummary(clocks[index]) : null;
+        const verdict = summary ? judgeTiming(summary) : null;
+        const label = verdict ? (verdict.kind === 'valid' ? 'VALID' : verdict.kind === 'invalid' ? 'INVALID' : 'NO VERDICT') : 'no verdict';
+        verdicts.push(verdict ? `${label} (${verdict.reason})` : 'no verdict (no clock file)');
+        if (values['valid-only'] && label !== 'VALID') continue;
+        kept++;
+        const data = page.data as { width: number; height: number; scenes: Record<string, Record<string, TimingResult>> };
+        size = `${data.width}×${data.height}`;
+        // A later run of the same scene and variant replaces an earlier one (a retry).
+        for (const [scene, results] of Object.entries(data.scenes)) Object.assign((merged[scene] ??= {}), results);
+    }
+    const valid = verdicts.filter((verdict) => verdict.startsWith('VALID')).length;
+    const heading = timingPaths.length === 1 ? `timing ${verdicts[0]}` : `${kept} of ${timingPaths.length} runs${values['valid-only'] ? ' (VALID only)' : ''}, ${valid} VALID`;
+    lines.push(`#### GPU ms per frame at ${size}: radiance cache + DDGI (world cache; DDGI) — ${heading}`, '');
+    const timingScenes = Object.keys(merged).sort(sortBy(SCENE_ORDER));
     lines.push(`| Variant | ${timingScenes.join(' | ')} |`);
     lines.push(`|---|${timingScenes.map(() => '---').join('|')}|`);
-    const variantIds = [...new Set(timingScenes.flatMap((scene) => Object.keys(data.scenes[scene])))].sort(sortBy(VARIANT_ORDER));
+    const variantIds = [...new Set(timingScenes.flatMap((scene) => Object.keys(merged[scene])))].sort(sortBy(VARIANT_ORDER));
     for (const variantId of variantIds) {
         const cells = timingScenes.map((scene) => {
-            const result = data.scenes[scene][variantId];
+            const result = merged[scene][variantId];
             if (!result) return '';
             const neural = result.neuralTailMsMedian ? `; NRC ${result.neuralTailMsMedian.toFixed(2)}` : '';
             return `${result.totalMsMedian.toFixed(2)} (${result.worldCacheMsMedian.toFixed(2)}; ${result.ddgiMsMedian.toFixed(2)}${neural})`;
