@@ -205,7 +205,19 @@ On two-room with the GI denoiser off (`VITE_RC_COMPARE=denoiser=false`), the lig
 
 **Still not VALID.** The run that was meant to be the VALID one ran on 2026-11-28 under the bench lock with the cool wait, covering all ten presets on all seven scenes. It came out INVALID: thermal throttling in 99.5% of 7,710 loaded samples. The cool wait started it at 69 C after 5 s, and 27 minutes of timed GPU load (70 runs of 240 warm-up and 120 timed frames each) holds the RTX 3060 Laptop at its thermal limit. The SM clock under load had a median of 1,282 MHz. The clock rule asks for a timed section of 10-15 s. A VALID run therefore needs splitting into short runs, each with its own cool wait: one scene and two or three presets a run (`VITE_RC_VARIANT_SCENES`, `VITE_RC_VARIANTS`), and perhaps fewer warm-up frames. That split hasn't been done.
 
-The numbers below are that run's, for comparing the variants with each other only. They tell the same story as the earlier dry run (82 C start, without RC3.6's presets). On the big scenes, budgeted cells are cheapest, then the grid over DDGI, then SHaRC, and the grid alone and the neural tail are dearest. RC3.6's presets cost about what the grid alone does. Throttling moves single cells by up to a quarter between the two runs: Sponza's grid alone read 35 ms in one and 38 ms in the other, the neural tail 38 and 32. Don't read small differences.
+**Split runs, 2026-11-28 (partly VALID).** `tools/reference/rc-variants-timing-split.ts` splits the timing into 46 short runs, each with its own cool wait (to 50 C), 40 warm-up frames, a 30 s idle pause and 30 timed frames. Five runs finished before the overnight queue was stopped (Dennis, 2026-11-28: the machine was too busy to wait longer), all on Bistro exterior and all VALID:
+
+| Variant | Bistro exterior, GPU ms per frame at 1280×720 (world cache; DDGI) |
+|---|---|
+| budgeted | 20.78 (6.11; 2.70) |
+| gi12-ddgi | 21.81 (7.09; 2.76) |
+| sharc | 26.21 (14.24; 0.00) |
+| sharc-ddgi | 28.72 (14.06; 2.73) |
+| gi12-rays | 29.28 (17.26; 0.00) |
+
+The neural tail and RC3.6's presets weren't reached. The VALID ordering is the INVALID run's: budgeted cells cheapest, then the grid over DDGI, then SHaRC, with the grid alone dearest. DDGI stacked under SHaRC is pure cost (+2.5 ms), as its picture is SHaRC's own.
+
+The numbers below are the INVALID full run's, for comparing the variants with each other only. They tell the same story as the earlier dry run (82 C start, without RC3.6's presets). On the big scenes, budgeted cells are cheapest, then the grid over DDGI, then SHaRC, and the grid alone and the neural tail are dearest. RC3.6's presets cost about what the grid alone does. Throttling moves single cells by up to a quarter between the two runs: Sponza's grid alone read 35 ms in one and 38 ms in the other, the neural tail 38 and 32. Don't read small differences.
 
 **GPU ms per frame at 1280×720: radiance cache + DDGI (world cache; DDGI). Timing INVALID: thermal throttling in 99.5% of loaded samples.**
 
@@ -298,6 +310,6 @@ What would change this:
 ## Still open
 
 - **References:** Sponza's `upper-gallery` is not rendered yet. To add it, run the variants page with `VITE_RC_VARIANT_VIEWS=upper-gallery`, then pass every report to the table script.
-- **A VALID timing run.** The full run (all ten presets on seven scenes, 27 minutes) throttled in 99.5% of its loaded samples even with the cool wait. It needs splitting into short runs, each with its own cool wait: one scene and two or three presets a run.
+- **VALID timing for the rest.** Five of 46 split runs are VALID (Bistro exterior, five presets). The other scenes, the neural tail and RC3.6's presets are relative (INVALID) only. `node tools/reference/rc-variants-timing-split.ts` resumes them when the GPU is free; the 30 s pause keeps each run under the clock rule.
 - **The Mac** (M5 Pro, the target GPU): memory (the grid's 1 GiB), the f16 tail, and the timing.
 - **The lag every variant shares.** After the lights double, the picture takes over a second to reach 90%, about the same for every variant. Most of it is in the screen probes and the world cache, not in the choice of world cache. That needs its own look at the change resets, outside this task.
