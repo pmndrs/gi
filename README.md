@@ -64,6 +64,7 @@ Where to go next:
 - [docs/api/three.md](docs/api/three.md): the three.js adapter, every option, and what it does with your scene.
 - [docs/guides/adapter.md](docs/guides/adapter.md): GI from plain WebGPU, or an adapter for another engine, step by step through [examples/webgpu/hello/](examples/webgpu/hello/).
 - [docs/api/platform.md](docs/api/platform.md): the engine-free API, `@pmndrs/gi/core` and `@pmndrs/gi/ddgi`.
+- [docs/api/radiance-cache.md](docs/api/radiance-cache.md): the second technique, the radiance cache (screen probes over a world cache, from AMD GI-1.0/1.2), with three.js or without; its example is `12-radiance-cache`. [DDGI or the radiance cache](docs/guides/ddgi-or-radiance-cache.md) says which to use, and how to stack DDGI under the cache.
 
 The examples run from this repository: `pnpm install`, then `pnpm examples`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
@@ -88,7 +89,9 @@ GI runs on WebGPU only; there is no WebGL fallback.
 - [The three.js adapter](docs/api/three.md): every option, and what it does with your scene.
 - [The platform API](docs/api/platform.md): `@pmndrs/gi/core` and `@pmndrs/gi/ddgi` on a bare `GPUDevice`.
 - [Writing an adapter](docs/guides/adapter.md): GI from plain WebGPU, or for another engine, step by step.
-- [The radiance cache's design](docs/design/radiance-cache.md): what `@pmndrs/gi/radiance-cache` ports from AMD GI-1.0/1.2 and every way it differs. Its API page is still to come.
+- [The radiance cache](docs/api/radiance-cache.md): `@pmndrs/gi/radiance-cache` from three.js or on a bare `GPUDevice`, every setting, what it needs and its limits.
+- [DDGI or the radiance cache](docs/guides/ddgi-or-radiance-cache.md): how the two differ, which to use, and stacking DDGI under the cache.
+- [The radiance cache's design](docs/design/radiance-cache.md): what it takes from AMD GI-1.0/1.2 and every way it differs.
 - [Examples](https://pmndrs.github.io/gi/).
 - [CHANGELOG.md](CHANGELOG.md): what each release contains.
 - [THIRD_PARTY.md](THIRD_PARTY.md): code from others and the test scenes, with their licences.

@@ -26,10 +26,11 @@ The examples read the library straight from `packages/`, so a change to it shows
 | 09 | **Export to LightProbeGrid** (`09-lightprobegrid`) | `volume.exportLightProbeGrid()`, three's own `LightProbeGrid` as a static fallback, wiped against live GI by the mouse; download it as JSON. |
 | 10 | **Debug views** (`10-debug`) | The probes where they sit and in their state's colour, the screen debug views (GI only, coverage, probe states; `?view=`), and the irradiance atlas, drawn in three from the technique's debug outputs (`10-debug/debug-views.ts`). |
 | 11 | **Split Radiance Cascades** ([source](11-radiance-cascades/)) | A procedural passage with changing emission, a repeatable camera route and direct, indirect and composite views. Compare the native WebGPU solver with the Three.js reference. |
+| 12 | **Radiance cache** (`12-radiance-cache`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
 
 ## Split Radiance Cascades scenes
 
-Run `pnpm examples`, then choose a starting scene. The examples index includes these five links. The separate GI-1.2 radiance-cache viewer from [PR #41](https://github.com/pmndrs/gi/pull/41) runs with `pnpm dev` at [localhost:5200](http://localhost:5200/?technique=rc).
+Run `pnpm examples`, then choose a starting scene. The examples index includes these five links. The radiance cache (GI-1.2) has its own example, 12; the viewer shows it on every test scene with its compare panel: `pnpm dev`, then [localhost:5200](http://localhost:5200/?technique=rc).
 
 - [Lamp gallery camera rail](http://localhost:5203/11-radiance-cascades/) follows a repeatable route past rooms with changing emission.
 - [Sliding shutter](http://localhost:5203/11-radiance-cascades/?scene=door&camera=receiver&view=indirect) holds the camera on a wall while the door blocks and reveals the lamp. Switch the door to Open or Closed to hold either endpoint.
@@ -47,7 +48,7 @@ Run `pnpm examples`, then choose a starting scene. The examples index includes t
 
 - `shared/renderer.ts`: three's `WebGPURenderer` on a device with the limits GI needs (`createGIRenderer`), filling the window, and orbit controls.
 - `shared/scene.ts`: the repo's procedural test scenes (`scenes/`, made in code, MIT) as three scenes, with their lights, sky, camera bookmarks and suggested probe box. Downloaded models are left out: the site ships only what we can share.
-- `shared/stats.ts`: the line at the bottom: probes, GPU time, memory, the probes' mean irradiance and the frame count.
+- `shared/stats.ts`: the line at the bottom: probes, GPU time, memory, the probes' mean irradiance and the frame count. `shared/cache-stats.ts` is 12's: screen probes, memory, the mean irradiance the composite reads and the frame count.
 - `shared/status.ts`: the same numbers on `window.ddgiExample` (`{ frames, giMean, error }`), for the browser console and for the repo's check of the built site.
 - `shared/nav.ts`: the bar at the top of each page (back to the examples, the title, the source). `vite.config.ts` adds it to every page, so an example never imports it.
 
