@@ -93,6 +93,7 @@ import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import type { HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_BINDING, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL, cellShadingListLayout, type CellShadingListLayout } from './cell-shading-common.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
+import { TEMPORAL_FEEDBACK_WGSL } from './temporal-feedback.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
 
 /** `GPUShaderStage.COMPUTE` (the global doesn't exist in Node, where the tests import this file). */
@@ -608,7 +609,13 @@ fn ${POPULATION_ENTRY_POINT.populateScreenProbes}(
  * as Capsaicin's `sampleParams` are, and used by `PopulateCells` (for the
  * sky, the cosine-weighted direction `giSkyLightRay` rebuilds from them).
  *
- * Built with the platform's hit-shading module (group 0).
+ * With `gi1_use_temporal_feedback` (RC3.6, register D68; temporal-feedback.ts),
+ * a hit last frame's screen showed gives its probe ray last frame's lit image
+ * there and joins no resolve list (its probe ray reads no cell and gets no
+ * bypass additions); its cell still gets this hit's light sample.
+ *
+ * Built with the platform's hit-shading module (group 0); last frame's screen
+ * for the feedback in group 3.
  */
 export function generateReservoirsWgsl(layout: HashGridCacheBufferLayout): string {
     const size = POPULATION_WORKGROUP_SIZE.generateReservoirs;
@@ -617,6 +624,7 @@ ${CAPSAICIN_WGSL}
 ${populationHeadWgsl(layout)}
 ${PROBE_RAY_SURFACE_WGSL}
 ${CELL_SHADING_COMMON_WGSL}
+${TEMPORAL_FEEDBACK_WGSL}
 
 ${LIGHT_MASK_WGSL}
 @compute @workgroup_size(${size})
@@ -649,12 +657,31 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
         return; // do not continue past an emissive surface
     }
 
+    // Temporal radiance feedback (gi1.comp:2454-2496, gi1_use_temporal_feedback; register D68): where
+    // last frame's screen showed this hit, its probe ray takes last frame's lit image there (direct
+    // light and every bounce the image holds, averaged by the probes' history) and reads no
+    // cell: it joins no resolve list and gets no bypass additions. Unlike Capsaicin, the lit value
+    // isn't added to the cell, where its later bounces would be counted again with the cell's
+    // indirect value; the cell gets this hit's own light sample below, as without feedback.
+    var reads_cell = true;
+    if (g_HashGridCacheConstants.temporal_feedback != 0u && g_HashGridCacheConstants.use_direct_lighting != 0u) {
+        let previous_lighting = HashGridCache_TemporalFeedback(surface);
+        if (previous_lighting.w > 0.0) {
+            ScreenProbes_AccumulateRadiance(query_index, GIDenoiser_RemoveNaNs(previous_lighting.rgb));
+            reads_cell = false;
+        }
+    }
+
     // Lever E8 (cells lit on a budget): the hit offers itself as its cell's sample and, if its ray
     // is at least a cell long, joins the resolve list with no light of its own; its cell is lit by
     // ClaimCells-ShadeCells. A shorter ray reads no cell, so it is still lit per hit below.
     // Unlike per hit with multibounce off, a hit is resolved without knowing whether it has a light.
+    // A hit that took last frame's light (above) has its light already: it only offers its sample.
     if (HashGridCache_CellShadingBudgeted()) {
         HashGridCache_OfferCellSample(did, HashGridCache_RayListWord(g_HashGridCache_RayLists.visibility_cell_buffer, did));
+        if (!reads_cell) {
+            return;
+        }
         if (!HashGridCache_ShorterThanCell(probe_ray.origin, surface.position)) {
             let budgeted_resolve_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 1u);
             HashGridCache_SetRayListWord(g_HashGridCache_RayLists.resolve_buffer, budgeted_resolve_index, did);
@@ -683,9 +710,6 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
         return;
     }
 
-    // Resolve cells (no reservoir only discards nee, not second bounce contrib we need to resolve into screen probes)
-    let resolve_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 1u);
-
     // Here, we check that the ray has traversed at least a full hash cell
     // before hitting something.
     // If it hasn't, we bypass the filtering from the cache (although we
@@ -694,13 +718,19 @@ fn ${POPULATION_ENTRY_POINT.generateReservoirs}(
     // bright event on its other side (the diagram at gi1.comp:2533-2551).
     // Capsaicin measures from the probe's pixel on the depth buffer; the probe ray's origin is
     // that point pushed off the surface (register D17).
+    // A probe ray lit by the feedback above reads no cell and takes no bypass light: only its
+    // cell's sample follows.
     let cell_size  = HashGridCache_GetCellSize(surface.position);
     let ray_length = distance(probe_ray.origin, surface.position);
 
-    let bypass_cache = ray_length < cell_size;
+    let bypass_cache = reads_cell && ray_length < cell_size;
     let bypass_bit = select(0u, HASHGRIDCACHE_BYPASS_BIT, bypass_cache);
 
-    HashGridCache_SetRayListWord(g_HashGridCache_RayLists.resolve_buffer, resolve_index, did | bypass_bit);
+    // Resolve cells (no reservoir only discards nee, not second bounce contrib we need to resolve into screen probes)
+    if (reads_cell) {
+        let resolve_index = atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_RESOLVECOUNTBUFFER], 1u);
+        HashGridCache_SetRayListWord(g_HashGridCache_RayLists.resolve_buffer, resolve_index, did | bypass_bit);
+    }
     if (bypass_cache) {
         HashGridCache_SetRayListWord(g_HashGridCache_RayLists.first_bounce_bypass_buffer, did, 1u);
     }
@@ -1478,6 +1508,15 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
             let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
             second_radiance = direct_radiance.rgb / max(direct_radiance.w, 1.0);
             adds_sample = !HashGridCache_CellShadingBudgeted() || direct_radiance.w > 0.0;
+        }
+        // RC3.6 (register E12, cache feedback): the second hit's cell also brings its indirect
+        // value, the light it reflects from every bounce the cache holds (this frame's, from last
+        // frame's samples), so the first-bounce cell's indirect value carries every bounce, one more
+        // a frame. Not where the segment bypasses: the cell may hold light from the wall's other side
+        // (register D38), and the segment's own sample is direct light only.
+        if (g_HashGridCacheConstants.cache_feedback != 0u && !segment_bypasses) {
+            let indirect_radiance = HashGridCache_FilteredRadianceIndirect(cell_index);
+            second_radiance += indirect_radiance.rgb / max(indirect_radiance.w, 1.0);
         }
         // P6.4 (register E11): the neural tail's answer for the second hit, the light it reflects
         // from indirect light (every later bounce, as the network has learned the grid's indirect

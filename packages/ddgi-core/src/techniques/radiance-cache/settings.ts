@@ -54,7 +54,18 @@ export interface RadianceCacheSettings {
      * `GenerateReservoirs`, gi1.comp:2439-2452). Read since phase 2.
      */
     useDirectLighting: boolean;
-    /** `gi1_use_temporal_feedback` (gi1.h:54, default false): last frame's lit image fed back at hits. Phase 3. */
+    /**
+     * `gi1_use_temporal_feedback` (gi1.h:54, default false, as Capsaicin; RC3.6,
+     * register D68): a probe ray whose hit was on last frame's screen (on the
+     * same plane, facing the same way) reads last frame's lit image there, the
+     * host's lit colour plus albedo / π × E, every bounce the image holds,
+     * instead of its world-cache cell; the cell keeps its own light sample.
+     * Capsaicin also adds that image into the cell, where it is counted again
+     * with the cell's indirect value: fixed here (D68). On, the technique asks
+     * the host for `FrameScreen.lighting` and `.albedo` (fixed at construction,
+     * as for `ssgi`); turned on later without them it has no lit image and does
+     * nothing. GI-1.2 hash grid only. Read every frame.
+     */
     useTemporalFeedback: boolean;
     /** `gi1_use_multibounce` (gi1.h:55, default true): GI-1.2's second-bounce cells. Phase 3. */
     useMultibounce: boolean;
@@ -212,6 +223,16 @@ export interface RadianceCacheSettings {
     /** The cells' indirect sample cap with the second bounce from a fallback (E10; default 4). Read every frame. */
     fallbackIndirectSampleCount: number;
     /**
+     * Experiment E12 (RC3.6; not Capsaicin's): with GI-1.2's own second-bounce
+     * rays, a second hit brings its cell's indirect value as well as its direct
+     * one, so the world cache carries every bounce, one more each frame. Off
+     * (the default) is GI-1.2's two bounces. No effect with the second bounce
+     * from a stacked technique (E10, which holds every bounce already) or with
+     * the neural tail (P6.4, which is the same estimate). Details on
+     * `HashGridCacheOptions.cacheFeedback`. Read every frame.
+     */
+    cacheFeedback: boolean;
+    /**
      * The world-cache backend (P6.1): `gi1-hash-grid` (Capsaicin's, the
      * default; the `hashGridCache*` and multibounce options above are its) or
      * `sharc`. Read at `prepare`: changing it makes the other cache there.
@@ -304,7 +325,7 @@ export interface RadianceCacheSettings {
 export const SCREEN_HISTORY_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['probeBlend', 'emptyCellFill', 'backupFillsAsHistory'];
 
 /** Settings read at `prepare` only: changing one makes the technique again (the viewer restarts it; compare-toggles.ts). */
-export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'ssgi', 'neuralCache'];
+export const PREPARE_SETTINGS: readonly (keyof RadianceCacheSettings)[] = ['worldCache', 'ssgi', 'neuralCache', 'useTemporalFeedback'];
 
 /** Capsaicin's defaults (gi1.h:48-71, and SSGI's, ssgi.h:47-50). */
 export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = Object.freeze({
@@ -342,6 +363,7 @@ export const DEFAULT_RADIANCE_CACHE_SETTINGS: Readonly<RadianceCacheSettings> = 
     cellChangeResetHistory: 0,
     secondBounce: 'auto',
     fallbackIndirectSampleCount: 4,
+    cacheFeedback: false,
     worldCache: 'gi1-hash-grid',
     sharc: Object.freeze({}),
     // Ours (RC4.1, decided: DECISIONS 2026-11-19); compare-toggles.ts lists Capsaicin's values.

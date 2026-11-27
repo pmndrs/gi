@@ -106,9 +106,12 @@ import {
     purgeTilesWgsl,
 } from './hash-grid-wgsl.ts';
 import type { WorldCache, WorldCacheChanges, WorldCacheContext, WorldCacheFrame, WorldCacheLookup, WorldCacheProbeRays } from './world-cache.ts';
+import { TEMPORAL_FEEDBACK_GROUP, TEMPORAL_FEEDBACK_GROUP_ENTRIES, TEMPORAL_FEEDBACK_UNIFORM_BYTES, temporalFeedbackUniformWords, type WorldCacheTemporalFeedback } from './temporal-feedback.ts';
 
 /** `GPUBufferUsage` bits (the global doesn't exist in Node, where the tests import this file). */
 const BUFFER_USAGE = { copySrc: 0x4, copyDst: 0x8, uniform: 0x40, storage: 0x80 } as const;
+/** `GPUTextureUsage.TEXTURE_BINDING` (the global doesn't exist in Node). */
+const TEXTURE_BINDING_USAGE = 0x4;
 
 const WORD_BYTES = 4;
 
@@ -241,7 +244,19 @@ interface Prepared {
     /** `HashGridCacheCellShading` (E8's budget and the change events, read by E8 and E9). */
     readonly cellShadingUniform: GPUBuffer;
     readonly timer: WorldCacheContext['timer'];
+    /** RC3.6 (register D68): `GenerateReservoirs`' group 3, last frame's screen for `useTemporalFeedback`. */
+    readonly temporalFeedback: TemporalFeedbackResources;
     readonly memoryBytes: number;
+}
+
+/** `GenerateReservoirs`' group 3: its uniform, and 1 x 1 textures bound while there is no last frame to read. */
+interface TemporalFeedbackResources {
+    readonly uniform: GPUBuffer;
+    readonly layout: GPUBindGroupLayout;
+    readonly placeholderColor: GPUTexture;
+    readonly placeholderDepth: GPUTexture;
+    /** The group for the textures it was made with (made again when they change: a resize). */
+    group: { readonly textures: readonly GPUTexture[]; readonly group: GPUBindGroup } | null;
 }
 
 /** The per-ray lists for one screen's probe rays, and the ray-data bind groups over them. */
@@ -286,6 +301,8 @@ export class HashGridCache implements WorldCache {
      * trains or answers for the frames before the second bounce settles (P6.4's review).
      */
     private secondBouncePending = false;
+    /** RC3.6: whether this frame's `GenerateReservoirs` reads last frame's screen (`temporal_feedback`). */
+    private temporalFeedbackThisFrame = false;
 
     /** `options` is kept and read live (the technique passes its settings); without it, a copy of Capsaicin's defaults. */
     constructor(options: HashGridCacheOptions = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS }) {
@@ -423,8 +440,10 @@ export class HashGridCache implements WorldCache {
         const rayDataGroup = { label: 'radiance-cache/hash-grid ray data', entries: RAY_DATA_GROUP_ENTRIES };
         const word = (counter: number): GpuWord => ({ buffer: buffers.tileWords, offset: counter * WORD_BYTES });
         /** A population kernel: the hash grid in group 1, the ray data in group 2, the platform's hit shading in group 0 when it shades. */
-        const populationKernel = (label: string, code: string, entryPoint: string, shades: boolean): Promise<ComputeKernel> =>
-            kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup] });
+        const populationKernel = (label: string, code: string, entryPoint: string, shades: boolean, extraGroups: readonly GPUBindGroupLayoutDescriptor[] = []): Promise<ComputeKernel> =>
+            kernels.computeKernel({ label: `radiance-cache/${label}`, modules: shades ? [shade.module] : [], code, entryPoint, ownGroups: [cacheGroup, rayDataGroup, ...extraGroups] });
+        // RC3.6 (register D68): last frame's screen for the temporal feedback, GenerateReservoirs' group 3.
+        const temporalFeedbackGroup = { label: 'radiance-cache/temporal feedback', entries: TEMPORAL_FEEDBACK_GROUP_ENTRIES };
         const indirectArgs = (label: string, counter: number, itemsPerWorkgroup: number): Promise<GpuIndirectArgs> =>
             compute.createIndirectArgs({ label: `radiance-cache/${label}`, count: word(counter), itemsPerWorkgroup });
 
@@ -448,7 +467,7 @@ export class HashGridCache implements WorldCache {
             indirectArgs('PurgeTiles (ping-pong 0)', HASH_GRID_COUNTER.packedTileCount1, PURGE_TILES_WORKGROUP_SIZE),
             indirectArgs('PurgeTiles (ping-pong 1)', HASH_GRID_COUNTER.packedTileCount0, PURGE_TILES_WORKGROUP_SIZE),
             populationKernel('PopulateScreenProbes (cache half)', populateScreenProbesWgsl(layout), POPULATION_ENTRY_POINT.populateScreenProbes, false),
-            populationKernel('GenerateReservoirs', generateReservoirsWgsl(layout), POPULATION_ENTRY_POINT.generateReservoirs, true),
+            populationKernel('GenerateReservoirs', generateReservoirsWgsl(layout), POPULATION_ENTRY_POINT.generateReservoirs, true, [temporalFeedbackGroup]),
             populationKernel('PopulateCells', populateCellsWgsl(layout), POPULATION_ENTRY_POINT.populateCells, true),
             populationKernel('UpdateTiles', updateTilesWgsl(layout), POPULATION_ENTRY_POINT.updateTiles, false),
             populationKernel('ResolveCells', resolveCellsWgsl(layout), POPULATION_ENTRY_POINT.resolveCells, false),
@@ -517,10 +536,18 @@ export class HashGridCache implements WorldCache {
             shadeCells: pass(shadeKernel, shadeArgs),
         };
 
+        const temporalFeedback: TemporalFeedbackResources = {
+            uniform: device.createBuffer({ label: 'radiance-cache/temporal feedback', size: TEMPORAL_FEEDBACK_UNIFORM_BYTES, usage: BUFFER_USAGE.uniform | BUFFER_USAGE.copyDst }),
+            layout: generateReservoirs.ownLayouts[TEMPORAL_FEEDBACK_GROUP - HASH_GRID_KERNEL_GROUP],
+            placeholderColor: device.createTexture({ label: 'radiance-cache/temporal feedback placeholder', size: [1, 1], format: 'rgba16float', usage: TEXTURE_BINDING_USAGE }),
+            placeholderDepth: device.createTexture({ label: 'radiance-cache/temporal feedback depth placeholder', size: [1, 1], format: 'r32float', usage: TEXTURE_BINDING_USAGE }),
+            group: null,
+        };
+
         const purgeArgs = [purgeArgs0, purgeArgs1] as const;
         const allArgs = [...purgeArgs, ...Object.values(populationPasses).map((populationPass) => populationPass.args), claimFirstArgs, claimSecondArgs, scatterArgs, shadeArgs];
         const argsBytes = allArgs.reduce((sum, args) => sum + args.memoryBytes, 0);
-        const memoryBytes = layout.totalBytes + HASH_GRID_CONSTANTS_BYTES + RAY_LISTS_UNIFORM_BYTES + CELL_SHADING_UNIFORM_BYTES + argsBytes;
+        const memoryBytes = layout.totalBytes + HASH_GRID_CONSTANTS_BYTES + RAY_LISTS_UNIFORM_BYTES + CELL_SHADING_UNIFORM_BYTES + TEMPORAL_FEEDBACK_UNIFORM_BYTES + argsBytes;
         this.prepared = {
             device,
             capacity,
@@ -540,6 +567,7 @@ export class HashGridCache implements WorldCache {
             rayListsUniform,
             cellShadingUniform,
             timer: context.timer,
+            temporalFeedback,
             memoryBytes,
         };
         this.bufferPingPong = 0;
@@ -644,6 +672,7 @@ export class HashGridCache implements WorldCache {
         // restart (if any) comes before the constants, which read whether it is active.
         const tail = hashGridTailRuns(this.options.useMultibounce, secondBounce, this.secondBouncePending) ? this.tail : null;
         tail?.beginFrame(frame);
+        this.writeTemporalFeedback(prepared, frame.temporalFeedback);
         this.writeConstants(prepared, frame, secondBounce, tail?.active ?? false);
 
         // Capsaicin empties the cache when the cell size, the smallest cell size or multibounce
@@ -721,6 +750,9 @@ export class HashGridCache implements WorldCache {
         if (!prepared) return;
         for (const buffer of Object.values(prepared.buffers)) buffer.destroy();
         prepared.rayListsUniform.destroy();
+        prepared.temporalFeedback.uniform.destroy();
+        prepared.temporalFeedback.placeholderColor.destroy();
+        prepared.temporalFeedback.placeholderDepth.destroy();
         for (const args of prepared.purgeArgs) args.dispose();
         for (const populationPass of Object.values(prepared.population)) populationPass.args.dispose();
         const cellShading = prepared.cellShading;
@@ -802,8 +834,42 @@ export class HashGridCache implements WorldCache {
         populationPass.kernel.bind(pass);
         pass.setBindGroup(HASH_GRID_KERNEL_GROUP, populationPass.cacheGroup);
         pass.setBindGroup(RAY_DATA_GROUP, rayData.groups[name]);
+        if (name === 'generateReservoirs') {
+            const feedbackGroup = prepared.temporalFeedback.group?.group;
+            if (!feedbackGroup) throw new Error('@pmndrs/gi: the world cache records GenerateReservoirs before its temporal-feedback group is made');
+            pass.setBindGroup(TEMPORAL_FEEDBACK_GROUP, feedbackGroup);
+        }
         pass.dispatchWorkgroupsIndirect(populationPass.args.buffer, 0);
         pass.end();
+    }
+
+    /**
+     * RC3.6 (register D68): whether this frame's `GenerateReservoirs` reads last
+     * frame's screen (`useTemporalFeedback`, with direct lighting, and a last
+     * frame to read), its uniform, and its group 3 (placeholders without one).
+     */
+    private writeTemporalFeedback(prepared: Prepared, feedback: WorldCacheTemporalFeedback | undefined): void {
+        const options = this.options;
+        const resources = prepared.temporalFeedback;
+        const reads = options.useTemporalFeedback && options.useDirectLighting && feedback !== undefined;
+        this.temporalFeedbackThisFrame = reads;
+        if (reads) prepared.device.queue.writeBuffer(resources.uniform, 0, temporalFeedbackUniformWords(feedback));
+        const textures = reads ? [feedback.lighting, feedback.depth, feedback.normal] : [resources.placeholderColor, resources.placeholderDepth, resources.placeholderColor];
+        const current = resources.group;
+        if (current && current.textures.every((texture, index) => texture === textures[index])) return;
+        resources.group = {
+            textures,
+            group: prepared.device.createBindGroup({
+                label: 'radiance-cache/GenerateReservoirs temporal feedback',
+                layout: resources.layout,
+                entries: [
+                    { binding: 0, resource: { buffer: resources.uniform } },
+                    { binding: 1, resource: textures[0].createView() },
+                    { binding: 2, resource: textures[1].createView() },
+                    { binding: 3, resource: textures[2].createView() },
+                ],
+            }),
+        };
     }
 
     /** Experiment E10's `SampleBounceSourceCells`, with the fallback's resources in group 3. */
@@ -989,6 +1055,10 @@ export class HashGridCache implements WorldCache {
         // already holds the sky that reaches a hit (radiance-cache-ddgi-bounce's sky section).
         words[word.environmentLightEnable] = hashGridCacheSamplesSky(options, secondBounce) ? 1 : 0;
         words[word.useNeuralTail] = tailActive ? 1 : 0;
+        // E12: read only on GI-1.2's own second-bounce rays (UpdateMultibounceCells), and not with the
+        // tail, which is the same estimate of the later bounces.
+        words[word.cacheFeedback] = options.cacheFeedback && !tailActive ? 1 : 0;
+        words[word.temporalFeedback] = this.temporalFeedbackThisFrame ? 1 : 0;
         prepared.device.queue.writeBuffer(prepared.buffers.constants, 0, bytes);
     }
 

@@ -490,6 +490,27 @@ export const RADIANCE_CACHE_COMPARE_TOGGLES: readonly CompareToggle[] = [
         capsaicin: 'off',
         help: "With GI-1.2's own second-bounce rays only (the cache alone, or the second bounce from GI-1.2's rays): a small network (pmndrs/pathtracer's, from its private package) learns the cells' indirect light and answers the bounces past the second, so the cache carries every bounce. Off (the default, Capsaicin's) is two bounces. With DDGI giving the second bounce, or without the package, it stays off and warns once.",
     }),
+    // ---- More than two bounces (RC3.6, register E12 and D68) ----
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'cacheFeedback',
+        group: 'world-cache',
+        label: 'Cache feedback (every bounce)',
+        urlName: 'rcfeedback',
+        register: 'E12',
+        capsaicin: false,
+        help: "With GI-1.2's own second-bounce rays (the cache alone): a second bounce also brings the light its cell holds from the bounces before, so the cache carries every bounce, one more each frame. Off (the default, Capsaicin's) is two bounces. No effect with DDGI giving the second bounce (it holds every bounce already) or with the neural tail.",
+    }),
+    toggle<CompareBooleanToggle>({
+        kind: 'boolean',
+        setting: 'useTemporalFeedback',
+        group: 'world-cache',
+        label: "Last frame's image at hits (temporal feedback)",
+        urlName: 'rctemporal',
+        register: 'D68',
+        capsaicin: false,
+        help: "A probe ray whose hit was on screen last frame reads last frame's lit picture there (every bounce it shows) instead of the cache. Off is Capsaicin's default. Capsaicin's own version also adds that light into the cache, where the later bounces are counted twice; ours leaves the cache alone. Changing it restarts the radiance cache (it needs the lit picture from the host).",
+    }),
 
     // ---- The GI denoiser (RC4.3, register D65-D66) ----
     toggle<CompareBooleanToggle>({
