@@ -8,9 +8,9 @@
  * Everything comes from the public API: `gi.stats` for frames and memory,
  * and `cache.probes` for the irradiance image the composite reads. The mean
  * is one GPU readback, so it runs only every few seconds. There is no GPU
- * time: from three.js, `gi.stats.passes` doesn't hold the cache's
- * screen-stage passes (they run inside three's render, after the platform's
- * timestamps were resolved), so their sum would leave out most of its cost.
+ * time: `gi.stats.passes` doesn't hold the cache's passes (they run in
+ * `encodeScreen`, after the platform resolved its timestamps at the end of
+ * `encode`), so their sum would leave out nearly all of its cost.
  */
 
 import { halfToFloat, type GIPlatform } from '@pmndrs/gi/core';
