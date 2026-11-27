@@ -58,6 +58,8 @@ const numberFromEnv = (name: string, fallback: number): number => (typeof env[na
  */
 const WARM_FRAMES = numberFromEnv('VITE_RC_VARIANT_TIMING_WARM_FRAMES', 240);
 const TIMED_FRAMES = numberFromEnv('VITE_RC_VARIANT_TIMING_TIMED_FRAMES', 120);
+/** `VITE_RC_VARIANT_TIMING_PAUSE_MS`: idle this long before the timed frames (0 by default). */
+const PAUSE_BEFORE_TIMED_MS = numberFromEnv('VITE_RC_VARIANT_TIMING_PAUSE_MS', 0);
 const listFromEnv = (name: string): string[] | null => (typeof env[name] === 'string' && env[name] ? (env[name] as string).split(',').map((item) => item.trim()).filter(Boolean) : null);
 const SCENES = listFromEnv('VITE_RC_VARIANT_SCENES') ?? ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior', 'furnished-room'];
 const variantIds = listFromEnv('VITE_RC_VARIANTS');
@@ -178,6 +180,9 @@ async function timeVariant(device: GPUDevice, loaded: Loaded, preset: RadianceCa
         }
         await timer.drain();
         timer.takeSamples();
+        // The split runs idle here so the card cools between the warm-up and the timed frames
+        // (it reaches its 87 C target about 8 s into a GPU-bound load from 50 C).
+        if (PAUSE_BEFORE_TIMED_MS > 0) await new Promise((resolve) => setTimeout(resolve, PAUSE_BEFORE_TIMED_MS));
         for (let index = 0; index < TIMED_FRAMES; index++) await frame(true);
         await timer.drain();
         const samples = timer.takeSamples();
