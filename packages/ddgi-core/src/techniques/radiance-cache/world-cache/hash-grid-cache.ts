@@ -716,6 +716,9 @@ export class HashGridCache implements WorldCache {
         } else if (useMultibounce && this.tail && secondBounce === 'fallback' && !this.tailInactiveWarned) {
             this.tailInactiveWarned = true;
             prepared.context.warn?.("@pmndrs/gi: the radiance cache's neuralCache 'tail' is off while its second bounce comes from the technique stacked under it (secondBounce 'auto' or 'fallback'), whose field already carries the later bounces; set secondBounce: 'gi1-rays' to use the tail");
+        } else if (useMultibounce && this.tail && secondBounce === 'shared-cell' && !this.tailInactiveWarned) {
+            this.tailInactiveWarned = true;
+            prepared.context.warn?.("@pmndrs/gi: the radiance cache's neuralCache 'tail' is off with secondBounce 'shared-cell', which keeps no second-bounce entries for it to extend; set secondBounce: 'gi1-rays' to use the tail");
         }
         if (traceSecondBounce) this.encodePopulationPass(encoder, prepared, rayData, 'updateMultibounceCells', 'UpdateMultibounceCells');
         this.encodePopulationPass(encoder, prepared, rayData, 'resolveCells', 'ResolveCells');

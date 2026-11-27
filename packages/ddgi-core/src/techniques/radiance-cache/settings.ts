@@ -204,9 +204,12 @@ export interface RadianceCacheSettings {
      * (`gi.setFallback(radianceCache, ddgi)`) when its shading module answers
      * in world space, else GI-1.2's rays. `'fallback'` asks for the stacked
      * technique (and warns when it can't have it); `'gi1-rays'` is GI-1.2's
-     * rays, the faithful baseline. 'shared-cell' enables budgeted cell shading
-     * and traces one diffuse continuation per selected cell. Short first segments
-     * retain their per-hit estimator. Details on `HashGridCacheOptions.secondBounce`
+     * rays, the faithful baseline. `'shared-cell'` (pmndrs/gi#54, an
+     * experiment, not GI-1.2) lights cells on the budget whatever
+     * `cellShading` says and traces one diffuse continuation per lit cell, which
+     * every hit in the cell shares; a probe ray shorter than its cell keeps its
+     * own, roulette-weighted continuation. The neural tail doesn't run with it.
+     * Details on `HashGridCacheOptions.secondBounce`
      * and register E10. Changing what runs empties the world cache. Read every
      * frame.
      */
