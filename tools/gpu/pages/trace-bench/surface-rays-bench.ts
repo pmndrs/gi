@@ -971,7 +971,14 @@ export async function runSurfaceRaysPage(sceneId: string): Promise<void> {
             results.push(...(await countTieBreaks(measureContext, 'instanced', ours.data, variants[surfaceIndex], buffers[surfaceIndex], paired, surfaceAnswers)));
             const mergedSurface = mergedVariants.find((variant) => variant.name === 'surface');
             if (!mergedSurface) throw new Error('the merged sets have no surface set');
-            results.push(...(await countTieBreaks(measureContext, 'merged', mergedScene.data, mergedSurface, buffers[surfaceIndex], paired, surfaceAnswers)));
+            // Each tree's tie-break walks against that tree's own production answers. The merged tree's
+            // answers differ from the instanced tree's on a few edge-grazing rays (rounding, checked above
+            // against MIN_MERGED_AGREEMENT), so comparing its walks with the instanced answers measured that
+            // rounding, not the walk: 99.989% on Bistro interior on the RTX 3060, the merged tree's own
+            // agreement with the instanced one, to the ray.
+            const mergedSurfaceAnswers = mergedRun.answers.get('surface');
+            if (!mergedSurfaceAnswers) throw new Error('the merged surface set has no answers');
+            results.push(...(await countTieBreaks(measureContext, 'merged', mergedScene.data, mergedSurface, buffers[surfaceIndex], paired, mergedSurfaceAnswers)));
 
             // The instanced layout with every mesh cut into compact pieces: instancing kept, smaller top-level boxes.
             for (const piece of SPLIT_TRIANGLES) {
