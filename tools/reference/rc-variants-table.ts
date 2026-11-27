@@ -26,6 +26,7 @@ interface AccuracyNumbers {
 }
 
 interface StepResponse {
+    readonly changedBlocks: number;
     readonly framesTo50: number | null;
     readonly framesTo90: number | null;
     readonly residualAt4: number;
@@ -98,7 +99,10 @@ for (const path of values.variants ?? []) {
 const pct = (value: number, digits = 1): string => `${(value * 100).toFixed(digits)}%`;
 const signed = (value: number): string => `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`;
 const frames = (value: number | null): string => (value === null ? '>' : String(value));
-const step = (response: StepResponse | null): string => (response ? `${frames(response.framesTo50)} / ${frames(response.framesTo90)} · ${pct(response.residualAt4, 0)}` : 'n/a');
+/** Fewer changed 8 × 8 blocks than this and the region is too small to read (a box hidden behind furniture). */
+const MIN_CHANGED_BLOCKS = 20;
+const step = (response: StepResponse | null): string =>
+    !response ? 'n/a' : response.changedBlocks < MIN_CHANGED_BLOCKS ? `(${response.changedBlocks} blocks)` : `${frames(response.framesTo50)} / ${frames(response.framesTo90)} · ${pct(response.residualAt4, 0)}`;
 
 const lines: string[] = [];
 const sceneIds = [...scenes.keys()].sort(sortBy(SCENE_ORDER));

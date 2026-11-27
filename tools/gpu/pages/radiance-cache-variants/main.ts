@@ -173,13 +173,13 @@ function countNonFinite(values: Float32Array): number {
     return count;
 }
 
-/** The scene's three lights (not ambient or hemisphere lights, which GI doesn't take). */
+/** The scene's three lights GI takes (not ambient, hemisphere or rect-area lights: GI lights the emissive Cornell box from its ceiling's emissive surface). */
 function sceneLights(scene: Object3D): Light[] {
     const lights: Light[] = [];
     scene.traverse((object) => {
         // ThreeGI's own GILight carries GI into three's lighting; it is not a scene light.
-        const light = object as Light & { isAmbientLight?: boolean; isHemisphereLight?: boolean; isLightProbe?: boolean; isGILight?: boolean };
-        if (light.isLight && !light.isAmbientLight && !light.isHemisphereLight && !light.isLightProbe && !light.isGILight && light.intensity > 0) lights.push(light);
+        const light = object as Light & { isAmbientLight?: boolean; isHemisphereLight?: boolean; isLightProbe?: boolean; isGILight?: boolean; isRectAreaLight?: boolean };
+        if (light.isLight && !light.isAmbientLight && !light.isHemisphereLight && !light.isLightProbe && !light.isGILight && !light.isRectAreaLight && light.intensity > 0) lights.push(light);
     });
     return lights;
 }
