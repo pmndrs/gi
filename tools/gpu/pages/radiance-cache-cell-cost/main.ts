@@ -142,8 +142,9 @@ const round = (value: number, digits = 3): number => Number(value.toFixed(digits
 
 async function measureScene(device: GPUDevice, id: string): Promise<Record<string, unknown>> {
     const manifest = loadManifest(id);
-    const bookmark = manifest.cameras[0];
-    const camera: PageCamera = { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 };
+    const cameras = manifest.cameras.map((bookmark) => ({ name: bookmark.name, camera: { position: [...bookmark.position], target: [...bookmark.target], fovYDeg: bookmark.fovYDeg, near: 0.05, far: 1000 } as PageCamera }));
+    // The first bookmark; the #54 comparison's doorway images look through others.
+    let camera: PageCamera = cameras[0].camera;
     const timer = new GpuTimer(device, { slotCount: 8, maxPassesPerFrame: 64 });
     await timer.ready;
     if (!timer.enabled) throw new Error(`the GPU timer is ${timer.status}: timestamp-query is needed`);
@@ -180,7 +181,20 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
         await platform.rays.whenBuilt();
         if (sharedComparison) {
             const { compareSharedBounce } = await import('./shared-bounce.ts');
-            return await compareSharedBounce(device, technique, timer, frame, WIDTH, HEIGHT, id === 'two-room' ? described.changeScene : undefined);
+            return await compareSharedBounce({
+                device,
+                technique,
+                timer,
+                frame,
+                width: WIDTH,
+                height: HEIGHT,
+                changeScene: id === 'two-room' ? described.changeScene : undefined,
+                cameras,
+                setCamera: (next) => {
+                    camera = next;
+                },
+                id,
+            });
         }
         technique.resetHistory();
         for (let index = 0; index < WARM_FRAMES; index++) {
@@ -251,7 +265,8 @@ try {
     releaseDeviceOnPageHide(device);
     deviceErrors = watchDevice(device);
     const scenes: Record<string, unknown> = {};
-    for (const id of sharedComparison ? ['two-room', 'sponza'] : ['sponza', 'bistro-exterior']) scenes[id] = await measureScene(device, id);
+    const sceneIds = sharedComparison ? (await import('./shared-bounce.ts')).sharedBounceScenes() : ['sponza', 'bistro-exterior'];
+    for (const id of sceneIds) scenes[id] = await measureScene(device, id);
     await drainDevice(device);
     reportGpuTest({
         status: deviceErrors.length === 0 ? 'pass' : 'fail',
