@@ -244,6 +244,10 @@ The package is an optional sibling (DECISIONS 2026-11-20): `mlp-loader.ts` impor
 
 Not done here: glossy lookups (GI-1.1's reflections reading the cache, where the pathtracer found the network halves the converged error) wait for materials with roughness (D8); the pathtracer's reflection consumer (`bench/nrc/reflection-consumer-wgsl.ts` at 0e4435b: a delta mirror, full direct at a Lambert receiver plus a strict-indirect cache lookup) is the shape to follow. The pathtracer's hash-grid changes at 0e4435b (insert retry, merged snapshot buffer, continue-on-miss) are P6.1's to take.
 
+### The variants compared (P6.5)
+
+The world-cache variants (the GI-1.2 grid alone and over DDGI, SHaRC alone and over DDGI, budgeted cells, the neural tail) are compared against Cycles on one page, with the table, the trade-offs and a recommendation: [radiance-cache-variants.md](radiance-cache-variants.md). Each is a preset in the viewer's compare panel (the Variant list, `RADIANCE_CACHE_VARIANT_PRESETS`).
+
 ## World-cache memory
 
 Capsaicin's defaults allocate about 1 GiB for the hash cache (2^14 buckets × 16 tiles × 85 cells, two value arrays and two per-cell scratch arrays; `source-map.md` §4.2). We allocate the same, under the adapter-maximum limits the platform already asks for; never a cap from WebGPU's default 128 MiB binding (DECISIONS 2026-11-09). A device that can't fit it throws `GILimitError` naming the limit. Capacity is a setting chosen by measured bucket overflow and quality. Sizing the update scratch per updated tile instead of per cell is a lever (it frees several hundred MB). The technique reports its GPU memory in stats.
