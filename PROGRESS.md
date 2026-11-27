@@ -21,6 +21,13 @@ Rules:
 
 ---
 
+## 2026-11-28 · P6.5 timing run: INVALID (thermal) · implementer (opus)
+Did: the timing run the lead asked for: `radiance-cache-variants-timing` under the bench lock with the cool wait, all ten presets on all seven scenes (reports moved to `bench/results/incoming/rc-variants-timing.json` and `.clock.json`, git-ignored). The doc's GPU-time section and the trade-offs' milliseconds now come from this run, marked INVALID.
+Verified: the page PASSes (RTX 3060, 1,602 s). Timing is INVALID: thermal throttling in 99.5% of 7,710 loaded samples. The cool wait started it at 69 C after 5 s; SM median under load 1,282 MHz.
+Not verified: a VALID timing. 27 minutes of timed load can't stay unthrottled on this laptop. The clock rule wants 10-15 s timed sections.
+Numbers (relative only): on Sponza, Bistro interior and Bistro exterior, budgeted 20-27 ms, grid over DDGI 22-29, SHaRC 25-36, grid alone 38-39, neural tail 32-45. RC3.6's presets cost about the grid alone's. The orderings match the dry run, so the recommendation is unchanged. No Sponza upper-gallery reference yet.
+Next: split the timing into short runs (one scene and two or three presets each, `VITE_RC_VARIANT_SCENES` / `VITE_RC_VARIANTS`, cool wait each); Sponza upper-gallery when rendered.
+
 ## 2026-11-28 · P6.5 RC3.6's modes and the remaining views · implementer (opus)
 Did: merged `origin/rc3-6` (ddd4425; PROGRESS conflict only, both entries kept). Four presets: `gi12-rays-feedback`, `gi12-rays-temporal`, `gi12-rays-feedback-temporal`, `gi12-ddgi-temporal`. Both variant pages now make the technique with `useTemporalFeedback` when a preset asks, since it is fixed at construction. The variants page measures named views (`VITE_RC_VARIANT_VIEWS`). The doc covers ten views with RC3.6's rows.
 Verified: typecheck, lint, unit tests (453 in techniques, viewer, variants). RTX 3060, bench lock: `radiance-cache-variants` PASS with the six earlier presets on Bistro exterior across-the-street, and PASS with RC3.6's four presets on all ten views.

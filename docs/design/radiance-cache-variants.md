@@ -203,18 +203,24 @@ On two-room with the GI denoiser off (`VITE_RC_COMPARE=denoiser=false`), the lig
 
 ### GPU time
 
-**Not yet VALID.** The run below is a dry run of the timing page. The GPU started at 82 C, so the clock rule marks it INVALID. The SM clock under load had a median of 1,050 MHz, and the run shared the session with other agents' pages. Use it only to compare the variants with each other, not as milliseconds. A VALID run (cool start, the cool wait on) replaces it once the renders are done.
+**Still not VALID.** The run that was meant to be the VALID one ran on 2026-11-28 under the bench lock with the cool wait, covering all ten presets on all seven scenes. It came out INVALID: thermal throttling in 99.5% of 7,710 loaded samples. The cool wait started it at 69 C after 5 s, and 27 minutes of timed GPU load (70 runs of 240 warm-up and 120 timed frames each) holds the RTX 3060 Laptop at its thermal limit. The SM clock under load had a median of 1,282 MHz. The clock rule asks for a timed section of 10-15 s. A VALID run therefore needs splitting into short runs, each with its own cool wait: one scene and two or three presets a run (`VITE_RC_VARIANT_SCENES`, `VITE_RC_VARIANTS`), and perhaps fewer warm-up frames. That split hasn't been done.
 
-**GPU ms per frame at 1280×720: radiance cache + DDGI (world cache; DDGI) — timing INVALID (hot start: the GPU was at 82 C (70 C or more))**
+The numbers below are that run's, for comparing the variants with each other only. They tell the same story as the earlier dry run (82 C start, without RC3.6's presets). On the big scenes, budgeted cells are cheapest, then the grid over DDGI, then SHaRC, and the grid alone and the neural tail are dearest. RC3.6's presets cost about what the grid alone does. Throttling moves single cells by up to a quarter between the two runs: Sponza's grid alone read 35 ms in one and 38 ms in the other, the neural tail 38 and 32. Don't read small differences.
 
-| Variant | cornell-box-point | cornell-box | two-room | sponza | bistro-interior | bistro-exterior |
-|---|---|---|---|---|---|---|
-| gi12-rays | 3.99 (2.62; 0.00) | 4.20 (2.01; 0.00) | 10.56 (6.87; 0.00) | 35.07 (21.87; 0.00) | 45.26 (27.84; 0.00) | 46.11 (27.01; 0.00) |
-| gi12-ddgi | 4.44 (2.20; 0.67) | 4.94 (1.79; 0.88) | 9.73 (4.68; 1.33) | 23.98 (8.99; 2.77) | 34.32 (13.08; 4.41) | 33.32 (10.33; 4.23) |
-| sharc | 3.55 (1.31; 0.00) | 3.44 (1.18; 0.00) | 7.80 (3.04; 0.00) | 27.82 (15.18; 0.00) | 35.37 (18.45; 0.00) | 41.66 (22.82; 0.00) |
-| sharc-ddgi | 4.49 (1.30; 0.94) | 4.33 (1.18; 0.89) | 9.69 (3.08; 1.71) | 30.35 (15.13; 2.93) | 39.67 (18.31; 4.48) | 46.58 (22.94; 4.52) |
-| budgeted | 5.84 (2.66; 0.93) | 5.67 (2.51; 0.89) | 10.04 (5.03; 1.31) | 22.18 (7.42; 2.64) | 28.28 (7.73; 4.18) | 31.08 (8.32; 4.13) |
-| neural-tail | 7.80 (3.07; 0.00; NRC 2.48) | 6.62 (2.02; 0.00; NRC 2.42) | 13.86 (6.91; 0.00; NRC 3.24) | 37.87 (20.97; 0.00; NRC 4.49) | 48.61 (27.14; 0.00; NRC 4.66) | 51.66 (26.80; 0.00; NRC 6.24) |
+**GPU ms per frame at 1280×720: radiance cache + DDGI (world cache; DDGI). Timing INVALID: thermal throttling in 99.5% of loaded samples.**
+
+| Variant | cornell-box-point | cornell-box | two-room | furnished-room | sponza | bistro-interior | bistro-exterior |
+|---|---|---|---|---|---|---|---|
+| gi12-rays | 4.04 (2.64; 0.00) | 4.16 (1.99; 0.00) | 10.59 (6.90; 0.00) | 13.16 (7.87; 0.00) | 38.13 (23.50; 0.00) | 37.69 (23.21; 0.00) | 38.55 (22.45; 0.00) |
+| gi12-ddgi | 5.24 (2.32; 0.84) | 4.95 (1.82; 0.88) | 9.77 (4.75; 1.31) | 12.39 (4.65; 2.59) | 22.48 (8.49; 2.52) | 29.22 (11.17; 3.64) | 28.83 (9.08; 3.54) |
+| sharc | 3.55 (1.30; 0.00) | 3.47 (1.21; 0.00) | 6.31 (2.51; 0.00) | 10.43 (5.20; 0.00) | 25.11 (13.66; 0.00) | 29.44 (15.10; 0.00) | 35.68 (19.28; 0.00) |
+| sharc-ddgi | 4.48 (1.29; 0.93) | 4.34 (1.20; 0.88) | 7.47 (2.46; 1.31) | 12.07 (4.91; 2.46) | 26.26 (13.03; 2.44) | 32.80 (15.01; 3.60) | 39.21 (19.14; 3.78) |
+| budgeted | 5.88 (2.69; 0.94) | 5.29 (2.46; 0.79) | 10.12 (5.11; 1.31) | 11.99 (4.98; 2.36) | 19.89 (6.90; 2.35) | 24.90 (7.03; 3.61) | 27.08 (7.52; 3.48) |
+| neural-tail | 6.82 (2.94; 0.00; NRC 2.05) | 6.18 (1.94; 0.00; NRC 2.23) | 13.89 (6.94; 0.00; NRC 3.25) | 16.71 (7.78; 0.00; NRC 3.78) | 32.48 (18.18; 0.00; NRC 3.77) | 41.27 (23.09; 0.00; NRC 3.93) | 44.74 (23.11; 0.00; NRC 5.37) |
+| gi12-rays-feedback | 5.29 (3.04; 0.00) | 4.18 (2.01; 0.00) | 10.64 (6.93; 0.00) | 12.87 (7.79; 0.00) | 29.24 (18.48; 0.00) | 37.59 (23.18; 0.00) | 39.54 (23.20; 0.00) |
+| gi12-rays-temporal | 5.12 (2.87; 0.00) | 4.34 (2.09; 0.00) | 10.81 (6.80; 0.00) | 12.93 (7.63; 0.00) | 28.67 (18.14; 0.00) | 37.44 (23.01; 0.00) | 38.55 (22.45; 0.00) |
+| gi12-rays-feedback-temporal | 5.13 (2.88; 0.00) | 4.34 (2.10; 0.00) | 10.62 (6.79; 0.00) | 14.42 (8.23; 0.00) | 28.31 (17.96; 0.00) | 37.73 (23.24; 0.00) | 40.91 (23.99; 0.00) |
+| gi12-ddgi-temporal | 5.42 (2.23; 0.94) | 4.84 (1.68; 0.89) | 9.70 (4.60; 1.36) | 12.40 (4.47; 2.63) | 21.05 (8.08; 2.33) | 29.01 (11.11; 3.59) | 28.75 (9.05; 3.58) |
 
 Each cell is the radiance cache's passes plus DDGI's, with the world cache's own passes and DDGI's in brackets (and the neural tail's, where it runs). The camera is still, at the first bookmark, 1280 × 720. Memory comes from the same run. It doesn't depend on the scene, except DDGI's, which follows the volume's probe count:
 
@@ -233,34 +239,34 @@ The GI-1.2 grid's 1 GiB is Capsaicin's default capacity (2^14 buckets × 16 tile
 
 ## Trade-offs
 
-Measured: ten views of seven scenes (both Cornell boxes, two-room, two views each of the furnished room, Bistro interior and Bistro exterior, and Sponza). The timing run is a dry run, made before RC3.6 merged, so it has no RC3.6 rows.
+Measured: ten views of seven scenes (both Cornell boxes, two-room, two views each of the furnished room, Bistro interior and Bistro exterior, and Sponza). Both timing runs are INVALID (thermal throttling), so the milliseconds below compare the variants with each other only.
 
 **`gi12-rays`: the GI-1.2 grid alone (Capsaicin's).**
 - For: it needs nothing from the host. It warms up fast (median 22 frames). It is the faithful baseline.
-- Against: it carries only two bounces, and the cache's own lights leave out emitters. Closed rooms read 25-62% dark against Cycles, by far the worst error here. Open scenes are fine (−5 to −7%). It is also among the most expensive on the big scenes (35-46 ms in the dry run, the second-bounce rays included), and it holds the grid's 1.4 GiB at 1080p.
+- Against: it carries only two bounces, and the cache's own lights leave out emitters. Closed rooms read 25-62% dark against Cycles, by far the worst error here. Open scenes are fine (−5 to −7%). It is also among the most expensive on the big scenes (38-39 ms on Sponza and the Bistros, the second-bounce rays included), and it holds the grid's 1.4 GiB at 1080p.
 - How it fails: closed rooms come out dark everywhere, and an emitter-lit room most of all. This is the bias, not noise.
 
 **`gi12-ddgi`: the grid over DDGI (what ships).**
-- For: it has the smallest bias on every view (mean size 3.1%; two-room −0.9% with 1.5% block error). Its ghost clears soonest after the box moves (median 74 frames to 90%), and its frame brightness is the calmest. On the big scenes it costs less than the grid alone (24-34 ms in the dry run), because DDGI's field replaces the second-bounce rays and their cells.
-- Against: the host must place a DDGI volume around the scene. DDGI adds 0.7-4.4 ms and 12-72 MiB, and the grid's 1.4 GiB stays. It warms up more slowly than the grid alone (median 49 frames, 72-73 in the furnished room): until DDGI's field fills there is no later bounce. In the open scenes its 8×8 p95 is the highest (Sponza 52% against 40%, Bistro exterior 47% against 38%): DDGI's coarse field blurs the bounce at contacts.
+- For: it has the smallest bias on every view (mean size 3.1%; two-room −0.9% with 1.5% block error). Its ghost clears soonest after the box moves (median 74 frames to 90%), and its frame brightness is the calmest. On the big scenes it costs less than the grid alone (22-29 ms), because DDGI's field replaces the second-bounce rays and their cells.
+- Against: the host must place a DDGI volume around the scene. DDGI adds 0.8-3.6 ms and 12-72 MiB, and the grid's 1.4 GiB stays. It warms up more slowly than the grid alone (median 49 frames, 72-73 in the furnished room): until DDGI's field fills there is no later bounce. In the open scenes its 8×8 p95 is the highest (Sponza 52% against 40%, Bistro exterior 47% against 38%): DDGI's coarse field blurs the bounce at contacts.
 - How it fails: a hit outside every volume gets no bounce after the first (DDGI's coverage is 0 there), so a scene bigger than its volume goes dark past the edge. A coarse volume leaks light through thin walls, which DDGI's visibility only partly stops. After a cut or a load the picture is dark until the field fills: about 70 frames for Sponza's field at 256 probes a frame, about 100 for Bistro exterior's.
 
 **`sharc`: the SHaRC cache alone.**
 - For: it needs nothing from the host and still carries every bounce, emitters included. Its bias is 2-5 points behind the grid over DDGI (mean size 5.9%, worst −9.7% in the furnished room). In the open scenes its block error ties or beats the grid over DDGI's, and it has the lowest (or equal-lowest) p95 on the Cornell boxes, Sponza and both Bistros. Its memory is less than a third of the grid's: 415 MiB at 1080p in all, 83 MiB for the cache itself. Its cells cover almost every visible surface.
-- Against: it follows changes more slowly than the grid over DDGI. The lights' 90% comes at a median of 83 frames against 77, and the box's ghost at 85 against 74. Its warm-up is the longest of the cache-only variants in the rooms (156-157 in the furnished room; median 45 over all views, 1-28 in the open scenes). Its frame brightness moves 2-3 times more than the grid over DDGI's, though still a few thousandths of a percent. In the dry run its world cache is the costliest part on the big scenes: 15-23 ms, against the grid's 9-13 ms plus DDGI's 3-4 ms. It is a port from pmndrs/pathtracer, not Capsaicin's design.
+- Against: it follows changes more slowly than the grid over DDGI. The lights' 90% comes at a median of 83 frames against 77, and the box's ghost at 85 against 74. Its warm-up is the longest of the cache-only variants in the rooms (156-157 in the furnished room; median 45 over all views, 1-28 in the open scenes). Its frame brightness moves 2-3 times more than the grid over DDGI's, though still a few thousandths of a percent. Its world cache is the costliest part on the big scenes: 14-19 ms, against the grid's 8-11 ms plus DDGI's 2.5-3.6 ms. It is a port from pmndrs/pathtracer, not Capsaicin's design.
 - How it fails: it lags after changes, because its 32-frame mean and quarter-rate updates trade reaction for calm. Its coarse cells (its level-of-detail rule) blur the light near contacts.
 
 **`sharc-ddgi`: SHaRC with the volume still under it.**
 - The same picture as SHaRC on every scene, because SHaRC doesn't read the volume. It only adds DDGI's time and memory. It is not a candidate. It exists because the viewer stacks DDGI whatever the world cache is.
 
 **`budgeted`: budgeted cells over DDGI.**
-- For: its accuracy, flicker and memory match the grid over DDGI. It is the cheapest variant on the big scenes in the dry run (22-31 ms against 24-34), and the gain grows with the scene.
-- Against: it reacts more slowly to light changes. Four frames after the lights double, a median 98% of the change is still missing, against 91% for the grid over DDGI. The 90% mark comes at a median of 86 frames, and at 100 in Bistro interior. On the small scenes it costs more than per hit: 5.8 ms against 4.4 on Cornell, since sorting and claiming cells is a fixed cost.
+- For: its accuracy, flicker and memory match the grid over DDGI. It is the cheapest variant on the big scenes (20-27 ms against 22-29), and the gain grows with the scene.
+- Against: it reacts more slowly to light changes. Four frames after the lights double, a median 98% of the change is still missing, against 91% for the grid over DDGI. The 90% mark comes at a median of 86 frames, and at 100 in Bistro interior. On the small scenes it costs more than per hit: 5.9 ms against 5.2 on Cornell, since sorting and claiming cells is a fixed cost.
 - How it fails: under heavy change, cells wait their turn, so lighting updates lag. A budget too small for the scene shows as slow convergence.
 
 **`neural-tail`: the grid with the neural tail.**
 - For: it needs no DDGI volume, and in rooms lit by lights it closes most of the grid alone's missing bounces (two-room −44% → −7%, Cornell point −25% → −3.7%).
-- Against: it can't light an emissive scene. The emissive Cornell box reads as the grid alone, −49%. Its warm-up is the slowest in the rooms (138-214 frames in the rooms lit by lights; median 31 over all views), because the network trains first. When still, it pumps: the frame brightness changes up to 10 times more than the others, as training steps. It is the most expensive variant, with 2.4-6.2 ms for the network on top of the grid alone's rays. It needs `shader-f16` for full speed and the optional `@pathtracer/mlp` package, which isn't on npm. Without either it runs as the grid alone, with a warning.
+- Against: it can't light an emissive scene. The emissive Cornell box reads as the grid alone, −49%. Its warm-up is the slowest in the rooms (138-214 frames in the rooms lit by lights; median 31 over all views), because the network trains first. When still, it pumps: the frame brightness changes up to 10 times more than the others, as training steps. It is the most expensive variant, with 2.1-5.4 ms for the network on top of the grid alone's rays. It needs `shader-f16` for full speed and the optional `@pathtracer/mlp` package, which isn't on npm. Without either it runs as the grid alone, with a warning.
 - How it fails: after a cut it reads dark until the network learns. It drifts a little from frame to frame. Emitter-lit rooms, or a missing package, leave it at the grid alone's error.
 
 **`gi12-rays-feedback`: the grid alone with cache feedback (RC3.6, E12).**
@@ -286,12 +292,12 @@ Measured: ten views of seven scenes (both Cornell boxes, two-room, two views eac
 7. **Leave RC3.6's modes off (opt-in), as they are.** Cache feedback is the cheapest way to more bounces on the grid alone, but it stays 20-40% dark in closed rooms, so it doesn't replace SHaRC in point 2. Temporal feedback over-brightens rooms with lamps or emitters in view, does worse than DDGI alone when stacked with it, and pumps in one outdoor view.
 
 What would change this:
-- **The VALID timing run:** in the dry run, SHaRC's cache is slower than the grid over DDGI on big scenes.
+- **A VALID timing run:** both throttled runs have SHaRC's cache slower than the grid over DDGI on big scenes.
 - **The Mac:** memory, and f16.
 
 ## Still open
 
 - **References:** Sponza's `upper-gallery` is not rendered yet. To add it, run the variants page with `VITE_RC_VARIANT_VIEWS=upper-gallery`, then pass every report to the table script.
-- **A VALID timing run** of `radiance-cache-variants-timing`, with the cool wait, once the GPU is free of the renders. It will time RC3.6's presets too, which the dry run predates.
+- **A VALID timing run.** The full run (all ten presets on seven scenes, 27 minutes) throttled in 99.5% of its loaded samples even with the cool wait. It needs splitting into short runs, each with its own cool wait: one scene and two or three presets a run.
 - **The Mac** (M5 Pro, the target GPU): memory (the grid's 1 GiB), the f16 tail, and the timing.
 - **The lag every variant shares.** After the lights double, the picture takes over a second to reach 90%, about the same for every variant. Most of it is in the screen probes and the world cache, not in the choice of world cache. That needs its own look at the change resets, outside this task.
