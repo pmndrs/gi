@@ -394,10 +394,13 @@ export function checkImportGraph(packageDirectory: string, read?: (path: string)
  * The string targets of `new URL('...', import.meta.url)` in a JS file: files
  * the code fetches from beside itself (workers, WebAssembly, images). A
  * comment before the string is allowed, as vite writes `/* @vite-ignore *\/`.
+ * A template with `${...}` in it is skipped: its path is made at run time, so
+ * there is no file to look for (vite's own client builds
+ * `${base}__open-in-editor?file=...` this way).
  */
 export function importMetaUrls(source: string): string[] {
     const pattern = /new\s+URL\(\s*(?:\/\*[\s\S]*?\*\/\s*)*(['"`])([^'"`]+)\1\s*,\s*import\.meta\.url\s*\)/g;
-    return [...source.matchAll(pattern)].map((match) => match[2]);
+    return [...source.matchAll(pattern)].filter((match) => !(match[1] === '`' && match[2].includes('${'))).map((match) => match[2]);
 }
 
 /** Targets that aren't files to look for: inline data and other origins. */

@@ -191,6 +191,12 @@ return new Worker(new URL(
     test('ignores URLs built from a variable or another base', () => {
         expect(importMetaUrls("new URL(path, import.meta.url); new URL('./x.js', location.href);")).toEqual([]);
     });
+
+    test('skips a template made at run time, keeps a plain template', () => {
+        // vite 6's client, served to every app under the dev server.
+        const source = 'fetch(new URL(\n  `${base$1}__open-in-editor?file=${encodeURIComponent(file)}`,\n  import.meta.url\n)); new URL(`./plain.js`, import.meta.url);';
+        expect(importMetaUrls(source)).toEqual(['./plain.js']);
+    });
 });
 
 describe('missingBuiltUrls', () => {
