@@ -4,11 +4,10 @@
  * on `InterpolateScreenProbes`' irradiance before the composite reads it, as Capsaicin runs
  * them before `ResolveGI1`.
  *
- * The denoiser itself lives in the sibling library `pmndrs/denoiser` (`Gi1Denoiser` in
- * `@pmndrs/denoiser-ffx`, next to its other AMD ports; DECISIONS 2026-11-19). This file only
- * maps the platform's frame onto its input contract. During development the package is linked
- * from a local clone of the denoiser repo (root package.json, `link:`); it is not published,
- * so nothing here is part of `@pmndrs/gi` yet.
+ * The denoiser itself lives in the sibling library `pmndrs/denoiser` (`Gi1Denoiser`, exported
+ * from `denoiser/ffx` next to its other AMD ports since `denoiser@2.1.0`; DECISIONS 2026-11-19).
+ * This file only maps the platform's frame onto its input contract. The radiance cache isn't in
+ * `@pmndrs/gi`'s entry points yet, so nothing here is part of the published package.
  *
  * What it reads: the irradiance with Capsaicin's denoiser hint in alpha (screen-irradiance.ts),
  * `FrameScreen`'s depth, normal and velocity, and the platform's screen history for the
@@ -18,7 +17,7 @@
  * denoiser keeps a short history for a few frames (its soft reset, register D66).
  */
 
-import { Gi1Denoiser } from '@pmndrs/denoiser-ffx';
+import { Gi1Denoiser } from 'denoiser/ffx';
 import type { ScreenHistoryTextures } from '../../platform/contract/compute.ts';
 import type { FrameCamera, FrameScreen } from '../../platform/contract/frame.ts';
 import type { HistoryChanges } from './screen-probe-history.ts';

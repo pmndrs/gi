@@ -1,5 +1,7 @@
 # Where our DDGI differs from RTXGI, and why
 
+For Split Radiance Cascades against the authors' Chandra, see [radiance-cascades/divergence.md](radiance-cascades/divergence.md).
+
 Written 2026-11-11 by the lead (Mac). The reference is NVIDIA's RTXGI-DDGI SDK 1.3.7 as it sits in our fork (`native/rtxgi-ddgi`, SDK plus upstream fix a6c4d99), and its sample app (`samples/test-harness`), which holds the probe-trace shader, hit shading, lighting and the screen-space gather. Behind both are the two papers: Majercik et al. 2019 ("Dynamic Diffuse Global Illumination with Ray-Traced Irradiance Fields") and Majercik et al. 2021 ("Scaling Probe-Based Real-Time Dynamic Global Illumination"), which added relocation, classification and variability.
 
 **How this was built:** from reading the SDK's source next to ours, and from our own records (DECISIONS, NOTES, the design notes). No new measurements were taken. Impacts quoted with numbers come from earlier runs and cite where they were recorded. Impacts without numbers are the lead's estimate, and say so. Our edits to the fork (`DDGI_CAPTURE_*`, the harness's `skipConverged`) all default to stock behaviour, so "RTXGI does" means the SDK as shipped.

@@ -1,6 +1,6 @@
 # Chandra on Windows
 
-The reference is the authors’ Rust implementation of Split Radiance Cascades. It uses LuisaCompute’s CUDA and OptiX backend. The GI project’s S5 example is a separate Three.js port. [Chandra source at `9af00e8`](https://github.com/entropylost/chandra/tree/9af00e8de135a4126cb137d1ec62b451bd6b8e37)
+The reference is the authors’ Rust implementation of Split Radiance Cascades. It uses LuisaCompute’s CUDA and OptiX backend. Chandra needs an NVIDIA GPU. Sefirot's `keter/src/lib.rs` (at `571a946`) creates its LuisaCompute device as `DeviceType::Cuda`. Keter lists a `metal` feature, but running on a Mac would need that line changed and LuisaCompute's Metal backend to support the ray tracing, float atomics and warp operations Chandra uses. Nobody has tried it. Linux with NVIDIA should work, since that's the author's setup. Our build scripts are Windows PowerShell. The GI project’s S5 example is a separate Three.js port. [Chandra source at `9af00e8`](https://github.com/entropylost/chandra/tree/9af00e8de135a4126cb137d1ec62b451bd6b8e37)
 
 ## Measured reference
 
@@ -23,6 +23,8 @@ $root = Join-Path $env:TEMP 'gi-chandra-reference'
 & ./tools/reference/chandra/run.ps1 -BuildRoot $root
 node tools/reference/bench-lock.ts run --what rc-sponza --no-cool-wait -- node tools/gpu/run.ts --gpu nvidia --filter rc-chandra --out bench/screenshots/rc-chandra --json bench/screenshots/rc-chandra.json
 ```
+
+To trace a difference, set `VITE_RC_CHANDRA_DUMP=1` before the browser test. The run JSON then carries the WebGPU diffuse image and the primary world position and normal. `node tools/gpu/pages/rc-chandra/analyze.ts <run.json> <reference-dir>` splits the difference by pixel class, normal, emitter distance, probe-cell position and screen tile, and writes ratio maps. `VITE_RC_CHANDRA_GRID`, `_FIRST_INTERVAL`, `_MAX_DISTANCE`, `_HISTORY`, `_NORMAL_BIAS`, `_STRIDE` and `_FRAMES` each change one native solver setting. `VITE_RC_CHANDRA_NATIVE_ONLY=1` skips the Three.js arm. The 2026-11-26 sweep found that probe spacing drives both the mean and the local differences. [Findings](../../PROGRESS.md)
 
 The browser test compares scene-linear diffuse radiance and the primary visibility mask. Its WebGPU reflection uses roughness 0.15 and is sampled before Fresnel weighting. Chandra samples one reflected direction through its original cascades.
 

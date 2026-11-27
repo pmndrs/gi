@@ -16,6 +16,8 @@ The `@pmndrs/gi/radiance-cascades` entry takes a WebGPU device, a bounded world-
 
 The solver launches one ray per stride-sized screen tile. Before the hit, a directional bin receives evidence of transmittance. The interval containing the hit receives outgoing radiance. The ray contributes no observation beyond the hit. A miss samples the environment in the last interval. The near, middle and far grids halve their dimensions at each step and store 24, 96 and 384 directional bins per cell. The solver accumulates observations, merges far to near using transmittance and gathers diffuse irradiance at each visible surface. The prototype uses dense bounded grids, three levels, one containing parent per merge, and a six-axis diffuse projection with trilinear spatial gather. Radiance is clamped to 64 per channel during accumulation. Bins expire after 120 unobserved ticks. [WGSL passes](../../packages/ddgi-core/src/techniques/radiance-cascades/shaders.ts)
 
+These choices differ from Chandra in probe size, merge, gather and bounces. [Where we differ from Chandra, and why](divergence.md) lists each difference, what was measured and what is still to try.
+
 ```ts
 import { NativeRadianceCascades, createRcTransport } from '@pmndrs/gi/radiance-cascades';
 

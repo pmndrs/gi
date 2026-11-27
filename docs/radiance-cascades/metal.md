@@ -28,7 +28,7 @@ The launcher verifies the bundled GI checkout, installs its locked dependencies,
 
 If you already received the earlier kit, finish the run with its included launcher and return its results archive as usual. Its `host.json` records the source revision and lockfile digest so the results can be accepted as a historical baseline for that build.
 
-Fresh checkouts install the interval tracer, `@pmndrs/raytracer@0.1.0`, from the public npm registry. The lockfile also pins the public BVH, downsampler and upscaler packages. The merged workspace also requires the public denoiser sibling. The fetch command prepares its pinned build next to the checkout using Git and Corepack. The optional private neural-tail sibling can be absent for the Split RC run. [Published tracer](https://www.npmjs.com/package/@pmndrs/raytracer/v/0.1.0)
+Fresh checkouts install the interval tracer, `@pmndrs/raytracer@0.1.0`, from the public npm registry. The lockfile also pins the public BVH, downsampler, upscaler and denoiser packages. The fetch command clones the optional neural-tail sibling next to the checkout, and the Split RC run works without it. [Published tracer](https://www.npmjs.com/package/@pmndrs/raytracer/v/0.1.0)
 
 Choose a fresh output directory for each run. The launcher builds the gallery with the `/gi/` base, acquires the repository GPU and CPU bench locks in that order and uses the shared headless Chrome test harness. Close unrelated GPU workloads before measuring. The default browser lookup includes Chrome in `/Applications`. For another installation, append `--chrome "/path/to/Google Chrome.app/Contents/MacOS/Google Chrome"`. The terminal displays each fixture result as it completes.
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three/webgpu';
 import { cameraPosition, diffuseColor, materialMetalness, materialRoughness, mix, mrt, normalWorld, output, positionWorld, screenUV, select, texture, uniform, vec3, vec4, velocity } from 'three/tsl';
-import { NativeRadianceCascades } from '@pmndrs/gi/radiance-cascades';
+import { NativeRadianceCascades, type NativeRcOptions } from '@pmndrs/gi/radiance-cascades';
 import { createIntervalScene } from './interval-scene.ts';
 
 export interface RawBackend {
@@ -25,7 +25,11 @@ fn main(@builtin(global_invocation_id) id:vec3u) {
     textureStore(position,p,select(vec4f(0),vec4f(h.xyz/h.w,1),z < 1.0));
 }`;
 
-export async function createNativeAdapter(renderer: THREE.WebGPURenderer, scene: THREE.Scene, stride: 1 | 2, movingMeshes: THREE.Mesh[], profile: 'gallery' | 'door' | 'glossy') {
+/** Solver settings a diagnostic page may change, one at a time, on top of a profile. */
+export type NativeAdapterOverrides = Partial<Pick<NativeRcOptions, 'grid' | 'firstInterval' | 'maxDistance' | 'history' | 'normalBias'>>;
+
+export async function createNativeAdapter(renderer: THREE.WebGPURenderer, scene: THREE.Scene, stride: 1 | 2, movingMeshes: THREE.Mesh[],
+    profile: 'gallery' | 'door' | 'glossy', overrides: NativeAdapterOverrides = {}) {
     const backend = renderer.backend as unknown as RawBackend;
     const { device } = backend;
     const door = profile === 'door';
@@ -33,6 +37,7 @@ export async function createNativeAdapter(renderer: THREE.WebGPURenderer, scene:
     const solver = await NativeRadianceCascades.create(device, {
         bounds: door ? { min: [-2.9,-0.4,-3.4], max: [4.5,3.6,3.4] } : { min: [-5,-0.4,-11.5], max: [5,5.7,11.5] },
         grid: door ? [20,12,20] : [20,12,46], firstInterval: 0.6, maxDistance: door ? 12 : 28, rayStride: stride, roughSpecular: glossy,
+        ...overrides,
     });
     const geometry = await createIntervalScene(device, scene, { movingMeshes });
     const positionPass = await device.createComputePipelineAsync({
