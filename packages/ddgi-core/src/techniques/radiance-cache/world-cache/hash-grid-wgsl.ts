@@ -234,9 +234,8 @@ const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${words.decayTileBuffer}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1}u;
 const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
-// After the tile words, in the same buffer: the cells' last-reset frames (E9) and the update
-// scratch, Capsaicin's g_HashGridCache_UpdateCellValueBuffer and ...IndirectBuffer (register D6).
-const HASHGRIDCACHE_RESETFRAMESBUFFER: u32 = ${layout.resetFrames.firstWord}u;
+// After the tile words, in the same buffer: the update scratch, Capsaicin's
+// g_HashGridCache_UpdateCellValueBuffer and ...IndirectBuffer (register D6).
 const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${layout.updateScratch.updateCellValueBuffer}u;
 const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${layout.updateScratch.updateCellValueIndirectBuffer}u;
 // In the cell values (vec2u elements).

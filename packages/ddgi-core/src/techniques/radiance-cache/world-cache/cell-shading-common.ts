@@ -53,10 +53,10 @@ export const CELL_CHANGE_RESET_BIT = 0x80000000;
 /**
  * Bindings of the change data in the population passes' ray-data group
  * (group 2). Per finest-level cell, the frame (low 16 bits, two to a word) it
- * last forgot its history is in the hash grid's words
- * (`HashGridCacheBufferLayout.resetFrames`), and E8's lists are in the per-ray
- * list words (`HashGridCacheRayListLayout.cellLists`): sections of buffers
- * every population pass binds already (register D6, pmndrs/gi#49).
+ * last forgot its history (`HashGridCacheRayListLayout.resetFrames`) and E8's
+ * lists (`HashGridCacheRayListLayout.cellLists`) are sections of the per-ray
+ * list words, which every population pass binds already (register D6,
+ * pmndrs/gi#49), there only while E8 or E9 is used.
  */
 export const CELL_CHANGES_BINDING = {
     /** `HashGridCacheCellShading`: E8's budget and the change events. Uniform. */
@@ -124,14 +124,14 @@ fn HashGridCache_ClaimChangeReset(cell_index: u32, position: vec3f) -> bool {
     let frame = g_HashGridCacheConstants.frame_index;
     let since_epoch = frame - (epoch_plus_one - 1u);
     let slot = HashGridCache_ResetSlot(cell_index);
-    let word = HASHGRIDCACHE_RESETFRAMESBUFFER + slot.x;
-    let stored = (atomicLoad(&g_HashGridCache_TileWords[word]) >> slot.y) & 0xffffu;
+    let word = g_HashGridCache_RayLists.reset_frames_buffer + slot.x;
+    let stored = (atomicLoad(&g_HashGridCache_RayListWords[word]) >> slot.y) & 0xffffu;
     let since_reset = (frame - stored) & 0xffffu;
     if (since_reset <= since_epoch) {
         return false; // already forgot within this epoch
     }
-    atomicAnd(&g_HashGridCache_TileWords[word], ~(0xffffu << slot.y));
-    atomicOr(&g_HashGridCache_TileWords[word], (frame & 0xffffu) << slot.y);
+    atomicAnd(&g_HashGridCache_RayListWords[word], ~(0xffffu << slot.y));
+    atomicOr(&g_HashGridCache_RayListWords[word], (frame & 0xffffu) << slot.y);
     return true;
 }
 `;

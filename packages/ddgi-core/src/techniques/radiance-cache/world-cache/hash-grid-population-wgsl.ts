@@ -240,6 +240,15 @@ export interface HashGridCacheRayListLayout {
      * buffers or fewer (register D6, pmndrs/gi#49).
      */
     readonly cellLists: CellShadingListLayout | null;
+    /**
+     * Experiment E9's last-reset frames (`cellResetFrameWords`, capacity.ts),
+     * last, while E8 or E9 is used; null otherwise (no words). They belong to
+     * the cache, not the screen: the cache copies them when it makes the
+     * lists again. Here and not in the hash grid's words so they cost
+     * nothing while unused (32 MiB at the default capacity), with no binding
+     * of their own (register D6, pmndrs/gi#49).
+     */
+    readonly resetFrames: { readonly firstWord: number; readonly words: number } | null;
     readonly bytes: number;
 }
 
@@ -252,7 +261,7 @@ export interface HashGridCacheRayListLayout {
  * entry (at most one per first-bounce entry, so `max_ray_count`) its BRDF and
  * pdf (`MultibounceInfoBuffer`) and its ray (ours, register D36).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true, neuralTail = false, cellShadingLists = false): HashGridCacheRayListLayout {
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true, neuralTail = false, cellShadingLists = false, resetFrameWords = 0): HashGridCacheRayListLayout {
     // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
     // Without second-bounce rays (multibounce off, or the second bounce from a fallback, register
     // E10) the lists hold the first bounce only and the second-bounce lists are empty: 9 words a
@@ -274,7 +283,10 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const tailEnd = tailStart + (neuralTail ? NEURAL_TAIL_WORDS * secondBounceCount : 0);
     // Lever E8: its lists last, only while it lights cells on a budget (the lists are made again on a switch).
     const cellLists = cellShadingLists ? cellShadingListLayout(maxCombinedRayCount, tailEnd) : null;
-    const words = tailEnd + (cellLists ? cellLists.bytes / 4 : 0);
+    const cellListsEnd = tailEnd + (cellLists ? cellLists.bytes / 4 : 0);
+    // E9's frames after everything, while E8 or E9 is used (the lists are made again on a switch).
+    const resetFrames = resetFrameWords > 0 ? { firstWord: cellListsEnd, words: resetFrameWords } : null;
+    const words = cellListsEnd + resetFrameWords;
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -290,6 +302,7 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         multibounceDirectBuffer,
         neuralTailBuffer: neuralTail && secondBounceRays ? tailStart : 0,
         cellLists,
+        resetFrames,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -332,6 +345,7 @@ struct HashGridCacheRayLists {
     cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset; bits 8-15: E9's history kept
     cell_priority_bins: u32,        // lever E8: each bin's first slot, then its count
     neural_tail_buffer: u32,          // P6.4 (register E11): the neural tail's answer per second-bounce entry, 2 words
+    reset_frames_buffer: u32,       // E9 (at the lists' end while E8 or E9 is used): each finest cell's last-reset frame, 16 bits
 }
 
 ${CELL_CHANGES_WGSL}

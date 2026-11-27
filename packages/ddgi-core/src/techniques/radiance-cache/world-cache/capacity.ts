@@ -301,10 +301,12 @@ export const CELL_SHADING_BINS = CELL_SHADING_CLASSES * CELL_SHADING_SUB_BINS;
  * Where each array lives: word (or element) offsets inside its packed buffer,
  * and the sizes. Two storage buffers (register D6): the words (`atomic<u32>`)
  * and the cell values (`vec2u`). The words hold, each section starting on a
- * 256-byte boundary, the tile words (counters and the per-tile arrays), the
- * cells' last-reset frames (experiment E9) and the update scratch. One buffer
- * rather than three, so every population pass binds 10 storage buffers or
- * fewer with the platform's 5 (Apple GPUs allow 10 per stage, pmndrs/gi#49).
+ * 256-byte boundary, the tile words (counters and the per-tile arrays) and
+ * the update scratch. One buffer rather than two, so every population pass
+ * binds 10 storage buffers or fewer with the platform's 5 (Apple GPUs allow
+ * 10 per stage, pmndrs/gi#49). The cells' last-reset frames (experiment E9)
+ * are in the per-ray list words while E8 or E9 is used
+ * (`HashGridCacheRayListLayout.resetFrames`), so they cost nothing otherwise.
  */
 export interface HashGridCacheBufferLayout {
     /**
@@ -321,21 +323,13 @@ export interface HashGridCacheBufferLayout {
         readonly updateListedTileBuffer: number;
         readonly bytes: number;
     };
-    /**
-     * Experiment E9, in the words: per finest-level cell, the frame (16 bits,
-     * two cells a word) it last forgot its history (`HashGridCache_ClaimChangeReset`).
-     */
-    readonly resetFrames: {
-        readonly firstWord: number;
-        readonly bytes: number;
-    };
     /** Update scratch, in the words: `UpdateCellValueBuffer`, then `UpdateCellValueIndirectBuffer` `4 × numCells` words later. */
     readonly updateScratch: {
         readonly updateCellValueBuffer: number;
         readonly updateCellValueIndirectBuffer: number;
         readonly bytes: number;
     };
-    /** The whole words buffer: tile words, last-reset frames, update scratch. */
+    /** The whole words buffer: tile words, update scratch. */
     readonly words: {
         readonly bytes: number;
     };
@@ -361,6 +355,15 @@ export const CELL_VALUE_BYTES = 8;
 /** Words of a cell's update scratch: quantised rgb and a sample count (`HashGridCache_QuantizeRadiance`, hash_grid_cache.hlsl:301-306; `num_cells << 2`, gi1.cpp:527). */
 export const UPDATE_SCRATCH_WORDS_PER_CELL = 4;
 
+/**
+ * Words of experiment E9's last-reset frames: per finest-level cell, the
+ * frame (16 bits, two cells a word) it last forgot its history
+ * (`HashGridCache_ClaimChangeReset`). 32 MiB at Capsaicin's default capacity.
+ */
+export function cellResetFrameWords(capacity: HashGridCacheCapacity): number {
+    return Math.ceil((capacity.numTiles * capacity.numCellsPerTileMip[0]) / 2);
+}
+
 export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): HashGridCacheBufferLayout {
     const { numTiles, numCells } = capacity;
     const hashBuffer = COUNTER_WORDS;
@@ -369,16 +372,12 @@ export function hashGridCacheBufferLayout(capacity: HashGridCacheCapacity): Hash
     const packedTileIndexBuffer1 = packedTileIndexBuffer0 + numTiles;
     const updateListedTileBuffer = packedTileIndexBuffer1 + numTiles;
     const tileWordsEnd = updateListedTileBuffer + numTiles;
-    // E9's frames, 16 bits for each of the finest level's cells.
-    const resetFramesStart = alignSection(tileWordsEnd);
-    const resetFramesWords = Math.ceil((numTiles * capacity.numCellsPerTileMip[0]) / 2);
-    const scratchStart = alignSection(resetFramesStart + resetFramesWords);
+    const scratchStart = alignSection(tileWordsEnd);
     const scratchWordsPerArray = UPDATE_SCRATCH_WORDS_PER_CELL * numCells;
     const wordsBytes = (scratchStart + 2 * scratchWordsPerArray) * WORD_BYTES;
     const cellValuesBytes = 2 * numCells * CELL_VALUE_BYTES;
     return {
         tileWords: { hashBuffer, decayTileBuffer, packedTileIndexBuffer0, packedTileIndexBuffer1, updateListedTileBuffer, bytes: tileWordsEnd * WORD_BYTES },
-        resetFrames: { firstWord: resetFramesStart, bytes: resetFramesWords * WORD_BYTES },
         updateScratch: { updateCellValueBuffer: scratchStart, updateCellValueIndirectBuffer: scratchStart + scratchWordsPerArray, bytes: 2 * scratchWordsPerArray * WORD_BYTES },
         words: { bytes: wordsBytes },
         cellValues: { valueBuffer: 0, valueIndirectBuffer: numCells, bytes: cellValuesBytes },
