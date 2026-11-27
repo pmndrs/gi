@@ -25,8 +25,10 @@ describe('settings (gi1.h)', () => {
         expect(technique.settings.useDirectLighting).toBe(false);
         expect(technique.settings.useMultibounce).toBe(true);
         // SSGI (off by default, D61) reads the host's lit image and albedo when on (RC4.2, register D51).
-        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: false, lighting: false } });
-        expect(new RadianceCacheTechnique({ ssgi: true }).requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: true, lighting: true } });
+        // 10 storage buffers per stage at most in any pass (Apple GPUs' limit, pmndrs/gi#49; storage-buffers.test.ts).
+        const limits = { maxStorageBuffersPerShaderStage: 10 };
+        expect(technique.requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: false, lighting: false }, limits });
+        expect(new RadianceCacheTechnique({ ssgi: true }).requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: true, lighting: true }, limits });
     });
 
     it('size the probes as Capsaicin does (gi1.cpp:113-129)', () => {

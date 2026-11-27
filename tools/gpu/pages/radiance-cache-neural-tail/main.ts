@@ -136,7 +136,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { furnaceCeiling, skyStripsCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
-import { NEURAL_TAIL_COUNT_WORD, NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
+import { NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
@@ -380,7 +380,7 @@ async function tailDiagnostics(device: GPUDevice, technique: RadianceCacheTechni
             entryGroup.answerSum += value;
         }
     }
-    const records = Math.min(new Uint32Array(await readRange(device, buffers.counts, NEURAL_TAIL_COUNT_WORD.records * 4, 4))[0], buffers.setCapacity);
+    const records = Math.min(new Uint32Array(await readRange(device, buffers.recordCount.buffer, buffers.recordCount.offset, 4))[0], buffers.setCapacity);
     const set = new Float32Array(await readRange(device, buffers.set, 0, records * NEURAL_TAIL_RECORD_VEC4 * 16));
     for (let record = 0; record < records; record++) {
         const base = record * NEURAL_TAIL_RECORD_VEC4 * 4;
@@ -749,7 +749,7 @@ async function scanScene(device: GPUDevice, id: string, loader: 'manifest' | 'vi
                     else tailSum += (rgbw[0] + rgbw[1] + rgbw[2]) / 3;
                 }
             }
-            const records = Math.min(new Uint32Array(await readRange(device, tailBuffers.counts, NEURAL_TAIL_COUNT_WORD.records * 4, 4))[0], tailBuffers.setCapacity);
+            const records = Math.min(new Uint32Array(await readRange(device, tailBuffers.recordCount.buffer, tailBuffers.recordCount.offset, 4))[0], tailBuffers.setCapacity);
             const set = new Float32Array(await readRange(device, tailBuffers.set, 0, records * NEURAL_TAIL_RECORD_VEC4 * 16));
             let trainingTargetsBad = 0;
             for (let record = 0; record < records; record++) {
