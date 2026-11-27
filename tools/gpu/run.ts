@@ -17,6 +17,7 @@ import { type AdapterSummary, type RunSummary } from './contract.ts';
 import { matchesExpectation } from './evaluate.ts';
 import { discoverPages, selectPages, withOptionalSiblings } from './pages.ts';
 import { optionalSiblings } from '../optional-siblings.ts';
+import { storageBufferCaps } from './device-limit-caps.ts';
 import { BrowserSession, WebGpuUnavailableError, WrongAdapterError, type PageResult } from './session.ts';
 import { SITE_ROOT, startTestSite, type TestSiteServer } from './server.ts';
 import { summarizePage } from './summary.ts';
@@ -174,10 +175,14 @@ async function main(): Promise<number> {
             chromePath: options.chromePath,
             gpu: options.gpu,
             withoutGpu: options.withoutWebGpu,
+            limitCaps: options.maxStorageBuffers === null ? null : storageBufferCaps(options.maxStorageBuffers),
         });
 
         summary.adapter = await session.preflight();
         console.log(`adapter: ${describeAdapter(summary.adapter)}`);
+        if (options.maxStorageBuffers !== null) {
+            console.log(`device limits capped: at most ${options.maxStorageBuffers} storage buffers per shader stage (checked on a requested device)`);
+        }
         console.log(`pages: ${pages.map((page) => page.name).join(', ')}`);
 
         for (const page of pages) {

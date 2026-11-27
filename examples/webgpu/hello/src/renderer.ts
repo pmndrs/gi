@@ -429,7 +429,10 @@ export class ForwardRenderer {
         const pass = encoder.beginRenderPass({
             label: 'hello forward',
             colorAttachments: [{ view: this.hdrTexture.createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
-            depthStencilAttachment: { view: depthView, depthReadOnly: true },
+            // Load and store rather than depthReadOnly: Safari 26 doesn't show a
+            // read-only depth attachment's contents to the pass, so the 'equal'
+            // test failed everywhere and the picture was black.
+            depthStencilAttachment: { view: depthView, depthLoadOp: 'load', depthStoreOp: 'store' },
             timestampWrites,
         });
         pass.setPipeline(this.forwardPipeline);

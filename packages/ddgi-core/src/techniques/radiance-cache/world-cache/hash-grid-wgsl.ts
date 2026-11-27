@@ -58,20 +58,21 @@ const SHADER_STAGE_COMPUTE = 0x4;
 export const HASH_GRID_CACHE_BINDING = {
     /** `HashGridCacheConstants`, uniform. */
     constants: 0,
-    /** The tile words (counters, hash, decay, packed tile lists), `array<atomic<u32>>`. */
+    /**
+     * The words (`array<atomic<u32>>`, register D6): the tile words (counters,
+     * hash, decay, packed tile lists), the cells' last-reset frames and the
+     * update scratch (direct, then indirect), at `capacity.ts`'s offsets.
+     */
     tileWords: 1,
     /** The cell values (direct, then indirect), `array<vec2u>`. */
     cellValues: 2,
-    /** The update scratch (direct, then indirect), `array<atomic<u32>>`. */
-    updateScratch: 3,
 } as const;
 
-/** Layout entries of the hash grid's group: a uniform and three storage buffers. */
+/** Layout entries of the hash grid's group: a uniform and two storage buffers (pmndrs/gi#49: Apple GPUs allow 10 per stage). */
 export const HASH_GRID_CACHE_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: HASH_GRID_CACHE_BINDING.constants, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
     { binding: HASH_GRID_CACHE_BINDING.tileWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     { binding: HASH_GRID_CACHE_BINDING.cellValues, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    { binding: HASH_GRID_CACHE_BINDING.updateScratch, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
 /**
@@ -232,22 +233,24 @@ const HASHGRIDCACHE_VISIBILITYCOUNTBUFFER1: u32 = ${HASH_GRID_COUNTER.visibility
 const HASHGRIDCACHE_VISIBILITYRAYCOUNTBUFFER: u32 = ${HASH_GRID_COUNTER.visibilityRayCount}u;
 const HASHGRIDCACHE_RESOLVECOUNTBUFFER: u32 = ${HASH_GRID_COUNTER.resolveCount}u;
 const HASHGRIDCACHE_BUCKETOVERFLOWCOUNT: u32 = ${HASH_GRID_COUNTER.bucketOverflowCount}u;  // ours (register D23)
+const HASHGRIDCACHE_NEURALTAILRECORDS: u32 = ${HASH_GRID_COUNTER.neuralTailRecords}u;      // ours (P6.4's training set)
 const HASHGRIDCACHE_HASHBUFFER: u32 = ${words.hashBuffer}u;
 const HASHGRIDCACHE_DECAYTILEBUFFER: u32 = ${words.decayTileBuffer}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER0: u32 = ${words.packedTileIndexBuffer0}u;
 const HASHGRIDCACHE_PACKEDTILEINDEXBUFFER1: u32 = ${words.packedTileIndexBuffer1}u;
 const HASHGRIDCACHE_UPDATELISTEDTILEBUFFER: u32 = ${words.updateListedTileBuffer}u;      // ours (register D32)
-// In the cell values (vec2u elements) and the update scratch (words).
-const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
-const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
+// After the tile words, in the same buffer: the update scratch, Capsaicin's
+// g_HashGridCache_UpdateCellValueBuffer and ...IndirectBuffer (register D6).
 const HASHGRIDCACHE_UPDATECELLVALUEBUFFER: u32 = ${layout.updateScratch.updateCellValueBuffer}u;
 const HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER: u32 = ${layout.updateScratch.updateCellValueIndirectBuffer}u;
+// In the cell values (vec2u elements).
+const HASHGRIDCACHE_VALUEBUFFER: u32 = ${layout.cellValues.valueBuffer}u;
+const HASHGRIDCACHE_VALUEINDIRECTBUFFER: u32 = ${layout.cellValues.valueIndirectBuffer}u;
 
 ${HASH_GRID_CONSTANTS_STRUCT_WGSL}
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.constants}) var<uniform> g_HashGridCacheConstants: HashGridCacheConstants;
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.tileWords}) var<storage, read_write> g_HashGridCache_TileWords: array<atomic<u32>>;
 @group(${group}) @binding(${HASH_GRID_CACHE_BINDING.cellValues}) var<storage, read_write> g_HashGridCache_CellValues: array<vec2u>;
-@group(${group}) @binding(${HASH_GRID_CACHE_BINDING.updateScratch}) var<storage, read_write> g_HashGridCache_UpdateScratch: array<atomic<u32>>;
 ${MATH_WGSL}
 // ---- The ping-pong packed tile lists (hash_grid_cache.hlsl:75-78) ----
 // buffer_ping_pong picks this frame's list (written) and last frame's (read by PurgeTiles);

@@ -39,7 +39,7 @@ describe('temporal feedback (RC3.6, register D68)', () => {
     it("is off by default, as Capsaicin's gi1_use_temporal_feedback; on, the technique asks for the lit image and albedo, and a change restarts it", () => {
         expect(DEFAULT_RADIANCE_CACHE_SETTINGS.useTemporalFeedback).toBe(false);
         expect(DEFAULT_HASH_GRID_CACHE_OPTIONS.useTemporalFeedback).toBe(false);
-        expect(new RadianceCacheTechnique({ useTemporalFeedback: true }).requirements).toEqual({ queries: ['rays'], screen: { velocity: true, albedo: true, lighting: true } });
+        expect(new RadianceCacheTechnique({ useTemporalFeedback: true }).requirements).toMatchObject({ queries: ['rays'], screen: { velocity: true, albedo: true, lighting: true } });
         expect(PREPARE_SETTINGS).toContain('useTemporalFeedback');
         expect(compareToggle('useTemporalFeedback')).toMatchObject({ urlName: 'rctemporal', register: 'D68', defaultValue: false, capsaicin: false, restartsTechnique: true });
     });

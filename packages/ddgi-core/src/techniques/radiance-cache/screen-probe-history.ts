@@ -29,7 +29,18 @@ import type { TechniqueContext } from '../../platform/contract/technique.ts';
 import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
 import type { ScreenProbeLayout } from './settings.ts';
 import { SH_BLOCK_SIZE } from './wgsl/spherical-harmonics.ts';
-import { CLEAR_PROBE_MASK_GROUP, HISTORY_CHANGES_BYTES, MAX_HISTORY_CHANGE_BOXES, CLEAR_PROBE_MASK_WGSL, COUNTER, ENTRY_POINT, PROBE_SPAWN_PROBE_BYTES, WORKGROUP_SIZE } from './wgsl/screen-probes.ts';
+import {
+    CLEAR_PROBE_MASK_GROUP,
+    HISTORY_CHANGES_BYTES,
+    MAX_HISTORY_CHANGE_BOXES,
+    CLEAR_PROBE_MASK_WGSL,
+    COUNTER,
+    ENTRY_POINT,
+    historyWordsLayout,
+    PROBE_SPAWN_PROBE_BYTES,
+    WORKGROUP_SIZE,
+    type HistoryWordsLayout,
+} from './wgsl/screen-probes.ts';
 import {
     COUNT_GROUP,
     COUNT_WGSL,
@@ -62,6 +73,13 @@ interface HistoryKernels {
     readonly reorder: ComputeKernel;
 }
 
+/** One array in the history words: `size` bytes from byte `offset` of `buffer` (register D6). */
+export interface HistorySection {
+    readonly buffer: GPUBuffer;
+    readonly offset: number;
+    readonly size: number;
+}
+
 /** The history buffers sized per screen; tests read them through the technique's `probes.history`. */
 export interface HistoryResources {
     readonly layout: ScreenProbeLayout;
@@ -77,32 +95,40 @@ export interface HistoryResources {
     readonly cachedTileAtlas: GPUTexture;
     /** g_ScreenProbes_ProbeCachedTileIndexBuffer: per slot, the position (f32 bits) and packed normal (`vec4u`). */
     readonly cachedTileIndex: GPUBuffer;
+    /**
+     * The history words (register D6, pmndrs/gi#49; `historyWordsLayout`):
+     * the sections below that are `HistorySection`s, in one storage buffer.
+     */
+    readonly words: GPUBuffer;
+    readonly wordsLayout: HistoryWordsLayout;
     /** g_ScreenProbes_ProbeCachedTileLRUBuffer: LRU order → slot, bit 31 for an unused entry. */
-    readonly cachedTileLRU: GPUBuffer;
+    readonly cachedTileLRU: HistorySection;
     /** g_ScreenProbes_PreviousProbeCachedTileLRUBuffer: where ReorderScreenProbes writes next frame's order. */
     readonly nextCachedTileLRU: GPUBuffer;
     /** g_ScreenProbes_ProbeCachedTileMRUBuffer: per LRU entry used this frame, its order of use. */
-    readonly cachedTileMRU: GPUBuffer;
+    readonly cachedTileMRU: HistorySection;
     /** g_ScreenProbes_ProbeCachedTileListBuffer, ...ListElementBuffer: the cached tiles listed per probe tile. */
-    readonly cachedTileList: GPUBuffer;
+    readonly cachedTileList: HistorySection;
     readonly cachedTileListElements: GPUBuffer;
     /** g_ScreenProbes_EmptyTileBuffer, g_ScreenProbes_OverrideTileBuffer. */
     readonly emptyTiles: GPUBuffer;
     readonly overrideTiles: GPUBuffer;
     /** g_ScreenProbes_ProbeSpawnProbeBuffer: per spawned probe, the evicted and updated LRU entries and the replaced probe's seed. */
-    readonly spawnProbe: GPUBuffer;
+    readonly spawnProbe: HistorySection;
     /** The replaced probes' cells, a packed radiance per ray, staged by Sample for Blend (register D43). */
-    readonly evictedRadiance: GPUBuffer;
+    readonly evictedRadiance: HistorySection;
     /** Per ray slot: the rays its cell expected this frame under ray guiding (f32; register D64). */
-    readonly expectedRays: GPUBuffer;
+    readonly expectedRays: HistorySection;
     /**
      * The history sample count of each atlas texel (D46): this frame's, last
      * frame's (then each spawned probe's previous count, from Sample), and the
-     * cached tiles'. One word a texel, the atlas's row order.
+     * cached tiles'. One word a texel, the atlas's row order. Last frame's is
+     * a buffer of its own: it is copied from this frame's at the start of a
+     * frame, and a copy can't have one buffer at both ends.
      */
-    readonly cellCounts: GPUBuffer;
+    readonly cellCounts: HistorySection;
     readonly previousCellCounts: GPUBuffer;
-    readonly cachedCellCounts: GPUBuffer;
+    readonly cachedCellCounts: HistorySection;
     /** The buffers the platform's scans read and write for this size. */
     readonly scanBuffers: HistoryScanBuffers;
     readonly bytes: number;
@@ -207,6 +233,9 @@ export class ScreenProbeHistory {
         const buffer = (label: string, bytes: number): GPUBuffer =>
             device.createBuffer({ label: `${TECHNIQUE_ID} ${label}`, size: Math.max(bytes, 16), usage: BUFFER_USAGE.storage | BUFFER_USAGE.copySrc | BUFFER_USAGE.copyDst });
         const shSize: [number, number] = [layout.probeCount[0] * SH_BLOCK_SIZE, layout.probeCount[1] * SH_BLOCK_SIZE];
+        const wordsLayout = historyWordsLayout({ probeTileCount, atlasTexels, maxRayCount: layout.maxRayCount, maxProbeSpawnCount: layout.maxProbeSpawnCount });
+        const words = buffer('history words', wordsLayout.words * WORD_BYTES);
+        const section = (firstWord: number, bytes: number): HistorySection => ({ buffer: words, offset: firstWord * WORD_BYTES, size: bytes });
         const sampledStorage = TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.storageBinding | TEXTURE_USAGE.copySrc;
         const resources: HistoryResources = {
             layout,
@@ -216,19 +245,21 @@ export class ScreenProbeHistory {
             previousProbeSH: texture('previous probe SH', shSize, 'rg32uint', TEXTURE_USAGE.textureBinding | TEXTURE_USAGE.copySrc | TEXTURE_USAGE.copyDst),
             cachedTileAtlas: texture('cached tile atlas', layout.atlasSize, 'rgba16float', sampledStorage),
             cachedTileIndex: buffer('cached tile index', probeTileCount * 16),
-            cachedTileLRU: buffer('cached tile LRU', probeTileCount * WORD_BYTES),
+            words,
+            wordsLayout,
+            cachedTileLRU: section(wordsLayout.cachedTileLRU, probeTileCount * WORD_BYTES),
             nextCachedTileLRU: buffer('next cached tile LRU', probeTileCount * WORD_BYTES),
-            cachedTileMRU: buffer('cached tile MRU', probeTileCount * WORD_BYTES),
-            cachedTileList: buffer('cached tile list', probeTileCount * WORD_BYTES),
+            cachedTileMRU: section(wordsLayout.cachedTileMRU, probeTileCount * WORD_BYTES),
+            cachedTileList: section(wordsLayout.cachedTileList, probeTileCount * WORD_BYTES),
             cachedTileListElements: buffer('cached tile list elements', probeTileCount * 16),
             emptyTiles: buffer('empty tiles', probeTileCount * WORD_BYTES),
             overrideTiles: buffer('override tiles', layout.maxProbeSpawnCount * WORD_BYTES),
-            spawnProbe: buffer('spawn probe', layout.maxProbeSpawnCount * PROBE_SPAWN_PROBE_BYTES),
-            evictedRadiance: buffer('evicted probe radiance', layout.maxRayCount * 8),
-            expectedRays: buffer('expected rays per cell', layout.maxRayCount * 4),
-            cellCounts: buffer('cell counts', atlasTexels * WORD_BYTES),
+            spawnProbe: section(wordsLayout.probeSpawnProbes, layout.maxProbeSpawnCount * PROBE_SPAWN_PROBE_BYTES),
+            evictedRadiance: section(wordsLayout.evictedRadiance, layout.maxRayCount * 8),
+            expectedRays: section(wordsLayout.expectedRays, layout.maxRayCount * 4),
+            cellCounts: section(wordsLayout.cellCounts, atlasTexels * WORD_BYTES),
             previousCellCounts: buffer('previous cell counts', atlasTexels * WORD_BYTES),
-            cachedCellCounts: buffer('cached cell counts', atlasTexels * WORD_BYTES),
+            cachedCellCounts: section(wordsLayout.cachedCellCounts, atlasTexels * WORD_BYTES),
             scanBuffers: {
                 cachedTileListCount: buffer('cached tile list count', probeTileCount * WORD_BYTES),
                 cachedTileListIndex: buffer('cached tile list index', probeTileCount * WORD_BYTES),
@@ -244,19 +275,12 @@ export class ScreenProbeHistory {
         const textureBytes = layout.atlasSize[0] * layout.atlasSize[1] * 8 * 2 + probeTileCount * WORD_BYTES + shSize[0] * shSize[1] * 8;
         const bufferBytes = [
             resources.cachedTileIndex,
-            resources.cachedTileLRU,
+            resources.words,
             resources.nextCachedTileLRU,
-            resources.cachedTileMRU,
-            resources.cachedTileList,
             resources.cachedTileListElements,
             resources.emptyTiles,
             resources.overrideTiles,
-            resources.spawnProbe,
-            resources.evictedRadiance,
-            resources.expectedRays,
-            resources.cellCounts,
             resources.previousCellCounts,
-            resources.cachedCellCounts,
             ...Object.values(scanBuffers),
         ].reduce((sum, item) => sum + item.size, 0);
         this.sized = { ...resources, bytes: textureBytes + bufferBytes };
@@ -292,7 +316,7 @@ export class ScreenProbeHistory {
             encoder.copyTextureToTexture({ texture: inputs.probeAtlas }, { texture: resources.previousProbeAtlas }, [layout.atlasSize[0], layout.atlasSize[1]]);
             encoder.copyTextureToTexture({ texture: inputs.probeMask, mipLevel: 0 }, { texture: resources.previousProbeMask }, [layout.probeCount[0], layout.probeCount[1]]);
             encoder.copyTextureToTexture({ texture: inputs.probeSH }, { texture: resources.previousProbeSH }, [layout.probeCount[0] * SH_BLOCK_SIZE, layout.probeCount[1] * SH_BLOCK_SIZE]);
-            encoder.copyBufferToBuffer(resources.cellCounts, 0, resources.previousCellCounts, 0, resources.cellCounts.size);
+            encoder.copyBufferToBuffer(resources.words, resources.cellCounts.offset, resources.previousCellCounts, 0, resources.cellCounts.size);
         }
         // gfxCommandClearBuffer of the per-tile list counts (gi1.cpp:2283).
         encoder.clearBuffer(resources.scanBuffers.cachedTileListCount, 0, tiles * WORD_BYTES);
@@ -352,7 +376,7 @@ export class ScreenProbeHistory {
         pass.setBindGroup(1, groups.reorder);
         dispatchSplit(pass, Math.ceil(tiles / TEMPORAL_WORKGROUP.list), this.context.device.limits.maxComputeWorkgroupsPerDimension);
         pass.end();
-        encoder.copyBufferToBuffer(resources.nextCachedTileLRU, 0, resources.cachedTileLRU, 0, tiles * WORD_BYTES);
+        encoder.copyBufferToBuffer(resources.nextCachedTileLRU, 0, resources.words, resources.cachedTileLRU.offset, tiles * WORD_BYTES);
         this.screenHistory.encode(encoder, screen);
         this.sizedValid = true;
     }
@@ -384,7 +408,7 @@ export class ScreenProbeHistory {
         const level0 = (texture: GPUTexture): GPUTextureView => texture.createView({ baseMipLevel: 0, mipLevelCount: 1 });
         const value: FrameGroups = {
             clearPreviousMask: group('ClearProbeMask (previous)', kernels.clearProbeMask, [uniforms, level0(resources.previousProbeMask)]),
-            initCachedTileLRU: group(TEMPORAL_ENTRY_POINT.initCachedTileLRU, kernels.initCachedTileLRU, [uniforms, { buffer: resources.cachedTileLRU }]),
+            initCachedTileLRU: group(TEMPORAL_ENTRY_POINT.initCachedTileLRU, kernels.initCachedTileLRU, [uniforms, { buffer: resources.words }]),
             reproject: group(TEMPORAL_ENTRY_POINT.reproject, kernels.reproject, [
                 uniforms,
                 screenTextureView(screen.depth),
@@ -401,11 +425,11 @@ export class ScreenProbeHistory {
                 { buffer: resources.emptyTiles },
                 counters,
                 { buffer: resources.previousCellCounts },
-                { buffer: resources.cellCounts },
+                { buffer: resources.words },
             ]),
             count: group(TEMPORAL_ENTRY_POINT.count, kernels.count, [
                 uniforms,
-                { buffer: resources.cachedTileLRU },
+                { buffer: resources.words },
                 { buffer: resources.cachedTileIndex },
                 { buffer: scanBuffers.cachedTileListCount },
                 { buffer: resources.cachedTileListElements },
@@ -416,7 +440,7 @@ export class ScreenProbeHistory {
                 { buffer: this.scatterArgs.buffer },
                 { buffer: resources.cachedTileListElements },
                 { buffer: scanBuffers.cachedTileListIndex },
-                { buffer: resources.cachedTileList },
+                { buffer: resources.words },
             ]),
             patch: group(TEMPORAL_ENTRY_POINT.patch, kernels.patch, [
                 uniforms,
@@ -427,14 +451,18 @@ export class ScreenProbeHistory {
                 { buffer: resources.overrideTiles },
                 { buffer: inputs.probeSpawn },
             ]),
-            reorder: group(TEMPORAL_ENTRY_POINT.reorder, kernels.reorder, [
-                uniforms,
-                { buffer: resources.cachedTileLRU },
-                { buffer: scanBuffers.cachedTileLRUFlags },
-                { buffer: scanBuffers.cachedTileLRUIndex },
-                { buffer: resources.cachedTileMRU },
-                { buffer: resources.nextCachedTileLRU },
-            ]),
+            // Binding 4 is unused: the MRU order is in the history words (binding 1).
+            reorder: device.createBindGroup({
+                label: `${TECHNIQUE_ID}/${TEMPORAL_ENTRY_POINT.reorder}`,
+                layout: kernels.reorder.ownLayouts[0],
+                entries: [
+                    { binding: 0, resource: uniforms },
+                    { binding: 1, resource: { buffer: resources.words } },
+                    { binding: 2, resource: { buffer: scanBuffers.cachedTileLRUFlags } },
+                    { binding: 3, resource: { buffer: scanBuffers.cachedTileLRUIndex } },
+                    { binding: 5, resource: { buffer: resources.nextCachedTileLRU } },
+                ],
+            }),
         };
         this.groups = { key, value };
         return value;
@@ -446,19 +474,12 @@ export class ScreenProbeHistory {
         for (const texture of [sized.previousProbeAtlas, sized.previousProbeMask, sized.previousProbeSH, sized.cachedTileAtlas]) texture.destroy();
         for (const buffer of [
             sized.cachedTileIndex,
-            sized.cachedTileLRU,
+            sized.words,
             sized.nextCachedTileLRU,
-            sized.cachedTileMRU,
-            sized.cachedTileList,
             sized.cachedTileListElements,
             sized.emptyTiles,
             sized.overrideTiles,
-            sized.spawnProbe,
-            sized.evictedRadiance,
-            sized.expectedRays,
-            sized.cellCounts,
             sized.previousCellCounts,
-            sized.cachedCellCounts,
             ...Object.values(sized.scanBuffers),
         ]) {
             buffer.destroy();
