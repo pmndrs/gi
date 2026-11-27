@@ -86,7 +86,11 @@ function pageData(path: string, page: string): PageSummary {
 
 const SCENE_ORDER = ['cornell-box-point', 'cornell-box', 'two-room', 'furnished-room', 'sponza', 'bistro-interior', 'bistro-exterior'];
 const VARIANT_ORDER = ['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail'];
-const sortBy = (order: readonly string[]) => (a: string, b: string) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99);
+/** By `order`, a `<scene>/<view>` key after its scene's first view. */
+const sortBy = (order: readonly string[]) => (a: string, b: string) => {
+    const rank = (key: string): number => (order.indexOf(key.split('/')[0]) + 1 || 99) * 2 + (key.includes('/') ? 1 : 0);
+    return rank(a) - rank(b) || a.localeCompare(b);
+};
 
 const scenes = new Map<string, SceneResult>();
 let adapter = '';
@@ -109,7 +113,7 @@ const sceneIds = [...scenes.keys()].sort(sortBy(SCENE_ORDER));
 lines.push(`Measured on ${adapter || 'an unnamed adapter'}; scenes: ${sceneIds.join(', ') || 'none'}.`, '');
 for (const sceneId of sceneIds) {
     const scene = scenes.get(sceneId)!;
-    lines.push(`#### ${sceneId} (\`${scene.view}\`)`, '');
+    lines.push(`#### ${sceneId.split('/')[0]} (\`${scene.view}\`)`, '');
     lines.push('| Variant | GI bias | 8×8 mean | 8×8 p95 | one frame mean | cache coverage | warm-up (frames) | flicker per pixel (p95) | flicker of the frame | lights ×2: 50% / 90% frames · left at 4 | box moves: 50% / 90% frames · left at 4 | memory MiB (DDGI) |');
     lines.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const variantId of Object.keys(scene.variants).sort(sortBy(VARIANT_ORDER))) {

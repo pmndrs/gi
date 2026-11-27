@@ -51,7 +51,9 @@
  * a VALID clock verdict; this page's numbers don't depend on the clock.
  *
  * **Picking** (vite env): `VITE_RC_VARIANTS=gi12-rays,sharc` (preset ids),
- * `VITE_RC_VARIANT_SCENES=two-room,cornell-box-point`, `VITE_RC_VARIANT_WARM_FRAMES`,
+ * `VITE_RC_VARIANT_SCENES=two-room,cornell-box-point`, `VITE_RC_VARIANT_VIEWS=bar,furnished-room/towards-the-window`
+ * (views by bookmark or `<scene>/<bookmark>`; unset, each scene's first bookmark with a reference;
+ * a view other than that one is reported as `<scene>/<bookmark>`), `VITE_RC_VARIANT_WARM_FRAMES`,
  * `VITE_RC_VARIANT_MEASURE_FRAMES`, `VITE_RC_VARIANT_AFTER_FRAMES`; `VITE_RC_COMPARE`
  * applies over every variant (radiance-cache-probes/compare-env.ts). Scenes
  * without a reference are listed and skipped.
@@ -92,6 +94,8 @@ const numberFromEnv = (name: string, fallback: number): number => (typeof env[na
 const DEFAULT_SCENES = ['cornell-box-point', 'cornell-box', 'two-room', 'sponza', 'bistro-interior', 'bistro-exterior', 'furnished-room'];
 const SCENES = listFromEnv('VITE_RC_VARIANT_SCENES') ?? DEFAULT_SCENES;
 const variantIds = listFromEnv('VITE_RC_VARIANTS');
+/** Views to measure, by bookmark name or `<scene>/<bookmark>`; unset, each scene's first bookmark with a reference. */
+const VIEW_FILTER = listFromEnv('VITE_RC_VARIANT_VIEWS');
 const VARIANTS = variantIds ? RADIANCE_CACHE_VARIANT_PRESETS.filter((preset) => variantIds.includes(preset.id)) : RADIANCE_CACHE_VARIANT_PRESETS;
 /** T2.17's cap on three's own textures where they don't fit the 6 GB RTX (as the accuracy page). */
 const TEXTURE_CAPS: Record<string, number> = { 'bistro-exterior': 1024, 'bistro-interior': 1024 };
@@ -532,21 +536,26 @@ await runThreePage(
         for (const sceneId of SCENES) {
             const manifest = findManifest(sceneId);
             const files = await listReferenceFiles(sceneId);
-            let view: ReferenceView | null = null;
-            // One view per scene: the first bookmark with a reference.
+            const referenced: ReferenceView[] = [];
             for (const bookmark of manifest.cameras) {
-                view = await findReferenceView(files, sceneId, bookmark.name);
-                if (view) break;
+                const found = await findReferenceView(files, sceneId, bookmark.name);
+                if (found) referenced.push(found);
             }
-            if (!view) {
+            // The first bookmark with a reference, unless VITE_RC_VARIANT_VIEWS names views.
+            const views = VIEW_FILTER ? referenced.filter((view) => VIEW_FILTER.includes(view.camera) || VIEW_FILTER.includes(`${sceneId}/${view.camera}`)) : referenced.slice(0, 1);
+            if (views.length === 0) {
                 skipped.push(sceneId);
-                log(`${sceneId}: no Cycles reference with a stored shot under bench/references/${sceneId}/; skipped`);
+                log(`${sceneId}: no ${VIEW_FILTER ? 'named ' : ''}view with a Cycles reference and a stored shot under bench/references/${sceneId}/; skipped`);
                 continue;
             }
-            const loaded = await loadForView(context, sceneId, view);
-            const variants: Record<string, VariantResult> = {};
-            scenes[sceneId] = { view: view.camera, reference: `${view.prefix}-gi.exr`, sameManifest: view.sameManifest, variants };
-            for (const preset of VARIANTS) variants[preset.id] = await measureVariant(context, loaded, preset);
+            for (const view of views) {
+                const loaded = await loadForView(context, sceneId, view);
+                const variants: Record<string, VariantResult> = {};
+                // The scene's first referenced view under its own name (as before), any other as `<scene>/<view>`.
+                const key = view === referenced[0] ? sceneId : `${sceneId}/${view.camera}`;
+                scenes[key] = { view: view.camera, reference: `${view.prefix}-gi.exr`, sameManifest: view.sameManifest, variants };
+                for (const preset of VARIANTS) variants[preset.id] = await measureVariant(context, loaded, preset);
+            }
         }
         assert(Object.keys(scenes).length > 0, `no scene had a reference (skipped: ${skipped.join(', ')}); link bench/references`);
     },
