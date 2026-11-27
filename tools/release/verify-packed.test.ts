@@ -7,8 +7,10 @@ import {
     bareImports,
     checkImportGraph,
     checkTarballContents,
+    importMetaUrls,
     importSpecifiers,
     layerOf,
+    missingBuiltUrls,
     parseArguments,
     parsePackJson,
     resolveRelative,
@@ -137,6 +139,45 @@ describe('checkTarballContents', () => {
 
     test('allows workspace devDependencies, which consumers never install', () => {
         expect(checkTarballContents(complete, { ...manifest, devDependencies: { '@pmndrs/ddgi-core': 'workspace:*' } })).toEqual([]);
+    });
+});
+
+describe('importMetaUrls', () => {
+    test('string targets, with or without the comment vite writes', () => {
+        const source = `new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+const wasm = new URL("../assets/tiny.wasm", import.meta.url);
+return new Worker(new URL(
+  /* @vite-ignore */
+  "/assets/mesh-bvh-worker-BgIMPdeh.js",
+  import.meta.url
+), { type: "module" });`;
+        expect(importMetaUrls(source)).toEqual(['./worker.js', '../assets/tiny.wasm', '/assets/mesh-bvh-worker-BgIMPdeh.js']);
+    });
+
+    test('ignores URLs built from a variable or another base', () => {
+        expect(importMetaUrls("new URL(path, import.meta.url); new URL('./x.js', location.href);")).toEqual([]);
+    });
+});
+
+describe('missingBuiltUrls', () => {
+    test('relative and root targets the build wrote pass; inline data and other origins are skipped', () => {
+        const files = {
+            'index.html': '',
+            'assets/index-a.js': `new Worker(new URL("./worker-b.js", import.meta.url));
+new URL('/assets/tiny.wasm', import.meta.url);
+new Worker(new URL('data:text/javascript,0', import.meta.url));
+new URL('https://example.com/x.js', import.meta.url);`,
+            'assets/worker-b.js': '',
+            'assets/tiny.wasm': '',
+        };
+        expect(missingBuiltUrls(files)).toEqual([]);
+    });
+
+    test('names a file the build points at but never wrote, as with the BVH workers at /assets/', () => {
+        const files = {
+            'assets/index-a.js': 'new Worker(new URL(/* @vite-ignore */ "/assets/mesh-bvh-worker-BgIMPdeh.js", import.meta.url));',
+        };
+        expect(missingBuiltUrls(files)).toEqual(["assets/index-a.js fetches '/assets/mesh-bvh-worker-BgIMPdeh.js', which the build didn't write"]);
     });
 });
 
