@@ -7,14 +7,22 @@
 //      licence texts and every `exports` target, and its manifest asks
 //      consumers for nothing from this workspace;
 //   3. each entry's import graph (JS and .d.ts) reaches only what it may:
-//      `/core` and `/ddgi` no package at all, `.` and `/three` only three; and
-//      only its own layers' chunks (packages/ddgi/layer-chunks.ts): `/core` no
-//      DDGI or three code, `/ddgi` no three code;
+//      `/core` and `/ddgi` no package at all, `.` and `/three` only three,
+//      `/radiance-cache` only its denoiser (`denoiser/ffx`), never
+//      `@pathtracer/mlp` (an optional sibling it loads at run time); and only
+//      its own layers' chunks (packages/ddgi/layer-chunks.ts): `/core` no
+//      technique or three code, `/ddgi` no three code;
 //   4. a fresh project with the tarball, three and @webgpu/types installed by
-//      npm imports `.`, `/core`, `/ddgi` and `/three` under Node and typechecks
-//      a file using each, under both `bundler` and `nodenext` module resolution;
+//      npm imports `.`, `/core`, `/ddgi`, `/three` and `/radiance-cache` under
+//      Node and typechecks a file using each (the radiance cache wired into
+//      three as tools/gpu/pages/radiance-cache-three does, from public paths
+//      only), under both `bundler` and `nodenext` module resolution;
 //   5. a fresh project with the tarball and @webgpu/types only (no three)
-//      imports and typechecks `/core` and `/ddgi`, and finds no name in both.
+//      imports and typechecks `/core`, `/ddgi`, `/radiance-cascades` and
+//      `/radiance-cache`, and finds no name in both `/core` and `/ddgi`.
+//
+// Neither project has `@pathtracer/mlp`: `/radiance-cache` must import and
+// typecheck without it.
 //
 // Steps 4 and 5 install from the npm registry, so they need the network.
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
@@ -50,6 +58,7 @@ export const REQUIRED_FILES = [
     'licenses/hiprt.txt',
     'licenses/pathtracer-MIT.txt',
     'licenses/pbrt-v4-Apache-2.0.txt',
+    'licenses/capsaicin-MIT.txt',
 ];
 
 /**
@@ -64,10 +73,16 @@ export const ENTRY_IMPORTS: Record<string, RegExp[]> = {
     core: [],
     ddgi: [],
     'radiance-cascades': [/^@pmndrs\/rc-bvh$/],
+    // Its denoiser, an npm dependency. `@pathtracer/mlp` (the optional neural tail) is loaded
+    // through an `import()` no scanner sees (packages/ddgi/vite.config.ts), so it isn't listed.
+    'radiance-cache': [/^denoiser\/ffx$/],
 };
 
 /** Entries that must work with no engine installed. */
-const ENGINE_FREE_ENTRIES = ['core', 'ddgi', 'radiance-cascades'];
+const ENGINE_FREE_ENTRIES = ['core', 'ddgi', 'radiance-cascades', 'radiance-cache'];
+
+/** Packages the published package may load but must never name in its manifest or install (not on npm). */
+export const OPTIONAL_RUNTIME_PACKAGES = ['@pathtracer/mlp'];
 
 interface Consumer {
     /** Packages installed next to the tarball (versions are the repository's own). */
@@ -83,13 +98,38 @@ interface Consumer {
 export const CONSUMERS: Record<string, Consumer> = {
     three: {
         packages: ['three', '@types/three', '@webgpu/types'],
-        imports: [PACKAGE_NAME, `${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/three`],
-        // The README's getting started, plus one name from each other entry.
+        imports: [PACKAGE_NAME, `${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/three`, `${PACKAGE_NAME}/radiance-cache`],
+        // The README's getting started, plus one name from each other entry, and the radiance
+        // cache wired into three from public paths (tools/gpu/pages/radiance-cache-three, the viewer).
         source: `import * as THREE from 'three/webgpu';
+import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { DDGIVolume as RootDDGIVolume } from '@pmndrs/gi';
-import { requiredLimits } from '@pmndrs/gi/core';
+import { createGI, requiredLimits } from '@pmndrs/gi/core';
 import { ddgiPreset, type DDGIPresetName } from '@pmndrs/gi/ddgi';
-import { createGIRenderer, DDGIVolume } from '@pmndrs/gi/three';
+import { RADIANCE_CACHE_DEBUG_VIEW, RadianceCacheTechnique, type RadianceCacheSettings } from '@pmndrs/gi/radiance-cache';
+import { createGIRenderer, ddgi, DDGIVolume, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, GILight, screenInputs, ThreeGI } from '@pmndrs/gi/three';
+
+export async function radianceCache(scene: THREE.Scene, camera: THREE.PerspectiveCamera, settings: Partial<RadianceCacheSettings> = {}) {
+    const { renderer, device } = await createGIRenderer();
+    const gi = createGI(device);
+    const technique = gi.addTechnique(new RadianceCacheTechnique(settings));
+    gi.setOutput(technique);
+    const preparing = gi.prepare();
+    const threeGI = new ThreeGI(gi, scene, { preparing });
+    await preparing;
+    const scenePass = pass(scene, camera);
+    const stage = screenInputs(scenePass, threeGI);
+    scenePass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView), ...stage.outputs }));
+    const pipeline = new THREE.RenderPipeline(renderer);
+    pipeline.outputNode = stage.encodeBefore(ddgi(scenePass, threeGI));
+    // Or the composite on a light of its own, beside another technique's (the GPU page's way).
+    const ownLight = ddgi(scenePass, { light: new GILight(technique.shading) });
+    renderer.setAnimationLoop(() => {
+        threeGI.update(camera, 1 / 60);
+        pipeline.render();
+    });
+    return { technique, ownLight, probes: technique.probes, shView: RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics };
+}
 
 export async function start(preset: DDGIPresetName = 'low'): Promise<void> {
     const { renderer } = await createGIRenderer();
@@ -118,15 +158,26 @@ const volume = new three.DDGIVolume(6, 5, 6, 6, 6, 6);
 const settings = volume.ddgiVolume();
 const technique = new ddgi.DDGITechnique({ volume: settings });
 if (!(technique instanceof ddgi.DDGITechnique)) throw new Error('DDGITechnique failed instanceof');
+const cache = await import('${PACKAGE_NAME}/radiance-cache');
+const radianceCache = new cache.RadianceCacheTechnique();
+new three.GILight(radianceCache.shading);
 `,
     },
     core: {
         packages: ['@webgpu/types'],
-        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/radiance-cascades`],
-        // The platform and DDGI on a bare device, as in docs/api/platform.md.
+        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/radiance-cascades`, `${PACKAGE_NAME}/radiance-cache`],
+        // The platform and DDGI on a bare device, as in docs/api/platform.md; the radiance cache the same way.
         source: `import { createGI, requiredLimits } from '@pmndrs/gi/core';
 import { DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
 import { NativeRadianceCascades, createRcTransport, type NativeRcTransport, type RcTransportScene } from '@pmndrs/gi/radiance-cascades';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, RadianceCacheTechnique } from '@pmndrs/gi/radiance-cache';
+
+export async function startRadianceCache(device: GPUDevice) {
+    const gi = createGI(device);
+    gi.setOutput(gi.addTechnique(new RadianceCacheTechnique({ ...DEFAULT_RADIANCE_CACHE_SETTINGS, neuralCache: 'off' })));
+    await gi.prepare();
+    return gi;
+}
 
 export async function makeTransport(device: GPUDevice, scene: RcTransportScene): Promise<NativeRcTransport> {
     return createRcTransport(device, scene);
@@ -325,7 +376,7 @@ export function checkTarballContents(paths: string[], manifest: Manifest): strin
     // devDependencies may name workspace packages: npm never installs a dependency's devDependencies.
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
         for (const [name, version] of Object.entries(manifest[field] ?? {})) {
-            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh') {
+            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh' || OPTIONAL_RUNTIME_PACKAGES.includes(name)) {
                 failures.push(`${field} names ${name}@${version}, which isn't on npm`);
             }
         }
@@ -409,7 +460,7 @@ function main(): void {
             ...checkImportGraph(unpacked),
         ];
         if (failures.length) throw new Error(`The tarball:\n${failures.join('\n')}`);
-        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /radiance-cascades reaches only its published BVH dependency.`);
+        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /radiance-cascades reaches only its published BVH dependency, /radiance-cache only denoiser/ffx.`);
 
         for (const [name, consumer] of Object.entries(CONSUMERS)) {
             const directory = join(temporaryRoot, `consumer-${name}`);
@@ -417,6 +468,9 @@ function main(): void {
             createConsumer(directory, archive, consumer);
             if (!consumer.packages.includes('three') && existsSync(join(directory, 'node_modules/three'))) {
                 throw new Error(`Consumer '${name}' got three installed, though it didn't ask for it.`);
+            }
+            for (const optional of OPTIONAL_RUNTIME_PACKAGES) {
+                if (existsSync(join(directory, 'node_modules', optional))) throw new Error(`Consumer '${name}' got ${optional} installed: the check is that it works without it.`);
             }
             importUnderNode(directory, consumer.imports, consumer.nodeCheck);
             for (const resolution of Object.keys(RESOLUTIONS) as Array<keyof typeof RESOLUTIONS>) {

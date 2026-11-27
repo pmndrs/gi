@@ -32,6 +32,10 @@ The first release: real-time diffuse global illumination for WebGPU, with a thre
 - **Several volumes,** a dense one inside a coarse one with no visible seam, and a **camera volume** that moves with the viewer.
 - Debug outputs: the probes, their states, the irradiance and distance atlases.
 
+### The radiance cache (`@pmndrs/gi/radiance-cache`)
+
+- **A second technique on the platform,** based on AMD GI-1.0/1.2 (Capsaicin v1.3): screen probes over a world cache, engine-free like `/ddgi`. With three.js, `screenInputs`, `GILight` and the `ddgi()` composite from `/three` wire it into three's pipeline. Its image-space denoiser comes from the `denoiser` package, installed with this one. Its API page is still to come; [docs/design/radiance-cache.md](docs/design/radiance-cache.md) is its design.
+
 ### Checked, and not yet checked
 
 - Checked on an RTX 3060 Laptop GPU (Windows, Chrome) and an Apple M5 Pro (macOS, Chrome), and for correctness on an Intel UHD integrated GPU (Windows, Chrome). The milestone notes in [docs/milestones/](docs/milestones/) list every check and its result.

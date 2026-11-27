@@ -4,7 +4,7 @@
 
 **Real-time global illumination for WebGPU.** Light bounces around your scene and keeps up as lights, objects and the sun move. An engine-free GI platform carries the techniques; the first is Dynamic Diffuse Global Illumination (DDGI): a grid of probes that trace rays every frame. Plain WebGPU and WGSL underneath, with a three.js adapter on top.
 
-**▶ [Examples](https://pmndrs.github.io/gi/)**: small pages, each showing one feature. (The site goes live once the `pmndrs/gi` repository is public and its Pages site is on; until then the examples run from a checkout, see [Working on this repository](#working-on-this-repository).)
+**▶ [Examples](https://pmndrs.github.io/gi/)**: small pages, each showing one feature, running in your browser. They need a browser with WebGPU (see [Browser support](#browser-support)).
 
 ![Cornell box lit by DDGI: the red and green walls bleed colour onto the floor, ceiling and boxes](docs/images/cornell-gi.jpg)
 
@@ -23,6 +23,8 @@ One package, an import path per layer:
 | `@pmndrs/gi/three` (or `@pmndrs/gi`) | three.js `WebGPURenderer`, with DDGI's `DDGIVolume` and `ddgi()` composite | `three` r187 (`~0.187.0`) |
 | `@pmndrs/gi/core` | The GI platform on your own `GPUDevice`: the scene, rays, light and sky that techniques build on, for plain WebGPU or an adapter for another engine | nothing: three isn't needed |
 | `@pmndrs/gi/ddgi` | The DDGI technique, engine-free, run on the platform from `/core` | nothing: three isn't needed |
+| `@pmndrs/gi/radiance-cache` | The radiance cache (based on AMD GI-1.0/1.2: screen probes over a world cache), engine-free, run on the platform from `/core`; with three.js its screen inputs, GI light and composite come from `/three` | nothing: three isn't needed (its denoiser, `denoiser`, installs with the package) |
+| `@pmndrs/gi/radiance-cascades` | Split radiance cascades on your own `GPUDevice` (the experiment below) | nothing: three isn't needed |
 
 `three` is an optional peer dependency, so a project that only imports `/core` and `/ddgi` doesn't install it. With TypeScript, add `@webgpu/types` for the WebGPU types.
 
@@ -67,7 +69,9 @@ The examples run from this repository: `pnpm install`, then `pnpm examples`. The
 
 ## Split Radiance Cascades experiment
 
-Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. Run `pnpm examples` and open `/11-radiance-cascades/` to compare it with the Three.js reference on the same rail, close a moving shutter, or try temporal upscaling. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
+**▶ [Try it live](https://pmndrs.github.io/gi/11-radiance-cascades/)**: a lamp-lit gallery you can walk through. You can also watch [a shutter close over a lamp](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=door&camera=receiver&view=indirect), follow [reflections on a polished floor](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=polished), or compare [five floor finishes](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=roughness).
+
+Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. The example compares it with the Three.js reference on the same rail and offers temporal upscaling; locally it is at `/11-radiance-cascades/` under `pnpm examples`. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
 
 ## Browser support
 
@@ -84,6 +88,7 @@ GI runs on WebGPU only; there is no WebGL fallback.
 - [The three.js adapter](docs/api/three.md): every option, and what it does with your scene.
 - [The platform API](docs/api/platform.md): `@pmndrs/gi/core` and `@pmndrs/gi/ddgi` on a bare `GPUDevice`.
 - [Writing an adapter](docs/guides/adapter.md): GI from plain WebGPU, or for another engine, step by step.
+- [The radiance cache's design](docs/design/radiance-cache.md): what `@pmndrs/gi/radiance-cache` ports from AMD GI-1.0/1.2 and every way it differs. Its API page is still to come.
 - [Examples](https://pmndrs.github.io/gi/).
 - [CHANGELOG.md](CHANGELOG.md): what each release contains.
 - [THIRD_PARTY.md](THIRD_PARTY.md): code from others and the test scenes, with their licences.

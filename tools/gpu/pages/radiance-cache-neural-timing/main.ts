@@ -4,8 +4,9 @@
  * `bistro-exterior` at 1280 × 720 from each scene's first bookmark, the
  * camera still: GI-1.2's multibounce (`neuralCache: 'off'`), the tail at its
  * defaults (the compact network, 64 → 3 × 32 → 3, f16, 2 steps a frame), the
- * tail in f32, and the tail with the pathtracer's default network (64 → 5 ×
- * 64 → 3). The device is the platform's, which asks for `shader-f16` and the
+ * tail in f32, the tail with the pathtracer's default network (64 → 5 ×
+ * 64 → 3), and the tail's cheapest settings (one training step a frame; a
+ * screen record every 16 pixels). The device is the platform's, which asks for `shader-f16` and the
  * adapter's workgroup memory (32 KiB on the RTX 3060; DECISIONS 2026-11-20).
  *
  * Each configuration warms for `WARM_FRAMES` frames from an empty cache and a
@@ -55,6 +56,9 @@ const ALL_CONFIGURATIONS: readonly (readonly [string, Partial<RadianceCacheSetti
     ['tail', { useMultibounce: true, neuralCache: 'tail' }],
     ['tail, f32', { useMultibounce: true, neuralCache: 'tail', neural: { precision: 'f32' } }],
     ['tail, default network', { useMultibounce: true, neuralCache: 'tail', neural: { network: 'default' } }],
+    // The cheapest settings (the Mac run list, pmndrs/gi#49): one training step a frame, a screen record every 16 pixels.
+    ['tail, 1 step a frame', { useMultibounce: true, neuralCache: 'tail', neural: { stepsPerFrame: 1 } }],
+    ['tail, screen stride 16', { useMultibounce: true, neuralCache: 'tail', neural: { screenStride: 16 } }],
 ];
 /** `VITE_NEURAL_TIMING_CONFIGS`: a semicolon-separated subset of the names above (all by default). */
 const CONFIG_FILTER = typeof env.VITE_NEURAL_TIMING_CONFIGS === 'string' ? env.VITE_NEURAL_TIMING_CONFIGS.split(';').map((name) => name.trim()) : null;

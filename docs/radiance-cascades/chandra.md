@@ -1,6 +1,6 @@
 # Chandra on Windows
 
-The reference is the authors’ Rust implementation of Split Radiance Cascades. It uses LuisaCompute’s CUDA and OptiX backend. The GI project’s S5 example is a separate Three.js port. [Chandra source at `9af00e8`](https://github.com/entropylost/chandra/tree/9af00e8de135a4126cb137d1ec62b451bd6b8e37)
+The reference is the authors’ Rust implementation of Split Radiance Cascades. It uses LuisaCompute’s CUDA and OptiX backend. Chandra needs an NVIDIA GPU. Sefirot's `keter/src/lib.rs` (at `571a946`) creates its LuisaCompute device as `DeviceType::Cuda`. Keter lists a `metal` feature, but running on a Mac would need that line changed and LuisaCompute's Metal backend to support the ray tracing, float atomics and warp operations Chandra uses. Nobody has tried it. Linux with NVIDIA should work, since that's the author's setup. Our build scripts are Windows PowerShell. The GI project’s S5 example is a separate Three.js port. [Chandra source at `9af00e8`](https://github.com/entropylost/chandra/tree/9af00e8de135a4126cb137d1ec62b451bd6b8e37)
 
 ## Measured reference
 

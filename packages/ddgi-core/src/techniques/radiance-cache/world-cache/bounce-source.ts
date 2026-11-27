@@ -236,11 +236,11 @@ fn ${SAMPLE_BOUNCE_SOURCE_ENTRY_POINT}(
     let quantized_radiance = HashGridCache_QuantizeRadiance(radiance);
     let scratch = HASHGRIDCACHE_UPDATECELLVALUEINDIRECTBUFFER + 4u * cell_index;
     if (dot(radiance, radiance) > 0.0) {
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+        atomicAdd(&g_HashGridCache_TileWords[scratch + 0u], quantized_radiance.x);
+        atomicAdd(&g_HashGridCache_TileWords[scratch + 1u], quantized_radiance.y);
+        atomicAdd(&g_HashGridCache_TileWords[scratch + 2u], quantized_radiance.z);
     }
-    atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+    atomicAdd(&g_HashGridCache_TileWords[scratch + 3u], quantized_radiance.w);
 
     // A probe ray shorter than its cell reads no cell (register D38): its indirect light is added
     // to it here, unweighted (every entry samples, so there is no discard to make up for).

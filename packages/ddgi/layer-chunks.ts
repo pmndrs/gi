@@ -12,19 +12,25 @@
 //             `/ddgi` loads it and the platform
 //   three     the three.js adapter (packages/ddgi-three); `.` and `/three` load
 //             all three
+//   rc        Split radiance cascades (techniques/radiance-cascades);
+//             `/radiance-cascades` loads it and the platform
+//   radiance-cache
+//             the radiance cache (techniques/radiance-cache);
+//             `/radiance-cache` loads it and the platform
 //
 // The chunk names say which layer a file holds, so scripts/verify-artifacts.mjs
 // and tools/release/verify-packed.ts can check that `/core` reaches no `ddgi`
 // or `three` chunk, and `/ddgi` no `three` chunk.
 
 /** Chunk names by layer, in the order the layers build on each other. */
-export const LAYER_CHUNKS = ['platform', 'ddgi', 'three', 'rc'] as const;
+export const LAYER_CHUNKS = ['platform', 'ddgi', 'three', 'rc', 'radiance-cache'] as const;
 
 export type Layer = (typeof LAYER_CHUNKS)[number];
 
 /** The layers each public entry may load: an entry below a layer must never reach its code. */
 export const ENTRY_LAYERS: Record<string, readonly Layer[]> = {
     'radiance-cascades': ['platform', 'rc'],
+    'radiance-cache': ['platform', 'radiance-cache'],
     core: ['platform'],
     ddgi: ['platform', 'ddgi'],
     three: ['platform', 'ddgi', 'three'],
@@ -35,6 +41,7 @@ export const ENTRY_LAYERS: Record<string, readonly Layer[]> = {
 export function layerChunk(id: string): Layer | undefined {
     const path = id.replaceAll('\\', '/');
     if (path.includes('/techniques/radiance-cascades/')) return 'rc';
+    if (path.includes('/packages/ddgi-core/src/techniques/radiance-cache/')) return 'radiance-cache';
     if (path.includes('/packages/ddgi-three/src/')) return 'three';
     if (path.includes('/packages/ddgi-core/src/techniques/ddgi/')) return 'ddgi';
     if (path.includes('/packages/ddgi-core/src/platform/') || path.includes('/packages/bvh/')) return 'platform';

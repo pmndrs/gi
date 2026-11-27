@@ -1,0 +1,4 @@
+{
+    "description": "pmndrs/gi#49: the radiance cache on a device with 10 storage buffers per shader stage (Chrome on Apple GPUs): the cap enforced, limitNeeds 10, and every configuration that changes its bindings (SHaRC, budgeted cells, gi1-rays and DDGI-fallback second bounce, neural tail, SSGI, denoiser off) prepares and lights a built-in scene with no validation error. Correctness only.",
+    "timeoutMs": 240000
+}

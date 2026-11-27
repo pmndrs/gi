@@ -6,8 +6,12 @@
         // treats files reached through node_modules as external libraries and builds a
         // TypeScript program for each one, and each of the three adapter's files then
         // loads all of three's types again (it ran out of memory). `paths` replaces the
-        // root config's, so the umbrella's own entries are repeated.
+        // root config's, so the umbrella's own entries are repeated. `@pathtracer/mlp` (the
+        // radiance cache's optional neural tail, not on npm) maps to the repository's
+        // declarations of it only, never to a private clone, so rollup-plugin-dts inlines
+        // those few types and the published .d.ts never imports the package.
         "paths": {
+            "@pathtracer/mlp": ["packages/ddgi-core/src/techniques/radiance-cache/neural-cache/mlp-unavailable.d.ts"],
             "@pmndrs/gi": ["packages/ddgi/src/index.ts"],
             "@pmndrs/gi/core": ["packages/ddgi/src/core.ts"],
             "@pmndrs/gi/ddgi": ["packages/ddgi/src/ddgi.ts"],

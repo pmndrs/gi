@@ -75,9 +75,26 @@ describe('recommendPreset', () => {
         expect(recommendPreset({ vendor: 'nvidia', architecture: 'ampere' }, DESKTOP_LIMITS, desktop)).toBe('high');
         expect(recommendPreset({ vendor: 'amd', architecture: 'rdna-3', description: 'AMD Radeon RX 7800 XT' }, DESKTOP_LIMITS, desktop)).toBe('high');
         expect(recommendPreset({ vendor: 'intel', architecture: 'xe-hpg' }, DESKTOP_LIMITS, desktop)).toBe('high');
-        // What Chrome reports on the M5 Pro: no chip name.
-        expect(recommendPreset({ vendor: 'apple', architecture: 'metal-3', description: '' }, DESKTOP_LIMITS, desktop)).toBe('high');
         expect(recommendPreset({ vendor: 'apple', architecture: 'metal-3', description: 'Apple M5 Pro' }, DESKTOP_LIMITS, desktop)).toBe('high');
         expect(recommendPreset({ vendor: 'apple', architecture: 'metal-3', description: 'Apple M3 Max' }, DESKTOP_LIMITS, desktop)).toBe('high');
+    });
+
+    describe('on a Mac whose chip the browser does not name', () => {
+        // What Chrome 158 reports on the M5 Pro: an empty description and 18 cores.
+        const chrome = { vendor: 'apple', architecture: 'metal-3', description: '' };
+        // What Safari 26 reports on the same Mac: "apple" everywhere and 8 cores.
+        const safari = { vendor: 'apple', architecture: 'apple', device: 'apple', description: 'apple' };
+
+        it('gives high above 10 cores, as on a Pro or Max chip in Chrome', () => {
+            expect(recommendPreset(chrome, DESKTOP_LIMITS, { mobile: false, cpuCores: 18 })).toBe('high');
+            expect(recommendPreset(chrome, DESKTOP_LIMITS, { mobile: false, cpuCores: 12 })).toBe('high');
+        });
+
+        it('gives medium at 10 cores or fewer, in Safari, and when the count is unknown', () => {
+            expect(recommendPreset(chrome, DESKTOP_LIMITS, { mobile: false, cpuCores: 10 })).toBe('medium');
+            expect(recommendPreset(chrome, DESKTOP_LIMITS, { mobile: false, cpuCores: 8 })).toBe('medium');
+            expect(recommendPreset(safari, { maxBufferSize: 2 * 1024 * 1024 * 1024 }, { mobile: false, cpuCores: 8 })).toBe('medium');
+            expect(recommendPreset(chrome, DESKTOP_LIMITS, { mobile: false, cpuCores: 0 })).toBe('medium');
+        });
     });
 });

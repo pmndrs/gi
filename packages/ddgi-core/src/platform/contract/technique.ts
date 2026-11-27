@@ -16,6 +16,7 @@ import type { BounceSource, HitShading } from './shade';
 import type { ShadingModule } from './shading-module';
 import type { DebugView } from './stats';
 import type { GpuTimerScope } from './timing';
+import type { RequiredLimits } from './platform';
 import type { KernelBuilder } from './wgsl';
 
 /**
@@ -45,6 +46,14 @@ export interface TechniqueRequirements {
     readonly screen?: boolean | ScreenChannelRequest;
     /** Needs another technique as a bounce source or fallback. */
     readonly fallback?: boolean;
+    /**
+     * Device limits the technique's kernels need above WebGPU's defaults,
+     * such as `maxStorageBuffersPerShaderStage` for a kernel that binds more
+     * than 8 storage buffers. The host learns the largest of each from
+     * `GIPlatform.limitNeeds`, and `prepare` throws a `GILimitError` naming
+     * the first one the device is below, before compiling anything.
+     */
+    readonly limits?: RequiredLimits;
 }
 
 /** Services the platform gives a technique when it is attached. */

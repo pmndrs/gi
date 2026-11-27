@@ -91,7 +91,7 @@ THE SOFTWARE.
 import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import type { HashGridCacheBufferLayout } from './capacity.ts';
-import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_BINDING, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL } from './cell-shading-common.ts';
+import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_BINDING, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL, cellShadingListLayout, type CellShadingListLayout } from './cell-shading-common.ts';
 import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
 
@@ -118,10 +118,9 @@ export const RAY_DATA_GROUP_ENTRIES: readonly GPUBindGroupLayoutEntry[] = [
     { binding: RAY_DATA_BINDING.probeRays, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'read-only-storage' } },
     { binding: RAY_DATA_BINDING.radiance, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
     { binding: RAY_DATA_BINDING.listWords, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    // Lever E8 and experiment E9 (cell-shading-common.ts): the change events, each cell's last reset, E8's lists.
+    // Lever E8 and experiment E9 (cell-shading-common.ts): E8's budget and the change events. Each cell's
+    // last reset and E8's lists are sections of the words and the list words (register D6, pmndrs/gi#49).
     { binding: CELL_CHANGES_BINDING.uniform, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'uniform' } },
-    { binding: CELL_CHANGES_BINDING.resetFrames, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
-    { binding: CELL_CHANGES_BINDING.cellLists, visibility: SHADER_STAGE_COMPUTE, buffer: { type: 'storage' } },
 ];
 
 /** Bytes of `HashGridCacheRayLists`: seventeen words (the neural tail's last, P6.4), padded to a multiple of 16 bytes. */
@@ -234,6 +233,22 @@ export interface HashGridCacheRayListLayout {
      * one it is 0 and holds no words.
      */
     readonly neuralTailBuffer: number;
+    /**
+     * Lever E8's lists (`cellShadingListLayout`), after the others, while
+     * cells are lit on a budget; null otherwise (no words). In these words,
+     * not a buffer of their own, so the population passes bind 10 storage
+     * buffers or fewer (register D6, pmndrs/gi#49).
+     */
+    readonly cellLists: CellShadingListLayout | null;
+    /**
+     * Experiment E9's last-reset frames (`cellResetFrameWords`, capacity.ts),
+     * last, while E8 or E9 is used; null otherwise (no words). They belong to
+     * the cache, not the screen: the cache copies them when it makes the
+     * lists again. Here and not in the hash grid's words so they cost
+     * nothing while unused (32 MiB at the default capacity), with no binding
+     * of their own (register D6, pmndrs/gi#49).
+     */
+    readonly resetFrames: { readonly firstWord: number; readonly words: number } | null;
     readonly bytes: number;
 }
 
@@ -246,7 +261,7 @@ export interface HashGridCacheRayListLayout {
  * entry (at most one per first-bounce entry, so `max_ray_count`) its BRDF and
  * pdf (`MultibounceInfoBuffer`) and its ray (ours, register D36).
  */
-export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true, neuralTail = false): HashGridCacheRayListLayout {
+export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number, secondBounceRays = true, neuralTail = false, cellShadingLists = false, resetFrameWords = 0): HashGridCacheRayListLayout {
     // USE_MULTI_BOUNCE is Capsaicin's default (gi1.h:55): bounce 0 and bounce 1 share the visibility lists.
     // Without second-bounce rays (multibounce off, or the second bounce from a fallback, register
     // E10) the lists hold the first bounce only and the second-bounce lists are empty: 9 words a
@@ -265,7 +280,13 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
     const multibounceDirectBuffer = firstBounceBypassBuffer + maxRayCount;
     const tailStart = multibounceDirectBuffer + MULTIBOUNCE_DIRECT_WORDS * secondBounceCount;
     // P6.4 (register E11): the neural tail's answers, one per second-bounce entry, only with a tail.
-    const words = tailStart + (neuralTail ? NEURAL_TAIL_WORDS * secondBounceCount : 0);
+    const tailEnd = tailStart + (neuralTail ? NEURAL_TAIL_WORDS * secondBounceCount : 0);
+    // Lever E8: its lists last, only while it lights cells on a budget (the lists are made again on a switch).
+    const cellLists = cellShadingLists ? cellShadingListLayout(maxCombinedRayCount, tailEnd) : null;
+    const cellListsEnd = tailEnd + (cellLists ? cellLists.bytes / 4 : 0);
+    // E9's frames after everything, while E8 or E9 is used (the lists are made again on a switch).
+    const resetFrames = resetFrameWords > 0 ? { firstWord: cellListsEnd, words: resetFrameWords } : null;
+    const words = cellListsEnd + resetFrameWords;
     return {
         maxRayCount,
         maxCombinedRayCount,
@@ -280,6 +301,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
         firstBounceBypassBuffer,
         multibounceDirectBuffer,
         neuralTailBuffer: neuralTail && secondBounceRays ? tailStart : 0,
+        cellLists,
+        resetFrames,
         bytes: Math.max(words, 1) * 4,
     };
 }
@@ -289,8 +312,8 @@ export function hashGridCacheRayListLayout(maxRayCount: number, numCells: number
  * buffer bound whole as one storage binding, so it must fit both the binding
  * limit and the buffer limit. It grows with the screen (32 words per probe
  * ray: 29 MB at 1280 × 720, 265 MB at 3840 × 2160, past WebGPU's default
- * 128 MiB binding; lever E8's lists are a buffer of their own, made when it
- * is used), so a larger screen or a device with smaller limits can't
+ * 128 MiB binding; lever E8's lists add 6 words a probe ray while it is
+ * used), so a larger screen or a device with smaller limits can't
  * bind it where the cache itself fits (register D14's rule: name the limit,
  * no fallback).
  */
@@ -317,11 +340,12 @@ struct HashGridCacheRayLists {
     multibounce_ray_buffer: u32,    // ours (register D36): each second-bounce entry's ray, a WorldCacheProbeRay in 12 words
     first_bounce_bypass_buffer: u32,  // ours (register D38): 1 where a first-bounce entry's probe ray bypasses the cache
     multibounce_direct_buffer: u32,   // ours (register D38): a bypassing second-bounce entry's own direct light, 2 words
-    cell_candidate_buffer: u32,     // lever E8, in g_HashGridCache_CellLists: the cells hit this frame, two words each
-    cell_shade_buffer: u32,         // lever E8, in g_HashGridCache_CellLists: the cells lit this frame
+    cell_candidate_buffer: u32,     // lever E8 (at the lists' end while it is used): the cells hit this frame, two words each
+    cell_shade_buffer: u32,         // lever E8: the cells lit this frame
     cell_shading: u32,              // bit 0: lever E8, cells lit on a budget; bit 1: E9, per-hit change reset; bits 8-15: E9's history kept
-    cell_priority_bins: u32,        // lever E8, in g_HashGridCache_CellLists: each bin's first slot, then its count
+    cell_priority_bins: u32,        // lever E8: each bin's first slot, then its count
     neural_tail_buffer: u32,          // P6.4 (register E11): the neural tail's answer per second-bounce entry, 2 words
+    reset_frames_buffer: u32,       // E9 (at the lists' end while E8 or E9 is used): each finest cell's last-reset frame, 16 bits
 }
 
 ${CELL_CHANGES_WGSL}
@@ -385,7 +409,7 @@ fn HashGridCache_AddSampleOfNoLight(cell_index: u32) {
     if (HashGridCache_CellShadingBudgeted()) {
         return;
     }
-    atomicAdd(&g_HashGridCache_UpdateScratch[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);
+    atomicAdd(&g_HashGridCache_TileWords[HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index + 3u], 1u);
 }
 
 // GIDenoiser_RemoveNaNs (gi_denoiser.hlsl:74-81): maps the colour to [0, 1), clamps it and maps
@@ -768,11 +792,11 @@ fn ${POPULATION_ENTRY_POINT.populateCells}(
     // scratch's first words hold the entries' keys.
     if (!HashGridCache_CellShadingBudgeted()) {
         if (dot(lighting, lighting) > 0.0) {
-            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
-            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
-            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+            atomicAdd(&g_HashGridCache_TileWords[scratch + 0u], quantized_radiance.x);
+            atomicAdd(&g_HashGridCache_TileWords[scratch + 1u], quantized_radiance.y);
+            atomicAdd(&g_HashGridCache_TileWords[scratch + 2u], quantized_radiance.z);
         }
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+        atomicAdd(&g_HashGridCache_TileWords[scratch + 3u], quantized_radiance.w);
     }
 
     // In some cases, we want to bypass the cache to avoid light leaks;
@@ -858,15 +882,15 @@ fn UpdateTiles_Accumulate(previous_radiance: vec4f, new_samples: vec4f, max_coun
 // This frame's quantised samples of a cell (an update scratch array at 'scratch'), recovered,
 // and the scratch cleared for the next frame (gi1.comp:2164-2168, 2210-2224).
 fn UpdateTiles_TakeScratch(scratch: u32) -> vec4f {
-    let quantized = vec4u(atomicLoad(&g_HashGridCache_UpdateScratch[scratch + 0u]),
-                          atomicLoad(&g_HashGridCache_UpdateScratch[scratch + 1u]),
-                          atomicLoad(&g_HashGridCache_UpdateScratch[scratch + 2u]),
-                          atomicLoad(&g_HashGridCache_UpdateScratch[scratch + 3u]));
+    let quantized = vec4u(atomicLoad(&g_HashGridCache_TileWords[scratch + 0u]),
+                          atomicLoad(&g_HashGridCache_TileWords[scratch + 1u]),
+                          atomicLoad(&g_HashGridCache_TileWords[scratch + 2u]),
+                          atomicLoad(&g_HashGridCache_TileWords[scratch + 3u]));
     // Clear scratch
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 0u], 0u);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 1u], 0u);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 2u], 0u);
-    atomicStore(&g_HashGridCache_UpdateScratch[scratch + 3u], 0u);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 0u], 0u);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 1u], 0u);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 2u], 0u);
+    atomicStore(&g_HashGridCache_TileWords[scratch + 3u], 0u);
     return HashGridCache_RecoverRadiance(quantized);
 }
 
@@ -941,7 +965,7 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         // count down each such frame and read 0 after 16, though nothing was learned about the cell.
         // Experiment E9: a cell marked near a recent change takes this frame's samples whole.
         let direct_scratch = HASHGRIDCACHE_UPDATECELLVALUEBUFFER + 4u * cell_index;
-        let change_reset = (atomicAnd(&g_HashGridCache_UpdateScratch[direct_scratch + 3u], ~HASHGRIDCACHE_CHANGE_RESET_BIT) & HASHGRIDCACHE_CHANGE_RESET_BIT) != 0u;
+        let change_reset = (atomicAnd(&g_HashGridCache_TileWords[direct_scratch + 3u], ~HASHGRIDCACHE_CHANGE_RESET_BIT) & HASHGRIDCACHE_CHANGE_RESET_BIT) != 0u;
         let previous_direct_radiance = HashGridCache_UnpackRadiance(g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index]);
         let new_direct_samples = UpdateTiles_TakeScratch(direct_scratch);
         var direct_radiance = previous_direct_radiance;
@@ -1473,11 +1497,11 @@ fn ${POPULATION_ENTRY_POINT.updateMultibounceCells}(
 
     if (adds_sample) {
         if (dot(radiance, radiance) > 0.0) {
-            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 0u], quantized_radiance.x);
-            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 1u], quantized_radiance.y);
-            atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 2u], quantized_radiance.z);
+            atomicAdd(&g_HashGridCache_TileWords[scratch + 0u], quantized_radiance.x);
+            atomicAdd(&g_HashGridCache_TileWords[scratch + 1u], quantized_radiance.y);
+            atomicAdd(&g_HashGridCache_TileWords[scratch + 2u], quantized_radiance.z);
         }
-        atomicAdd(&g_HashGridCache_UpdateScratch[scratch + 3u], quantized_radiance.w);
+        atomicAdd(&g_HashGridCache_TileWords[scratch + 3u], quantized_radiance.w);
     }
 
     // The first bounce's probe ray reads no cell when it is shorter than its cell (register D38):
