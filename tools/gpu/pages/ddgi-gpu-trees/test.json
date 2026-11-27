@@ -1,5 +1,5 @@
 {
-    "description": "#26 (was T2.12 check 2): DDGI on the GPU's H-PLOC mesh trees, which nothing replaces, against tinybvh only (the fallback, gpuFirst: false). Two platforms on one scene: every mesh on a GPU tree unless refused (those on fallback trees), no tinybvh build left running, the GPU ms of the tree-walking passes in turns (GPU trees within 5% of tinybvh only, judged on Sponza on the RTX), recompiles 0 and the GPU build's buffers gone. VITE_DDGI_SCENES=a,b (default sponza; needs the downloads), VITE_DDGI_UNITS (default 512). For hand use under the bench lock.",
+    "description": "#26 (was T2.12 check 2): DDGI on the GPU's H-PLOC mesh trees, which nothing replaces, against tinybvh only (the fallback, gpuFirst: false). Two platforms on one scene: every mesh on a GPU tree unless refused (those on fallback trees), no tinybvh build left running, the GPU ms of the tree-walking passes in turns (GPU trees at most 5% slower than tinybvh only, judged on Sponza on the RTX), recompiles 0 and the GPU build's buffers gone. VITE_DDGI_SCENES=a,b (default sponza; needs the downloads), VITE_DDGI_UNITS (default 512). For hand use under the bench lock.",
     "timeoutMs": 1200000,
     "manual": true
 }

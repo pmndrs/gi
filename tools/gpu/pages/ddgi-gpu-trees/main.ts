@@ -20,8 +20,10 @@
  *    each first in half the rounds (so a clock that drifts, and the second
  *    timing's slowdown, affect both alike); the median GPU ms of the passes
  *    that walk the trees (`ddgi/trace` and, with direct light deferred,
- *    `ddgi/gi-direct`) per frame. The done-when: `gpu` within 5% of
- *    `tinybvh-only`, judged on Sponza on the RTX under the clock rule
+ *    `ddgi/gi-direct`) per frame. The done-when: `gpu` at most 5% slower
+ *    than `tinybvh-only` (one-sided since #26: T2.12's two-sided bar compared
+ *    the same trees after a swap, and faster GPU trees are no failure),
+ *    judged on Sponza on the RTX under the clock rule
  *    (DECISIONS 2026-11-05); other scenes and GPUs report it. A small
  *    scene's tree passes take about 2 ms a frame, and in a correctness run
  *    on a hot RTX two-room read 0.80x with the same trees on both sides;
@@ -195,7 +197,7 @@ await runThreePage(async ({ device, adapterSummary, log, data }) => {
         const ratio = treePassMs.gpu / treePassMs['tinybvh-only'];
         log(`${sceneId}: tree passes on GPU trees ${round(treePassMs.gpu)} ms, tinybvh only ${round(treePassMs['tinybvh-only'])} ms (${round(ratio)}x)`);
         const judgeSpeed = onRtx && sceneId === SPEED_SCENE;
-        if (judgeSpeed && Math.abs(ratio - 1) > TRACE_SPEED_TOLERANCE) failures.push(`${sceneId}: on GPU trees the tree passes take ${round(ratio)}x tinybvh-only's (bar within 5%)`);
+        if (judgeSpeed && ratio - 1 > TRACE_SPEED_TOLERANCE) failures.push(`${sceneId}: on GPU trees the tree passes take ${round(ratio)}x tinybvh-only's (bar: at most 5% slower)`);
 
         // 4. Nothing replaced a tree or recompiled, and the GPU build's buffers are gone.
         const after = rays.meshTreeCounts;
