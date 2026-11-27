@@ -62,16 +62,20 @@
  * 7. **The shared-cell bounce** (pmndrs/gi#54, `secondBounce: 'shared-cell'`,
  *    `cellShading` left per hit, which the mode overrides; multibounce on),
  *    run first. Known answers:
- *    a. cold cache: the first frame from an empty cache, every lit cell's one
- *       indirect sample is exact (ceiling ρ² E / π, floor 0, one sample each);
- *    b. indirect miss: the floor alone under a white sky, every lit cell's
- *       indirect value is 0 with a count (no sky counted twice, misses counted);
+ *    a. cold cache: the furnace's first frame from an empty cache, every lit
+ *       (ceiling) cell's one indirect sample is exact: ρ² E / π, one sample;
+ *    b. indirect miss: the ceiling alone under a white sky (the world-cache
+ *       page's scene), every lit cell's indirect value is exactly 0 with a
+ *       count (no sky counted twice, misses counted);
  *    c. short-ray bypass: cells from 8 m at a budget of 0, the near ceiling rays
  *       shorter than their cell average ρ² E / π within 1.5% (ShortRayBounce's
  *       roulette and its 1 / (1 - p)); rays through their cell read 0;
- *    d. the furnace (ρ² E / π within 1% by `FURNACE_FRAMES`) and the strips
- *       (half that within 2%: misses count as samples) at 20k, read through
- *       warm destination cells;
+ *    d. at 20k, the furnace (ρ² E / π within 1% by `FURNACE_FRAMES`) and the
+ *       strips (half that within 2%: misses count as samples), seen from above:
+ *       the probes are all on the floor, so no floor cell is lit and every
+ *       continuation lands cold; and the furnace seen level from halfway up,
+ *       where probes on the ceiling light the floor cells, so continuations read
+ *       warm landing cells (ρ² E / π within 1%);
  *    e. zero budget: nothing lit, every ray through its cell reads exactly 0;
  *    and the furnace's lag after its sun doubles (recorded).
  *    `VITE_RC_CELL_SHADING_ONLY=shared` runs section 7 alone.
@@ -207,12 +211,22 @@ function quad(platform: GIPlatformImpl, label: string, corners: readonly Vec3[],
     scene.createInstance({ mesh, materials: [material], transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], label });
 }
 
-/** `'sky floor'`: the corner's floor alone under a white sky (the shared bounce's misses). */
-type SceneKind = 'corner' | 'furnace' | 'strips' | 'sky floor';
+/**
+ * `'ceiling only'` (the world-cache page's): the furnace's ceiling under a white sky, and a black
+ * 1 × 1 m patch on the ground for the probes, the camera 0.3 m over it looking down. The ceiling's
+ * continuations go down: nearly all miss, the rest land on the black patch.
+ */
+type SceneKind = 'corner' | 'furnace' | 'strips' | 'ceiling only' | 'furnace level';
+/** The furnace seen level, from halfway up: probes on floor and ceiling, so floor cells are lit too (the shared bounce's warm landings). */
+const FURNACE_LEVEL_CAMERA: PageCamera = { position: [0, 1.5, 0], target: [0, 1.5, -2], fovYDeg: 60, near: 0.05, far: 1000 };
+const CEILING_ONLY_CAMERA: PageCamera = { position: [0, 0.3, 0], target: [0, 0, 0], fovYDeg: 60, near: 0.05, far: 1000 };
 
 function describe(platform: GIPlatformImpl, kind: SceneKind): void {
-    if (kind === 'sky floor') {
-        quad(platform, 'floor', [[-200, 0, 200], [200, 0, 200], [200, 0, -200], [-200, 0, -200]], [0, 1, 0], ALBEDO);
+    if (kind === 'ceiling only') {
+        const half = FURNACE.halfWidth;
+        const y = FURNACE.ceilingY;
+        quad(platform, 'ceiling', [[-half, y, -half], [half, y, -half], [half, y, half], [-half, y, half]], [0, -1, 0], FURNACE.albedo);
+        quad(platform, 'black probe patch', [[-0.5, 0, 0.5], [0.5, 0, 0.5], [0.5, 0, -0.5], [-0.5, 0, -0.5]], [0, 1, 0], 0);
         platform.scene.setEnvironment({ type: 'color', color: [1, 1, 1], intensity: 1 });
         return;
     }
@@ -270,7 +284,7 @@ async function startScenario(device: GPUDevice, name: string, kind: SceneKind, l
     await platform.prepare();
     describe(platform, kind);
     const handles = lights.map((light) => platform.scene.createLight(light));
-    const camera = kind === 'corner' || kind === 'sky floor' ? CORNER_CAMERA : FURNACE.camera;
+    const camera = kind === 'corner' ? CORNER_CAMERA : kind === 'ceiling only' ? CEILING_ONLY_CAMERA : kind === 'furnace level' ? FURNACE_LEVEL_CAMERA : FURNACE.camera;
     const screen = await PageScreen.create(platform, device, WIDTH, HEIGHT);
     const frame = (): void => {
         const encoder = device.createCommandEncoder({ label: `radiance-cache-cell-shading ${name}` });
@@ -500,14 +514,14 @@ async function queue(device: GPUDevice, fail: (message: string) => void): Promis
 
 // ---- 3 and 4. The furnace and the strips --------------------------------------------------------------
 
-function nearCeilingStats(state: RayState, expected: number): { mean: number; rays: number; off: number } {
-    const cellSize = hashGridCacheCellSizeConstant(verticalFieldOfView(frameCamera(FURNACE.camera, WIDTH, HEIGHT).projection), WIDTH, HEIGHT, 32);
+function nearCeilingStats(state: RayState, expected: number, camera: PageCamera = FURNACE.camera): { mean: number; rays: number; off: number } {
+    const cellSize = hashGridCacheCellSizeConstant(verticalFieldOfView(frameCamera(camera, WIDTH, HEIGHT).projection), WIDTH, HEIGHT, 32);
     let sum = 0;
     let rays = 0;
     const values: number[] = [];
     state.hits.forEach((hit, ray) => {
         if (!hit || Math.abs(hit[1] - FURNACE.ceilingY) > 1e-3) return;
-        if (hashGridCacheGetCellSize(hit, FURNACE.camera.position, { cellSize, minCellSize: 0.1 }) * TILE_CELLS >= NEAR_TILE_SIZE) return;
+        if (hashGridCacheGetCellSize(hit, camera.position, { cellSize, minCellSize: 0.1 }) * TILE_CELLS >= NEAR_TILE_SIZE) return;
         const value = (state.radiance[ray * 4] + state.radiance[ray * 4 + 1] + state.radiance[ray * 4 + 2]) / 3;
         sum += value;
         rays++;
@@ -517,8 +531,8 @@ function nearCeilingStats(state: RayState, expected: number): { mean: number; ra
     return { mean, rays, off: values.filter((value) => Math.abs(value / expected - 1) > TOLERANCE).length };
 }
 
-async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips', fail: (message: string) => void): Promise<Record<string, number>> {
-    const expected = kind === 'furnace' ? CEILING_INDIRECT : STRIPS_INDIRECT;
+async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips' | 'furnace level', fail: (message: string) => void): Promise<Record<string, number>> {
+    const expected = kind === 'strips' ? STRIPS_INDIRECT : CEILING_INDIRECT;
     const scenario = await startScenario(device, `${kind} ${modeName(mode)}`, kind, [FURNACE_SUN], settingsFor(mode, true));
     try {
         let convergedAt = -1;
@@ -526,15 +540,15 @@ async function furnace(device: GPUDevice, mode: Mode, kind: 'furnace' | 'strips'
             scenario.frame();
             // Read every 5th frame (and the last): the furnace converges over tens of frames.
             if (frame % 5 !== 0 && frame !== FURNACE_FRAMES) continue;
-            const stats = nearCeilingStats(await readRays(device, scenario), expected);
+            const stats = nearCeilingStats(await readRays(device, scenario), expected, scenario.camera);
             if (Math.abs(stats.mean / expected - 1) <= 0.01) {
                 if (convergedAt < 0) convergedAt = frame;
             } else convergedAt = -1;
         }
-        const final = nearCeilingStats(await readRays(device, scenario), expected);
+        const final = nearCeilingStats(await readRays(device, scenario), expected, scenario.camera);
         const name = `${kind} ${modeName(mode)}`;
         if (final.rays === 0) fail(`${name}: no near ceiling ray`);
-        if (kind === 'furnace') {
+        if (kind !== 'strips') {
             if (convergedAt < 0) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, not ${expected.toFixed(4)} within 1%, after ${FURNACE_FRAMES} frames`);
         } else if (Math.abs(final.mean / expected - 1) > TOLERANCE) fail(`${name}: the near ceiling rays average ${final.mean.toFixed(4)}, expected ${expected.toFixed(4)} within 2%`);
         // The shared bounce (#54) keeps no second-bounce entries, so there are no landings to read: its
@@ -706,16 +720,12 @@ function onCeiling(hit: Vec3): boolean {
     return Math.abs(hit[1] - FURNACE.ceilingY) <= 1e-3;
 }
 
-function onFloor(hit: Vec3): boolean {
-    return Math.abs(hit[1]) <= 1e-3;
-}
-
 /**
- * 7a. **Cold cache** (the furnace, the first frame from an empty cache): every destination is cold
- * (no floor or ceiling cell has a direct value before ShadeCells), so every lit cell's one
- * continuation lights its landing with the sun, as ShadeCells would. Under a shadowless sun that
- * sample is exact: a lit cell whose sample hit is on the ceiling holds ρ · ρ E / π, one sample;
- * one on the floor lands on the ceiling, which faces away from the sun, and holds 0, one sample.
+ * 7a. **Cold cache** (the furnace, the first frame from an empty cache): the probes are on the
+ * floor, so every lit cell is a ceiling cell, and every destination is cold (no cell has a direct
+ * value before ShadeCells), so each lit cell's one continuation lights its landing on the floor
+ * with the sun, as ShadeCells would. Under a shadowless sun that sample is exact: every lit cell
+ * holds ρ · ρ E / π, one sample.
  */
 async function sharedColdCache(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, number>> {
     const mode: SharedMode = { shared: SHARED_BUDGET };
@@ -724,26 +734,21 @@ async function sharedColdCache(device: GPUDevice, fail: (message: string) => voi
         scenario.frame();
         if (scenario.cache.secondBounceInUse !== 'shared-cell') fail(`shared cold cache: the second bounce in use is ${scenario.cache.secondBounceInUse}`);
         const { lit, target, cells } = await readLitCells(device, scenario, await readRays(device, scenario));
-        const tally = { lit, target, ceilingCells: 0, ceilingOff: 0, floorCells: 0, floorOff: 0, notOneSample: 0, ceilingMean: 0 };
+        const tally = { lit, target, ceilingCells: 0, ceilingOff: 0, notOneSample: 0, ceilingMean: 0 };
         for (const cell of cells) {
             const [r, g, b, count] = cell.indirect;
             if (count !== 1) tally.notOneSample++;
+            if (!onCeiling(cell.hit)) continue;
             const value = (r + g + b) / 3;
-            if (onCeiling(cell.hit)) {
-                tally.ceilingCells++;
-                tally.ceilingMean += value;
-                if (Math.abs(value / CEILING_INDIRECT - 1) > EXACT_TOLERANCE) tally.ceilingOff++;
-            } else if (onFloor(cell.hit)) {
-                tally.floorCells++;
-                if (value !== 0) tally.floorOff++;
-            }
+            tally.ceilingCells++;
+            tally.ceilingMean += value;
+            if (Math.abs(value / CEILING_INDIRECT - 1) > EXACT_TOLERANCE) tally.ceilingOff++;
         }
         tally.ceilingMean = Number((tally.ceilingMean / Math.max(tally.ceilingCells, 1) / CEILING_INDIRECT).toFixed(5));
-        if (tally.ceilingCells < 1000 || tally.floorCells < 1000) fail(`shared cold cache: ${tally.ceilingCells} lit ceiling cells and ${tally.floorCells} lit floor cells; the check needs 1,000 of each`);
+        if (tally.ceilingCells < 1000) fail(`shared cold cache: only ${tally.ceilingCells} lit ceiling cells`);
         if (tally.notOneSample > 0) fail(`shared cold cache: ${tally.notOneSample} lit cells don't hold exactly one indirect sample after the first frame`);
         // A continuation leaving the 400 m floor (about 1 in 5,000 at 3 m) misses: allow 0.5%.
         if (tally.ceilingOff > 0.005 * tally.ceilingCells) fail(`shared cold cache: ${tally.ceilingOff} of ${tally.ceilingCells} lit ceiling cells are not rho^2 E / pi = ${CEILING_INDIRECT.toFixed(4)} within ${EXACT_TOLERANCE * 100}% (mean ${tally.ceilingMean})`);
-        if (tally.floorOff > 0) fail(`shared cold cache: ${tally.floorOff} of ${tally.floorCells} lit floor cells read light from a ceiling the sun can't reach`);
         return tally;
     } finally {
         scenario.dispose();
@@ -752,38 +757,39 @@ async function sharedColdCache(device: GPUDevice, fail: (message: string) => voi
 }
 
 /**
- * 7b. **Indirect miss** (the floor alone under a white sky): every continuation leaves the floor
- * upward and misses. The sky is the floor's own light sample (its direct value), so a miss adds a
- * sample of no light: every lit floor cell's indirect value is 0 with a count (a miss is counted,
- * not skipped, which the strips' half check in 7d needs too).
+ * 7b. **Indirect miss** (the ceiling only, under a white sky): the lit cells are ceiling cells,
+ * whose continuations go down and miss (or land on the black patch). The sky reaches the ceiling
+ * through its own light sample (its direct value), so a miss is a sample of no light: every lit
+ * cell's indirect value is exactly 0, with a count (a miss is counted, not skipped, which the
+ * strips' half in 7d needs too), and its direct value is lit.
  */
 async function sharedMiss(device: GPUDevice, fail: (message: string) => void): Promise<Record<string, number>> {
     const mode: SharedMode = { shared: SHARED_BUDGET };
-    const scenario = await startScenario(device, `miss ${modeName(mode)}`, 'sky floor', [], settingsFor(mode, true));
-    const tally = { floorCells: 0, lit: 0, indirectNotZero: 0, uncounted: 0, directDark: 0 };
+    const scenario = await startScenario(device, `miss ${modeName(mode)}`, 'ceiling only', [], settingsFor(mode, true));
+    const tally = { ceilingCells: 0, lit: 0, indirectNotZero: 0, uncounted: 0, directLit: 0 };
     try {
         for (let frame = 1; frame <= 5; frame++) {
             scenario.frame();
             const { lit, cells } = await readLitCells(device, scenario, await readRays(device, scenario));
             tally.lit += lit;
             for (const cell of cells) {
-                if (!onFloor(cell.hit)) continue;
-                tally.floorCells++;
+                if (!onCeiling(cell.hit)) continue;
+                tally.ceilingCells++;
                 const [r, g, b, count] = cell.indirect;
                 if (r !== 0 || g !== 0 || b !== 0) tally.indirectNotZero++;
                 if (!(count >= 1)) tally.uncounted++;
-                if (!(cell.direct[0] > 0)) tally.directDark++;
+                if (cell.direct[0] > 0) tally.directLit++;
             }
         }
     } finally {
         scenario.dispose();
         await device.queue.onSubmittedWorkDone();
     }
-    if (tally.floorCells < 1000) fail(`shared miss: only ${tally.floorCells} lit floor cells`);
-    if (tally.indirectNotZero > 0) fail(`shared miss: ${tally.indirectNotZero} of ${tally.floorCells} lit floor cells have indirect light though every continuation misses (the sky counted twice?)`);
-    if (tally.uncounted > 0) fail(`shared miss: ${tally.uncounted} lit floor cells have no indirect sample: a miss must count as a sample of no light`);
-    // Most lit cells were lit by the sky this frame or before; a few, new this frame, hold a single 0
-    // sample (the sky drawn below the horizon has no weight), which is not an error. Recorded.
+    if (tally.ceilingCells < 1000) fail(`shared miss: only ${tally.ceilingCells} lit ceiling cells`);
+    if (tally.indirectNotZero > 0) fail(`shared miss: ${tally.indirectNotZero} of ${tally.ceilingCells} lit ceiling cells have indirect light though their continuations miss (the sky counted twice?)`);
+    if (tally.uncounted > 0) fail(`shared miss: ${tally.uncounted} lit ceiling cells have no indirect sample: a miss must count as a sample of no light`);
+    // The sky lights the ceiling (its direct value): the scene is lit, so a zero indirect means something.
+    if (tally.directLit < 0.9 * tally.ceilingCells) fail(`shared miss: only ${tally.directLit} of ${tally.ceilingCells} lit ceiling cells have direct light from the sky`);
     return tally;
 }
 
@@ -953,6 +959,7 @@ try {
     shared.bypass = await sharedBypass(device, fail);
     shared.furnace = await furnace(device, sharedMode, 'furnace', fail);
     shared.strips = await furnace(device, sharedMode, 'strips', fail);
+    shared.furnaceLevel = await furnace(device, sharedMode, 'furnace level', fail);
     shared.zeroBudget = await sharedZeroBudget(device, fail);
     shared.multibounceLag = await multibounceLag(device, sharedMode);
     data.sharedCell = shared;
