@@ -758,7 +758,7 @@ From 2026-11-19 the open follow-ups are GitHub issues on [pmndrs/gi](https://git
 - [#22](https://github.com/pmndrs/gi/issues/22) Budget v2 calibration on Bistro, and the change cost model (T3.14, T3.15).
 - [#23](https://github.com/pmndrs/gi/issues/23) Scene-copy follow-ups (T3.16).
 - [#24](https://github.com/pmndrs/gi/issues/24) Native RTXGI parity on Sponza (T3.17).
-- [#26](https://github.com/pmndrs/gi/issues/26) Whether the tinybvh swap is still needed.
+- [#26](https://github.com/pmndrs/gi/issues/26) Whether the tinybvh swap is still needed: decided 2026-11-28, swap removed on branch `gpu-trees-only` (DECISIONS 2026-11-28); its before/after timing waits for the VALID-timing slot.
 
 **RTXGI divergence experiments** ([docs/divergence.md](docs/divergence.md))
 - [#16](https://github.com/pmndrs/gi/issues/16) DV-02: stop updating settled probes.
