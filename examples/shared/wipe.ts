@@ -175,7 +175,9 @@ export function createWipe(canvas: HTMLCanvasElement, options: WipeOptions = {})
         },
         node(left: Node, right: Node): Node {
             const side = select(screenUV.x.lessThan(split), left, right);
-            return select(differenceOn.greaterThan(0), abs(vec4(left as Node<'vec4'>).sub(right as Node<'vec4'>)).mul(scale), side);
+            // Colour only: the alphas' difference would be 0, a see-through picture.
+            const difference = vec4(abs(vec4(left as Node<'vec4'>).rgb.sub(vec4(right as Node<'vec4'>).rgb)).mul(scale), 1);
+            return select(differenceOn.greaterThan(0), difference, side);
         },
         splitPixels(width: number): number {
             return Math.round(width * split.value);

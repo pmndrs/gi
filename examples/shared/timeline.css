@@ -1,26 +1,10 @@
-/* The timeline chart (timeline.ts). On its own it floats bottom right, above
-   the stats line; given a container it fills that instead. */
+/* The timeline chart (timeline.ts). On its own it sits in the dock (dock.css),
+   bottom right; given a container it fills that instead. */
 .timeline {
     box-sizing: border-box;
     padding: 6px 10px 6px;
     color: #cfd8e3;
     font: 12px/1.4 system-ui, sans-serif;
-}
-.timeline-floating {
-    position: fixed;
-    right: 12px;
-    bottom: 44px;
-    z-index: 15;
-    width: 280px;
-    max-width: calc(100vw - 24px);
-    background: rgba(8, 10, 14, 0.85);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 8px;
-}
-@media (max-width: 720px) {
-    .timeline-floating {
-        bottom: 84px;
-    }
 }
 .timeline-header,
 .timeline-footer {

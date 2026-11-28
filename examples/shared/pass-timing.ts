@@ -15,6 +15,7 @@
  */
 
 import type { GIPlatform, PassTiming } from '@pmndrs/gi/core';
+import { floatingDock } from './dock.ts';
 import './pass-timing.css';
 
 /** One line per pass, by its full name in `stats.passes`. */
@@ -155,7 +156,7 @@ export interface PassTimingOptions {
     readonly frames?: number;
     /** Lines for passes this module doesn't know, or to say more about one, by full name. */
     readonly descriptions?: Readonly<Record<string, string>>;
-    /** Where the list goes. Default a box of its own, bottom right, above the stats line. */
+    /** Where the list goes. Default a box in the page's dock (dock.ts), bottom right above the stats line. */
     readonly container?: HTMLElement;
 }
 
@@ -185,7 +186,7 @@ export function showPassTiming(platform: GIPlatform | null | (() => GIPlatform |
     const averager = new PassAverager(options.frames ?? 30);
 
     const box = document.createElement('section');
-    box.className = options.container ? 'pass-timing' : 'pass-timing pass-timing-floating';
+    box.className = options.container ? 'pass-timing' : 'pass-timing floating-panel';
     const header = document.createElement('div');
     header.className = 'pass-timing-header';
     const title = document.createElement('span');
@@ -198,7 +199,7 @@ export function showPassTiming(platform: GIPlatform | null | (() => GIPlatform |
     const note = document.createElement('p');
     note.className = 'pass-timing-note';
     box.append(header, list, note);
-    (options.container ?? document.body).append(box);
+    (options.container ?? floatingDock()).append(box);
 
     const rowsByName = new Map<string, { element: HTMLDetailsElement; ms: HTMLElement; bar: HTMLElement }>();
     let rows: PassRow[] = [];

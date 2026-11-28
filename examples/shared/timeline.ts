@@ -13,6 +13,7 @@
  * reads the first canvas it finds).
  */
 
+import { floatingDock } from './dock.ts';
 import './timeline.css';
 
 export interface TimelineOptions {
@@ -28,7 +29,7 @@ export interface TimelineOptions {
     readonly settleTolerance?: number;
     /** Frames the value must stay within the tolerance to count as settled. Default 10. */
     readonly settleHold?: number;
-    /** Where the chart goes. Default a box of its own, bottom right, above the stats line. */
+    /** Where the chart goes. Default a box in the page's dock (dock.ts), bottom right above the stats line. */
     readonly container?: HTMLElement;
 }
 
@@ -86,7 +87,7 @@ export function createTimeline(options: TimelineOptions): Timeline {
     const hold = options.settleHold ?? 10;
 
     const box = document.createElement('div');
-    box.className = options.container ? 'timeline' : 'timeline timeline-floating';
+    box.className = options.container ? 'timeline' : 'timeline floating-panel';
     const header = document.createElement('div');
     header.className = 'timeline-header';
     const title = document.createElement('span');
@@ -115,7 +116,7 @@ export function createTimeline(options: TimelineOptions): Timeline {
     settle.title = "This page's own reading: frames from the latest marker until the value stays within " + `${Math.round(tolerance * 100)}% of where it ends up, for ${hold} frames.`;
     footer.append(span, settle);
     box.append(header, plot, footer);
-    (options.container ?? document.body).append(box);
+    (options.container ?? floatingDock()).append(box);
 
     // Every frame since the latest marker is kept for the settle reading; the chart shows the last `capacity`.
     let values: (number | null)[] = [];
