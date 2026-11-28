@@ -1,6 +1,6 @@
 /** What X2 shows and how it works: the page's explainer panel (shared/explainer.ts). Plain data; main.ts holds the example. */
 
-import { API_PAGES, docsLink, showExplainer } from '../../shared/explainer.ts';
+import { API_PAGES, docsLink, GUIDE, showExplainer } from '../../shared/explainer.ts';
 
 const SEVERAL_VOLUMES = docsLink('design/m3-moving.md#41-several-volumes-in-one-technique', 'm3-moving.md §4.1, "Several volumes in one technique"');
 const CAMERA_VOLUME = docsLink('design/m3-moving.md#42-the-camera-following-volume-scrolling', 'm3-moving.md §4.2, "The camera-following volume"');
@@ -50,8 +50,8 @@ showExplainer({
         "DDGI keeps light in probes on a grid inside boxes you place. One coarse box over the whole town (blue, 8 m between probes by default) is cheap, but it can't hold light that changes within a 6 m street. So the page adds a window of 32 × 8 × 32 probes that follows the camera (`follow: 'camera'`, yellow, 1.5 m apart), and with three volumes a middle window between them (green). The nearer window has the higher `priority`.",
         `The probes themselves never move. When you go more than 0.75 of a spacing from the window's centre, the window moves by whole planes: the planes it leaves behind are reused for the planes entering ahead, which are updated first and fade in. Source: [${CAMERA_VOLUME.label}](${CAMERA_VOLUME.href}).`,
         `Where volumes overlap, the one with the higher priority answers, and the next fills in across the window's fade band, up to 10 spacings wide. A point reads at most 2 volumes, and one technique takes at most 8. Sources: [${SEVERAL_VOLUMES.label}](${SEVERAL_VOLUMES.href}) and §4.2.`,
-        `Each probe costs memory wherever it is, about 1.5 KB: a 32 × 12 × 32 window, 12,288 probes, is 19 MB. Its updates come out of a GPU budget (2 ms by default): 132 probe updates a frame on Bistro exterior at 2 ms. A camera at 5 m/s through a 32 × 12 × 32 window at 1.5 m needs about 43 of them a frame for the planes entering. Source: [${CAMERA_VOLUME.label}](${CAMERA_VOLUME.href}).`,
-        "The radiance cache keeps no probes in the world. Screen probes, one per 16 × 16 pixels, trace rays, and each hit adds its light to a cell of SHaRC's hash table. A cell is named by its position, its size and which way its surface faces, hashed into 1M slots, so cells exist wherever rays land. There is no box to place and no edge to fly past.",
+        `Each probe costs memory wherever it is, about 1.5 KB: a 32 × 12 × 32 window, 12,288 probes, is 19 MB. Its updates come out of a GPU budget, 2 ms by default ([${GUIDE.label}](${GUIDE.href})): 132 probe updates a frame on Bistro exterior at 2 ms. A camera at 5 m/s through a 32 × 12 × 32 window at 1.5 m needs about 43 of them a frame for the planes entering. Source: [${CAMERA_VOLUME.label}](${CAMERA_VOLUME.href}).`,
+        `The radiance cache keeps no probes in the world. Screen probes, one per 16 × 16 pixels ([${API_PAGES.radianceCache.label}](${API_PAGES.radianceCache.href})), trace rays, and each hit adds its light to a cell of SHaRC's hash table. A cell is named by its position, its size and which way its surface faces, hashed into 1M slots, so cells exist wherever rays land. There is no box to place and no edge to fly past.`,
         `SHaRC's levels of detail: a cell's size is set by its distance from the camera, so it covers about 16 pixels on screen (\`cellPixels\`), and it is never smaller than 2 cm (\`minCell\`). Near walls fall into small cells and far streets into big ones. A cell with fewer than 16 samples (\`minSamples\`) is read from a coarser level instead, up to 3 levels up (\`fallbackLevels\`), and each sample is also added to those coarser cells (\`pyramid\`). A cell no ray has reached for 64 frames is freed (\`staleFrames\`). Source: [${SHARC_SETTINGS.label}](${SHARC_SETTINGS.href}).`,
         "The cache can't draw its cells in the world yet, so this page can't show their size by distance: that is the greyed-out `show cells`.",
         "Which suits which world? DDGI suits a world you can cover with boxes, even a big one with a coarse box and a window that follows the camera, when you want memory you can predict and a GPU budget you set. Its probes also keep the light behind the camera. The cache suits a world with no shape to put a box around, or detail finer than a probe grid holds, on a device with the memory. Its cost follows the screen, not the size of the world.",
@@ -69,7 +69,7 @@ showExplainer({
             { text: 'DDGI: memory follows the probe count, not the screen: 12–72 MiB on the scenes measured, from two-room to Bistro exterior.', source: VARIANT_MEMORY },
             { text: 'DDGI: its updates stay inside a budget. At 132 updates a frame, a 1.5 m window following a camera at 5 m/s takes about a third of it.', source: CAMERA_VOLUME },
             { text: 'SHaRC: nothing to place and no edge: cells are hashed from their position, and finer near the camera.', source: SHARC_SETTINGS },
-            { text: "SHaRC: 83 MiB for the cache itself, 415 MiB at 1080p with the screen side, against about 1.1 GiB for the cache's default world cache, the GI-1.2 grid (1,085 MiB).", source: VARIANT_MEMORY },
+            { text: "SHaRC: 83 MiB for the cache itself and 415 MiB at 1080p in all, less than a third of the memory of the cache's default world cache, the GI-1.2 grid.", source: VARIANT_TRADE_OFFS },
             { text: 'SHaRC: every bounce with no volume. In the open scenes measured its block error ties with or beats the grid over DDGI.', source: VARIANT_TRADE_OFFS },
         ],
         cons: [
@@ -77,7 +77,8 @@ showExplainer({
             { text: 'DDGI: a window follows the camera on every axis, so flying up takes its probes off the ground. Probes entering it need 2 updates before they show.', source: CAMERA_VOLUME },
             { text: 'SHaRC: all of its work runs every frame, with no budget. On the big scenes measured its world cache was the costliest part, 14–19 ms (relative only: those timing runs were thermally limited).', source: VARIANT_TRADE_OFFS },
             { text: 'SHaRC: it lags after changes. 90% of a light change comes at a median of 83 frames, against 77 for the grid over DDGI.', source: VARIANT_TRADE_OFFS },
-            { text: "The cache's default grid holds about 1.1 GiB whatever the world. A smaller grid (P6.8), and SHaRC as the default with no volume (P6.7), are planned.", source: PLANNED },
+            { text: "The cache's default world cache, the GI-1.2 grid, holds 1,085 MiB (about 1.1 GiB) whatever the world.", source: VARIANT_MEMORY },
+            { text: 'A smaller grid (P6.8), and SHaRC as the default when no volume is stacked (P6.7), are planned.', source: PLANNED },
         ],
     },
     api: API_PAGES.radianceCache,
