@@ -111,7 +111,10 @@ export interface GIPlatform {
      * written depth and normals and before it shades. A no-op when no attached
      * technique has a screen stage, so hosts may always call it. Call it after
      * the frame's `encode`: screen stages use that frame's camera, whose
-     * projection must be the one `screen.depth` was drawn with.
+     * projection must be the one `screen.depth` was drawn with. With
+     * `gpuTiming`, submit the encoder given here before the frame's next
+     * `encode`: that is when the platform starts reading the frame's
+     * timestamps back, the screen stage's included.
      */
     encodeScreen(encoder: GPUCommandEncoder, screen: FrameScreen): void;
     /**
