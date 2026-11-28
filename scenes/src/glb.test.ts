@@ -64,6 +64,7 @@ describe('exported procedural scenes', async () => {
             'closed-door',
             'cornell-box',
             'cornell-box-point',
+            'dark-room',
             'furnace-room',
             'glass-wall',
             'open-ground',
