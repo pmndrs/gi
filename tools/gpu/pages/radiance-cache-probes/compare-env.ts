@@ -10,9 +10,9 @@
  * doesn't know throws, so a typo can't run the defaults unnoticed.
  */
 
-import { compareValuesFromText, setCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
+import { compareValuesFromText, setCompareValues, type CompareValues } from '../../../../packages/cache/src/compare-toggles.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 

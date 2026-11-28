@@ -5,8 +5,10 @@
  * `@pmndrs/gi` itself is the same list) and `@pmndrs/gi/radiance-cache` (the
  * radiance cache, engine-free).
  *
- * It reads the index files with TypeScript's parser and follows their
- * `export * from` and `export { ... } from` lines through the source, so it
+ * It reads the published package's entry files (packages/gi/src) with
+ * TypeScript's parser and follows their `export * from` and
+ * `export { ... } from` lines through the source, into the private workspace
+ * packages (`@pmndrs/gi-*`, by their `exports`), so it
  * needs no type checking and runs in well under a second. Every form of
  * export the packages use is handled; one it doesn't know throws, naming the
  * file, so a new form can't drop names silently.
@@ -14,27 +16,49 @@
  *   node tools/docs/public-exports.ts          # prints the names, one per line
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
-/** The published entry points and the private package each one re-exports. */
+/** The published entry points: each one's entry file in the published package, which re-exports the private packages. */
 export const PUBLIC_ENTRY_POINTS = [
-    { name: '@pmndrs/gi/core', index: 'packages/ddgi-core/src/platform/index.ts', doc: 'docs/api/platform.md' },
-    { name: '@pmndrs/gi/ddgi', index: 'packages/ddgi-core/src/techniques/ddgi/index.ts', doc: 'docs/api/platform.md' },
-    { name: '@pmndrs/gi/three', index: 'packages/ddgi-three/src/index.ts', doc: 'docs/api/three.md' },
-    { name: '@pmndrs/gi/radiance-cache', index: 'packages/ddgi-core/src/techniques/radiance-cache/index.ts', doc: 'docs/api/radiance-cache.md' },
+    { name: '@pmndrs/gi/core', index: 'packages/gi/src/core.ts', doc: 'docs/api/platform.md' },
+    { name: '@pmndrs/gi/ddgi', index: 'packages/gi/src/ddgi.ts', doc: 'docs/api/platform.md' },
+    { name: '@pmndrs/gi/three', index: 'packages/gi/src/three.ts', doc: 'docs/api/three.md' },
+    { name: '@pmndrs/gi/radiance-cache', index: 'packages/gi/src/radiance-cache.ts', doc: 'docs/api/radiance-cache.md' },
 ] as const;
 
 export type PublicEntryPoint = (typeof PUBLIC_ENTRY_POINTS)[number];
 
-/** `./contract` → `.../contract.ts` or `.../contract/index.ts`; a bare package name → null (not ours to list). */
+/** The private workspace packages by name (`@pmndrs/gi-core`, ...): their folders under packages/. */
+const workspacePackages = new Map(
+    readdirSync(join(repositoryRoot, 'packages'), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && existsSync(join(repositoryRoot, 'packages', entry.name, 'package.json')))
+        .map((entry) => {
+            const folder = join(repositoryRoot, 'packages', entry.name);
+            return [(JSON.parse(readFileSync(join(folder, 'package.json'), 'utf8')) as { name: string }).name, folder] as const;
+        })
+        .filter(([name]) => name.startsWith('@pmndrs/gi-')),
+);
+
+/**
+ * `./contract` → `.../contract.ts` or `.../contract/index.ts`; a private workspace package (`@pmndrs/gi-core`,
+ * `@pmndrs/gi-core/platform/index`) → its file, as its `exports` map it (`.` is `src/index.ts`, `./*` is
+ * `src/*.ts`); any other bare package name → null (not ours to list).
+ */
 function resolveRelative(fromFile: string, specifier: string): string | null {
-    if (!specifier.startsWith('.')) return null;
-    const base = resolve(dirname(fromFile), specifier);
+    let base: string;
+    if (specifier.startsWith('.')) {
+        base = resolve(dirname(fromFile), specifier);
+    } else {
+        const match = [...workspacePackages].find(([name]) => specifier === name || specifier.startsWith(`${name}/`));
+        if (!match) return null;
+        const [name, folder] = match;
+        base = specifier === name ? join(folder, 'src/index.ts') : join(folder, 'src', specifier.slice(name.length + 1));
+    }
     const candidates = base.endsWith('.ts') ? [base] : [`${base}.ts`, join(base, 'index.ts')];
     const found = candidates.find((candidate) => existsSync(candidate));
     if (!found) throw new Error(`${fromFile}: can't find the module '${specifier}'`);

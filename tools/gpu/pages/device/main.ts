@@ -11,7 +11,7 @@
  * change the run size.
  */
 
-import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/index.ts';
+import { GpuTimer } from '../../../../packages/core/src/platform/timing/index.ts';
 import { QUERY_TOKEN } from '../../contract.ts';
 import { runGpuTest } from '../../client.ts';
 import { collectEnvironment } from './environment.ts';

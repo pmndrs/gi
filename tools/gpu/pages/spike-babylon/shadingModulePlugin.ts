@@ -23,7 +23,7 @@ import { ShaderLanguage } from '@babylonjs/core/Materials/shaderLanguage.js';
 import type { UniformBuffer } from '@babylonjs/core/Materials/uniformBuffer.js';
 import type { MaterialDefines } from '@babylonjs/core/Materials/materialDefines.js';
 import type { Scene } from '@babylonjs/core/scene.js';
-import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-core/src/platform/contract/shading-module.ts';
+import type { ShadingModule, ShadingParameter } from '../../../../packages/core/src/platform/contract/shading-module.ts';
 
 type TextureParameter = Extract<ShadingParameter, { kind: 'texture' }>;
 type SamplerParameter = Extract<ShadingParameter, { kind: 'sampler' }>;

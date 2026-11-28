@@ -24,11 +24,11 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { InstanceHandle, TextureHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { ColorRGB } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import type { MaterialDescriptor, UvMapping, UvWrap } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../../../../packages/ddgi-core/src/platform/textures/texture-store-wgsl.ts';
+import type { InstanceHandle, TextureHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { ColorRGB } from '../../../../packages/core/src/platform/contract/math.ts';
+import type { MaterialDescriptor, UvMapping, UvWrap } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../../../../packages/core/src/platform/textures/texture-store-wgsl.ts';
 import { ready, ShadeKernel } from '../hit-shading-shared/harness.ts';
 import { LayerSampler, readLayer } from '../textures-shared/textures.ts';
 

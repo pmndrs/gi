@@ -28,7 +28,7 @@
  * Not a page itself (no index.html).
  */
 
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { readBuffer, type SurfacePoint } from './harness.ts';
 

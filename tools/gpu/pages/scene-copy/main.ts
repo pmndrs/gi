@@ -4,7 +4,7 @@
  * 1. **Accessors against the inputs.** A kernel calls every WGSL accessor of
  *    the scene module for a few points on every instance slot, every material
  *    and every light, and the answers are compared with values worked out
- *    from the scene's inputs (packages/ddgi-core/src/platform/scene/testing/fixture.ts).
+ *    from the scene's inputs (packages/core/src/platform/scene/testing/fixture.ts).
  *    Three states: the basic scene, after edits, and after churn that
  *    reallocates every buffer.
  * 2. **Nothing recompiles.** Shader modules and pipelines are counted on the
@@ -21,8 +21,8 @@
  *    material the inputs give that triangle).
  */
 
-import type { BindingSlot, ModuleBindingEntry, WgslModule } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
-import { PlatformScene } from '../../../../packages/ddgi-core/src/platform/scene/platform-scene.ts';
+import type { BindingSlot, ModuleBindingEntry, WgslModule } from '../../../../packages/core/src/platform/contract/wgsl.ts';
+import { PlatformScene } from '../../../../packages/core/src/platform/scene/platform-scene.ts';
 import {
     buildBasicScene,
     checkReadback,
@@ -33,13 +33,13 @@ import {
     makeQueries,
     materialIndices,
     SceneModel,
-} from '../../../../packages/ddgi-core/src/platform/scene/testing/fixture.ts';
+} from '../../../../packages/core/src/platform/scene/testing/fixture.ts';
 import {
     accessorKernelWgsl,
     decodeReadback,
     outputLayout,
     packQueries,
-} from '../../../../packages/ddgi-core/src/platform/scene/testing/readback.ts';
+} from '../../../../packages/core/src/platform/scene/testing/readback.ts';
 import {
     assembleTraceScene,
     createCpuTracer,
@@ -47,10 +47,10 @@ import {
     packRays,
     uploadTraceScene,
     type TraceRay,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
+import { buildMeshBvhWithTinyBvh } from '../../../../packages/core/src/platform/trace/mesh-bvh-topology.ts';
 import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
-import { createRandom, randomUnitVector } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { createRandom, randomUnitVector } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { assert, runGpuTest } from '../../client.ts';
 
 // Mesh trees come from tinybvh (WASM), the only mesh builder since B0.

@@ -22,9 +22,9 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { DEFAULT_WARM_UP_PASSES } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { DEFAULT_WARM_UP_PASSES } from '../../../../packages/ddgi/src/settings.ts';
 import { describeScene, frameInput, halfToFloat, loadManifest, readTextureBytes, releaseDeviceOnPageHide, runFrame, TestView } from '../ddgi-shared/harness.ts';
 
 const SCENES = ['cornell-box', 'two-room'];

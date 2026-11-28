@@ -19,9 +19,9 @@ __pycache__/
 /bench/recordings/
 
 # Copied into the npm package at build (tools/release/package-files.ts); the root files are the ones to edit.
-/packages/ddgi/README.md
-/packages/ddgi/LICENSE
-/packages/ddgi/licenses/
+/packages/gi/README.md
+/packages/gi/LICENSE
+/packages/gi/licenses/
 
 # GI-1.0 research: source PDFs aren't redistributable (research/gi-1.0/sources/SOURCES.md); native Capsaicin builds and captures
 research/gi-1.0/sources/*.pdf

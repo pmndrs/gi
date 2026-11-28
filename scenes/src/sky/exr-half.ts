@@ -23,8 +23,8 @@
  * `zlib.deflateSync`, readers use the platform's `DecompressionStream`.
  */
 
-import type { HalfRgbImage } from '../../../packages/ddgi-core/src/platform/sky/half-float.ts';
-import { floatToHalf, halfToFloat } from '../../../packages/ddgi-core/src/platform/sky/half-float.ts';
+import type { HalfRgbImage } from '../../../packages/core/src/platform/sky/half-float.ts';
+import { floatToHalf, halfToFloat } from '../../../packages/core/src/platform/sky/half-float.ts';
 
 // The half-float conversion and the image type live in the core (T1.4), so the
 // platform's procedural sky makes exactly the same half floats as these files.

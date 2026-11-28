@@ -9,6 +9,7 @@ import type { ServerResponse } from 'node:http';
 import { createServer, searchForWorkspaceRoot, type Connect, type ViteDevServer } from 'vite';
 import { EXAMPLES_SITE_BASE, EXAMPLES_SITE_FILES, REFERENCE_FILES } from './contract.ts';
 import { optionalSiblings, optionalSiblingsPlugin } from '../optional-siblings.ts';
+import { linkedSiblingEntries } from '../sibling-manifests.ts';
 
 /** The folder served as the site root: it holds client.ts, preflight.html and pages/. */
 export const SITE_ROOT = import.meta.dirname;
@@ -20,14 +21,14 @@ export interface TestSiteServer {
 }
 
 /**
- * Sibling libraries from a local clone for development (root package.json
- * `linkedSiblings`): a required one through its `link:` dependency in
+ * Sibling libraries from a local clone for development (`linkedSiblings`,
+ * tools/sibling-manifests.ts): a required one through its `link:` dependency in
  * node_modules (none at the moment), an optional one through
  * `optionalSiblingsPlugin` (`@pathtracer/mlp` for the neural tail, P6.4). They live outside this repo, so vite serves their real folders only
  * when they are listed in `server.fs.allow`.
  */
 const LINKED_SIBLINGS = [
-    ...Object.keys((JSON.parse(readFileSync(resolve(SITE_ROOT, '../../package.json'), 'utf8')) as { linkedSiblings?: Record<string, unknown> }).linkedSiblings ?? {})
+    ...Object.keys(linkedSiblingEntries(resolve(SITE_ROOT, '../..')))
         .map((name) => resolve(SITE_ROOT, '../../node_modules', name))
         .filter((path) => existsSync(path))
         .map((path) => realpathSync(path)),
@@ -97,8 +98,8 @@ export async function startTestSite(): Promise<TestSiteServer> {
         // run examples/three as a user writes it (`@pmndrs/gi/three`).
         resolve: {
             alias: [
-                { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
-                { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+                { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/gi/src/index.ts') },
+                { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades)$/, replacement: resolve(SITE_ROOT, '../../packages/gi/src/$1.ts') },
             ],
         },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.

@@ -43,11 +43,11 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { InstanceHandle, LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { SavedFieldError } from '../../../../packages/ddgi-core/src/techniques/ddgi/saved-field.ts';
-import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { InstanceHandle, LightHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { SavedFieldError } from '../../../../packages/ddgi/src/saved-field.ts';
+import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi/src/settings.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
 import { describeScene, imageMean, loadManifest, releaseDeviceOnPageHide, TestView } from '../ddgi-shared/harness.ts';

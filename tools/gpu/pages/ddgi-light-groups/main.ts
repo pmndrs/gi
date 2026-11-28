@@ -37,9 +37,9 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { defaultLightGroups } from '../../../../packages/ddgi-core/src/techniques/ddgi/light-groups.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { DDGIField } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { defaultLightGroups } from '../../../../packages/ddgi/src/light-groups.ts';
 import { createDdgiScene, halfToFloat, imageMean, readBuffer, readTextureBytes, releaseDeviceOnPageHide, runFrame, runFrames, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 
 const env = import.meta.env as Record<string, unknown>;

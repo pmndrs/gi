@@ -38,14 +38,14 @@
  *    has them.
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { InstanceHandle, MaterialHandle, TextureHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { CpuStoreLayer } from '../../../../packages/ddgi-core/src/platform/textures/texture-store-cpu.ts';
-import { HIT_RECORD_BYTES, RAY_BYTES, packRays, type TraceRay } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import type { WalkMaterial } from '../../../../packages/ddgi-core/src/platform/trace/material-test-wgsl.ts';
-import { addToTally, compareAny, compareClosest, newTally, type ComparisonTally, type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { InstanceHandle, MaterialHandle, TextureHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { CpuStoreLayer } from '../../../../packages/core/src/platform/textures/texture-store-cpu.ts';
+import { HIT_RECORD_BYTES, RAY_BYTES, packRays, type TraceRay } from '../../../../packages/core/src/platform/trace/index.ts';
+import type { WalkMaterial } from '../../../../packages/core/src/platform/trace/material-test-wgsl.ts';
+import { addToTally, compareAny, compareClosest, newTally, type ComparisonTally, type TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
 import {
     buildAlphaCases,
     buildMaterialCases,
@@ -58,8 +58,8 @@ import {
     toFloat32Ray,
     uvLookup,
     type MaterialCase,
-} from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import { buildReferenceScene, traceAnyReference, traceClosestReferenceWithMiss } from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
+} from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import { buildReferenceScene, traceAnyReference, traceClosestReferenceWithMiss } from '../../../../packages/core/src/platform/trace/reference-tracer.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { IDENTITY_MATRIX } from '../trace-bench/gltf-geometry.ts';
 import { createDispatchTimer } from '../trace-bench/dispatch-timer.ts';

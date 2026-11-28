@@ -14,7 +14,7 @@
 
 import { assert, runGpuTest } from '../../client.ts';
 import { CORNELL_POINT_IN_AIR_VOLUME, createDdgiScene, FieldProbe, readBuffer, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 
 const FRAMES = 400;
 const PATHS_PER_POINT = 16384;

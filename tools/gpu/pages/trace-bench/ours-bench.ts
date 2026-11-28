@@ -15,7 +15,7 @@ import {
     type MeshBvhBuilder,
     type TraceInstance,
     type TraceSceneData,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
 import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
 import { GpuLbvhBuilder, type GpuLbvhGeometry } from '../../../../packages/bvh/src/gpu-lbvh.ts';
 import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';

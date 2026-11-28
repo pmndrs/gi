@@ -16,7 +16,7 @@ Start by reading:
 
 Check, in order:
 1. **The done-when checks.** Re-run every command yourself. Is each check actually true? A claimed pass that you can't reproduce is a fail.
-2. **Scope.** Did the change stay inside the task? Does it break the `ddgi-core` no-engine-imports boundary?
+2. **Scope.** Did the change stay inside the task? Does it break a package boundary (no engine in `core` or a technique, no technique in `three`, no path into another package's files)?
 3. **Code rules:**
    - readable formatting and names;
    - comments that explain *why*;

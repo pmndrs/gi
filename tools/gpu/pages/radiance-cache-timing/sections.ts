@@ -2,7 +2,7 @@
  * The radiance cache's timed passes, named and grouped as native Capsaicin's
  * per-pass CSV (`research/gi-1.0/native-capsaicin.md`, "GI-1.2 per-pass
  * timings": the groups its `summarize.py` sums). The technique names its
- * passes `radiance-cache/<Capsaicin section>` (`techniques/radiance-cache/
+ * passes `radiance-cache/<Capsaicin section>` (`packages/cache/src/
  * timed-pass.ts`, P6.6), so the section is the name without its prefix, but
  * for one case: Capsaicin's `PopulateScreenProbesCells` traces the probe rays
  * and inserts their hits' cells in one kernel; the port times the trace
@@ -30,8 +30,8 @@
  * depth and normals kept for the next frame).
  */
 
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { POPULATE_TRACE_SECTION, RADIANCE_CACHE_TIMER_PREFIX } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/timed-pass.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { POPULATE_TRACE_SECTION, RADIANCE_CACHE_TIMER_PREFIX } from '../../../../packages/cache/src/timed-pass.ts';
 
 /** Native Capsaicin's groups, in its table's order, then SSGI, then what only the port has. */
 export const CAPSAICIN_GROUPS = ['probe tracing and cell population', 'cache update and resolve', 'screen probes', 'denoise and resolve', 'ssgi', 'ours only'] as const;

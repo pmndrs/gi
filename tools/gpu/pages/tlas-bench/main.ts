@@ -26,18 +26,18 @@
  * 3060, over 3 runs under the bench lock (to-csv.ts writes the rows).
  */
 
-import type { InstanceHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
+import type { InstanceHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
 import { GpuBvhRefit } from '../../../../packages/bvh/src/gpu-refit.ts';
 import { PRIMITIVE_BOX_FLOATS } from '../../../../packages/bvh/src/refit-cpu.ts';
-import { BVH_NODE_BYTES } from '../../../../packages/ddgi-core/src/platform/trace/layout.ts';
-import { transformBounds } from '../../../../packages/ddgi-core/src/platform/trace/top-level.ts';
-import { buildTopLevelShape } from '../../../../packages/ddgi-core/src/platform/trace/top-level-shape.ts';
+import { BVH_NODE_BYTES } from '../../../../packages/core/src/platform/trace/layout.ts';
+import { transformBounds } from '../../../../packages/core/src/platform/trace/top-level.ts';
+import { buildTopLevelShape } from '../../../../packages/core/src/platform/trace/top-level-shape.ts';
 import type { DispatchTimer } from '../trace-bench/dispatch-timer.ts';
-import { PlatformKernelBuilder } from '../../../../packages/ddgi-core/src/platform/kernel-builder.ts';
-import { PlatformScene } from '../../../../packages/ddgi-core/src/platform/scene/platform-scene.ts';
-import { PlatformRayQueries } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
-import { TOP_LEVEL_REBUILD_COST_RATIO } from '../../../../packages/ddgi-core/src/platform/trace/top-level-gpu.ts';
-import { createRandom, randomAffine } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { PlatformKernelBuilder } from '../../../../packages/core/src/platform/kernel-builder.ts';
+import { PlatformScene } from '../../../../packages/core/src/platform/scene/platform-scene.ts';
+import { PlatformRayQueries } from '../../../../packages/core/src/platform/trace/ray-queries.ts';
+import { TOP_LEVEL_REBUILD_COST_RATIO } from '../../../../packages/core/src/platform/trace/top-level-gpu.ts';
+import { createRandom, randomAffine } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { createDispatchTimer } from '../trace-bench/dispatch-timer.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';

@@ -45,11 +45,11 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { InstanceHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import { WAKE_FRAMES } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
-import { slotOf } from '../../../../packages/ddgi-core/src/techniques/ddgi/scroll.ts';
-import { probeGrid } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { InstanceHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/ddgi/src/layout.ts';
+import { WAKE_FRAMES } from '../../../../packages/ddgi/src/mark-table.ts';
+import { slotOf } from '../../../../packages/ddgi/src/scroll.ts';
+import { probeGrid } from '../../../../packages/ddgi/src/settings.ts';
 import { createDdgiScene, FieldProbe, readBuffer, releaseDeviceOnPageHide, type DdgiScene, type SurfacePoint } from '../ddgi-shared/harness.ts';
 import { probeSnapshot, type ProbeSnapshot } from '../ddgi-shared/moving.ts';
 import { bookmarkCamera, runCameraFrame, runCameraFrames } from '../ddgi-shared/response.ts';

@@ -35,7 +35,7 @@
  * land). A spin that runs out is counted in the stats and triggers the repair
  * pass. The stats can be read back (`diagnostics: true`, off by default): each
  * `copyStats` the caller records is one small readback, so the caller
- * decides how often. ddgi-core's top level reads them only in stats mode,
+ * decides how often. gi-core's top level reads them only in stats mode,
  * which is how a give-up reaches its warnings and counters; its deforming
  * meshes copy them at most once every 15 frames each, for the drift signal
  * (DECISIONS 2026-11-10).
@@ -531,7 +531,7 @@ export interface GpuBvhRefitOptions {
     readonly label?: string;
     /**
      * Read the stats back (a frame or two late) into `latestStats`, one small
-     * readback per `copyStats` the caller records. Off by default. ddgi-core
+     * readback per `copyStats` the caller records. Off by default. gi-core
      * promises hosts no readbacks frame after frame: its top level turns this
      * on only in stats mode, and its deforming meshes copy at most once every
      * 15 frames each (DECISIONS 2026-11-10). Correctness never depends on it:

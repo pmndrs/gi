@@ -21,10 +21,10 @@
 import { MeshLambertMaterial, PerspectiveCamera, RenderTarget, type Material, type Mesh, type Object3D } from 'three/webgpu';
 import { FloatType } from 'three';
 import { assert } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { materialDescriptor } from '../../../../packages/ddgi-three/src/convert.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
+import { materialDescriptor } from '../../../../packages/three/src/convert.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

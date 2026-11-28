@@ -39,9 +39,9 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { FrameCamera } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { DEFAULT_PRIORITY_SHARE } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
-import { priorityCount } from '../../../../packages/ddgi-core/src/techniques/ddgi/schedule.ts';
+import type { FrameCamera } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { DEFAULT_PRIORITY_SHARE } from '../../../../packages/ddgi/src/settings.ts';
+import { priorityCount } from '../../../../packages/ddgi/src/schedule.ts';
 import { createDdgiScene, imageMean, loadManifest, releaseDeviceOnPageHide, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 import { bookmarkCamera, convergeField, describeErrors, runCameraFrame, runCameraFrames, ScheduleGapCensus, stepResponse, type ConvergeOptions, type StepResponse } from '../ddgi-shared/response.ts';
 

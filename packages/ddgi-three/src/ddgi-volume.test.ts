@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { probeGrid } from '../../ddgi-core/src/techniques/ddgi/settings.ts';
+import { probeGrid } from '@pmndrs/gi-ddgi';
 import { DDGIVolume } from './ddgi-volume.ts';
 
 describe('DDGIVolume (LightProbeGrid-shaped)', () => {

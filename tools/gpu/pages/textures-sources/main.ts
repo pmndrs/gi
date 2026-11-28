@@ -38,12 +38,12 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { TextureHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { TextureSource } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { TextureHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { TextureSource } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { frame } from '../hit-shading-shared/harness.ts';
-import { buildStoreLayerOnCpu } from '../../../../packages/ddgi-core/src/platform/textures/texture-store-cpu.ts';
-import { alphaPatternImage } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { buildStoreLayerOnCpu } from '../../../../packages/core/src/platform/textures/texture-store-cpu.ts';
+import { alphaPatternImage } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { bc7Level, blockColour, blockImage, largestByteDifference, linearToSrgb, readLayer, srgbToLinear, type LayerLevels } from '../textures-shared/textures.ts';
 
 const SIZE = 256;

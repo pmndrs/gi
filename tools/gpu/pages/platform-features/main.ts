@@ -2,7 +2,7 @@
  * RC1.4 (TASKS.md, radiance-cache track): functional checks of the features
  * the radiance cache needs, on three devices from the same GPU:
  *
- * 1. **Ours:** made by `requestGIDevice` (packages/ddgi-three/src/host.ts),
+ * 1. **Ours:** made by `requestGIDevice` (packages/three/src/host.ts),
  *    the adapter's host helper: every feature the adapter offers and the
  *    platform's `requiredLimits`.
  * 2. **Without tier2:** the same request minus `texture-formats-tier2`, to
@@ -21,8 +21,8 @@
 import { WebGPURenderer } from 'three/webgpu';
 import { drainDevice, reportGpuTest, summarizeAdapter, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import type { AdapterSummary } from '../../contract.ts';
-import { deviceLimits, requestGIDevice } from '../../../../packages/ddgi-three/src/host.ts';
-import { optionalFeatures } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { deviceLimits, requestGIDevice } from '../../../../packages/three/src/host.ts';
+import { optionalFeatures } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';
 import {
     CHECKED_FEATURES,
@@ -57,7 +57,7 @@ function featureData(results: Record<CheckedFeature, FeatureResult>): Record<str
     return Object.fromEntries(CHECKED_FEATURES.map((feature) => [feature, results[feature]]));
 }
 
-/** Whether the platform's own advice (`optionalFeatures`, ddgi-core) asks for the feature. */
+/** Whether the platform's own advice (`optionalFeatures`, gi-core) asks for the feature. */
 function platformAdvises(adapter: GPUAdapter): Record<string, boolean> {
     const advised = new Set<string>(optionalFeatures(adapter));
     return Object.fromEntries(

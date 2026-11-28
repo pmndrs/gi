@@ -11,7 +11,7 @@
  * round, so slow drift (clock speeds, thermals) hits both about equally.
  */
 
-import { type GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/index.ts';
+import { type GpuTimer } from '../../../../packages/core/src/platform/timing/index.ts';
 import { assessOverhead, measureTimerResolutionMs, type OverheadAssessment } from './noise.ts';
 import { median, summarize, type Summary } from './statistics.ts';
 import { type Workload } from './workload.ts';

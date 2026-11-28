@@ -6,12 +6,12 @@
  * The sky itself (Preetham, no sun disc, black below the horizon) and its
  * calibration (the Ineichen-Perez share of the sun's light on open ground)
  * are the core's `buildCalibratedSky`
- * (`packages/ddgi-core/src/platform/sky/calibrated-sky.ts`), the same code
+ * (`packages/core/src/platform/sky/calibrated-sky.ts`), the same code
  * the platform runs for a `procedural` environment (T1.4). This file adds
  * what is manifest-specific: which light is the sky's sun, and how bright it is.
  */
 
-import type { EnvironmentDescriptor } from '../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { EnvironmentDescriptor } from '../../../packages/core/src/platform/contract/scene.ts';
 import {
     buildCalibratedSky,
     DEFAULT_SKY_HEIGHT,
@@ -21,9 +21,9 @@ import {
     measureHorizontalIrradiance,
     type HorizontalIrradiance,
     type SkyCalibration,
-} from '../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
-import type { HalfRgbImage } from '../../../packages/ddgi-core/src/platform/sky/half-float.ts';
-import { rec709Luminance } from '../../../packages/ddgi-core/src/platform/sky/preetham.ts';
+} from '../../../packages/core/src/platform/sky/calibrated-sky.ts';
+import type { HalfRgbImage } from '../../../packages/core/src/platform/sky/half-float.ts';
+import { rec709Luminance } from '../../../packages/core/src/platform/sky/preetham.ts';
 import type { ManifestEnvironment, ManifestLight, SceneManifest, Vec3 } from '../manifest.ts';
 
 export { DEFAULT_SKY_HEIGHT, DEFAULT_SKY_WIDTH, DEFAULT_TURBIDITY, measureHalfImage, measureHorizontalIrradiance, type HorizontalIrradiance, type SkyCalibration };

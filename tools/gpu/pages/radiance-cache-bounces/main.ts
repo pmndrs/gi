@@ -91,18 +91,18 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-bounces --gpu nvidia`.
  */
 
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/cache/src/capsaicin-math.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/cache/src/world-cache/world-cache.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { PAGE_COMPARE_VALUES } from '../radiance-cache-probes/compare-env.ts';
-import { setCompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { setCompareValues } from '../../../../packages/cache/src/compare-toggles.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
 const WIDTH = 1280;

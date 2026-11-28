@@ -2,11 +2,11 @@
  * The tracer's GPU layout, as tinybvh's WASM writes it (stage B0b): what a
  * builder hands to the tracer when it writes the layout itself instead of a
  * `MeshTreeTopology` (topology.ts). The layout is defined, word by word, in
- * `packages/ddgi-core/src/platform/trace/layout.ts` (and the WGSL generated
+ * `packages/core/src/platform/trace/layout.ts` (and the WGSL generated
  * from it); `native/tinybvh-wasm.cpp` repeats it as C structs.
  *
  * The sizes and limits below are the one definition: layout.ts imports them
- * (this package can't import the core). A test in ddgi-core checks that the
+ * (this package can't import the core). A test in gi-core checks that the
  * WASM's bytes equal the JavaScript conversion's.
  */
 
@@ -54,7 +54,7 @@ export const GPU_LAYOUT_TRIANGLE_BYTES = 48;
 
 /**
  * Word positions inside a triangle, matching the tracer's WGSL `GiBvhTriangle`
- * (and ddgi-core's `TRIANGLE_WORD`): each corner is a `vec3f` followed by one
+ * (and gi-core's `TRIANGLE_WORD`): each corner is a `vec3f` followed by one
  * word, the original triangle index after the first, the flags after the second.
  */
 export const GPU_LAYOUT_TRIANGLE_WORD = {

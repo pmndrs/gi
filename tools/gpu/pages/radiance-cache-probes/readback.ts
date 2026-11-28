@@ -3,7 +3,7 @@
  * radiance-cache-image). Not a page itself.
  */
 
-import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { halfBitsToFloat } from '../../../../packages/cache/src/capsaicin-math.ts';
 
 /** A texture's mip level as bytes, rows packed (the copy pads them to 256 bytes). */
 export async function readTexture(device: GPUDevice, texture: GPUTexture, bytesPerTexel: number, width: number, height: number, mipLevel = 0): Promise<Uint8Array> {

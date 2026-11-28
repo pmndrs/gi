@@ -6,7 +6,7 @@ Written 2026-11-11 by the lead (Mac). The reference is NVIDIA's RTXGI-DDGI SDK 1
 
 **How this was built:** from reading the SDK's source next to ours, and from our own records (DECISIONS, NOTES, the design notes). No new measurements were taken. Impacts quoted with numbers come from earlier runs and cite where they were recorded. Impacts without numbers are the lead's estimate, and say so. Our edits to the fork (`DDGI_CAPTURE_*`, the harness's `skipConverged`) all default to stock behaviour, so "RTXGI does" means the SDK as shipped.
 
-**Paths:** `SDK/` = `native/rtxgi-ddgi/rtxgi-sdk/`, `HAR/` = `native/rtxgi-ddgi/samples/test-harness/`, `DDGI/` = `packages/ddgi-core/src/techniques/ddgi/`, `PLAT/` = `packages/ddgi-core/src/platform/`.
+**Paths:** `SDK/` = `native/rtxgi-ddgi/rtxgi-sdk/`, `HAR/` = `native/rtxgi-ddgi/samples/test-harness/`, `DDGI/` = `packages/ddgi/src/`, `PLAT/` = `packages/core/src/platform/`.
 
 **Columns used below:**
 - **Quality** and **Speed:** what changes for the picture and for GPU time and memory. *Better*, *worse* or *same*, with a size where known.

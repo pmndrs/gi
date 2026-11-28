@@ -1,0 +1,33 @@
+{
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "declarationMap": false,
+        // The private workspace packages by path, not through node_modules: rollup-plugin-dts
+        // treats files reached through node_modules as external libraries and builds a
+        // TypeScript program for each one, and each of the three adapter's files then
+        // loads all of three's types again (it ran out of memory). `paths` replaces the
+        // root config's, so the umbrella's own entries are repeated. `@pathtracer/mlp` (the
+        // radiance cache's optional neural tail, not on npm) maps to the repository's
+        // declarations of it only, never to a private clone, so rollup-plugin-dts inlines
+        // those few types and the published .d.ts never imports the package.
+        "paths": {
+            "@pathtracer/mlp": ["packages/cache/src/neural-cache/mlp-unavailable.d.ts"],
+            "@pmndrs/gi": ["packages/gi/src/index.ts"],
+            "@pmndrs/gi/core": ["packages/gi/src/core.ts"],
+            "@pmndrs/gi/ddgi": ["packages/gi/src/ddgi.ts"],
+            "@pmndrs/gi/three": ["packages/gi/src/three.ts"],
+            "@pmndrs/gi-core": ["packages/core/src/index.ts"],
+            "@pmndrs/gi-core/*": ["packages/core/src/*"],
+            "@pmndrs/gi-cache": ["packages/cache/src/index.ts"],
+            "@pmndrs/gi-cache/*": ["packages/cache/src/*"],
+            "@pmndrs/gi-ddgi": ["packages/ddgi/src/index.ts"],
+            "@pmndrs/gi-ddgi/*": ["packages/ddgi/src/*"],
+            "@pmndrs/gi-three": ["packages/three/src/index.ts"],
+            "@pmndrs/gi-three/*": ["packages/three/src/*"],
+            "@pmndrs/gi-ddgi-three": ["packages/ddgi-three/src/index.ts"],
+            "@pmndrs/gi-ddgi-three/*": ["packages/ddgi-three/src/*"]
+        }
+    },
+    "include": ["src", "../core/src", "../ddgi/src", "../cache/src", "../three/src", "../ddgi-three/src"],
+    "exclude": ["**/*.test.ts"]
+}

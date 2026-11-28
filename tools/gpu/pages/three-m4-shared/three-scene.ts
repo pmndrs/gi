@@ -13,9 +13,9 @@
  */
 
 import { BufferAttribute, BufferGeometry, Mesh, MeshStandardMaterial, PointLight, Scene, type Material } from 'three';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import type { ProceduralScene, SceneMaterialData, SceneMeshData } from '../../../../scenes/src/scene-data.ts';

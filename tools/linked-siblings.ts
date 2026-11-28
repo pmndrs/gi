@@ -1,6 +1,7 @@
 /**
- * Sibling libraries from a local clone for development, pinned in package.json's
- * `linkedSiblings` (repo, commit, clone, path, built, build; `optional` for a private one).
+ * Sibling libraries from a local clone for development, pinned in the `linkedSiblings` of the
+ * package.json that uses them (tools/sibling-manifests.ts: the root's or a workspace package's;
+ * repo, commit, clone, path, built, build; `optional` for a private one).
  *
  * - Required (a `link:` dependency): none at the moment. The radiance cache's GI denoiser
  *   (RC4.3) was one until `denoiser@2.1.0` put `Gi1Denoiser` on npm (`denoiser/ffx`); a git
@@ -26,8 +27,10 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+
+import { linkedSiblingEntries } from './sibling-manifests.ts';
 
 interface Sibling {
     /** Clone URL. */
@@ -47,8 +50,7 @@ interface Sibling {
 }
 
 const ROOT = resolve(import.meta.dirname, '..');
-const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { linkedSiblings?: Record<string, Sibling> };
-const siblings = Object.entries(manifest.linkedSiblings ?? {});
+const siblings = Object.entries(linkedSiblingEntries<Sibling>(ROOT));
 const fetch = process.argv.includes('--fetch');
 
 function run(command: readonly string[], cwd: string, quiet = false): void {

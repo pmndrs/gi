@@ -7,7 +7,7 @@
  * inside passes: gaps between passes are not counted, which makes them
  * steadier than CPU frame time, and is what "GPU ms" means in this viewer.
  *
- * Our own `GpuTimer` (ddgi-core) times passes we encode ourselves. Passes
+ * Our own `GpuTimer` (gi-core) times passes we encode ourselves. Passes
  * that three encodes, like everything in these baselines, are timed here.
  *
  * Why three's own return value is not used: it is the total of the passes

@@ -29,9 +29,9 @@
  *   node tools/reference/bench-lock.ts run --cpu-timed --what "T2.M1 setTransforms" -- pnpm test:gpu --gpu nvidia --filter scene-set-transforms
  */
 
-import type { InstanceHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { createRandom, randomAffine } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import type { InstanceHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { createRandom, randomAffine } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { frameInput } from '../ddgi-shared/harness.ts';
 import { median } from '../trace-bench/statistics.ts';

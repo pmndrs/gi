@@ -11,7 +11,7 @@
  * before the next starts, so no two timed passes overlap on the GPU.
  */
 
-import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/index.ts';
+import { GpuTimer } from '../../../../packages/core/src/platform/timing/index.ts';
 import { median } from './statistics.ts';
 import type { TimingSource, TimingSummary } from './results.ts';
 

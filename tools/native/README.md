@@ -61,7 +61,7 @@ spacing[axis] = size[axis] / count[axis]        (so it can be a little smaller t
 origin        = volume.center
 ```
 
-Our DDGI technique uses a different rule (`floor(size / spacing) + 1` per axis at exactly the given spacing, centred on `volume.center`; `probeGrid()` in ddgi-core). `bench.ps1 -GridRule ddgi` gives the harness that grid, for timing at matched probe counts and positions; the default stays the cell-centre grid. Counts for our scenes:
+Our DDGI technique uses a different rule (`floor(size / spacing) + 1` per axis at exactly the given spacing, centred on `volume.center`; `probeGrid()` in packages/ddgi). `bench.ps1 -GridRule ddgi` gives the harness that grid, for timing at matched probe counts and positions; the default stays the cell-centre grid. Counts for our scenes:
 
 | Scene | default (`cells`) | `-GridRule ddgi` |
 |---|---|---|

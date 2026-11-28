@@ -50,8 +50,8 @@ export default defineConfig({
         // Exact-match entries per public subpath: a plain '@pmndrs/gi' key is a
         // prefix alias and would send '@pmndrs/gi/core' to 'index.ts/core'.
         alias: [
-            { find: /^@pmndrs\/gi$/, replacement: resolve(repoRoot, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(repoRoot, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(repoRoot, 'packages/gi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(repoRoot, 'packages/gi/src/$1.ts') },
         ],
     },
     // Our own dependency cache, so this server and the viewer's don't fight over node_modules/.vite.
@@ -74,8 +74,8 @@ export default defineConfig({
                 // plain-WebGPU example doesn't download three.
                 manualChunks(id) {
                     if (id.includes('/node_modules/')) return id.includes('/three/') ? 'three' : 'vendor';
-                    if (id.includes('/packages/ddgi-three/')) return 'ddgi-three';
-                    if (id.includes('/packages/')) return 'ddgi-core';
+                    if (id.includes('/packages/three/') || id.includes('/packages/ddgi-three/')) return 'gi-three';
+                    if (id.includes('/packages/')) return 'gi-core';
                     return undefined;
                 },
             },

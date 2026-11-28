@@ -381,7 +381,7 @@ def remove_left_out_faces(table, imported_by_part):
     Removes the faces of materials whose meshes the three adapter left out of
     GI (the table's `leftOutMeshes`): a mesh whose materials all let light
     through is sent with contributesToGI false, since the M1 tracer treats
-    every surface as opaque (packages/ddgi-three/src/scene-sync.ts). three
+    every surface as opaque (packages/three/src/scene-sync.ts). three
     makes one mesh per glTF primitive and a primitive has one material, so
     removing a material's faces removes exactly those meshes. A material with
     only some of its meshes left out can't be matched that way, and stops the

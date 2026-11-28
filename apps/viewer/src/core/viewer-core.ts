@@ -27,7 +27,7 @@ import { disposeScene, loadScene, type LoadedScene, type LoadProgress, type Load
 import { DdgiTechnique, DEFAULT_DDGI_VIEWER_SETTINGS, layerKey, type DdgiViewerSettings } from '../techniques/ddgi-technique';
 import { DEFAULT_LPG_SETTINGS, LightProbeGridTechnique, type LightProbeGridSettings } from '../techniques/light-probe-grid-technique';
 import { NoGiTechnique } from '../techniques/no-gi-technique';
-import { RADIANCE_CACHE_COMPARE_TOGGLES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+import { RADIANCE_CACHE_COMPARE_TOGGLES } from '../../../../packages/cache/src/compare-toggles.ts';
 import { DEFAULT_RADIANCE_CACHE_VIEWER_SETTINGS, RadianceCacheViewerTechnique, type RadianceCacheChangeReadout, type RadianceCacheViewerSettings } from '../techniques/radiance-cache-technique';
 import { ReferenceImageTechnique } from '../techniques/reference-technique';
 import { TECHNIQUE_LABELS, type GiTechnique, type TechniqueContext, type TechniqueId, type UpscaleSettings } from '../techniques/types';

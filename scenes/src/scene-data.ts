@@ -2,7 +2,7 @@
  * Engine-free scene data produced by the procedural builders.
  *
  * The shapes deliberately mirror the platform's scene contract
- * (`packages/ddgi-core/src/platform/contract/scene.ts`) so a procedural scene
+ * (`packages/core/src/platform/contract/scene.ts`) so a procedural scene
  * can be handed to the platform later without translation: positions and
  * indices for meshes, a small material model (albedo, emissive, alpha cutoff,
  * double-sided), instances with column-major transforms, and lights in the

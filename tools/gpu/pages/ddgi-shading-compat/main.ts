@@ -18,7 +18,7 @@
  */
 
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { ForwardRenderer } from '../../../../examples/webgpu/hello/src/renderer.ts';
 import { imageMean, releaseDeviceOnPageHide, runFrames, TestView } from '../ddgi-shared/harness.ts';
 import { createHelloScene, readRgba32FloatAsRgb } from '../ddgi-shading-shared/hello-scene.ts';

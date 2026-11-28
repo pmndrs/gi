@@ -22,7 +22,7 @@
  * place and leaves the grand total after the last tile sum; the LBVH and
  * H-PLOC builders number the nodes they keep with it, and the radix sort
  * scans its digit offsets. The platform's GPU utilities
- * (packages/ddgi-core/src/platform/compute) use the same kernels with their
+ * (packages/core/src/platform/compute) use the same kernels with their
  * own ios: a scan into another buffer, and stream compaction, whose store
  * writes each kept item's index at its prefix.
  */

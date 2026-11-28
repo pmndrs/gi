@@ -7,12 +7,12 @@ import { readExr } from '../../../tools/compare/exr.ts';
 import { compareWithCommitted, loadSkyManifests, skyDirectory } from '../../../tools/sky/generate.ts';
 import type { ManifestLight, SceneManifest } from '../manifest.ts';
 import { OPEN_GROUND_ALBEDO } from '../procedural/open-ground.ts';
-import { ineichenPerezClearSky, kastenYoungAirMass } from '../../../packages/ddgi-core/src/platform/sky/clear-sky-ratio.ts';
+import { ineichenPerezClearSky, kastenYoungAirMass } from '../../../packages/core/src/platform/sky/clear-sky-ratio.ts';
 import { directionToEquirectUv, equirectUvToDirection, rowHorizontalIrradianceWeight, rowSolidAngle } from './equirect.ts';
 import { decodeHalfExr, encodeHalfExr, floatToHalf, halfImageToFloats, halfToFloat, type HalfRgbImage } from './exr-half.ts';
-import { createPreethamSky, perez, preethamSkyXyY } from '../../../packages/ddgi-core/src/platform/sky/preetham.ts';
+import { createPreethamSky, perez, preethamSkyXyY } from '../../../packages/core/src/platform/sky/preetham.ts';
 import { decodeSkyFile, skyFileName, type SkySidecar } from './sky-file.ts';
-import { buildCalibratedSky } from '../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
+import { buildCalibratedSky } from '../../../packages/core/src/platform/sky/calibrated-sky.ts';
 import { buildSkyImage, measureHalfImage, platformSkyEnvironment, resolveSkySun, type ProceduralEnvironment } from './sky-image.ts';
 import { skyImageToRgbaHalves } from './sky-texture.ts';
 

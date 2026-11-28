@@ -38,8 +38,8 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { FrameCamera } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { NEAR_SET_SPACINGS } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import type { FrameCamera } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { NEAR_SET_SPACINGS } from '../../../../packages/ddgi/src/mark-table.ts';
 import { createDdgiScene, imageMean, releaseDeviceOnPageHide, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 import { markRecall, missedByDistance, nearBox, probeSnapshot, type MarkRecall } from '../ddgi-shared/moving.ts';
 import { bookmarkCamera, convergeField, runCameraFrame, type ConvergeOptions } from '../ddgi-shared/response.ts';

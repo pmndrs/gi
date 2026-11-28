@@ -1,0 +1,28 @@
+{
+    "name": "@pmndrs/gi-cache",
+    "version": "0.0.0",
+    "private": true,
+    "description": "The radiance caches of @pmndrs/gi, engine-free: AMD's GI-1.0/1.2 (screen probes over a world cache) with its variants (SHaRC, budgeted cells, the neural tail). Bundled into the published package as `@pmndrs/gi/radiance-cache`; never published on its own.",
+    "license": "MIT",
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    },
+    "dependencies": {
+        "@pmndrs/gi-core": "workspace:*",
+        "denoiser": "2.1.0"
+    },
+    "linkedSiblings": {
+        "@pathtracer/mlp": {
+            "repo": "https://github.com/pmndrs/pathtracer.git",
+            "commit": "0e4435bd05bf4f55c8763c76facae640db35855c",
+            "clone": "../pmndrs-pathtracer",
+            "path": "packages/mlp",
+            "built": ["src/index.ts"],
+            "build": [],
+            "optional": true
+        }
+    }
+}

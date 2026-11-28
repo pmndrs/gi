@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import {
     createRcTransport, type RcPointLight, type RcRGB, type RcSurfaceMaterial,
-} from '../../packages/ddgi-core/src/techniques/radiance-cascades/transport.ts';
+} from '../../packages/core/src/techniques/radiance-cascades/transport.ts';
 
 /** Converts an opaque Three scene into one static BLAS and one object-space BLAS per moving mesh. */
 export async function createIntervalScene(

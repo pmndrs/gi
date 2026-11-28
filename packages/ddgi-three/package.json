@@ -1,8 +1,8 @@
 {
-    "name": "@pmndrs/ddgi-three",
+    "name": "@pmndrs/gi-ddgi-three",
     "version": "0.0.0",
     "private": true,
-    "description": "three.js WebGPURenderer adapter for @pmndrs/gi. Bundled into the published package; never published on its own.",
+    "description": "DDGI's own three.js code for @pmndrs/gi: DDGIVolume, the LightProbeGrid export and the volume start. Bundled into the published package; never published on its own.",
     "license": "MIT",
     "type": "module",
     "sideEffects": false,
@@ -11,7 +11,9 @@
         "./*": "./src/*.ts"
     },
     "dependencies": {
-        "@pmndrs/ddgi-core": "workspace:*"
+        "@pmndrs/gi-core": "workspace:*",
+        "@pmndrs/gi-ddgi": "workspace:*",
+        "@pmndrs/gi-three": "workspace:*"
     },
     "peerDependencies": {
         "three": "~0.187.0"

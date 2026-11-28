@@ -6,7 +6,7 @@
  * Not a page itself (no index.html).
  */
 
-import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../../../../packages/ddgi-core/src/platform/textures/texture-store-wgsl.ts';
+import { STORE_LAYER_SIZE, STORE_MIP_LEVELS } from '../../../../packages/core/src/platform/textures/texture-store-wgsl.ts';
 
 // ---------------------------------------------------------------------------
 // Colour

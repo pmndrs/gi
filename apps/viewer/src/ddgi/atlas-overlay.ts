@@ -42,7 +42,7 @@ const ATLAS_PARAMETER: Record<AtlasChoice, string> = {
 
 /**
  * Distances are capped at 1.5 cell diagonals when DDGI stores them
- * (`distanceClamp` in ddgi-core's settings.ts), so white means "at the cap".
+ * (`distanceClamp` in gi-core's settings.ts), so white means "at the cap".
  */
 const DISTANCE_WHITE_CELL_DIAGONALS = 1.5;
 

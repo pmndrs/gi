@@ -30,7 +30,7 @@
  * assumed), and each word is scanned by a Hillis-Steele scan over the
  * workgroup's threads. A kernel written against these names runs on either
  * path unchanged; the platform's GPU utilities use it on devices without
- * `subgroups` (packages/ddgi-core/src/platform/compute).
+ * `subgroups` (packages/core/src/platform/compute).
  */
 
 /** How a workgroup combines its threads' values: subgroup operations first, or the declared fallback in workgroup memory. */

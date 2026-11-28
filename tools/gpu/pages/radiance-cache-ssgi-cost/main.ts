@@ -10,10 +10,10 @@
  * Time it cool, alone: `node tools/reference/bench-lock.ts run -- pnpm test:gpu --filter radiance-cache-ssgi-cost --gpu nvidia`.
  */
 
-import { DEFAULT_SCREEN_SPACE_GI_SETTINGS } from '../../../../packages/ddgi-core/src/platform/contract/compute.ts';
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import { DEFAULT_SCREEN_SPACE_GI_SETTINGS } from '../../../../packages/core/src/platform/contract/compute.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';

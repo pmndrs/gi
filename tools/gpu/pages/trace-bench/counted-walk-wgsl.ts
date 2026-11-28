@@ -8,7 +8,7 @@
  *   that holds the ray's origin is entered at tMin), it picks the first child
  *   by a rule instead of always the left one.
  *
- * The production walk (`packages/ddgi-core/src/platform/trace/wgsl.ts`,
+ * The production walk (`packages/core/src/platform/trace/wgsl.ts`,
  * `walkWgsl`) has no counters and must not get any: production shaders carry
  * no test hooks. {@link benchWalkWgsl} repeats its loop line for line,
  * reusing every helper of the production trace module (node and triangle
@@ -27,8 +27,8 @@
  * so the copy stays the production walk line for line).
  */
 
-import { NO_MATERIALS_WGSL } from '../../../../packages/ddgi-core/src/platform/trace/material-test-wgsl.ts';
-import { traceModuleWgsl } from '../../../../packages/ddgi-core/src/platform/trace/wgsl.ts';
+import { NO_MATERIALS_WGSL } from '../../../../packages/core/src/platform/trace/material-test-wgsl.ts';
+import { traceModuleWgsl } from '../../../../packages/core/src/platform/trace/wgsl.ts';
 
 /** Words per ray the counted kernel writes, in the order of {@link COUNTED_WORD}. */
 export const COUNTED_WORDS = 17;

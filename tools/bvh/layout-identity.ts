@@ -4,7 +4,7 @@
  * JavaScript conversion makes (stage B0b). For every mesh of each scene it
  * builds tinybvh's tree twice:
  *
- * - `build` (the tree's shape) followed by ddgi-core's `buildMeshBvhFromTopology`;
+ * - `build` (the tree's shape) followed by gi-core's `buildMeshBvhFromTopology`;
  * - `buildLayout` (the layout written inside the WASM);
  *
  * and compares the nodes, triangles, parents and box byte for byte, plus the
@@ -20,8 +20,8 @@
  */
 
 import { createTinyBvhBuilder, type GpuLayoutMeshBvh, type TinyBvhBuilder } from '../../packages/bvh/src/index.ts';
-import type { MeshBvh } from '../../packages/ddgi-core/src/platform/trace/mesh-bvh.ts';
-import { buildMeshBvhFromTopology } from '../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+import type { MeshBvh } from '../../packages/core/src/platform/trace/mesh-bvh.ts';
+import { buildMeshBvhFromTopology } from '../../packages/core/src/platform/trace/mesh-bvh-topology.ts';
 import { readSceneMeshes } from './scene-meshes.ts';
 
 const DEFAULT_SCENES = ['sponza', 'bistro-exterior', 'bistro-interior'];

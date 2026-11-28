@@ -51,15 +51,15 @@
 
 import { Box3, PerspectiveCamera, Vector3, type Mesh, type Object3D } from 'three/webgpu';
 import { assert } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
+import { DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES } from '../../../../packages/three/src/scene-sync.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { sceneLighting } from '../../../../apps/viewer/src/render/scene-lighting.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 import { addMovingInstances, SET_TRANSFORMS_INSTANCES, SET_TRANSFORMS_TARGET_MS, timeSetTransforms } from './set-transforms.ts';
 

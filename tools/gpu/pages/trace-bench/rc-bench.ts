@@ -22,15 +22,15 @@
  * the rays and this order are new.
  */
 
-import { RAY_FLOATS, HIT_RECORD_BYTES, HIT_RECORD_WORD, type MeshBvhBuilder } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { addToTally, compareAny, compareClosest, newTally, type ComparisonTally } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
-import { createRandom, toFloat32Ray } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { RAY_FLOATS, HIT_RECORD_BYTES, HIT_RECORD_WORD, type MeshBvhBuilder } from '../../../../packages/core/src/platform/trace/index.ts';
+import { addToTally, compareAny, compareClosest, newTally, type ComparisonTally } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
+import { createRandom, toFloat32Ray } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import {
     buildReferenceScene,
     traceAnyReference,
     traceClosestReference,
     type ReferenceScene,
-} from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
+} from '../../../../packages/core/src/platform/trace/reference-tracer.ts';
 import {
     BENCH_SCENE_SUBSETS,
     RC_HALTON_FIRST_INDEX,

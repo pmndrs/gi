@@ -67,7 +67,7 @@ import {
     RADIANCE_CACHE_DEBUG_VIEW,
     RadianceCacheTechnique,
     type CompareValues,
-} from '../../../../packages/ddgi/src/radiance-cache';
+} from '../../../../packages/gi/src/radiance-cache';
 import { RcChangeMeter } from './rc-change-meter';
 import { applyViewLayers, LAYER_RADIANCE_CACHE, type GiMode } from '../scene/layers';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';

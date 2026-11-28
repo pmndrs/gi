@@ -138,7 +138,7 @@ export const HELP = {
         "Saves the measurement as a CSV file: one row per frame (frame, milliseconds since the step, the region's brightness, its change from before and its distance from settled, probes updated), with the marks and how it was measured at the top.",
 
     // The radiance cache's compare toggles (RC4.5): each toggle's own help is in its registry entry
-    // (packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts).
+    // (packages/cache/src/compare-toggles.ts).
     rcCompare:
         "Each of our changes to how AMD's radiance cache (Capsaicin) carries light from frame to frame, with a switch back to Capsaicin's way, so you can see what each does. They take effect on the next frame. A few start the probes' history over when changed (marked ↺), so the picture fills in again from scratch for a moment. The link keeps your choices.",
     rcCompareCapsaicin: "Sets every toggle to Capsaicin's own behaviour: the port as AMD published it, before our fixes.",

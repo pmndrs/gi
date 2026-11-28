@@ -4,13 +4,13 @@ Status: **an outline, not a decision** (2026-11-06). What is decided (DECISIONS 
 
 ## Already engine-free
 
-- `packages/bvh` imports nothing from ddgi-core, GI code, the adapters or any engine. Lint enforces it (`eslint.config.mjs`), and ddgi-core depends on it (`"@pmndrs/bvh": "workspace:*"`).
+- `packages/bvh` imports nothing from gi-core, GI code, the adapters or any engine. Lint enforces it (`eslint.config.mjs`), and gi-core depends on it (`"@pmndrs/bvh": "workspace:*"`).
 - It needs only WebGPU and WebAssembly: the `.wasm` is inlined as base64, so it loads the same way in a worker, on a page, in Node and in any bundler. It starts no workers itself.
 - It has its own unit tests, GPU pages (`tools/gpu/pages/bvh-*`), licence texts (`licenses/`) and a reproducible `.wasm` build (`pnpm bvh:wasm --check`).
 
-## Still in ddgi-core, though not DDGI-specific
+## Still in gi-core, though not DDGI-specific
 
-A standalone package would be thinner than what users of a BVH expect, because these pieces live in ddgi-core today:
+A standalone package would be thinner than what users of a BVH expect, because these pieces live in gi-core today:
 
 - **The layout's WGSL**: the `GiBvhNode` and `GiBvhTriangle` structs in `platform/trace/layout.ts`. The sizes and word positions already come from `packages/bvh/src/gpu-layout.ts`.
 - **The ray walk**: `giTraceClosest` and `giTraceAny`, with the watertight triangle test. The oracle every builder must pass runs through it.
@@ -51,7 +51,7 @@ The instance gather in `top-level-gpu.ts` reads DDGI's scene copy, so it stays.
 | The bvh GPU pages, `layout-identity` and `tree-quality` | |
 | **To decide:** the ray walk and the oracle | |
 
-**The open question is the ray walk.** If it moves, `@pmndrs/bvh` becomes "build, refit and trace", which is what picking and path tracers want, and the oracle travels with the builders it judges. ddgi-core would then import its walk from the package. If it stays, every user writes its own walk against the layout, and the oracle stays in ddgi. Moving it looks better, but it is Dennis's call, best made after M2.
+**The open question is the ray walk.** If it moves, `@pmndrs/bvh` becomes "build, refit and trace", which is what picking and path tracers want, and the oracle travels with the builders it judges. gi-core would then import its walk from the package. If it stays, every user writes its own walk against the layout, and the oracle stays in ddgi. Moving it looks better, but it is Dennis's call, best made after M2.
 
 ## Versioning, and how ddgi depends on it
 
@@ -62,7 +62,7 @@ The instance gather in `top-level-gpu.ts` reads DDGI's scene copy, so it stays.
 
 ## A possible order
 
-1. M2 wires the GPU builders into ddgi-core (fast first GI), and the API settles.
+1. M2 wires the GPU builders into gi-core (fast first GI), and the API settles.
 2. API review: trim the exports, rename the shared types, and move the layout's WGSL (and the walk, if decided) into `packages/bvh` **inside this repo first**, so the new boundary is proven before any split.
 3. A second user (picking) built on the package in this repo.
 4. CI and test GPUs, the three-mesh-bvh comparison, and the M5 Pro run.

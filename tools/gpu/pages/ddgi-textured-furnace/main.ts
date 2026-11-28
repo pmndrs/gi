@@ -34,7 +34,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { PixelData } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { PixelData } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { FURNACE_SIZE_M } from '../../../../scenes/src/procedural/furnace-room.ts';
 import { createDdgiScene, FieldProbe, releaseDeviceOnPageHide, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
 import { readLayer, srgbToLinear } from '../textures-shared/textures.ts';

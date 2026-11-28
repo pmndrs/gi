@@ -1,17 +1,17 @@
 // Copies the files the npm package needs from the repository into
-// packages/ddgi, as the last part of its build (`pnpm build`):
+// packages/gi, as the last part of its build (`pnpm build`):
 //
 //   README.md    the root README's user-facing part: everything above the
 //                PACKAGE_README_END marker, with links made absolute, since
 //                npmjs.com can't resolve a link relative to the repository.
 //   LICENSE      the repository's licence, unchanged.
 //   licenses/    the full licence texts of the bundled code, which
-//                packages/ddgi/THIRD_PARTY.md points to: packages/bvh's
+//                packages/gi/THIRD_PARTY.md points to: packages/bvh's
 //                (tinybvh, the Emscripten runtime, HIPRT) and each
 //                technique's own `licenses/` folder (TECHNIQUE_LICENSES),
 //                and the platform's (PLATFORM_LICENSES).
 //
-// packages/ddgi/THIRD_PARTY.md itself is written by hand and committed: it
+// packages/gi/THIRD_PARTY.md itself is written by hand and committed: it
 // lists only what ships in the package, unlike the root THIRD_PARTY.md, which
 // also lists test scenes and tools. The copies are git-ignored, so the root
 // files stay the one place to edit.
@@ -21,14 +21,15 @@ import { join, resolve } from 'node:path';
 import { isDirectRun } from './release-version.ts';
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
-const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/ddgi');
+const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/gi');
 const BUNDLED_LICENSES = join(REPOSITORY_ROOT, 'packages/bvh/licenses');
-/** Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4) and the radiance cache's (AMD Capsaicin). */
-const TECHNIQUE_LICENSES = ['radiance-cascades', 'radiance-cache'].map((technique) =>
-    join(REPOSITORY_ROOT, 'packages/ddgi-core/src/techniques', technique, 'licenses'),
-);
+/**
+ * Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4; inside
+ * packages/core until it moves to packages/radiance-cascades) and the radiance cache's (AMD Capsaicin).
+ */
+const TECHNIQUE_LICENSES = ['packages/core/src/techniques/radiance-cascades/licenses', 'packages/cache/src/licenses'].map((folder) => join(REPOSITORY_ROOT, folder));
 /** Licence texts for code the platform bundles beyond Capsaicin's: the SSGI pass's rtoy-samples and assimp parts. */
-const PLATFORM_LICENSES = join(REPOSITORY_ROOT, 'packages/ddgi-core/src/platform/licenses');
+const PLATFORM_LICENSES = join(REPOSITORY_ROOT, 'packages/core/src/platform/licenses');
 
 /** The line in the root README where the npm package's README stops. */
 export const PACKAGE_README_END = '<!-- The npm package README ends here. Below: working on this repository. -->';

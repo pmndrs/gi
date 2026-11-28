@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_URL_STATE, parseUrlState, serializeUrlState } from './url-state';
-import { capsaicinCompareValues, RADIANCE_CACHE_COMPARE_TOGGLES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles';
+import { capsaicinCompareValues, RADIANCE_CACHE_COMPARE_TOGGLES } from '../../../../packages/cache/src/compare-toggles';
 
 describe('url state', () => {
     it("keeps each radiance-cache compare toggle (RC4.5) through a link, and doesn't take it for a scene setting", () => {

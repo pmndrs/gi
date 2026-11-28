@@ -23,9 +23,9 @@
  * - Each scene has both lit and shadowed hits, so the comparison means something.
  */
 
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { buildReferenceScene, traceAnyReference, traceClosestReference } from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
-import { invertAffine } from '../../../../packages/ddgi-core/src/platform/trace/top-level.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { buildReferenceScene, traceAnyReference, traceClosestReference } from '../../../../packages/core/src/platform/trace/reference-tracer.ts';
+import { invertAffine } from '../../../../packages/core/src/platform/trace/top-level.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { buildOracleCases, FULL_SIZES, type OracleCase } from '../trace-oracle/cases.ts';
 import { frame, ready, ShadeKernel, type Vec3 } from '../hit-shading-shared/harness.ts';

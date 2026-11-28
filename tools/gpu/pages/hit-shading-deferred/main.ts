@@ -40,12 +40,12 @@
  *    the declared fallback (`atomics`) give the same results, bit for bit.
  */
 
-import type { DirectWorkList, RayScratch } from '../../../../packages/ddgi-core/src/platform/contract/shade.ts';
-import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
-import type { ComputeKernel } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { RAY_RESULT_BYTES, RAY_SCRATCH_HEADER_BYTES, RAY_SCRATCH_WORD } from '../../../../packages/ddgi-core/src/platform/shade/direct.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import type { DirectWorkList, RayScratch } from '../../../../packages/core/src/platform/contract/shade.ts';
+import type { GpuTimerScope } from '../../../../packages/core/src/platform/contract/timing.ts';
+import type { ComputeKernel } from '../../../../packages/core/src/platform/contract/wgsl.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { RAY_RESULT_BYTES, RAY_SCRATCH_HEADER_BYTES, RAY_SCRATCH_WORD } from '../../../../packages/core/src/platform/shade/direct.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { boxMesh, buildOracleCases, FULL_SIZES, type OracleCase } from '../trace-oracle/cases.ts';
 import { frame, normalize, readBuffer, ready, type Vec3 } from '../hit-shading-shared/harness.ts';

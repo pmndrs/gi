@@ -12,8 +12,8 @@
  * Not a page itself (no index.html).
  */
 
-import { ddgiPreset, isDDGIPresetName, type DDGIPreset } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets.ts';
-import { DEFAULT_DDGI_SETTINGS } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { ddgiPreset, isDDGIPresetName, type DDGIPreset } from '../../../../packages/ddgi/src/presets.ts';
+import { DEFAULT_DDGI_SETTINGS } from '../../../../packages/ddgi/src/settings.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 

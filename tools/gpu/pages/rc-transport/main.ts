@@ -1,4 +1,4 @@
-import { createRcTransport } from '../../../../packages/ddgi-core/src/techniques/radiance-cascades/transport.ts';
+import { createRcTransport } from '../../../../packages/core/src/techniques/radiance-cascades/transport.ts';
 import { assert, runGpuTest } from '../../client.ts';
 
 const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];

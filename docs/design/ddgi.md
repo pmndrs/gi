@@ -15,7 +15,7 @@ A box of probes on a regular grid. Each probe stores, in two texture atlases, th
 
 ## Where things live
 
-- `packages/ddgi-core/src/techniques/ddgi/`: the technique (`DDGITechnique implements GITechnique<DDGISettings>`), its WGSL, its tests.
+- `packages/ddgi/src/`: the technique (`DDGITechnique implements GITechnique<DDGISettings>`), its WGSL, its tests.
 - It sees only `TechniqueContext` (scene copy, ray queries, hit shading, kernel builder, timer). Never the host, never three.js.
 - Test pages: `tools/gpu/pages/ddgi-*`.
 
@@ -161,7 +161,7 @@ One uniform buffer holds the volume (origin, spacing, counts), the frame rotatio
 
 **Why.** A GPU-millisecond budget plus GPU power management is a positive feedback loop: less work lets the GPU idle, its clocks drop, the same work takes longer, so the controller cuts work again. On a quiet laptop at 60 Hz the RTX sat in its low-power state and 2 ms bought 2–3 Sponza probes a frame (a sweep every 162 s). The budget exists to protect frame time, and a GPU that is idling has time to spare. RTXGI itself uses fixed work per frame.
 
-The code is `packages/ddgi-core/src/platform/work-budget.ts`; every threshold below is a named constant there (`CALIBRATION`, `SATURATION`) with its reason, and recorded in DECISIONS.
+The code is `packages/core/src/platform/work-budget.ts`; every threshold below is a named constant there (`CALIBRATION`, `SATURATION`) with its reason, and recorded in DECISIONS.
 
 **1. The control is work: probes per frame (`units`).**
 - Each frame the platform hands a technique a fixed number of units: the calibrated batch (point 2), never below the floor (point 3), stepped down only when frames are late (point 4).

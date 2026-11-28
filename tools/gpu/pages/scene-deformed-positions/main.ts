@@ -36,15 +36,15 @@
  * Recompiles must stay 0. Nothing is timed against a bar.
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { InstanceHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { DeformedPositions } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { SceneReader } from '../../../../packages/ddgi-core/src/platform/scene/testing/scene-reader.ts';
-import { HIT_RECORD_BYTES, packRays, RAY_BYTES, unpackRay, type MeshGeometry, type TraceRay, type TraceSceneInstance } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { DRIFT_HOLD_FRAMES } from '../../../../packages/ddgi-core/src/platform/trace/deforming-trees.ts';
-import { type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
-import { createRandom, randomAffine, randomRays, randomTriangleSoup, randomUnitVector, tessellatedQuad, toFloat32Ray, type Random } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { InstanceHandle, MeshHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { DeformedPositions } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { SceneReader } from '../../../../packages/core/src/platform/scene/testing/scene-reader.ts';
+import { HIT_RECORD_BYTES, packRays, RAY_BYTES, unpackRay, type MeshGeometry, type TraceRay, type TraceSceneInstance } from '../../../../packages/core/src/platform/trace/index.ts';
+import { DRIFT_HOLD_FRAMES } from '../../../../packages/core/src/platform/trace/deforming-trees.ts';
+import { type TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
+import { createRandom, randomAffine, randomRays, randomTriangleSoup, randomUnitVector, tessellatedQuad, toFloat32Ray, type Random } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { boxMesh, transformPoint, type OracleCase } from '../trace-oracle/cases.ts';
 import { computeReferenceAnswersYielding, evaluateCase } from '../trace-oracle/check.ts';

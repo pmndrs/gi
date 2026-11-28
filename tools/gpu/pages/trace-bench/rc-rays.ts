@@ -38,8 +38,8 @@
  * of the point's largest coordinate (`giShadeOffsetRayOrigin`).
  */
 
-import { HIT_RECORD_BYTES, HIT_RECORD_WORD, RAY_FLOATS } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import type { Random } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { HIT_RECORD_BYTES, HIT_RECORD_WORD, RAY_FLOATS } from '../../../../packages/core/src/platform/trace/index.ts';
+import type { Random } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import type { ManifestLight } from '../../../../scenes/src/manifest.ts';
 import { RAY_FAR } from './config.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';

@@ -64,13 +64,13 @@
 
 import { BoxGeometry, FloatType, Mesh, MeshStandardMaterial, NodeMaterial, PerspectiveCamera, QuadMesh, Raycaster, RenderTarget, Vector2, Vector3, type Light, type Material, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type CompareValues, type RadianceCacheVariantPreset } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
-import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
-import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type CompareValues, type RadianceCacheVariantPreset } from '../../../../packages/cache/src/compare-toggles.ts';
+import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
+import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { STACKED_DDGI_PROBES_PER_FRAME } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';

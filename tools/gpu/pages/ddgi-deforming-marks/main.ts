@@ -29,9 +29,9 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { tessellatedQuad } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import { FAR_SET_SPACINGS, NEAR_SET_SPACINGS } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import { tessellatedQuad } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import { PROBE_STATE } from '../../../../packages/ddgi/src/layout.ts';
+import { FAR_SET_SPACINGS, NEAR_SET_SPACINGS } from '../../../../packages/ddgi/src/mark-table.ts';
 import { createDdgiScene, releaseDeviceOnPageHide, runFrame, runFrames } from '../ddgi-shared/harness.ts';
 import { nearBox, probeSnapshot } from '../ddgi-shared/moving.ts';
 
