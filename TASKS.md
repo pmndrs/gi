@@ -713,6 +713,16 @@ Under DECISIONS 2026-11-19 (a multi-cache GI system built from GI-1.2): experime
 | P6.9 | VALID timing for the variants: resume `tools/reference/rc-variants-timing-split.ts` (41 of 46 runs left) when the RTX is free, or time on the M5 Pro with the #49 run list. Relative timing is accepted until then (Dennis, 2026-11-28). | lead | S | P6.5 | later |
 | PKG.1 | The workspace becomes `gi`, one package per technique (DECISIONS 2026-11-27, "flat and technique-chained"; closes #32). Split `packages/ddgi-core` and `packages/ddgi-three` into `packages/core` (`src/platform`), `packages/three` (the shared three.js layer), `packages/ddgi` + `packages/ddgi-three` (DDGI's technique code and its volume, light-probe grid and volume start) and `packages/cache` (`src/techniques/radiance-cache` with its WGSL, neural-cache and world-cache folders, tests and the GPU pages' imports). Rename `packages/ddgi` (the published `@pmndrs/gi`) to `packages/gi`. The private names follow the folders (`@pmndrs/gi-core`, `@pmndrs/gi-three`, `@pmndrs/gi-ddgi`, `@pmndrs/gi-ddgi-three`, `@pmndrs/gi-cache`). `@pmndrs/gi/<technique>` re-exports from each. The denoiser (`denoiser@2.1.0`) and the optional `@pathtracer/mlp` become `cache`'s dependencies. Add a lint rule: `three` imports no technique package, and no package reaches into another's `src`. Split RC (`techniques/radiance-cascades`) moves to `packages/radiance-cascades` in its own workflow, to these names. Done when lint, typecheck, unit tests, `verify:packed` and every GPU page pass, and before the Mac run list (#49) | implementer | L | RC3.6, P6.5, #49 (`rc-storage-buffers`), #59 (`rc-subpath`), `worker-relative-url` | done |
 
+### Library follow-ups the examples need ([docs/plans/examples.md](docs/plans/examples.md))
+
+Found while building the example pages (C1-C6, X1-X3); each is library work the pages wait on, not page work.
+
+| ID | Task | Agent | Size | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| EX.1 | World-space debug views of the world caches: the GI-1.2 hash grid's cells drawn where they are in the scene, coloured by sample count, and SHaRC's cells the same way. Today the radiance cache has only its three screen-space probe views (`debugViews`: probe atlas, probe mask, probe SH). C6's debug overlays and X2's "show cells" need them | implementer | M | none | todo |
+| EX.2 | A live count of the world cache's cells in use (the hash grid's and SHaRC's), read back a frame or more late so it never stalls the GPU, in `cache.counters` or the platform's stats. Today `cache.counters` gives only the capacity. C6's live readouts need it | implementer | S | none | todo |
+| EX.3 | Two GI platforms in one scene pass: each platform's shading module declares its WGSL functions under the same names (`giIrradiance`, `giCoverage`, `giDebugColor`), so two `ddgi()` composites in one node graph, or two GI lights in one scene pass, fail with "redeclaration of 'giIrradiance'". C2 (#80) works around it by rendering each composite to its own texture and putting one GI light on a hidden layer. Fix: per-platform names for those functions. X3 and C2 need it | implementer | M | none | todo |
+
 ## Carried to M2 (collected during M1)
 
 _Historical: each item was done in M2 or M3, or is now an issue (see Later)._
