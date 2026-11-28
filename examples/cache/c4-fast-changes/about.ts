@@ -38,7 +38,7 @@ showExplainer({
     diagramCaption: "One world-cache cell after a light is switched off. A sketch, not this page's data.",
     tryThis: [
         'Untick `room light`. The chart falls after the marker. Read the settle count under it.',
-        'Untick `change resets` and switch `room light` again. The chart falls slower, and the settle count is larger.',
+        "Untick `change resets`, then switch `room light` off and on again. Switching it on settles slower without the reset: this page's own reading on an RTX 3060 laptop, three runs each, was 85 to 89 frames with it and 126 to 134 without. Switching it off showed no clear difference: the cells follow at once, but the screen probes and the denoiser set the picture's pace. The cells' own numbers are under Trade-offs.",
         'Tick `ghost view`, then drag the red box somewhere else. Its old shadow and bounce light show for a moment. With `change resets` off they show for longer.',
         'Orbit the camera with `flashlight` on. The light it bounces follows the beam a few frames behind.',
     ],
