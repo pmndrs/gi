@@ -26,7 +26,8 @@
  *   beside the picture and clicked as a user would (checkbox clicks, select
  *   and slider change events): each toggle set to Capsaicin's value (or, where
  *   that is ours, to its other value) from ours, `COMPARE_FRAMES` frames
- *   drawn, then back to ours; and "All Capsaicin". Each must reach the core
+ *   drawn, then back to ours; `secondBounce: 'shared-cell'` the same way
+ *   (pmndrs/gi#54, `EXTRA_CHOICES`); and "All Capsaicin". Each must reach the core
  *   technique's settings, leave no NaN, infinite or negative value in the
  *   irradiance and probe atlas, and log no error; the change of the picture
  *   against ours is recorded beside ours against itself a few frames later
@@ -206,6 +207,9 @@ function showCompareControls(core: ViewerCore): RcCompareControls {
     return controls;
 }
 
+/** Choices clicked besides each toggle's `compareValueOf` value: the shared-cell second bounce (pmndrs/gi#54). */
+const EXTRA_CHOICES: readonly (readonly [string, string])[] = [['secondBounce', 'shared-cell']];
+
 /** The value a toggle is clicked to: Capsaicin's, or where that is ours, the other one. */
 function compareValueOf(entry: CompareToggle): boolean | number | string {
     if (entry.capsaicin !== undefined && entry.capsaicin !== entry.defaultValue) return entry.capsaicin;
@@ -301,6 +305,21 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
         clickToggle(section, entry, entry.defaultValue);
         await settle();
         if (valueOf(entry) !== entry.defaultValue) failures.push(`${sceneId}: clicking ${entry.setting} back left the technique at ${String(valueOf(entry))}`);
+        await drawFrames(core, COMPARE_FRAMES);
+    }
+    // Choices the loop above doesn't click (it takes Capsaicin's value): the shared-cell second bounce (#54).
+    for (const [setting, value] of EXTRA_CHOICES) {
+        const entry = RADIANCE_CACHE_COMPARE_TOGGLES.find((toggle) => toggle.setting === setting);
+        if (!entry) throw new Error(`no compare toggle for ${setting}`);
+        clickToggle(section, entry, value);
+        await settle();
+        if (valueOf(entry) !== value) failures.push(`${sceneId}: clicking ${setting} to ${value} left the technique at ${String(valueOf(entry))}`);
+        await drawFrames(core, COMPARE_FRAMES);
+        const image = await irradianceImage(core, rc());
+        await scan(`${setting} = ${value}`);
+        results[`${setting}=${value}`] = { ...imageChange(ours, image), readout: rc().changeReadout };
+        clickToggle(section, entry, entry.defaultValue);
+        await settle();
         await drawFrames(core, COMPARE_FRAMES);
     }
     clickButton(section, 'all-capsaicin');
