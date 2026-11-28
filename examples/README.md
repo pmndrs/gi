@@ -37,6 +37,7 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | # | Example | Shows |
 | --- | --- | --- |
 | C1 | **No volume needed** (`cache/c1-no-volume`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
+| C5 | **Light from surfaces** (`cache/c5-emissive`) | A room with no light objects, lit only by two emissive strips and a screen (the procedural `emissive-room`), through the cache on its defaults: a probe ray that hits an emitter takes its emission. Change the strips' colour and brightness, put one of two pictures made in code on the screen, or show GI only. |
 
 ### Split Radiance Cascades (`cascades/`)
 

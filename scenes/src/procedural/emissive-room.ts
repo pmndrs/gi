@@ -32,7 +32,7 @@ const SLAB_M = 0.15;
 /** The strips' emitted radiance: a warm white. */
 export const EMISSIVE_ROOM_STRIP_RADIANCE: LinearColor = [9, 7.6, 5.6];
 /** The screen's emitted radiance with nothing on it: a plain white glow. */
-export const EMISSIVE_ROOM_SCREEN_RADIANCE: LinearColor = [2, 2, 2];
+export const EMISSIVE_ROOM_SCREEN_RADIANCE: LinearColor = [3, 3, 3];
 
 /** Material names a page can look up to change the emitters (C5). */
 export const EMISSIVE_ROOM_MATERIALS = { strip: 'strip-light', screen: 'screen' } as const;
