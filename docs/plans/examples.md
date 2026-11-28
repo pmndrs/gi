@@ -1,6 +1,6 @@
 # Examples: one set per method, each one teaching something
 
-Status: **draft for Dennis to agree on**, 2026-11-28. It closes road step 4, "Docs and demos". Once agreed, each demo below is one subagent's task.
+Status: **agreed with Dennis, 2026-11-28** ("the list is good"; reflections use pmndrs/reflections; add the courtyard-balls demo). It closes road step 4, "Docs and demos". Once agreed, each demo below is one subagent's task.
 
 ## Why
 
@@ -115,18 +115,22 @@ Folders become `examples/ddgi/01-hello/`, `examples/cache/c1-.../` and so on. No
 ## Together (X1–X2)
 
 ### X1 · GI and reflections
-- **Teaches:** GI here is diffuse light. Reflections are a separate layer on top. The composite counts each light path once, so GI and reflections don't add up twice. This is DECISIONS' "reflections layer on top of DDGI".
-- **Scene:** a new procedural room (`addRoomShell`) with a polished floor, a matte wall and a lamp.
+- **Teaches:** GI here is diffuse light. Reflections are a separate layer, from pmndrs's own [`@pmndrs/reflections`](https://github.com/pmndrs/reflections) (0.1.0 on npm), and the two must count each light path once.
+- **Scene:** a new procedural room (`addRoomShell`) with a polished floor, a matte wall, a lamp and a few objects, some of them off-screen.
 - **On screen:** diffuse GI only; reflections only; both.
-- **The reflection source, picked live:**
-  - three's screen-space reflections (the TSL `SSRNode` in three 0.187's addons);
-  - the environment map as the fallback where SSR has no data.
+- **The reflection source:** `@pmndrs/reflections` (`/three`, `Reflections.create`), with its three layers picked live:
+  - box-projected probes;
+  - screen-space reflections;
+  - the ray-traced fallback (`rayTracing: true`, on `@pmndrs/raytracer` and `@pmndrs/bvh`).
+  
+  The denoiser is `denoiser/ffx`, which gi already depends on.
 - **Explainer:**
   - What GI covers and what it doesn't: glossy reflections (#31, D8).
-  - How the composite splits the diffuse share (`1 − F`) from the specular.
-  - Why SSR misses off-screen objects.
-  - What comes later: RT reflections, the first technique after v1 (DECISIONS), and Split RC's own rough reflections, which run on the Mac.
-- **Open question:** whether to add a traced-reflection option from `@pmndrs/raytracer` here. It shows the off-screen fix, but it is a bigger page. **Proposal:** SSR plus the environment first; traced reflections as X1b once RT reflections exist.
+  - How the diffuse share (`1 − F`) and the specular are kept apart, so neither is counted twice.
+  - Why SSR misses off-screen objects, and how probes and the traced fallback fill in.
+  - That GI-lit surfaces appear lit in the reflections.
+- **Open in the build:** how `reflections.render(camera)` and gi's composite (`ddgi()` on three's `RenderPipeline`) run in one frame. Fixes go upstream as pmndrs/reflections issues or PRs; gi doesn't work around them.
+- **Depends on:** `@pmndrs/reflections` 0.1.0, `@pmndrs/raytracer` and `@pmndrs/bvh` (published).
 
 ### X2 · Scale
 - **Teaches:** how each method covers a big world.
@@ -143,6 +147,28 @@ Folders become `examples/ddgi/01-hello/`, `examples/cache/c1-.../` and so on. No
   - How the hash grid's levels of detail work.
   - Memory: DDGI 12–55 MiB, against the grid's ~1.1 GiB (P6.8 shrinks it) and SHaRC's 83 MiB. Sources: P6.5 and P6.8.
 - **Depends on:** DDGI's multi-volume path (exists). P6.8 changes the grid's memory number.
+
+### X3 · Balls in the courtyard
+- **Teaches:** how each technique handles a scene that keeps changing. Big moving objects, light that moves with them, and emissive surfaces that change, all at once.
+- **Scene:** Sponza's courtyard. The site can't ship Sponza, so the page loads it at run time from its public glTF (Khronos glTF-Sample-Assets, Crytek's model, CC BY 3.0, credited on the page). Without a network it falls back to the procedural `courtyard`.
+- **What happens:**
+  - Balls 1–2 m wide come over the wall, bounce and roll around inside until they settle.
+  - Each has either an emissive material (a random colour; some pulse or flicker) or a random PBR material (albedo, metalness, roughness).
+  - **Right-click tosses another one in.** A cap, around 30, keeps it bounded.
+  - The physics is a small sphere solver of the page's own: floor, the courtyard's walls as boxes, ball against ball. No physics library.
+- **Controls:**
+  - the technique: DDGI, or the cache's variants (from C6's presets);
+  - add a ball; clear;
+  - emissive on/off for all balls;
+  - freeze the physics.
+- **On screen:** GPU ms, memory, and frames to settle after each throw (C4's timeline).
+- **Explainer:** what each technique does with a moving emitter:
+  - DDGI's probes update over frames;
+  - the cache's change resets clear cells near the ball;
+  - light from emissive surfaces needs the rays to reach them.
+
+  It also says where each one lags or ghosts. Numbers come only from `docs/`, and the page's own readouts are labelled as such.
+- **Depends on:** C4's timeline and C6's preset list, so it is built after them. The Split RC workflow can add its technique to the switcher later.
 
 ## DDGI (01–10)
 
@@ -164,16 +190,17 @@ No new pages. Each gets the explainer panel ("What you're seeing", "How it works
 2. **Then one agent per page,** in parallel. Each brief is this page's section plus "What every page has":
    - C1, C3 and C4 first: they make the case for the cache;
    - then C6, C2 and C5;
-   - then X1 and X2.
+   - then X1, X2 and X3 (X3 after C4 and C6).
 3. **Each agent's done-check:**
    - lint, typecheck, unit tests, `examples:build` and `examples-site`;
    - a screenshot of the page;
    - every number in its explainer traced to its source.
 4. **The lead reviews** each page's explainer text before its PR.
 
-## Questions for Dennis
+## Answered (2026-11-28)
 
-1. **Folders:** is the move to `examples/ddgi/`, `cache/` and `together/` with C- and X- numbers OK, or should we keep a flat 01–NN?
-2. **X1's reflection source:** three's SSR plus the environment now, with traced reflections later as X1b. Or do you want `@pmndrs/raytracer` in the first version?
-3. **X2's world:** is a generated block world OK, or do you want a specific layout?
-4. **The DDGI explainer pass on 01–10:** include it now, or leave it for later?
+1. **Folders:** regroup into `examples/ddgi/`, `cache/` and `together/`, with C- and X- numbers.
+2. **Reflections:** `@pmndrs/reflections`, pmndrs's own tool (X1).
+3. **X2's world:** a generated block world.
+4. **DDGI explainer pass on 01–10:** yes, with the shared pieces.
+5. **Added:** X3, balls in the courtyard.
