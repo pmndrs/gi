@@ -10,10 +10,10 @@
  * them): the lamp 0.3 m under its shade, and the flashlight where the first
  * camera bookmark stands, pointing where it looks.
  *
- * Layout (metres). The interior is 5 wide (x), 2.7 high, 4.5 deep (z). The
+ * Layout (metres). The interior is 5 wide (x), 2.7 high, 5 deep (z). The
  * red box (`drag-box`, 0.6 m) stands on the floor in the middle; a pale
  * cabinet stands against the west wall and a low blue bench against the
- * north wall, so the box's bounce and shadow land on something.
+ * south wall (z = 0), so the box's bounce and shadow land on something.
  */
 
 import type { ProceduralScene } from '../scene-data';
@@ -22,7 +22,7 @@ import { addRoomShell } from './room-shell';
 
 const DEGREES_TO_RADIANS = Math.PI / 180;
 
-export const DARK_ROOM_SIZE_M: readonly [number, number, number] = [5, 2.7, 4.5];
+export const DARK_ROOM_SIZE_M: readonly [number, number, number] = [5, 2.7, 5];
 /** The box the page drags: its name, edge length and where it starts (its centre). */
 export const DRAG_BOX_NAME = 'drag-box';
 export const DRAG_BOX_SIZE_M = 0.6;
@@ -43,17 +43,17 @@ export function buildDarkRoom(): ProceduralScene {
 
     builder.addBoxCentered(DRAG_BOX_NAME, red, DRAG_BOX_START, [DRAG_BOX_SIZE_M, DRAG_BOX_SIZE_M, DRAG_BOX_SIZE_M]);
     builder.addBox('cabinet', cabinet, [0, 0, 0.6], [0.5, 1.8, 1.8]);
-    builder.addBox('bench', bench, [2.0, 0, 3.9], [4.2, 0.45, z]);
+    builder.addBox('bench', bench, [2.0, 0, 0], [4.2, 0.45, 0.5]);
     // The lamp's shade hangs 5 cm under the ceiling, the lamp 0.3 m below it.
-    builder.addBox('lamp-shade', shade, [2.3, y - 0.05, 2.05], [2.7, y, 2.45]);
-    builder.addLight({ type: 'point', label: 'ceiling-lamp', color: [1, 0.94, 0.84], intensity: 10, position: [2.5, 2.35, 2.25], range: 12 });
+    builder.addBox('lamp-shade', shade, [2.3, y - 0.05, 2.3], [2.7, y, 2.7]);
+    builder.addLight({ type: 'point', label: 'ceiling-lamp', color: [1, 0.94, 0.84], intensity: 10, position: [2.5, 2.35, 2.5], range: 12 });
     builder.addLight({
         type: 'spot',
         label: 'flashlight',
         color: [1, 0.97, 0.92],
         intensity: 40,
-        position: [0.6, 1.6, 4.1],
-        direction: [2.4, -1.1, -2.5],
+        position: [1.3, 1.5, 4.2],
+        direction: [1.2, -0.7, -1.7],
         range: 12,
         innerConeAngle: 14 * DEGREES_TO_RADIANS,
         outerConeAngle: 22 * DEGREES_TO_RADIANS,
