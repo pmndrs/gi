@@ -183,7 +183,32 @@
                 <a class="card" href="cache/c1-no-volume/">
                     <div class="number">C1</div>
                     <div class="title">No volume needed</div>
-                    <div class="description">AMD's GI-1.0/1.2 on 01's scene: screen probes where the camera looks, lit through a world-space hash grid, with DDGI under it for the later bounces.</div>
+                    <div class="description">The cache alone in a sunlit courtyard, with no probe box: screen probes where the camera looks, their rays ending in world-cache cells only where they land.</div>
+                </a>
+                <a class="card" href="cache/c2-contact-detail/">
+                    <div class="number">C2</div>
+                    <div class="title">Contact detail</div>
+                    <div class="description">The cache and DDGI wiped on one view of a shelf of boxes: screen probes keep the light where objects meet, a probe grid blurs it. Two probe spacings and a difference view.</div>
+                </a>
+                <a class="card" href="cache/c3-doorway/">
+                    <div class="number">C3</div>
+                    <div class="title">Light through a doorway</div>
+                    <div class="description">A closed room lit only through a doorway needs several bounces. Switch the cache's second bounce between GI-1.2's own rays, DDGI underneath and SHaRC, and watch the far room's brightness.</div>
+                </a>
+                <a class="card" href="cache/c4-fast-changes/">
+                    <div class="number">C4</div>
+                    <div class="title">Fast changes: lag against ghosting</div>
+                    <div class="description">Switch a lamp, sweep a flashlight and drag a box in a dark room. A chart shows how many frames GI takes to settle, with the cache's change reset on and off.</div>
+                </a>
+                <a class="card" href="cache/c5-emissive/">
+                    <div class="number">C5</div>
+                    <div class="title">Light from surfaces</div>
+                    <div class="description">A room lit only by emissive strips and a screen, with no light objects: probe rays that hit an emitter take its light.</div>
+                </a>
+                <a class="card" href="cache/c6-cache-switcher/">
+                    <div class="number">C6</div>
+                    <div class="title">The cache switcher</div>
+                    <div class="description">Every world-cache variant, one at a time, in closed rooms and open air: how each works, what P6.5 measured, its GPU time per pass and the cache's debug views.</div>
                 </a>
             </div>
 

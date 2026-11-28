@@ -1,0 +1,55 @@
+/* The far room's readings (far-room.ts), in the dock bottom right. */
+.far-room {
+    box-sizing: border-box;
+    padding: 6px 10px 8px;
+    color: #cfd8e3;
+    font: 12px/1.4 system-ui, sans-serif;
+}
+.far-room-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px 8px;
+    margin-bottom: 4px;
+}
+.far-room-header span {
+    color: #8b97a6;
+    font-size: 11px;
+}
+.far-room-row {
+    display: grid;
+    grid-template-columns: 7.5em 1fr 7.5em;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    color: #8b97a6;
+}
+.far-room-row.active {
+    color: #f3f6f9;
+    font-weight: 600;
+}
+.far-room-track {
+    height: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.far-room-bar {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: #8b97a6;
+    transition: width 0.3s;
+}
+.far-room-row.active .far-room-bar {
+    background: #ffc878;
+}
+.far-room-value {
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    text-align: right;
+}
+.far-room-note {
+    margin-top: 4px;
+    color: #8b97a6;
+    font-size: 11px;
+}

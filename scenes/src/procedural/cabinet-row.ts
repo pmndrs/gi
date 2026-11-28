@@ -16,6 +16,11 @@
  * Options:
  * - `closedFronts` (default true): doors on every unit, so the insides are
  *   closed hollow volumes. Set false to leave the fronts open.
+ * - `objects` (default false): small things where light meets a contact. An
+ *   open shelf on four legs, 2 cm off the wall at x 3.2..4.6, with boxes on
+ *   it, under it and in front of it, and a few jars and a bread bin on the
+ *   worktop. They are 0.1-0.35 m across, about the probe spacing or less, for
+ *   the contact-detail example (examples/cache/c2-contact-detail).
  */
 
 import type { BuilderOptions, ProceduralScene, Vector3Tuple } from '../scene-data';
@@ -69,10 +74,59 @@ function addHollowCabinet(
     }
 }
 
+/**
+ * The `objects` option's things (file comment): an open shelf on legs, and
+ * boxes resting on it, under it, in front of it and on the worktop.
+ */
+function addContactObjects(builder: SceneBuilder, worktopTop: number): void {
+    const shelf = builder.addDiffuse('shelf-oak', [0.55, 0.42, 0.3]);
+    const red = builder.addDiffuse('object-red', [0.7, 0.12, 0.1]);
+    const green = builder.addDiffuse('object-green', [0.15, 0.55, 0.2]);
+    const blue = builder.addDiffuse('object-blue', [0.15, 0.3, 0.7]);
+    const yellow = builder.addDiffuse('object-yellow', [0.8, 0.65, 0.15]);
+    const grey = builder.addDiffuse('object-grey', [0.6, 0.6, 0.6]);
+
+    // The shelf: a top board on four legs, a lower board between them, 2 cm off the wall.
+    const [x0, x1, z0, z1] = [3.2, 4.6, 0.02, 0.42];
+    const leg = 0.04;
+    const top = 0.5;
+    const lower = 0.15;
+    const p = PANEL_THICKNESS_M;
+    const o = PANEL_OVERLAP_M;
+    const legCorners: readonly (readonly [number, number])[] = [
+        [x0, z0],
+        [x1 - leg, z0],
+        [x0, z1 - leg],
+        [x1 - leg, z1 - leg],
+    ];
+    legCorners.forEach(([lx, lz], index) => builder.addBox(`shelf-leg-${index}`, shelf, [lx, 0, lz], [lx + leg, top + o, lz + leg]));
+    builder.addBox('shelf-top', shelf, [x0, top, z0], [x1, top + p, z1]);
+    builder.addBox('shelf-lower', shelf, [x0 + leg - o, lower, z0], [x1 - leg + o, lower + p, z1]);
+
+    // On the shelf, under it and in front of it.
+    const onShelf = top + p;
+    builder.addBox('shelf-red-box', red, [3.32, onShelf, 0.04], [3.52, onShelf + 0.3, 0.24]);
+    builder.addBoxCentered('shelf-green-cube', green, [3.95, onShelf + 0.075, 0.22], [0.15, 0.15, 0.15], 20);
+    builder.addBox('shelf-blue-book', blue, [4.2, onShelf, 0.06], [4.5, onShelf + 0.05, 0.28]);
+    builder.addBoxCentered('shelf-blue-book-2', blue, [4.34, onShelf + 0.075, 0.17], [0.26, 0.05, 0.18], -12);
+    builder.addBox('shelf-yellow-box', yellow, [3.6, lower + p, 0.08], [3.85, lower + p + 0.2, 0.33]);
+    builder.addBox('floor-grey-cube', grey, [3.9, 0, 0.7], [4.2, 0.3, 1.0]);
+
+    // On the worktop: a canister and two jars 2 cm from the wall (the jars 2 cm apart), and a bread bin.
+    builder.addBox('worktop-canister', red, [1.0, worktopTop, 0.02], [1.12, worktopTop + 0.25, 0.14]);
+    builder.addBox('worktop-jar-0', yellow, [1.2, worktopTop, 0.02], [1.3, worktopTop + 0.15, 0.12]);
+    builder.addBox('worktop-jar-1', green, [1.32, worktopTop, 0.02], [1.42, worktopTop + 0.15, 0.12]);
+    builder.addBox('worktop-bread-bin', blue, [2.3, worktopTop, 0.03], [2.65, worktopTop + 0.2, 0.28]);
+}
+
 export function buildCabinetRow(options: BuilderOptions = {}): ProceduralScene {
     const closedFronts = options.closedFronts ?? true;
     if (typeof closedFronts !== 'boolean') {
         throw new Error(`cabinet-row: option "closedFronts" must be a boolean, got ${JSON.stringify(closedFronts)}`);
+    }
+    const objects = options.objects ?? false;
+    if (typeof objects !== 'boolean') {
+        throw new Error(`cabinet-row: option "objects" must be a boolean, got ${JSON.stringify(objects)}`);
     }
 
     const builder = new SceneBuilder();
@@ -136,6 +190,8 @@ export function buildCabinetRow(options: BuilderOptions = {}): ProceduralScene {
             closedFronts,
         );
     }
+
+    if (objects) addContactObjects(builder, baseTop + WORKTOP_THICKNESS_M);
 
     builder.addLight({
         type: 'point',

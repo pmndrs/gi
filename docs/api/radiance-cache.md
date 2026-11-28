@@ -283,12 +283,12 @@ P6.5 compared ten variants on ten views against Cycles ([docs/design/radiance-ca
 | `cache.resetScreenHistory()` | Forgets the probes' history only (a camera cut). The world cache keeps its cells. |
 | `cache.worldCache`, `cache.worldCacheBackend`, `cache.neuralTail` | The world cache (GI-1.2's grid, or whichever backend fills the slot) and the neural tail once prepared. For tests and pages; their types aren't exported. |
 
-**GPU time:** with `gpuTiming`, `gi.stats.passes` doesn't hold the cache's passes today. The platform resolves its timestamps at the end of `encode`, and the cache's work all runs later, in `encodeScreen`. Time it with the browser's GPU profiler for now.
+**GPU time:** with `gpuTiming`, `gi.stats.passes` holds the cache's passes, one per Capsaicin section, named `radiance-cache/<section>` (`radiance-cache/ReprojectScreenProbes`, `radiance-cache/SampleScreenProbes` and so on; the world cache, SHaRC and the neural tail name theirs the same way). The cache's work runs in `encodeScreen`, after `encode`, so the platform resolves the frame's timestamps again at the end of the screen stage (since pmndrs/gi#52).
 
 ## Known limits
 
 - **Indirect diffuse only.** No glossy reflections (GI-1.1's need roughness and metalness in the platform's materials), and hits are Lambert.
-- **Textures at hits** are each texture's mean colour, as for DDGI's rays. The pixel itself uses its real texture through `giAlbedo`.
+- **Textures at hits** are sampled at the hit, as for DDGI's rays: probe-ray hits go through the platform's `giSurfaceAt`, which reads each texture at the mip of the ray's footprint (a ray cone of the platform's default spread). `gi.hitShadingSettings.sampleTextures = false` reads each texture's mean colour instead, for comparisons (platform.md). The pixel itself uses its real texture through `giAlbedo`.
 - **Emissive surfaces aren't lights** for the cache. Their light reaches a probe only when its ray hits them; it doesn't reach the cells near them. DDGI underneath fills this in.
 - **Not under the upscaler yet**, and full resolution only.
 - **About 1.1 GiB of GPU memory** at the default capacity, whatever the scene's size. Integrated and mobile GPUs may not have it; the Intel UHD runs it for correctness only.

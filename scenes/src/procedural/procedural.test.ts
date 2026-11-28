@@ -3,6 +3,8 @@ import type { ProceduralScene, SceneInstanceData, SceneMeshData } from '../scene
 import { BLOCK_WORLD_MAX_HEIGHT_M, blockWorldSun, buildBlockWorld } from './block-world';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
 import { buildCornellBox, CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from './cornell-box';
+import { buildDarkRoom, DARK_ROOM_SIZE_M, DRAG_BOX_NAME, DRAG_BOX_SIZE_M, DRAG_BOX_START } from './dark-room';
+import { buildEmissiveRoom, EMISSIVE_ROOM_MATERIALS } from './emissive-room';
 import {
     buildFurnaceRoom,
     FURNACE_ALBEDO,
@@ -151,6 +153,22 @@ describe('furnace-room', () => {
     });
 });
 
+describe('emissive-room', () => {
+    const scene = buildEmissiveRoom();
+
+    it('has no lights: the strips and the screen are its only light', () => {
+        expect(scene.lights).toEqual([]);
+        const emitters = scene.instances.filter((instance) => Math.max(...scene.materials[instance.material].emissive) > 0).map((instance) => instance.name);
+        expect(emitters.sort()).toEqual(['screen-panel', 'strip-east', 'strip-west']);
+    });
+
+    it('names the emitter materials as pages look them up', () => {
+        expect(scene.materials[findInstance(scene, 'strip-west').material].name).toBe(EMISSIVE_ROOM_MATERIALS.strip);
+        expect(scene.materials[findInstance(scene, 'strip-east').material].name).toBe(EMISSIVE_ROOM_MATERIALS.strip);
+        expect(scene.materials[findInstance(scene, 'screen-panel').material].name).toBe(EMISSIVE_ROOM_MATERIALS.screen);
+    });
+});
+
 describe('thin-wall', () => {
     it('has a partition 3 cm thick spanning the whole room, with a light on one side only', () => {
         const scene = buildThinWall();
@@ -210,6 +228,17 @@ describe('cabinet-row', () => {
         expect(doors(open)).toBe(0);
     });
 
+    it('adds the shelf on legs and the small objects only with objects true, after everything else', () => {
+        const plain = buildCabinetRow();
+        const withObjects = buildCabinetRow({ objects: true });
+        expect(plain.instances.some((instance) => instance.name.startsWith('shelf-'))).toBe(false);
+        expect(withObjects.instances.filter((instance) => instance.name.startsWith('shelf-leg-'))).toHaveLength(4);
+        // The plain scene's instances and materials come first, unchanged, so its references still hold.
+        expect(withObjects.instances.slice(0, plain.instances.length)).toEqual(plain.instances);
+        expect(withObjects.materials.slice(0, plain.materials.length)).toEqual(plain.materials);
+        expect(() => buildCabinetRow({ objects: 'yes' })).toThrow(/objects/);
+    });
+
     it('is a hollow volume: no board occupies the middle of a base unit', () => {
         const scene = buildCabinetRow();
         // Centre of the first base unit: x 0.6..1.2, y 0.1..0.82, z 0..0.58.
@@ -259,6 +288,26 @@ describe('block-world', () => {
             const covers = [0, 1].every((axis) => Math.abs(centre[axis]) < half[axis] + 2.9);
             expect(covers, instance.name).toBe(false);
         }
+    });
+});
+
+describe('dark-room', () => {
+    it('has the box the C4 page drags, standing on the floor inside the room', () => {
+        const scene = buildDarkRoom();
+        const box = findInstance(scene, DRAG_BOX_NAME);
+        boxSize(box).forEach((extent) => expect(extent).toBeCloseTo(DRAG_BOX_SIZE_M));
+        expect([box.transform[12], box.transform[13], box.transform[14]]).toEqual([...DRAG_BOX_START]);
+        expect(DRAG_BOX_START[1] - DRAG_BOX_SIZE_M / 2).toBe(0);
+        for (const axis of [0, 2]) {
+            expect(DRAG_BOX_START[axis] - DRAG_BOX_SIZE_M / 2).toBeGreaterThan(0);
+            expect(DRAG_BOX_START[axis] + DRAG_BOX_SIZE_M / 2).toBeLessThan(DARK_ROOM_SIZE_M[axis]);
+        }
+    });
+
+    it('has a lamp and a flashlight and nothing else that gives light, so with both off the room is black', () => {
+        const scene = buildDarkRoom();
+        expect(scene.lights.map((light) => `${light.type} ${light.label}`)).toEqual(['point ceiling-lamp', 'spot flashlight']);
+        for (const material of scene.materials) expect(material.emissive).toEqual([0, 0, 0]);
     });
 });
 

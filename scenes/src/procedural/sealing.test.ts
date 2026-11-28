@@ -19,6 +19,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ProceduralScene, Vector3Tuple } from '../scene-data';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
+import { buildDarkRoom, DARK_ROOM_SIZE_M } from './dark-room';
+import { buildEmissiveRoom, EMISSIVE_ROOM_SIZE_M } from './emissive-room';
 import { buildFurnaceRoom, FURNACE_SIZE_M } from './furnace-room';
 import { SceneBuilder } from './geometry';
 import { buildThinWall, THIN_WALL_THICKNESS_M } from './thin-wall';
@@ -206,6 +208,22 @@ describe('sealing', () => {
         }
     });
 
+    it('dark room: no ray leaves, including rays along every seam', () => {
+        const seams = boxEdgePoints([0, 0, 0], DARK_ROOM_SIZE_M);
+        for (const origin of [[1, 1.5, 3.5], [4.5, 2.2, 0.5]] as Vec[]) {
+            expectContained(buildDarkRoom(), origin, seams, () => true, 'dark room');
+        }
+    });
+
+    it('emissive room: no ray leaves, including rays along every seam', () => {
+        const [x, y, z] = EMISSIVE_ROOM_SIZE_M;
+        const seams = boxEdgePoints([0, 0, 0], [x, y, z]);
+        const scene = buildEmissiveRoom();
+        for (const origin of [[3, 1.4, 2.4], [0.3, 2.5, 0.3], [5.7, 0.2, 4.4]] as Vec[]) {
+            expectContained(scene, origin, seams, () => true, 'emissive room');
+        }
+    });
+
     it('two rooms: no ray leaves the building, from either room', () => {
         const seams = boxEdgePoints([0, 0, 0], [ROOM_B_X1_M, ROOM_HEIGHT_M, ROOM_SIZE_M]);
         for (const scene of [buildTwoRoom(), buildClosedDoor()]) {
@@ -285,6 +303,15 @@ describe('no flush seams', () => {
         const pattern = /^(floor|ceiling|wall-|partition|door-panel)/;
         expect(flushPairs(axisAlignedBoxes(buildTwoRoom(), pattern))).toEqual([]);
         expect(flushPairs(axisAlignedBoxes(buildClosedDoor(), pattern))).toEqual([]);
+    });
+
+    it('dark room shell', () => {
+        expect(flushPairs(axisAlignedBoxes(buildDarkRoom(), /^room-/))).toEqual([]);
+    });
+
+    it('emissive room: its shell and everything fixed to it (furniture may stand on the floor)', () => {
+        const boxes = axisAlignedBoxes(buildEmissiveRoom(), /^(room-|strip-|screen-|cabinet|shelf)/);
+        expect(flushPairs(boxes, (a, b) => a === 'room-floor' || b === 'room-floor')).toEqual([]);
     });
 
     it('furnace room shell', () => {

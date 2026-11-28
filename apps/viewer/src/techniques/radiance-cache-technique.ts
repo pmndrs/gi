@@ -63,10 +63,12 @@ import {
 // `@pmndrs/gi/radiance-cache`, read from source by path for the reason library.ts gives.
 import {
     applyCompareValues,
+    DEFAULT_RADIANCE_CACHE_SETTINGS,
     hostCompareValue,
     RADIANCE_CACHE_DEBUG_VIEW,
     RadianceCacheTechnique,
     type CompareValues,
+    type RadianceCacheSettings,
 } from '../../../../packages/gi/src/radiance-cache';
 import { RcChangeMeter } from './rc-change-meter';
 import { applyViewLayers, LAYER_RADIANCE_CACHE, type GiMode } from '../scene/layers';
@@ -155,9 +157,13 @@ export class RadianceCacheViewerTechnique implements GiTechnique {
         const { device, loaded, hasTimestamps } = this.context;
         const platform = createGI(device, { gpuTiming: hasTimestamps, label: `viewer radiance cache ${loaded.manifest.id}` });
         this.platform = platform;
-        // SSGI decides the screen channels the technique asks for, so it is given at construction (a restart setting).
-        const technique = new RadianceCacheTechnique({ ssgi: this.settings.compare.ssgi === true });
-        applyCompareValues(technique.settings, this.settings.compare);
+        // Every compare value goes in at construction, as C6 does: SSGI and temporal feedback decide the
+        // screen channels the technique asks for (albedo and the lit picture) in its constructor, and the
+        // world cache and the neural tail are read at prepare (PREPARE_SETTINGS; ViewerCore makes the
+        // technique again when one changes). The rest are read every frame (`configure`).
+        const settings: RadianceCacheSettings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS };
+        applyCompareValues(settings, this.settings.compare);
+        const technique = new RadianceCacheTechnique(settings);
         platform.addTechnique(technique);
         this.technique = technique;
         platform.setOutput(technique);
