@@ -120,13 +120,13 @@ pnpm install
 pnpm dev             # the viewer: every test scene with GI, its debug views and settings
 pnpm examples        # the examples site, at http://localhost:5203
 pnpm lint && pnpm typecheck && pnpm test
-pnpm build           # the package, into packages/ddgi/dist
+pnpm build           # the package, into packages/gi/dist
 pnpm verify:packed   # packs it and checks it as a user would get it
 pnpm test:release    # runs the publish workflow's steps against throwaway repositories
 pnpm test:gpu        # the GPU checks, in headless Chrome on a real GPU
 ```
 
-The published package, `@pmndrs/gi`, is `packages/ddgi`; it bundles the private workspace packages `ddgi-core` (the engine-free platform, `/core`, and DDGI, `/ddgi`), `ddgi-three` (the three.js adapter) and `bvh`. The workspace folders and private names keep `ddgi` for now ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-11-10). [docs/releasing.md](docs/releasing.md) says how a release is cut, and what CI checks and doesn't.
+The published package, `@pmndrs/gi`, is `packages/gi`; it bundles the private workspace packages `ddgi-core` (the engine-free platform, `/core`, and DDGI, `/ddgi`), `ddgi-three` (the three.js adapter) and `bvh`. The workspace folders and private names keep `ddgi` for now ([docs/DECISIONS.md](docs/DECISIONS.md), 2026-11-10). [docs/releasing.md](docs/releasing.md) says how a release is cut, and what CI checks and doesn't.
 
 How the work is run:
 

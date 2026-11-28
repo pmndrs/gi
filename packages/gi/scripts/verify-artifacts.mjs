@@ -26,7 +26,7 @@ for (const entry of publicEntries) {
 // repository root by tools/release/package-files.ts; THIRD_PARTY.md is the
 // package's own; licenses/ holds the bundled code's licence texts it points to.
 for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY.md', 'licenses/tinybvh.txt', 'licenses/emscripten-runtime.txt', 'licenses/hiprt.txt', 'licenses/pathtracer-MIT.txt', 'licenses/pbrt-v4-Apache-2.0.txt', 'licenses/capsaicin-MIT.txt', 'licenses/rtoy-samples-MIT.txt', 'licenses/assimp-BSD-3-Clause.txt']) {
-    if (!existsSync(resolve(packageRoot, file))) problems.push(`missing ${file} in packages/ddgi`);
+    if (!existsSync(resolve(packageRoot, file))) problems.push(`missing ${file} in packages/gi`);
 }
 
 // Every path in package.json `exports` must exist too.

@@ -97,8 +97,8 @@ export async function startTestSite(): Promise<TestSiteServer> {
         // run examples/three as a user writes it (`@pmndrs/gi/three`).
         resolve: {
             alias: [
-                { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/index.ts') },
-                { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades)$/, replacement: resolve(SITE_ROOT, '../../packages/ddgi/src/$1.ts') },
+                { find: /^@pmndrs\/gi$/, replacement: resolve(SITE_ROOT, '../../packages/gi/src/index.ts') },
+                { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades)$/, replacement: resolve(SITE_ROOT, '../../packages/gi/src/$1.ts') },
             ],
         },
         // The pages have no npm dependencies; skip the dependency pre-bundling scan.

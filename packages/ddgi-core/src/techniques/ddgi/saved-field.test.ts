@@ -115,7 +115,7 @@ describe('the .ddgibake file', () => {
     });
 
     it('records the umbrella package version as its writer', () => {
-        const manifest = JSON.parse(readFileSync(new URL('../../../../ddgi/package.json', import.meta.url), 'utf8')) as { name: string; version: string };
+        const manifest = JSON.parse(readFileSync(new URL('../../../../gi/package.json', import.meta.url), 'utf8')) as { name: string; version: string };
         expect(SAVED_FIELD_WRITER).toBe(`${manifest.name} ${manifest.version}`);
     });
 });

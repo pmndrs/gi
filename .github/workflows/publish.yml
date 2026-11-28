@@ -1,6 +1,6 @@
 name: Publish to npm
 
-# Publishes @pmndrs/gi (the package in packages/ddgi) to npm and creates its
+# Publishes @pmndrs/gi (the package in packages/gi) to npm and creates its
 # GitHub Release. Adapted from @pmndrs/upscaler's publish.yml. Merges to main
 # never publish. Nothing runs until Dennis registers this file as the package's
 # trusted publisher on npmjs.com (docs/releasing.md, "Once").
@@ -9,7 +9,7 @@ name: Publish to npm
 #
 #   1. Push a vX.Y.Z tag, including one made in the GitHub UI (Releases → Draft
 #      a new release → new tag on main → Publish release). The tag is the
-#      version: packages/ddgi/package.json is stamped to it in this checkout,
+#      version: packages/gi/package.json is stamped to it in this checkout,
 #      and afterwards a `release: vX.Y.Z [skip ci]` commit brings main's
 #      package.json up to it (only if main is behind; never rewritten, never
 #      tagged again).
@@ -157,17 +157,17 @@ jobs:
             echo "::error::CHANGELOG.md on main has no '## $VERSION' section. Write the release notes there, merge them, and run again."
             exit 1
           fi
-          CURRENT=$(node -p "require('./packages/ddgi/package.json').version")
+          CURRENT=$(node -p "require('./packages/gi/package.json').version")
           order=$(node "$RUNNER_TEMP/release-tools/release-version.ts" --compare "$VERSION" "$CURRENT")
           if [[ "$order" != "1" ]]; then
-            echo "::error::$VERSION is not newer than packages/ddgi/package.json's $CURRENT."
+            echo "::error::$VERSION is not newer than packages/gi/package.json's $CURRENT."
             exit 1
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          (cd packages/ddgi && npm version "$VERSION" --no-git-tag-version > /dev/null)
-          git commit --quiet -m "release: $TAG [skip ci]" -- packages/ddgi/package.json
+          (cd packages/gi && npm version "$VERSION" --no-git-tag-version > /dev/null)
+          git commit --quiet -m "release: $TAG [skip ci]" -- packages/gi/package.json
           git tag -a "$TAG" -m "$TAG"
 
           # Atomic: the commit and the tag land together or not at all. Pushed
@@ -219,11 +219,11 @@ jobs:
           # The tag is the version. A tag made in the GitHub UI points at a commit
           # whose package.json still has the previous version, so stamp it here
           # (this checkout only; main is caught up after publishing).
-          TAGGED_VERSION=$(node -p "require('./packages/ddgi/package.json').version")
+          TAGGED_VERSION=$(node -p "require('./packages/gi/package.json').version")
           if [[ "$TAGGED_VERSION" != "$VERSION" ]]; then
-            echo "packages/ddgi/package.json at $TAG says $TAGGED_VERSION; publishing it as $VERSION."
+            echo "packages/gi/package.json at $TAG says $TAGGED_VERSION; publishing it as $VERSION."
           fi
-          (cd packages/ddgi && npm version "$VERSION" --no-git-tag-version --allow-same-version > /dev/null)
+          (cd packages/gi && npm version "$VERSION" --no-git-tag-version --allow-same-version > /dev/null)
 
           echo "Releasing $TAG ($COMMIT)."
           {
@@ -240,7 +240,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          NAME=$(node -p "require('./packages/ddgi/package.json').name")
+          NAME=$(node -p "require('./packages/gi/package.json').name")
           error_file=$(mktemp "$RUNNER_TEMP/npm-view.XXXXXX")
           set +e
           published_version=$(npm view "$NAME@$VERSION" version 2>"$error_file")
@@ -285,7 +285,7 @@ jobs:
 
           NPM_LATEST=""
           if [[ "$PRERELEASE" == "false" ]]; then
-            NAME=$(node -p "require('./packages/ddgi/package.json').name")
+            NAME=$(node -p "require('./packages/gi/package.json').name")
             error_file=$(mktemp "$RUNNER_TEMP/npm-latest.XXXXXX")
             set +e
             NPM_LATEST=$(npm view "$NAME" dist-tags.latest 2>"$error_file")
@@ -344,7 +344,7 @@ jobs:
           echo "Publishing $VERSION under dist-tag '$DIST_TAG'"
           # From the package's folder: the workspace root is private. prepublishOnly
           # runs lint, typecheck, unit tests, build and the packed-consumer check.
-          cd packages/ddgi
+          cd packages/gi
           npm publish --access public --tag "$DIST_TAG"
 
       # --- Append-only GitHub Release ------------------------------------------
@@ -439,17 +439,17 @@ jobs:
             git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git checkout --quiet -B release-sync refs/remotes/origin/main
 
-            MAIN_VERSION=$(node -p "require('./packages/ddgi/package.json').version")
+            MAIN_VERSION=$(node -p "require('./packages/gi/package.json').version")
             order=$(node "$RUNNER_TEMP/release-tools/release-version.ts" --compare "$VERSION" "$MAIN_VERSION")
             if [[ "$order" != "1" ]]; then
-              echo "main's packages/ddgi/package.json is $MAIN_VERSION, not behind $VERSION; nothing to catch up."
+              echo "main's packages/gi/package.json is $MAIN_VERSION, not behind $VERSION; nothing to catch up."
               exit 0
             fi
 
-            (cd packages/ddgi && npm version "$VERSION" --no-git-tag-version > /dev/null)
-            git commit --quiet -m "release: v$VERSION [skip ci]" -- packages/ddgi/package.json
+            (cd packages/gi && npm version "$VERSION" --no-git-tag-version > /dev/null)
+            git commit --quiet -m "release: v$VERSION [skip ci]" -- packages/gi/package.json
             if git push --quiet origin HEAD:refs/heads/main; then
-              echo "Bumped main's packages/ddgi/package.json $MAIN_VERSION → $VERSION (untagged; $TAG is unchanged)."
+              echo "Bumped main's packages/gi/package.json $MAIN_VERSION → $VERSION (untagged; $TAG is unchanged)."
               exit 0
             fi
             echo "main moved while catching up (attempt $attempt of 3); retrying on the new main."

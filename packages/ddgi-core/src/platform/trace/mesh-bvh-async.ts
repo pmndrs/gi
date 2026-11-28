@@ -51,7 +51,7 @@ function tryStartWorker(): Worker | null {
     if (typeof Worker === 'undefined') return null;
     try {
         // Keep this exact form: bundlers find the worker file through it, and the
-        // package build (packages/ddgi/vite.config.ts, inlineWorkers) inlines it.
+        // package build (packages/gi/vite.config.ts, inlineWorkers) inlines it.
         return new Worker(new URL('./mesh-bvh-worker.ts', import.meta.url), { type: 'module' });
     } catch {
         return null;

@@ -50,8 +50,8 @@ export default defineConfig({
         // Exact-match entries per public subpath: a plain '@pmndrs/gi' key is a
         // prefix alias and would send '@pmndrs/gi/core' to 'index.ts/core'.
         alias: [
-            { find: /^@pmndrs\/gi$/, replacement: resolve(repoRoot, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(repoRoot, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(repoRoot, 'packages/gi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(repoRoot, 'packages/gi/src/$1.ts') },
         ],
     },
     // Our own dependency cache, so this server and the viewer's don't fight over node_modules/.vite.

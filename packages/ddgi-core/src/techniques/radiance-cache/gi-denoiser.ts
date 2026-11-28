@@ -7,7 +7,7 @@
  * The denoiser itself lives in the sibling library `pmndrs/denoiser` (`Gi1Denoiser`, exported
  * from `denoiser/ffx` next to its other AMD ports since `denoiser@2.1.0`; DECISIONS 2026-11-19).
  * This file only maps the platform's frame onto its input contract. `@pmndrs/gi/radiance-cache`
- * ships it with `denoiser` as a dependency, external to the bundle (packages/ddgi/vite.config.ts).
+ * ships it with `denoiser` as a dependency, external to the bundle (packages/gi/vite.config.ts).
  *
  * What it reads: the irradiance with Capsaicin's denoiser hint in alpha (screen-irradiance.ts),
  * `FrameScreen`'s depth, normal and velocity, and the platform's screen history for the

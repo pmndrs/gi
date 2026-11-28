@@ -56,7 +56,7 @@ Needs: Node 24, git and network access. On Linux and macOS it also needs Python 
 
 `licenses/tinybvh.txt` is tinybvh's licence; the build checks it against tinybvh's own `LICENSE` file. `licenses/emscripten-runtime.txt` covers the parts of Emscripten's runtime that the `.wasm` contains: Emscripten's own code and musl (MIT), dlmalloc (public domain), and LLVM's libc++ and compiler-rt (Apache 2.0 with LLVM Exceptions).
 
-The generated `src/tinybvh-wasm.ts` starts with both texts in a `/*! */` comment, which bundlers keep. So every built file that contains the `.wasm` also contains its licences. `packages/ddgi/scripts/verify-artifacts.mjs` fails the package build if one doesn't.
+The generated `src/tinybvh-wasm.ts` starts with both texts in a `/*! */` comment, which bundlers keep. So every built file that contains the `.wasm` also contains its licences. `packages/gi/scripts/verify-artifacts.mjs` fails the package build if one doesn't.
 
 ## GPU refit (stage B1a)
 

@@ -121,8 +121,8 @@ function configureUser(directory: string): void {
 }
 
 function writePackage(directory: string, version: string): void {
-    mkdirSync(join(directory, 'packages/ddgi'), { recursive: true });
-    writeFileSync(join(directory, 'packages/ddgi/package.json'), `${JSON.stringify({ name: '@pmndrs/gi', version }, null, 4)}\n`);
+    mkdirSync(join(directory, 'packages/gi'), { recursive: true });
+    writeFileSync(join(directory, 'packages/gi/package.json'), `${JSON.stringify({ name: '@pmndrs/gi', version }, null, 4)}\n`);
 }
 
 function commit(directory: string, message: string): string {
@@ -220,9 +220,9 @@ interface Fixture {
 }
 
 /**
- * origin's main: "Release 0.1.0" (packages/ddgi at 0.1.0, tagged v0.1.0) →
+ * origin's main: "Release 0.1.0" (packages/gi at 0.1.0, tagged v0.1.0) →
  * "Release tooling" → "Notes for 0.2.0 and 0.3.0" (CHANGELOG has 0.1.0, 0.2.0
- * and 0.3.0) ← main. packages/ddgi stays at 0.1.0 throughout.
+ * and 0.3.0) ← main. packages/gi stays at 0.1.0 throughout.
  */
 function createFixture({ tag, offMain }: { tag?: string; offMain?: string } = {}): Fixture {
     const root = mkdtempSync(join(tmpdir(), 'ddgi-publish-workflow-'));
@@ -293,7 +293,7 @@ function pushToMain(fixture: Fixture, message: string, version?: string): void {
 const originGit = (fixture: Fixture, args: string[]) => git(fixture.root, ['--git-dir', fixture.origin, ...args]);
 const mainSubjects = (fixture: Fixture) => originGit(fixture, ['log', '--format=%s', 'main']).split('\n');
 const versionAt = (fixture: Fixture, ref: string) =>
-    (JSON.parse(originGit(fixture, ['show', `${ref}:packages/ddgi/package.json`])) as { version: string }).version;
+    (JSON.parse(originGit(fixture, ['show', `${ref}:packages/gi/package.json`])) as { version: string }).version;
 
 function readLog(path: string): string[] {
     return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : [];
@@ -429,7 +429,7 @@ describe('triggers and structure', () => {
         }
     });
 
-    test('publishes packages/ddgi, not the private workspace root', () => {
+    test('publishes packages/gi, not the private workspace root', () => {
         expect(step('Publish to npm').run).toMatch(/cd packages\/ddgi\nnpm publish --access public --tag "\$DIST_TAG"/);
     });
 
@@ -475,14 +475,14 @@ describe('ci.yml', () => {
 
 describeRuns('a tag push (including a tag made in the GitHub UI)', () => {
     test(
-        'the tag is the version: stamps packages/ddgi, publishes it, makes the Release from CHANGELOG, catches main up',
+        'the tag is the version: stamps packages/gi, publishes it, makes the Release from CHANGELOG, catches main up',
         () =>
             withFixture({ tag: 'v0.2.0' }, (fixture) => {
                 const tagged = originGit(fixture, ['rev-parse', 'v0.2.0^{commit}']);
                 const job = runJob(fixture, { tag: 'v0.2.0' });
 
                 expect(job.failed, job.output).toBeNull();
-                expect(job.output).toContain('packages/ddgi/package.json at v0.2.0 says 0.1.0; publishing it as 0.2.0');
+                expect(job.output).toContain('packages/gi/package.json at v0.2.0 says 0.1.0; publishing it as 0.2.0');
                 expect(job.outputs.resolve).toEqual({ tag: 'v0.2.0', mode: 'tag' });
                 expect(job.outputs.release).toMatchObject({ version: '0.2.0', prerelease: 'false', latest: 'true' });
                 expect(job.outputs.dist).toEqual({ tag: 'latest' });
@@ -668,8 +668,8 @@ describeRuns('the Run workflow button', () => {
                 expect(mainSubjects(fixture).slice(0, 2)).toEqual(['release: v0.2.0 [skip ci]', 'Notes for 0.2.0 and 0.3.0']);
                 expect(originGit(fixture, ['rev-parse', 'v0.2.0^{commit}'])).toBe(originGit(fixture, ['rev-parse', 'main']));
                 expect(versionAt(fixture, 'main')).toBe('0.2.0');
-                // Only packages/ddgi/package.json changes in the release commit.
-                expect(originGit(fixture, ['show', '--name-only', '--format=', 'main'])).toBe('packages/ddgi/package.json');
+                // Only packages/gi/package.json changes in the release commit.
+                expect(originGit(fixture, ['show', '--name-only', '--format=', 'main'])).toBe('packages/gi/package.json');
             }),
         SLOW,
     );
@@ -713,7 +713,7 @@ describeRuns('the Run workflow button', () => {
                 const job = runJob(fixture, { event: 'workflow_dispatch', inputs: { version: '0.2.0' } });
 
                 expect(job.failed).toBe('Cut release commit and tag');
-                expect(job.output).toContain('0.2.0 is not newer than packages/ddgi/package.json\'s 0.3.0');
+                expect(job.output).toContain('0.2.0 is not newer than packages/gi/package.json\'s 0.3.0');
             }),
         SLOW,
     );
@@ -742,7 +742,7 @@ describeRuns('the Run workflow button', () => {
                 expect(job.publishes).toEqual([]);
                 expect(job.releases).toHaveLength(1);
                 expect(job.notes).toContain('Notes for 0.1.0.');
-                expect(job.output).toContain("main's packages/ddgi/package.json is 0.1.0, not behind 0.1.0");
+                expect(job.output).toContain("main's packages/gi/package.json is 0.1.0, not behind 0.1.0");
                 expect(originGit(fixture, ['rev-parse', 'main'])).toBe(before);
             }),
         SLOW,

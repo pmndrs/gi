@@ -37,7 +37,7 @@ throw new Error("import('nowhere') failed");`;
 });
 
 describe('the import graph', () => {
-    // A package cut into layer chunks as the build cuts it (packages/ddgi/layer-chunks.ts).
+    // A package cut into layer chunks as the build cuts it (packages/gi/layer-chunks.ts).
     const files: Record<string, string> = {
         '/pkg/dist/radiance-cascades.js': "export * from './chunks/rc-r4.js';",
         '/pkg/dist/radiance-cascades.d.ts': "export * from './chunks/rc-r4.js';",
@@ -45,7 +45,7 @@ describe('the import graph', () => {
         '/pkg/dist/chunks/rc-r4.d.ts': "export type { MeshGeometry } from '@pmndrs/rc-bvh';",
         '/pkg/dist/radiance-cache.js': "export * from './chunks/radiance-cache-d5.js';",
         '/pkg/dist/radiance-cache.d.ts': "export * from './chunks/radiance-cache-d5.js';",
-        // The optional neural tail's package through the hidden import() the build writes (packages/ddgi/vite.config.ts).
+        // The optional neural tail's package through the hidden import() the build writes (packages/gi/vite.config.ts).
         '/pkg/dist/chunks/radiance-cache-d5.js':
             "import { Gi1Denoiser } from 'denoiser/ffx'; import { x } from './platform-a1.js'; export const mlp = () => ((specifier) => import(/* @vite-ignore */ specifier))('@pathtracer/mlp');",
         '/pkg/dist/chunks/radiance-cache-d5.d.ts': "export { x as cache } from './platform-a1.js'; type MlpNetwork = 'default' | 'compact';",

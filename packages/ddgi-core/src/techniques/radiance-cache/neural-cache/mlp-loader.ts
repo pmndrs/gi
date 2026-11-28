@@ -9,9 +9,9 @@
  *
  * In the published `@pmndrs/gi/radiance-cache` the package stays external and
  * isn't a dependency: the build writes this `import()` so a consumer's bundler
- * leaves it alone (packages/ddgi/vite.config.ts), and it rejects at run time
+ * leaves it alone (packages/gi/vite.config.ts), and it rejects at run time
  * where the package can't be resolved. Its types are inlined from
- * `mlp-unavailable.d.ts` (packages/ddgi/tsconfig.build.json).
+ * `mlp-unavailable.d.ts` (packages/gi/tsconfig.build.json).
  */
 
 import type * as Mlp from '@pathtracer/mlp';

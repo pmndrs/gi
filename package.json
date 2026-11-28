@@ -2,7 +2,7 @@
     "name": "webgpu-ddgi",
     "version": "0.0.0",
     "private": true,
-    "description": "Workspace root for @pmndrs/gi: a WebGPU-native GI platform with DDGI as its first technique. The published package lives in packages/ddgi.",
+    "description": "Workspace root for @pmndrs/gi: a WebGPU-native GI platform with DDGI as its first technique. The published package lives in packages/gi.",
     "license": "MIT",
     "type": "module",
     "packageManager": "pnpm@10.23.0",

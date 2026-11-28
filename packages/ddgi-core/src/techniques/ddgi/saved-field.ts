@@ -53,7 +53,7 @@ export const SECTION_ALIGNMENT = 256;
 export const SAVED_FIELD_PREAMBLE_BYTES = 12;
 /**
  * The writer, recorded in every header (the umbrella package and its
- * version). saved-field.test.ts checks it against packages/ddgi/package.json,
+ * version). saved-field.test.ts checks it against packages/gi/package.json,
  * so it can't drift.
  */
 export const SAVED_FIELD_WRITER = '@pmndrs/gi 0.0.0';
