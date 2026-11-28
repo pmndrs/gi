@@ -37,6 +37,7 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | # | Example | Shows |
 | --- | --- | --- |
 | C1 | **No volume needed** (`cache/c1-no-volume`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
+| C6 | **The cache switcher** (`cache/c6-cache-switcher`) | One world cache at a time from `RADIANCE_CACHE_VARIANT_PRESETS` (`?variant=`), on two closed rooms or the open courtyard (`?scene=courtyard`): a card per variant with how it works, its pros and cons, P6.5's measured bias, lag and memory and what it needs from the host; GPU time per pass and memory live; the cache's debug views (`?overlay=probe-atlas`, `probe-mask`, `probe-sh`). |
 
 ### Split Radiance Cascades (`cascades/`)
 
