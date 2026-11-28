@@ -116,11 +116,15 @@ async function checkSite(log: (line: string) => void, data: Record<string, unkno
 
     const pages = files.filter((file) => file.path.endsWith('.html'));
     const checked = new Set<string>();
+    // Redirects from the old flat paths (examples/public/01-hello/ → ddgi/01-hello/), kept so links
+    // to the published site from before the regroup still work. Their link is checked like any other.
+    const redirects = new Set<string>();
     let landingLinks: string[] = [];
     for (const page of pages) {
         const pageUrl = new URL(page.path, siteRoot).href;
         const html = await (await fetchOk(pageUrl)).text();
         const parsed = new DOMParser().parseFromString(html, 'text/html');
+        if (parsed.querySelector('meta[http-equiv="refresh"]')) redirects.add(page.path);
         const references = [
             ...[...parsed.querySelectorAll('script[src]')].map((element) => element.getAttribute('src')!),
             ...[...parsed.querySelectorAll('link[href]')].map((element) => element.getAttribute('href')!),
@@ -140,10 +144,13 @@ async function checkSite(log: (line: string) => void, data: Record<string, unkno
         }
     }
     data.referencesChecked = checked.size;
-    log(`site: ${pages.length} pages, ${checked.size} references resolve inside ${EXAMPLES_SITE_BASE} and load`);
+    data.redirects = redirects.size;
+    log(`site: ${pages.length} pages (${redirects.size} redirects from old paths), ${checked.size} references resolve inside ${EXAMPLES_SITE_BASE} and load`);
 
     // Every example page the build made must be on the landing page.
-    const examplePages = pages.filter((page) => page.path !== 'index.html').map((page) => new URL(page.path.replace(/index\.html$/, ''), siteRoot).href);
+    const examplePages = pages
+        .filter((page) => page.path !== 'index.html' && !redirects.has(page.path))
+        .map((page) => new URL(page.path.replace(/index\.html$/, ''), siteRoot).href);
     const unlinked = examplePages.filter((url) => !landingLinks.includes(url));
     if (unlinked.length > 0) throw new Error(`the landing page doesn't link ${unlinked.join(', ')}`);
     return landingLinks;
