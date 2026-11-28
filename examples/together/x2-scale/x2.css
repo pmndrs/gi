@@ -1,0 +1,50 @@
+/* X2's readings (readouts.ts): a box in the shared dock, and the stats line. */
+.x2-readouts {
+    padding: 8px 10px;
+    font: 12px/1.45 system-ui, sans-serif;
+    color: #cfd8e3;
+}
+.x2-readouts-title {
+    margin-bottom: 4px;
+    color: #8b98a8;
+}
+.x2-reading {
+    padding: 4px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    opacity: 0.6;
+}
+.x2-reading.current {
+    opacity: 1;
+}
+.x2-reading-numbers {
+    font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace;
+    color: #ffc878;
+}
+.x2-reading-detail {
+    color: #8b98a8;
+}
+.x2-stats {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    padding: 5px 10px;
+    z-index: 10;
+    background: rgba(8, 10, 14, 0.75);
+    color: #cfd8e3;
+    font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
+    pointer-events: none;
+}
+/* The readings and the pass list, in a column under the panel (its top follows the panel's height). */
+.x2-column {
+    position: fixed;
+    right: 12px;
+    top: 300px;
+    bottom: 44px;
+    z-index: 15;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 300px;
+    max-width: calc(100vw - 24px);
+    overflow-y: auto;
+}
