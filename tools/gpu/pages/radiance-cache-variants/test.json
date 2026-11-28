@@ -1,0 +1,5 @@
+{
+    "description": "P6.5: the radiance cache's world-cache variants (the compare panel's presets: GI-1.2 grid alone and over DDGI, SHaRC alone and over DDGI, budgeted cells, the neural tail) on every scene with a Cycles reference, at its stored camera and 1920x1080: warm-up, GI term accuracy (bias, 8x8 mean and p95) against cycles-gi, world-cache coverage, flicker when still, lag and ghosting after the lights double and after a box moves, memory, and what ran. A measurement: fails only on errors, non-finite values or no scene. VITE_RC_VARIANTS / VITE_RC_VARIANT_SCENES pick a subset. Needs bench/references and the downloads.",
+    "timeoutMs": 7200000,
+    "manual": true
+}

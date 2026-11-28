@@ -7,9 +7,13 @@ import {
     hostCompareValue,
     isHostToggle,
     compareValuesFromText,
+    formatCompareValue,
     parseCompareValue,
     RADIANCE_CACHE_COMPARE_TOGGLES,
+    RADIANCE_CACHE_VARIANT_PRESETS,
     readCompareValues,
+    variantOfValues,
+    variantPreset,
     writeCompareValues,
     type CompareToggle,
     type CompareValues,
@@ -178,5 +182,51 @@ describe('the compare toggles (RC4.5)', () => {
         expect(compareValuesFromText(undefined)).toEqual({});
         expect(() => compareValuesFromText('probeBlnd=capsaicin-hysteresis')).toThrow(/no compare toggle/);
         expect(() => compareValuesFromText('emptyCellFill=dark')).toThrow(/not a value/);
+    });
+});
+
+describe('the world-cache variant presets (P6.5)', () => {
+    it('name each variant once, with values every toggle takes', () => {
+        const ids = RADIANCE_CACHE_VARIANT_PRESETS.map((preset) => preset.id);
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(ids).toEqual(['gi12-rays', 'gi12-ddgi', 'sharc', 'sharc-ddgi', 'budgeted', 'neural-tail', 'gi12-rays-feedback', 'gi12-rays-temporal', 'gi12-rays-feedback-temporal', 'gi12-ddgi-temporal']);
+        for (const preset of RADIANCE_CACHE_VARIANT_PRESETS) {
+            expect(preset.id).toMatch(/^[a-z0-9-]+$/);
+            for (const [setting, value] of Object.entries(preset.values)) {
+                const entry = RADIANCE_CACHE_COMPARE_TOGGLES.find((candidate) => candidate.setting === setting);
+                expect(entry, `${preset.id}: ${setting}`).toBeDefined();
+                expect(parseCompareValue(entry!, formatCompareValue(entry!, value as boolean | number | string)), `${preset.id}: ${setting}`).toBe(value);
+            }
+        }
+    });
+
+    it('say whether DDGI runs under the cache the way the host reads it', () => {
+        for (const preset of RADIANCE_CACHE_VARIANT_PRESETS) expect(hostCompareValue(preset.values, 'host.cacheAlone'), preset.id).toBe(!preset.needs.ddgiVolume);
+    });
+
+    it('keep what ships as the variant with nothing changed', () => {
+        expect(variantPreset('gi12-ddgi')?.values).toEqual({});
+        expect(variantOfValues({})?.id).toBe('gi12-ddgi');
+    });
+
+    it('run the neural tail only where it can run: the grid alone, on its own rays', () => {
+        const neural = variantPreset('neural-tail')!;
+        expect(neural.values).toMatchObject({ neuralCache: 'tail', secondBounce: 'gi1-rays', 'host.cacheAlone': true });
+        expect(neural.needs).toEqual({ ddgiVolume: false, shaderF16: true, sibling: '@pathtracer/mlp' });
+    });
+
+    it('find a preset again from its values, through a link, and no preset for a mix', () => {
+        for (const preset of RADIANCE_CACHE_VARIANT_PRESETS) {
+            const params = new URLSearchParams();
+            writeCompareValues(preset.values, params);
+            expect(variantOfValues(readCompareValues(params))?.id, preset.id).toBe(preset.id);
+        }
+        expect(variantOfValues({ worldCache: 'sharc', cellShading: 'budgeted' })).toBeUndefined();
+    });
+
+    it('read a variant by name on a GPU page, with later names over it, and refuse an unknown one', () => {
+        expect(compareValuesFromText('variant=sharc')).toEqual({ worldCache: 'sharc', 'host.cacheAlone': true });
+        expect(compareValuesFromText('variant=budgeted,cellShadingBudget=5000')).toEqual({ cellShading: 'budgeted', cellShadingBudget: 5000 });
+        expect(() => compareValuesFromText('variant=sharcc')).toThrow(/no radiance-cache variant/);
     });
 });
