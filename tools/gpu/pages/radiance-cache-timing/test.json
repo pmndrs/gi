@@ -1,0 +1,5 @@
+{
+    "description": "P6.6: the radiance cache's GPU ms per pass through the platform's own timer (stats.passes, the screen stage included), as Capsaicin's sections and native Capsaicin's CSV groups, on cornell-box, sponza, bistro-interior, bistro-exterior and two-room at 1280x720, multibounce on and off; medians over 120 frames after 300 warm-up, and the technique's memory. Every section the setting runs must read more than 0 ms. Recorded, not gated; for hand use under the bench lock.",
+    "timeoutMs": 1800000,
+    "manual": true
+}
