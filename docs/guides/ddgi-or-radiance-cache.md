@@ -32,7 +32,7 @@ The cache stays the output. DDGI goes under it as its fallback:
 1. `gi.addTechnique(cache)`, `gi.setOutput(cache)`;
 2. `gi.addTechnique(ddgi)`, then `gi.setFallback(cache, ddgi)`, before `gi.prepare()`.
 
-Each frame the platform runs DDGI first. Where a probe ray of the cache hits a surface, the world cache reads DDGI's irradiance there instead of tracing GI-1.2's second-bounce ray (`secondBounce: 'auto'`, the default). The code is in [radiance-cache.md, "Stacking DDGI under the cache"](../api/radiance-cache.md#stacking-ddgi-under-the-cache) and [`examples/cache/c1-no-volume`](../../examples/cache/c1-no-volume/).
+Each frame the platform runs DDGI first. Where a probe ray of the cache hits a surface, the world cache reads DDGI's irradiance there instead of tracing GI-1.2's second-bounce ray (`secondBounce: 'auto'`, the default). The code is in [radiance-cache.md, "Stacking DDGI under the cache"](../api/radiance-cache.md#stacking-ddgi-under-the-cache). [`examples/cache/c1-no-volume`](../../examples/cache/c1-no-volume/) shows the cache alone, with no volume.
 
 What it changes:
 
