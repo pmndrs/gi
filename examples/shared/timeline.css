@@ -1,0 +1,69 @@
+/* The timeline chart (timeline.ts). On its own it floats bottom right, above
+   the stats line; given a container it fills that instead. */
+.timeline {
+    box-sizing: border-box;
+    padding: 6px 10px 6px;
+    color: #cfd8e3;
+    font: 12px/1.4 system-ui, sans-serif;
+}
+.timeline-floating {
+    position: fixed;
+    right: 12px;
+    bottom: 44px;
+    z-index: 15;
+    width: 280px;
+    max-width: calc(100vw - 24px);
+    background: rgba(8, 10, 14, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+}
+@media (max-width: 720px) {
+    .timeline-floating {
+        bottom: 84px;
+    }
+}
+.timeline-header,
+.timeline-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+.timeline-reading {
+    color: #ffc878;
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+.timeline svg {
+    display: block;
+    width: 100%;
+    height: 64px;
+    margin: 4px 0;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 3px;
+}
+.timeline-trace {
+    stroke: #ffc878;
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+}
+.timeline-marker {
+    stroke: #7dd3fc;
+    stroke-width: 1;
+    stroke-dasharray: 3 2;
+    vector-effect: non-scaling-stroke;
+}
+.timeline-plot {
+    position: relative;
+}
+.timeline-marker-labels span {
+    position: absolute;
+    top: 4px;
+    padding: 0 3px;
+    color: #7dd3fc;
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+.timeline-footer {
+    color: #8b97a6;
+    font-size: 11px;
+}

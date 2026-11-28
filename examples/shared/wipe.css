@@ -1,0 +1,59 @@
+/* The wipe's line, its handle and the two sides' names (wipe.ts). The line
+   lets the mouse through; the handle and a band around the line grab it. */
+.wipe-line {
+    position: fixed;
+    z-index: 5;
+    width: 2px;
+    margin-left: -1px;
+    background: rgba(255, 255, 255, 0.8);
+    pointer-events: none;
+}
+.wipe-line[hidden] {
+    display: none;
+}
+.wipe-handle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 28px;
+    height: 28px;
+    margin: -14px 0 0 -14px;
+    box-sizing: border-box;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: rgba(8, 10, 14, 0.75);
+    cursor: col-resize;
+    pointer-events: auto;
+    touch-action: none;
+}
+.wipe-handle::before {
+    content: '◂▸';
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    font: 11px/1 system-ui, sans-serif;
+    letter-spacing: -1px;
+}
+.wipe-line.dragging .wipe-handle,
+.wipe-handle:focus-visible {
+    border-color: #ffc878;
+    outline: none;
+}
+.wipe-label {
+    position: absolute;
+    bottom: 48px;
+    padding: 3px 8px;
+    background: rgba(8, 10, 14, 0.8);
+    border-radius: 4px;
+    color: #cfd8e3;
+    font: 12px/1.3 system-ui, sans-serif;
+    white-space: nowrap;
+}
+.wipe-label.left {
+    right: 8px;
+}
+.wipe-label.right {
+    left: 8px;
+}
