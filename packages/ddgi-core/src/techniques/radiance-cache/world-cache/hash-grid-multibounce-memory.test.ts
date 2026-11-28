@@ -128,8 +128,9 @@ describe('the multibounce arrays sized at prepare (register D67)', () => {
         expect(cacheOn.preparedWithMultibounce).toBe(true);
         expect(cacheOn.stats['multibounce arrays']).toBe(1);
 
-        // The arrays and the three passes' indirect arguments (12 bytes each here).
-        expect(cacheOn.memoryBytes - cacheOff.memoryBytes).toBe(INDIRECT_BYTES + 3 * 12);
+        // The arrays and the indirect arguments made only with them (12 bytes each here): the three
+        // second-bounce passes' and pmndrs/gi#54's ShortRayBounce's.
+        expect(cacheOn.memoryBytes - cacheOff.memoryBytes).toBe(INDIRECT_BYTES + 4 * 12);
     });
 
     it('a prepare after the option changes makes the other size', async () => {
