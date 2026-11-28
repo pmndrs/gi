@@ -38,6 +38,7 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | --- | --- | --- |
 | C1 | **No volume needed** (`cache/c1-no-volume`) | The radiance cache alone (`@pmndrs/gi/radiance-cache`, `worldCache: 'sharc'`) lighting a sunlit courtyard with no probe box: screen probes over a world cache of cells keyed by position, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`. GI on and off, and the sun's height and direction. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
 | C2 | **Contact detail** (`cache/c2-contact-detail`) | The cache (SHaRC world cache, no volume) and a `DDGIVolume` on one scene pass of `cabinet-row-objects`, each through its own `ddgi()` composite, wiped by the mouse (`shared/wipe.ts`) with a difference view. DDGI's probe spacing switches between 0.25 m and 0.5 m, so its blur at contacts shows against the cache's screen probes. |
+| C3 | **Light through a doorway** (`cache/c3-doorway`) | Two rooms, the camera in the unlit one: the world cache's second bounce from GI-1.2's own rays (`secondBounce: 'gi1-rays'`), from a DDGI volume stacked under the cache (the default), or from SHaRC (`worldCache: 'sharc'`), switched live, with the door open or shut. The far room's GI is read back and shown as a number and a bar for each. |
 
 ### Split Radiance Cascades (`cascades/`)
 
