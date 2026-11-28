@@ -4,7 +4,7 @@ import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../settings.ts';
 import { RadianceCacheShadingModule } from '../shading.ts';
 import { BOUNCE_SOURCE_GROUP, SAMPLE_BOUNCE_SOURCE_ENTRY_POINT, sampleBounceSourceCellsWgsl, shadingModuleLayoutEntries, shadingModuleUniformBytes } from './bounce-source.ts';
 import { DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheBufferLayout, hashGridCacheCapacity } from './capacity.ts';
-import { hashGridCacheClearOptions, hashGridCacheSamplesSky, sameClearOptions } from './hash-grid-cache.ts';
+import { hashGridCacheClearOptions, hashGridCacheSamplesSky, hashGridCellsBudgeted, sameClearOptions } from './hash-grid-cache.ts';
 import { hashGridCacheRayListLayout } from './hash-grid-population-wgsl.ts';
 
 /** A stand-in for another technique's module (the radiance cache never imports one): DDGI's shape, plus a uniform. */
@@ -75,6 +75,17 @@ describe("experiment E10: the world cache's second bounce from a stacked techniq
         expect(sameClearOptions(rays, hashGridCacheClearOptions(options))).toBe(true);
         const single = { ...options, useMultibounce: false };
         expect(sameClearOptions(hashGridCacheClearOptions(single, 'gi1-rays'), hashGridCacheClearOptions(single, 'fallback'))).toBe(true);
+    });
+
+    it("lights cells on the budget with the shared-cell bounce whatever cellShading says (#54), so its lists are made", () => {
+        expect(hashGridCellsBudgeted({ cellShading: 'per-hit' }, 'shared-cell')).toBe(true);
+        expect(hashGridCellsBudgeted({ cellShading: 'budgeted' }, 'shared-cell')).toBe(true);
+        expect(hashGridCellsBudgeted({ cellShading: 'budgeted' }, 'gi1-rays')).toBe(true);
+        for (const other of ['gi1-rays', 'fallback'] as const) expect(hashGridCellsBudgeted({ cellShading: 'per-hit' }, other)).toBe(false);
+        // Switching to it empties the cache as the other estimators do.
+        const options = { ...DEFAULT_HASH_GRID_CACHE_OPTIONS };
+        expect(sameClearOptions(hashGridCacheClearOptions(options, 'gi1-rays'), hashGridCacheClearOptions(options, 'shared-cell'))).toBe(false);
+        expect(hashGridCacheSamplesSky(DEFAULT_HASH_GRID_CACHE_OPTIONS, 'shared-cell')).toBe(true);
     });
 
     it("leaves the sky out of the cache's light choice with the fallback, whose field holds it (RC3.4's option)", () => {

@@ -42,7 +42,7 @@ export type CapsaicinGroup = (typeof CAPSAICIN_GROUPS)[number];
 export const DIFFUSE_GROUPS: readonly CapsaicinGroup[] = ['probe tracing and cell population', 'cache update and resolve', 'screen probes', 'denoise and resolve'];
 
 /** The settings that decide which sections run: what the page varies, plus what it leaves at the defaults. */
-export type TimedSettings = Pick<RadianceCacheSettings, 'useMultibounce' | 'cellShading' | 'worldCache' | 'probeFilter' | 'ssgi' | 'neuralCache'>;
+export type TimedSettings = Pick<RadianceCacheSettings, 'useMultibounce' | 'cellShading' | 'worldCache' | 'probeFilter' | 'ssgi' | 'neuralCache' | 'secondBounce'>;
 
 interface SectionEntry {
     readonly section: string;
@@ -81,6 +81,8 @@ export const SECTIONS: readonly SectionEntry[] = [
     { section: 'ClaimCells', group: 'probe tracing and cell population', runsWhen: (settings) => hashGrid(settings) && settings.cellShading === 'budgeted' },
     { section: 'PrioritizeCells', group: 'probe tracing and cell population', runsWhen: (settings) => hashGrid(settings) && settings.cellShading === 'budgeted' },
     { section: 'ShadeCells', group: 'probe tracing and cell population', runsWhen: (settings) => hashGrid(settings) && settings.cellShading === 'budgeted' },
+    // pmndrs/gi#54: one traced bounce from each lit cell's sample hit, before ShadeCells.
+    { section: 'SharedCellBounce', group: 'probe tracing and cell population', runsWhen: (settings) => secondBounceRays(settings) && settings.secondBounce === 'shared-cell' },
     // Experiment E10 (P6.3): the second bounce read from a technique stacked under the cache. The
     // page stacks none, so it never runs here; listed so a run with one maps its pass.
     { section: 'SampleBounceSourceCells', group: 'cache update and resolve', runsWhen: () => false },

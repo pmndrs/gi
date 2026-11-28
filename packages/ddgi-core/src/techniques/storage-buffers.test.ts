@@ -165,7 +165,7 @@ const CACHE_AXES: readonly Axis<CacheConfiguration>[] = [
         [
             ['worldCache', ['gi1-hash-grid', 'sharc']],
             ['cellShading', ['per-hit', 'budgeted']],
-            ['secondBounce', ['auto', 'gi1-rays', 'fallback']],
+            ['secondBounce', ['auto', 'gi1-rays', 'fallback', 'shared-cell']],
             ['neuralCache', ['off', 'tail']],
             ['denoiserHistoryClamp', ['neighbourhood', 'none']],
             ['probeBlend', ['running-mean', 'capsaicin-hysteresis']],

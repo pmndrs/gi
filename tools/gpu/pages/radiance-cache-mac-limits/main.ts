@@ -11,7 +11,8 @@
  *    prepares and runs four frames with no validation error, and its
  *    irradiance is finite and lit: the default (GI-1.2's hash grid),
  *    `worldCache: 'sharc'`, `cellShading: 'budgeted'`, `secondBounce:
- *    'gi1-rays'`, `'fallback'` with DDGI stacked under it, `neuralCache:
+ *    'gi1-rays'`, `'fallback'` with DDGI stacked under it, `'shared-cell'`
+ *    (pmndrs/gi#54), `neuralCache:
  *    'tail'` (where this checkout has the optional network; it says so in
  *    the data otherwise), SSGI on, the denoiser off, and `useMultibounce`
  *    off at prepare (register D67: the second-bounce passes aren't made and
@@ -53,6 +54,8 @@ const CONFIGURATIONS: readonly Configuration[] = [
     { name: "cellShading 'budgeted'", settings: { cellShading: 'budgeted' } },
     { name: "secondBounce 'gi1-rays'", settings: { secondBounce: 'gi1-rays' } },
     { name: "secondBounce 'fallback', DDGI below", settings: { secondBounce: 'fallback' }, ddgiBelow: true },
+    // pmndrs/gi#54: cells lit on the budget though cellShading is left per hit, and its two traced passes.
+    { name: "secondBounce 'shared-cell'", settings: { secondBounce: 'shared-cell' } },
     { name: "neuralCache 'tail'", settings: { neuralCache: 'tail', secondBounce: 'gi1-rays' } },
     { name: 'ssgi on', settings: { ssgi: true } },
     { name: 'denoiser off', settings: { denoiser: false } },
