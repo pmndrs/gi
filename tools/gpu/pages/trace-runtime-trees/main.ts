@@ -1,20 +1,15 @@
 /**
  * T3.2 (docs/design/m3-moving.md §2.2 and "Draft done-whens"): mesh trees for
  * meshes added or replaced while the scene runs. Their trees are built on the
- * GPU (H-PLOC) in the frame they are uploaded, placed after a small stats
- * readback, and replaced by tinybvh's when the worker finishes.
+ * GPU (H-PLOC) in the frame they are uploaded and placed after a small stats
+ * readback; nothing replaces them later (#26: tinybvh is only the fallback).
  *
  * Per scene (the cabinet row; the furnished room too when it is downloaded),
- * three platforms in turn, each traced through `rays.encodeBatch`:
+ * two platforms in turn, each traced through `rays.encodeBatch`:
  *
- * - `tinybvh-only` (`gpuFirst: false`): M1's path, the reference for memory
- *   and trace speed. Run first;
- * - `gpu-first` (the defaults, what hosts get): a mesh's first tree is
- *   whichever builder's arrives first, so a small mesh may well get
- *   tinybvh's;
- * - `gpu-held` (`holdRefinements`): tinybvh's trees for the meshes added at
- *   runtime wait, so those meshes are certainly traced on their GPU trees
- *   until the page releases them, one at a time.
+ * - `tinybvh-only` (`gpuFirst: false`): the fallback, M1's path, the
+ *   reference for memory and trace speed. Run first;
+ * - `gpu` (the defaults, what hosts get): every mesh on its GPU tree.
  *
  * Steps, each with a reference worked out on the CPU before the change:
  *
@@ -25,18 +20,17 @@
  *    frames, counting the frame that uploads it as 1, and keep passing.
  * 2. **replace** (item 1): `updateMesh` on that cabinet's mesh, which now has
  *    an open front with a shelf, with its instance unchanged. The same bar.
- * 3. **swap** (item 3): tinybvh's tree of the replaced cabinet replaces its
- *    GPU tree (`gpu-held`: released by the page; `gpu-first`: when the worker
- *    finishes, if the GPU's tree came first). Within FREED_WITHIN_FRAMES
- *    frames of the swap, the tracer's nodes and triangles in use must equal
- *    `tinybvh-only`'s in the same scene (so nothing of the GPU tree is left)
- *    and the GPU build's own buffers must be gone. The oracle is checked again
- *    after the swap.
+ * 3. **freed** (item 3, since #26 about the replaced tree rather than a
+ *    swap): within FREED_WITHIN_FRAMES frames of the frame the replace was
+ *    first seen, the tracer's triangles in use must equal `tinybvh-only`'s in
+ *    the same scene (every builder writes one record per triangle, so nothing
+ *    of the cabinet's old tree is left) and the GPU build's own buffers must
+ *    be gone. Nodes in use are recorded (the builders' trees differ).
  * 4. **sheet** (recorded, not judged): a 100,352-triangle bumpy sheet added,
  *    where the worker's build is long enough for the GPU's tree to matter:
- *    frames until it passes the oracle, then its swap (judged as in 3), and
- *    the trace speed of rays aimed at it on the GPU tree and after the swap
- *    against `tinybvh-only` (TASKS M3: timing is recorded, not gated).
+ *    frames until it passes the oracle, its memory judged as in 3, and the
+ *    trace speed of rays aimed at it on the GPU tree against `tinybvh-only`
+ *    (TASKS M3: timing is recorded, not gated).
  *
  * Recompiles must stay 0 throughout. Each check's rays are also compared with
  * the scene before the change, and must disagree on at least
@@ -89,8 +83,6 @@ const FREED_WITHIN_FRAMES = 2;
 /** Frames given to a change before the page gives up on it (1.5 s), and frames it must keep passing after it first did. */
 const MAX_FRAMES = 90;
 const STAY_FRAMES = 6;
-/** Frames given to the worker's tree before a natural swap is given up on (10 s at 60 Hz). */
-const MAX_SWAP_FRAMES = 600;
 const CHECK_RAYS = 2000;
 /** The CPU reference yields to the browser after this many rays. */
 const REFERENCE_YIELD_RAYS = 50;
@@ -129,12 +121,11 @@ const IDLE_FRAME: FrameInput = {
 };
 
 type Vec3 = [number, number, number];
-type Variant = 'tinybvh-only' | 'gpu-first' | 'gpu-held';
-const VARIANTS: readonly Variant[] = ['tinybvh-only', 'gpu-first', 'gpu-held'];
+type Variant = 'tinybvh-only' | 'gpu';
+const VARIANTS: readonly Variant[] = ['tinybvh-only', 'gpu'];
 const MESH_TREES: Record<Variant, MeshTreeOptions> = {
     'tinybvh-only': { gpuFirst: false },
-    'gpu-first': {},
-    'gpu-held': { holdRefinements: true },
+    gpu: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -492,24 +483,18 @@ async function startRun(device: GPUDevice, scene: SceneGeometry, variant: Varian
     };
     run.frame();
     await settle(run);
-    if (variant === 'gpu-held') {
-        // The scene as loaded goes to tinybvh's trees now; only meshes added later stay held.
-        const loadedSlots = new Set(sceneMeshes.map((mesh) => platform.sceneCopy.meshSlot(mesh)));
-        platform.rays.releaseRefinements((slot) => loadedSlots.has(slot));
-        await settle(run);
-    }
     return run;
 }
 
-/** Frames until no mesh waits for a tree and no tinybvh build runs (held ones stay held). */
+/** Frames until no mesh waits for a tree and no tinybvh build runs. */
 async function settle(run: Run): Promise<void> {
     const rays = run.platform.rays;
     for (let frame = 0; ; frame++) {
         assert(frame < 200, `${run.variant}: the mesh trees still build after 200 frames`);
-        await rays.whenRefined();
+        await rays.whenBuilt();
         run.frame();
         await run.device.queue.onSubmittedWorkDone();
-        if (!rays.building && !rays.refining) break;
+        if (!rays.building && rays.meshTreeCounts.tinybvhBuilding === 0) break;
     }
     // One more, for a top-level shape that arrived with the last trees.
     run.frame();
@@ -577,6 +562,8 @@ interface SeenResult {
     readonly treesWhenSeen: MeshTreeCounts | null;
     /** Frames after it was first seen whose rays failed the oracle. */
     readonly failedAfterSeen: number[];
+    /** The tracer's memory in the frame it was first seen and the next FREED_WITHIN_FRAMES frames. */
+    readonly memoryAfterSeen: MemoryNow[];
     /** The last frame's failures, when it was never seen. */
     readonly lastFailures: string[];
 }
@@ -590,10 +577,13 @@ async function framesUntilSeen(run: Run, check: Check, change: () => void): Prom
     let treesWhenSeen: MeshTreeCounts | null = null;
     let lastFailures: string[] = [];
     const failedAfterSeen: number[] = [];
+    const memoryAfterSeen: MemoryNow[] = [];
     for (let frame = 1; frame <= MAX_FRAMES; frame++) {
         const frameStart = performance.now();
         run.frame();
         const failures = await checkNow(run, check);
+        if (failures.length === 0 && firstSeenFrame === null) memoryAfterSeen.push(memoryNow(run));
+        else if (firstSeenFrame !== null && frame <= firstSeenFrame + FREED_WITHIN_FRAMES) memoryAfterSeen.push(memoryNow(run));
         if (failures.length === 0 && firstSeenFrame === null) {
             firstSeenFrame = frame;
             firstSeenMs = performance.now() - changedAt;
@@ -605,82 +595,38 @@ async function framesUntilSeen(run: Run, check: Check, change: () => void): Prom
         if (firstSeenFrame !== null && frame >= firstSeenFrame + STAY_FRAMES) break;
         await waitUntil(frameStart + FRAME_MS);
     }
-    return { firstSeenFrame, firstSeenMs, treesWhenSeen, failedAfterSeen, lastFailures: firstSeenFrame === null ? lastFailures : [] };
+    return { firstSeenFrame, firstSeenMs, treesWhenSeen, failedAfterSeen, memoryAfterSeen, lastFailures: firstSeenFrame === null ? lastFailures : [] };
 }
 
-interface MemoryAfterSwap {
+interface MemoryNow {
     readonly nodesInUse: number;
     readonly trianglesInUse: number;
     readonly gpuBuildOutputs: number;
     readonly onGpuTrees: number;
+    readonly onTinybvhTrees: number;
 }
 
-interface SwapResult {
-    /** Why there was no swap to check, or null. */
-    readonly noSwap: string | null;
-    /** Frames from the first frame after the release (held) or after the tree was first seen (natural) to the swap. */
-    readonly framesToSwap: number | null;
-    /** Frames after the swap frame until nothing of the GPU tree was left (0 = the swap frame itself), or null. */
-    readonly freedAfterFrames: number | null;
-    /** The swap frame and the next FREED_WITHIN_FRAMES frames (or, for a swap not watched, now). */
-    readonly memory: MemoryAfterSwap[];
-    /** A swap not watched (see `swapAndFree`) left part of the GPU tree behind. */
-    readonly leftAfterEarlierSwap?: boolean;
-}
-
-function memoryNow(run: Run): MemoryAfterSwap {
+function memoryNow(run: Run): MemoryNow {
     const memory: AccelerationMemory = run.platform.rays.memory;
-    return { nodesInUse: memory.nodesInUse, trianglesInUse: memory.trianglesInUse, gpuBuildOutputs: memory.gpuBuildOutputs, onGpuTrees: run.platform.rays.meshTreeCounts.onGpuTrees };
+    const trees = run.platform.rays.meshTreeCounts;
+    return {
+        nodesInUse: memory.nodesInUse,
+        trianglesInUse: memory.trianglesInUse,
+        gpuBuildOutputs: memory.gpuBuildOutputs,
+        onGpuTrees: trees.onGpuTrees,
+        onTinybvhTrees: trees.onTinybvhTrees,
+    };
 }
 
 /**
- * tinybvh's tree replaces `slot`'s GPU tree: released by the page (`gpu-held`)
- * or when the worker finishes (`gpu-first`). Then the swap frame and the next
- * FREED_WITHIN_FRAMES frames are compared with `tinybvh-only`'s memory in the
- * same scene: nothing of the GPU tree may be left.
+ * Frames after the one the change was first seen in until nothing of the
+ * mesh's old tree is left and the GPU build's buffers are gone (0 = that
+ * frame itself), or null if not within FREED_WITHIN_FRAMES (see the file
+ * comment, step 3).
  */
-async function swapAndFree(run: Run, slot: number, tinybvhOnly: MemoryAfterSwap, swapsAtChange: number): Promise<SwapResult> {
-    const rays = run.platform.rays;
-    if (rays.meshTreeCounts.onGpuTrees === 0) {
-        // `gpu-first`: the worker's tree may already have replaced the GPU's while the change was being checked.
-        // That swap's frame wasn't watched, so only what is left now is reported.
-        const now = memoryNow(run);
-        const swappedEarlier = rays.meshTreeCounts.swaps > swapsAtChange;
-        const freed = now.nodesInUse === tinybvhOnly.nodesInUse && now.trianglesInUse === tinybvhOnly.trianglesInUse && now.gpuBuildOutputs === 0;
-        const noSwap = swappedEarlier ? `swapped while the change was checked; ${freed ? 'nothing' : 'something'} of the GPU tree left now` : "tinybvh's tree came first";
-        return { noSwap, framesToSwap: null, freedAfterFrames: null, memory: [now], leftAfterEarlierSwap: swappedEarlier && !freed };
-    }
-    if (run.variant === 'gpu-held') {
-        await rays.whenRefined();
-        rays.releaseRefinements((meshSlot) => meshSlot === slot);
-    }
-    const swapsBefore = rays.meshTreeCounts.swaps;
-    let framesToSwap: number | null = null;
-    for (let frame = 1; frame <= MAX_SWAP_FRAMES; frame++) {
-        const frameStart = performance.now();
-        run.frame();
-        if (rays.meshTreeCounts.swaps > swapsBefore) {
-            framesToSwap = frame;
-            break;
-        }
-        await run.device.queue.onSubmittedWorkDone();
-        await waitUntil(frameStart + FRAME_MS);
-    }
-    if (framesToSwap === null) return { noSwap: `no swap within ${MAX_SWAP_FRAMES} frames`, framesToSwap: null, freedAfterFrames: null, memory: [] };
-    const memory: MemoryAfterSwap[] = [];
-    let freedAfterFrames: number | null = null;
-    for (let after = 0; after <= FREED_WITHIN_FRAMES; after++) {
-        if (after > 0) {
-            await run.device.queue.onSubmittedWorkDone();
-            run.frame();
-        }
-        const now = memoryNow(run);
-        memory.push(now);
-        const freed = now.onGpuTrees === 0 && now.gpuBuildOutputs === 0 && now.nodesInUse === tinybvhOnly.nodesInUse && now.trianglesInUse === tinybvhOnly.trianglesInUse;
-        if (freed && freedAfterFrames === null) freedAfterFrames = after;
-    }
-    await run.device.queue.onSubmittedWorkDone();
-    return { noSwap: null, framesToSwap, freedAfterFrames, memory };
+function freedAfterFrames(seen: SeenResult, tinybvhOnly: MemoryNow): number | null {
+    const index = seen.memoryAfterSeen.findIndex((now) => now.gpuBuildOutputs === 0 && now.trianglesInUse === tinybvhOnly.trianglesInUse);
+    return index < 0 ? null : index;
 }
 
 function median(values: readonly number[]): number {
@@ -767,7 +713,7 @@ await runGpuTest(
             );
 
             const sceneReport: Record<string, unknown> = { triangles: scene.triangles, instances: scene.instances.length, changedShare: Object.fromEntries(Object.values(checks).map((check) => [check.step, round(check.changedShare)])) };
-            const tinybvhOnlyMemory: Partial<Record<'replace' | 'sheet', MemoryAfterSwap>> = {};
+            const tinybvhOnlyMemory: Partial<Record<'replace' | 'sheet', MemoryNow>> = {};
             let tinybvhOnlySpeed: { closestMs: number; anyMs: number } | null = null;
 
             for (const variant of VARIANTS) {
@@ -777,6 +723,8 @@ await runGpuTest(
                 const label = `${sceneId} ${variant}`;
                 const variantReport: Record<string, unknown> = {};
                 const gated = variant !== 'tinybvh-only';
+                // Scene meshes the GPU refused (too deep, say) are on fallback trees from the start; the page's meshes must not be.
+                const fallbackAtStart = platform.rays.meshTreeCounts.onTinybvhTrees;
 
                 const judgeSeen = (step: StepName, seen: SeenResult): void => {
                     const trees = seen.treesWhenSeen;
@@ -793,19 +741,23 @@ await runGpuTest(
                     if (seen.firstSeenFrame === null || seen.firstSeenFrame > SEEN_WITHIN_FRAMES) {
                         failures.push(`${label} ${step}: rays saw the change in frame ${seen.firstSeenFrame ?? `> ${MAX_FRAMES}`} (bar ${SEEN_WITHIN_FRAMES})`);
                     }
-                    // Held: the mesh's tinybvh tree waits, so passing proves the GPU tree.
-                    if (variant === 'gpu-held' && (trees?.onGpuTrees ?? 0) < 1) failures.push(`${label} ${step}: no mesh was on a GPU tree when the rays first saw the change`);
+                    // The changed mesh is on its GPU tree (no fallback tree beyond the scene's own), so passing proves the GPU tree.
+                    if ((trees?.onTinybvhTrees ?? 0) > fallbackAtStart) {
+                        failures.push(`${label} ${step}: ${trees?.onTinybvhTrees} meshes were on tinybvh (fallback) trees when the rays first saw the change, ${fallbackAtStart} at the start`);
+                    }
                 };
-                const judgeSwap = (step: 'replace' | 'sheet', swap: SwapResult): void => {
-                    variantReport[`${step}Swap`] = swap;
+                const judgeFreed = (step: 'replace' | 'sheet', seen: SeenResult): void => {
+                    const reference = tinybvhOnlyMemory[step];
+                    assert(reference, `${label} ${step}: no tinybvh-only memory to compare with`);
+                    const frames = freedAfterFrames(seen, reference);
+                    variantReport[`${step}Memory`] = { freedAfterFrames: frames, afterSeen: seen.memoryAfterSeen, tinybvhOnly: reference };
+                    const last = seen.memoryAfterSeen.at(-1);
                     log(
-                        `${label} ${step} swap: ` +
-                            (swap.noSwap ?? `in frame ${swap.framesToSwap}; nothing of the GPU tree left ${swap.freedAfterFrames === null ? `after ${FREED_WITHIN_FRAMES} frames: NOT FREED` : `${swap.freedAfterFrames} frames after the swap frame`}`),
+                        `${label} ${step} memory: ${frames === null ? `NOT FREED within ${FREED_WITHIN_FRAMES} frames` : `freed ${frames} frames after the frame it was seen`}; ` +
+                            `nodes in use ${last?.nodesInUse} (tinybvh-only ${reference.nodesInUse}), triangles ${last?.trianglesInUse} (${reference.trianglesInUse})`,
                     );
-                    if (variant === 'gpu-held' && swap.noSwap) failures.push(`${label} ${step}: no swap (${swap.noSwap})`);
-                    if (swap.leftAfterEarlierSwap) failures.push(`${label} ${step}: after its swap, part of the GPU tree was still in the tracer's buffers`);
-                    if (!swap.noSwap && swap.freedAfterFrames === null) {
-                        failures.push(`${label} ${step}: the GPU tree's ranges were not freed within ${FREED_WITHIN_FRAMES} frames of the swap (${JSON.stringify(swap.memory)} against tinybvh-only ${JSON.stringify(tinybvhOnlyMemory[step])})`);
+                    if (frames === null) {
+                        failures.push(`${label} ${step}: the old tree or the GPU build's buffers were not freed within ${FREED_WITHIN_FRAMES} frames (${JSON.stringify(seen.memoryAfterSeen)} against tinybvh-only ${JSON.stringify(reference)})`);
                     }
                 };
 
@@ -827,57 +779,42 @@ await runGpuTest(
                 await settle(run);
 
                 // 2. replace: the same mesh, a new shape, the instance unchanged.
-                const swapsBeforeReplace = platform.rays.meshTreeCounts.swaps;
-                judgeSeen(
-                    'replace',
-                    await framesUntilSeen(run, checks.replace, () => {
-                        const open = scene.meshes[scene.openCabinet];
-                        platform.scene.updateMesh(cabinet, { positions: open.positions, indices: open.indices!, label: 'new cabinet, opened' });
-                    }),
-                );
+                const replaced = await framesUntilSeen(run, checks.replace, () => {
+                    const open = scene.meshes[scene.openCabinet];
+                    platform.scene.updateMesh(cabinet, { positions: open.positions, indices: open.indices!, label: 'new cabinet, opened' });
+                });
+                judgeSeen('replace', replaced);
 
-                // 3. swap: tinybvh's tree replaces the cabinet's GPU tree; nothing of the GPU tree stays.
-                if (variant === 'tinybvh-only') {
-                    await settle(run);
-                    tinybvhOnlyMemory.replace = memoryNow(run);
-                } else {
-                    judgeSwap('replace', await swapAndFree(run, platform.sceneCopy.meshSlot(cabinet), tinybvhOnlyMemory.replace!, swapsBeforeReplace));
-                    await settle(run);
-                    const afterSwap = await checkNow(run, checks.replace);
-                    if (afterSwap.length > 0) failures.push(`${label} replace: the oracle fails after the swap: ${afterSwap.slice(0, 2).join(' | ')}`);
-                }
+                // 3. freed: nothing of the cabinet's old tree stays, nor the GPU build's buffers.
+                await settle(run);
+                if (variant === 'tinybvh-only') tinybvhOnlyMemory.replace = memoryNow(run);
+                else judgeFreed('replace', replaced);
+                const afterReplace = await checkNow(run, checks.replace);
+                if (afterReplace.length > 0) failures.push(`${label} replace: the oracle fails once the trees settled: ${afterReplace.slice(0, 2).join(' | ')}`);
 
-                // 4. sheet: a big mesh added, its swap, and trace speed (recorded).
-                const swapsBeforeSheet = platform.rays.meshTreeCounts.swaps;
-                judgeSeen(
-                    'sheet',
-                    await framesUntilSeen(run, checks.sheet, () => {
+                // 4. sheet: a big mesh added, its memory, and trace speed (recorded).
+                const sheetSeen = await framesUntilSeen(run, checks.sheet, () => {
                         const sheet = scene.meshes[scene.sheet];
                         added.sheet = platform.scene.createMesh({ positions: sheet.positions, indices: sheet.indices!, label: 'bumpy sheet' });
                         const handle = platform.scene.createInstance({ mesh: added.sheet, materials: [run.material], transform: scene.sheetAt });
-                        run.caseIdBySlot.set(platform.sceneCopy.instanceSlot(handle), sheetId);
-                    }),
-                );
+                    run.caseIdBySlot.set(platform.sceneCopy.instanceSlot(handle), sheetId);
+                });
+                judgeSeen('sheet', sheetSeen);
                 assert(added.sheet, 'the sheet was not made');
-                const sheetSlot = platform.sceneCopy.meshSlot(added.sheet);
+                await settle(run);
                 if (variant === 'tinybvh-only') {
-                    await settle(run);
                     tinybvhOnlyMemory.sheet = memoryNow(run);
                     tinybvhOnlySpeed = await timeTrace(run, speedRays);
                     variantReport.speed = tinybvhOnlySpeed;
                 } else {
-                    const onGpuTree = platform.rays.meshTreeCounts.onGpuTrees > 0 ? await timeTrace(run, speedRays) : null;
-                    judgeSwap('sheet', await swapAndFree(run, sheetSlot, tinybvhOnlyMemory.sheet!, swapsBeforeSheet));
-                    await settle(run);
-                    const afterSwap = await timeTrace(run, speedRays);
-                    const ratio = (ms: number | undefined, against: number | undefined) => (ms === undefined || against === undefined ? null : round(ms / against));
+                    judgeFreed('sheet', sheetSeen);
+                    const onGpuTree = await timeTrace(run, speedRays);
+                    const ratio = (ms: number, against: number | undefined) => (against === undefined ? null : round(ms / against));
                     variantReport.speed = {
                         onGpuTree,
-                        afterSwap,
-                        gpuTreeOverTinybvh: { closest: ratio(onGpuTree?.closestMs, tinybvhOnlySpeed?.closestMs), any: ratio(onGpuTree?.anyMs, tinybvhOnlySpeed?.anyMs) },
-                        afterSwapOverTinybvh: { closest: ratio(afterSwap.closestMs, tinybvhOnlySpeed?.closestMs), any: ratio(afterSwap.anyMs, tinybvhOnlySpeed?.anyMs) },
+                        gpuTreeOverTinybvh: { closest: ratio(onGpuTree.closestMs, tinybvhOnlySpeed?.closestMs), any: ratio(onGpuTree.anyMs, tinybvhOnlySpeed?.anyMs) },
                     };
-                    log(`${label} sheet speed (ms, closest / any): GPU tree ${round(onGpuTree?.closestMs ?? NaN)} / ${round(onGpuTree?.anyMs ?? NaN)}, after the swap ${round(afterSwap.closestMs)} / ${round(afterSwap.anyMs)}, tinybvh only ${round(tinybvhOnlySpeed?.closestMs ?? NaN)} / ${round(tinybvhOnlySpeed?.anyMs ?? NaN)}`);
+                    log(`${label} sheet speed (ms, closest / any): GPU tree ${round(onGpuTree.closestMs)} / ${round(onGpuTree.anyMs)}, tinybvh only ${round(tinybvhOnlySpeed?.closestMs ?? NaN)} / ${round(tinybvhOnlySpeed?.anyMs ?? NaN)}`);
                 }
 
                 const recompiles = platform.stats.recompiles - recompilesBefore;

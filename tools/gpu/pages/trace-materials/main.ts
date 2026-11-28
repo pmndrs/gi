@@ -21,9 +21,10 @@
  *    pass, against the reference's hash twin: within 1 percentage point over
  *    `STOCHASTIC_RAYS` rays. The reference reads alpha from store layers the
  *    CPU makes from the cases' own pixels, never from the GPU's.
- *    Run on tinybvh's trees (after the swap) and, on a device with
- *    subgroups, on the GPU's H-PLOC first trees with tinybvh's held back:
- *    the flags must be right on both install paths.
+ *    Run on the GPU's H-PLOC trees (on a device with subgroups) and on
+ *    tinybvh's (the fallback, `gpuFirst: false`): the flags must be right
+ *    on both install paths. Parts 2 and 3 run on the trees hosts get
+ *    (the GPU's where there are subgroups).
  * 2. **Run-time changes** (first half's done-when 4, and the review's "only
  *    when the walk sees it"): a material edited from opaque to see-through,
  *    made single-sided, an instance given a see-through material
@@ -130,7 +131,7 @@ async function placeCase(device: GPUDevice, materialCase: MaterialCase, trees: T
     const platform = new GIPlatformImpl(device, {
         label: `trace-materials ${materialCase.name}`,
         rayBatches: true,
-        meshTrees: trees === 'gpu' ? { holdRefinements: true } : {},
+        meshTrees: trees === 'gpu' ? {} : { gpuFirst: false },
     });
     const textureHandles = new Map<CpuStoreLayer, TextureHandle>();
     for (const texture of materialCase.textures ?? []) {
@@ -169,7 +170,7 @@ async function placeCase(device: GPUDevice, materialCase: MaterialCase, trees: T
     });
     await platform.prepare();
     frame(device, platform); // uploads the scene and makes the texture layers; the trees start building
-    await platform.rays.whenRefined();
+    await platform.rays.whenBuilt();
     frame(device, platform); // places the trees (and rewrites their flags)
     await platform.rays.whenBuilt();
     frame(device, platform);
@@ -361,6 +362,8 @@ await runGpuTest(
         const alphaCases = buildAlphaCases(RAYS_PER_CASE, STOCHASTIC_RAYS, STOCHASTIC_ALPHA);
         const cases = [...firstHalf, ...alphaCases];
         const treeSources: TreeSource[] = device.features.has('subgroups') ? ['tinybvh', 'gpu'] : ['tinybvh'];
+        // What hosts get: the GPU's trees with subgroups, the fallback's without (#26).
+        const hostTrees: TreeSource = treeSources[treeSources.length - 1];
         const results: Record<string, unknown> = {};
 
         // 1. Agreement with the reference, on both install paths.
@@ -394,7 +397,7 @@ await runGpuTest(
             after: MaterialCase['materials'],
             expectRewrites = true,
         ): Promise<void> => {
-            const placed = await placeCase(device, materialCase, 'tinybvh', before);
+            const placed = await placeCase(device, materialCase, hostTrees, before);
             try {
                 const resultBefore = compare(materialCase, await trace(device, placed, materialCase.rays), before);
                 const rewritesBefore = placed.platform.rays.triangleFlagRewrites;
@@ -497,7 +500,7 @@ await runGpuTest(
             device.queue.writeBuffer(rayBuffer, 0, packRays(rays) as Float32Array<ArrayBuffer>);
             const blocked = device.createBuffer({ label: 'trace-materials cost blocked', size: rays.length * 4, usage: GPUBufferUsage.STORAGE });
             for (const [side, materials] of sides) {
-                const placed = await placeCase(device, scene, 'tinybvh', materials);
+                const placed = await placeCase(device, scene, hostTrees, materials);
                 try {
                     const times: number[] = [];
                     for (let run = 0; run < COST_RUNS + 1; run++) {

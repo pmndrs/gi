@@ -219,7 +219,7 @@ The screen probes' size, rays and spawn rate are fixed: `PROBE_SIZE` (8 × 8 cel
 | `fallbackIndirectSampleCount` | `4` | The second bounce's sample cap when it comes from a stacked technique. Its value carries no ray noise, so a lower cap follows changes sooner. |
 | `cellChangeResetHistory` | `0` | With `cellChangeReset`: samples of a changed cell's history kept beside the new ones (0 to 15). 3 trades a little lag for less noise. |
 | `useDirectLighting` | `true` | Probe rays that miss read the sky, and rays that hit an emissive surface take its emission. |
-| `useTemporalFeedback` | `false` | Capsaicin's option to feed last frame's lit image back at hits. Not built: nothing reads it. |
+| `useTemporalFeedback` | `false` | Opt-in (RC3.6, register D68): a probe ray whose hit was on last frame's screen reads last frame's lit image there. It asks the host for its lit image and albedo, so changing it restarts the technique. Capsaicin's version also adds that light into the cell, which counts later bounces twice; ours doesn't. It brings the host's own image errors back as light, and it is worse than DDGI underneath on every measured view. |
 | `useResampling` | `false` | Capsaicin's world-space ReSTIR of light samples. Not built: nothing reads it. |
 | `reservoirCacheCellSize` | `16` | ReSTIR's cell size, with `useResampling`. Nothing reads it. |
 | `disableAlphaTesting` | `false` | Capsaicin's option. Nothing reads it: the platform's tracer always honours cut-outs. |
@@ -244,7 +244,7 @@ The screen probes' size, rays and spawn rate are fixed: `PROBE_SIZE` (8 × 8 cel
 
 ### Variants
 
-Three backends and levers sit beside GI-1.2's, off by default. Each is measured against it, and none is the default until they have been compared (see "Variants being compared" below).
+These backends and levers sit beside GI-1.2's, all off by default. P6.5 compared them, and they stay opt-in (see "Variants compared" below).
 
 | Setting | Default | What it does, and what it costs |
 | --- | --- | --- |
@@ -253,6 +253,7 @@ Three backends and levers sit beside GI-1.2's, off by default. Each is measured 
 | `cellShading: 'budgeted'` | | id Tech 8's "shade cells, not hits": hits only find their cells, and at most `cellShadingBudget` cells a frame are lit, by priority (new or changed first). Fewer shadow rays; each cell is noisier and older. World-cache time on Sponza 12.3 ms per hit, 11.8 ms at 20,000 cells. |
 | `cellShadingBudget` | `20000` | Cells lit a frame with `'budgeted'`. More reacts faster: a doubled sun takes 24 / 8 / 6 frames at 5k / 20k / 80k. |
 | `neuralCache: 'tail'` | | A small neural network (pmndrs/pathtracer's `@pathtracer/mlp`) answers the end of GI-1.2's second bounce, so the cells carry every bounce. Runs only with the GI-1.2 grid and its own second-bounce rays. About 2.8 ms on Sponza and 26 MiB. Needs the optional package (below). |
+| `cacheFeedback` | `false` | Opt-in (RC3.6, register E12): with GI-1.2's own second-bounce rays, a second hit also brings its cell's indirect value, so the cells carry every bounce. No memory or extra rays. It roughly halves the grid alone's error in rooms lit by lamps, but cells only hold an indirect value where a probe ray hit them first, so closed rooms stay 20–40% dark, and it doubles the lag. Does nothing when DDGI supplies the second bounce or the neural tail is on. |
 | `neural` | `{}` | The tail's settings over its defaults: `network` `'compact'` (64 → 3 × 32 → 3), `precision` `'auto'`, `positionBands` 12, `batch` 16384, `stepsPerFrame` 2, `warmupStepsPerFrame` 16, `warmupSteps` 256, `cellRecords` 16384, `screenStride` 8, `screenRecords` 16384, `changeBoostFrames` 16, `learningRate` 0.002, `ema` `'off'`, `seed` 1, `bounds` null, `boundsHalfSize` 64. Read at `prepare`. |
 
 ### The denoiser and its package
@@ -265,9 +266,9 @@ The denoiser is `Gi1Denoiser` from the sibling library [`denoiser`](https://www.
 
 It also turns off, with a warning, with `worldCache: 'sharc'`, with the second bounce from a stacked technique, or when its network doesn't fit the device's workgroup memory.
 
-## Variants being compared
+## Variants compared
 
-The SHaRC cache, budgeted cells, the neural tail and DDGI underneath are first-class alternatives to GI-1.2's own world cache. The default will be picked after a side-by-side comparison of accuracy against Cycles, lag and ghosting after changes, flicker, memory, GPU time and what each needs from the host (TASKS P6.5; DECISIONS 2026-11-23). Until then the defaults stay as above: the GI-1.2 hash grid, with DDGI's bounces when a volume is stacked.
+P6.5 compared ten variants on ten views against Cycles ([docs/design/radiance-cache-variants.md](../design/radiance-cache-variants.md); DECISIONS 2026-11-28). The default stays the GI-1.2 hash grid with DDGI's bounces when a volume is stacked: it has the smallest bias on every view (3.1% averaged). Budgeted cells (3.4%), SHaRC (5.9%), the neural tail (11.3%), `cacheFeedback` and `useTemporalFeedback` stay opt-in. Don't stack DDGI under SHaRC: SHaRC ignores it. Planned: SHaRC as the default when no volume is stacked (TASKS P6.7), and a smaller grid (P6.8). `RADIANCE_CACHE_VARIANT_PRESETS` sets every toggle of one variant at once.
 
 ## Reading results and debug views
 
@@ -333,4 +334,5 @@ Every change from Capsaicin's behaviour has a setting whose other value brings C
 | `CompareValues`, `capsaicinCompareValues()` | A set of toggle values, and Capsaicin's for every toggle. |
 | `applyCompareValues(settings, values)` | Puts values into a technique's live settings. |
 | `readCompareValues(params)`, `writeCompareValues(values, params)`, `COMPARE_URL_NAMES`, `compareValuesFromText(text)` | The values to and from a page's URL parameters, and from text. |
+| `RADIANCE_CACHE_VARIANT_PRESETS`, `RadianceCacheVariantPreset`, `VariantNeeds`, `variantPreset(id)`, `variantOfValues(values)` | P6.5's ten variants as compare-value sets (`gi12-ddgi`, `sharc`, `budgeted`, `neural-tail`, …), each with what it needs from the host; one by id, or the variant a set of values matches. |
 | `HOST_COMPARE_DEFAULTS`, `hostCompareValue(values, setting)` | The host's own choices in a compare set (whether to stack DDGI), which never go into the technique's settings. |
