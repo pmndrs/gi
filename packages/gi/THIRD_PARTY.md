@@ -15,7 +15,7 @@
 | [Open Asset Import Library](https://github.com/assimp/assimp) (assimp): `FromToMatrix`, which Capsaicin's SSGI takes as `RotFromToMatrix` | The SSGI pass in the platform layer | BSD 3-Clause | `licenses/assimp-BSD-3-Clause.txt` |
 | The hash-grid radiance cache of [pmndrs/pathtracer](https://github.com/pmndrs/pathtracer) (commit `dd771c815dbd80bd1c7dc78673746a7742c51618`), ported to WGSL and TypeScript (the radiance cache's `worldCache: 'sharc'` backend) | The radiance-cache layer in `dist/chunks/` | MIT, Dennis Smolek | `licenses/pathtracer-MIT.txt` |
 
-The RC layer imports the engine-free entry of `@pmndrs/bvh@0.1.0` under the npm alias `@pmndrs/rc-bvh`, and the radiance cache imports `Gi1Denoiser` from `denoiser/ffx` (`denoiser@2.1.0`, MIT, AMD FidelityFX ports). Both are npm dependencies, installed with this package, not bundled; their distributions include their own third-party notices.
+The RC layer imports the engine-free entry of `@pmndrs/bvh@0.1.1` under the npm alias `@pmndrs/rc-bvh`, and the radiance cache imports `Gi1Denoiser` from `denoiser/ffx` (`denoiser@2.1.0`, MIT, AMD FidelityFX ports). Both are npm dependencies, installed with this package, not bundled; their distributions include their own third-party notices.
 
 The radiance cache's optional neural tail (`neuralCache: 'tail'`) loads `@pathtracer/mlp` (pmndrs/pathtracer, MIT) at run time if it can be found. It is neither bundled nor a dependency, and it isn't on npm.
 

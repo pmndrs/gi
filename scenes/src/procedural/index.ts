@@ -2,6 +2,8 @@ import type { BuilderOptions, ProceduralBuilder, ProceduralScene } from '../scen
 import { buildCabinetRow } from './cabinet-row';
 import { buildCornellBox } from './cornell-box';
 import { buildCourtyard } from './courtyard';
+import { buildDarkRoom } from './dark-room';
+import { buildEmissiveRoom } from './emissive-room';
 import { buildFurnaceRoom } from './furnace-room';
 import { buildOpenGround } from './open-ground';
 import { buildAlphaChecker, buildGlassWall } from './see-through-walls';
@@ -23,11 +25,15 @@ export const proceduralBuilders: Readonly<Record<string, ProceduralBuilder>> = {
     'closed-door': buildClosedDoor,
     'cabinet-row': buildCabinetRow,
     'open-ground': buildOpenGround,
+    // Examples, C4: a dark room with a lamp, a flashlight and a box to drag.
+    'dark-room': buildDarkRoom,
     // M4's textured scenes (T4.4).
     'textured-furnace': buildTexturedFurnace,
     'uv-board': buildUvBoard,
     'alpha-checker': buildAlphaChecker,
     'glass-wall': buildGlassWall,
+    // C5's room lit by emissive surfaces only.
+    'emissive-room': buildEmissiveRoom,
 };
 
 export function buildProcedural(name: string, options?: BuilderOptions): ProceduralScene {
@@ -45,6 +51,8 @@ export {
     buildClosedDoor,
     buildCornellBox,
     buildCourtyard,
+    buildDarkRoom,
+    buildEmissiveRoom,
     buildFurnaceRoom,
     buildGlassWall,
     buildOpenGround,

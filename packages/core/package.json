@@ -12,7 +12,7 @@
     },
     "dependencies": {
         "@pmndrs/bvh": "workspace:*",
-        "@pmndrs/rc-bvh": "npm:@pmndrs/bvh@0.1.0",
+        "@pmndrs/rc-bvh": "npm:@pmndrs/bvh@0.1.1",
         "@pmndrs/raytracer": "0.1.0"
     }
 }

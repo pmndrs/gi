@@ -60,9 +60,12 @@ describe('exported procedural scenes', async () => {
         expect(manifests.map((m) => m.id).sort()).toEqual([
             'alpha-checker',
             'cabinet-row',
+            'cabinet-row-objects',
             'closed-door',
             'cornell-box',
             'cornell-box-point',
+            'dark-room',
+            'emissive-room',
             'furnace-room',
             'glass-wall',
             'open-ground',
