@@ -43,6 +43,7 @@ const PASS_DESCRIPTIONS: Readonly<Record<string, string>> = {
     'radiance-cache/SSGI': 'Screen-space occlusion and near-field light, from the depth and normals (off by default).',
     'radiance-cache/ClearCounters': "Clears the frame's counters.",
     'radiance-cache/ReprojectScreenProbes': "Moves last frame's screen probes to where their surfaces are now, by the motion vectors.",
+    'radiance-cache/LookupScreenProbes': 'Finds the cached probes that left the screen and are on it again, and lists them by tile, for sampling.',
     'radiance-cache/SpawnScreenProbes': 'Places one probe on the visible surface of each 16 × 16-pixel tile that needs one.',
     'radiance-cache/PatchScreenProbes': 'Fills tiles that reprojection left without a probe.',
     'radiance-cache/SampleScreenProbes': "Picks each probe's ray directions, more of them where last frame found more light.",
