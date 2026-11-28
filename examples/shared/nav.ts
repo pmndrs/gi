@@ -67,7 +67,7 @@ function link(className: string, href: string, text: string, external = false): 
 
 function mount(): void {
     const base = import.meta.env.BASE_URL;
-    // The page's folder under the site's root, e.g. '03-lights/' or 'webgpu/hello/'.
+    // The page's folder under the site's root, e.g. 'ddgi/03-lights/' or 'webgpu/hello/'.
     const folder = location.pathname.startsWith(base) ? location.pathname.slice(base.length).replace(/index\.html$/, '') : '';
 
     const style = document.createElement('style');

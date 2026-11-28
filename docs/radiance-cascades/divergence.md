@@ -1,12 +1,12 @@
 # Where our Split RC differs from Chandra, and why
 
-Written 2026-11-27 by the lead (Mac). The reference is the authors' own implementation, Chandra, at [`9af00e8`](https://github.com/entropylost/chandra/tree/9af00e8de135a4126cb137d1ec62b451bd6b8e37), the same build our [Sponza comparison](chandra.md) runs. It needs an NVIDIA GPU, so it can't run on the Mac as it stands. The second reference is the Three.js port the gallery ships as `?backend=three` ([`examples/11-radiance-cascades/RealtimeRadianceCascades.js`](../../examples/11-radiance-cascades/RealtimeRadianceCascades.js), from zalo's three.js PR at `5425061`). Behind both is the Split RC paper (Freeman, Sannikov and Pitt-Francis, [rev. 2](https://arxiv.org/abs/2607.20384v2)). I didn't re-read the paper for this file. Our [method notes](../../research/radiance-cascades/foundations/method.md) summarise it.
+Written 2026-11-27 by the lead (Mac). The reference is the authors' own implementation, Chandra, at [`9af00e8`](https://github.com/entropylost/chandra/tree/9af00e8de135a4126cb137d1ec62b451bd6b8e37), the same build our [Sponza comparison](chandra.md) runs. It needs an NVIDIA GPU, so it can't run on the Mac as it stands. The second reference is the Three.js port the gallery ships as `?backend=three` ([`examples/cascades/11-radiance-cascades/RealtimeRadianceCascades.js`](../../examples/cascades/11-radiance-cascades/RealtimeRadianceCascades.js), from zalo's three.js PR at `5425061`). Behind both is the Split RC paper (Freeman, Sannikov and Pitt-Francis, [rev. 2](https://arxiv.org/abs/2607.20384v2)). I didn't re-read the paper for this file. Our [method notes](../../research/radiance-cascades/foundations/method.md) summarise it.
 
 **The rule we work under:** Chandra is a guide, not a target. Our solver is judged by browser frame time, memory and how the image looks in motion at the display size (DECISIONS 2026-11-19). A difference from Chandra is fine when it's measured and wins on those terms. This file shows which differences have been measured and which are still untested.
 
 **How this was built:** by reading Chandra's source next to ours, plus our own records (PROGRESS, DECISIONS, NOTES). No new measurements were taken. Numbers cite where they were recorded. Impacts without numbers are the lead's estimate and say so.
 
-**Paths:** `CH/` = Chandra's `src/` at `9af00e8`, `RC/` = `packages/core/src/techniques/radiance-cascades/`, `GAL/` = `examples/11-radiance-cascades/`.
+**Paths:** `CH/` = Chandra's `src/` at `9af00e8`, `RC/` = `packages/core/src/techniques/radiance-cascades/`, `GAL/` = `examples/cascades/11-radiance-cascades/`.
 
 **Columns:** the same as the [DDGI file](../divergence.md). **Quality** and **Speed** say *better*, *worse* or *same* for the picture and for GPU time or memory. **Effort** runs from XS (an hour or two) to L (a milestone-sized piece). **WebGPU** says whether Chandra's way can be done in WebGPU today.
 

@@ -39,7 +39,7 @@ function floorDelta(a: Capture, b: Capture) {
 async function arm(state: State) {
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'width:960px;height:540px;border:0;display:block';
-    const url = new URL(EXAMPLES_SITE_BASE + '11-radiance-cascades/', location.origin);
+    const url = new URL(EXAMPLES_SITE_BASE + 'cascades/11-radiance-cascades/', location.origin);
     url.search = new URLSearchParams({ verify:'1', backend:'interval', scene:'polished', resolve:'upscale', ratio:'1.5',
         outputSize:'preview', view:'lit', camera:'rail', roughness:'0.24', motion:'still', cue:'blue', stride:'2', specular:state }).toString();
     iframe.src = url.href;

@@ -58,7 +58,7 @@ const FRAME_HEIGHT = 540;
  * scenes, and the screen debug views (an override material and an explicit
  * GI update, a path the default view doesn't take).
  */
-const EXTRA_PAGES = ['06-materials/?scene=glass-wall', '06-materials/?scene=uv-board', '10-debug/?view=gi-only', '10-debug/?view=coverage', '10-debug/?view=probe-states'];
+const EXTRA_PAGES = ['ddgi/06-materials/?scene=glass-wall', 'ddgi/06-materials/?scene=uv-board', 'ddgi/10-debug/?view=gi-only', 'ddgi/10-debug/?view=coverage', 'ddgi/10-debug/?view=probe-states'];
 const THUMBNAIL_WIDTH = 300;
 const THUMBNAIL_HEIGHT = 169;
 
@@ -249,7 +249,7 @@ async function runExample(url: string, thumbnails: Array<{ name: string; thumbna
     const { expectText, act } = options;
     const name = url.slice(siteRoot.length) || 'index';
     const isHello = name.startsWith('webgpu/hello');
-    const isRail = name.startsWith('11-radiance-cascades/');
+    const isRail = name.startsWith('cascades/11-radiance-cascades/');
     const started = performance.now();
     const frame = await openFrame(isHello ? `${url}?view=gi` : isRail ? `${url}?verify=1` : url);
     try {
@@ -341,11 +341,11 @@ try {
     const results: Record<string, ExampleResult> = {};
     for (const url of examples) {
         const name = url.slice(siteRoot.length);
-        const isBake = name.startsWith('08-');
+        const isBake = name.startsWith('ddgi/08-');
         // 08's first visit saves a bake; the second must start from it.
         results[name] = await runExample(url, thumbnails, {
             expectText: isBake ? { id: 'bake-state', text: 'Reload to start from it' } : undefined,
-            act: name.startsWith('07-') ? switchPresets : undefined,
+            act: name.startsWith('ddgi/07-') ? switchPresets : undefined,
         });
         if (isBake) results[`${name} (reloaded)`] = await runExample(url, thumbnails, { expectText: { id: 'bake-state', text: 'from the bake saved' } });
     }

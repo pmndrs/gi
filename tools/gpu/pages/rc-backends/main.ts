@@ -41,7 +41,7 @@ function difference(a: RailCapture, b: RailCapture) {
 async function captureBackend(backend: Backend): Promise<Views[]> {
     const frame = document.createElement('iframe');
     frame.style.cssText = `width:${width}px;height:${height}px;border:0;display:block;`;
-    frame.src = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/?verify=1&scene=gallery&backend=${backend}&resolve=native&stride=2`, location.origin).href;
+    frame.src = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/?verify=1&scene=gallery&backend=${backend}&resolve=native&stride=2`, location.origin).href;
     document.body.append(frame);
     const captures: Views[] = [];
     const statistics: Record<string, unknown>[] = [];

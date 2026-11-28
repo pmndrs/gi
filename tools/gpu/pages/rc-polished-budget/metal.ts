@@ -118,7 +118,7 @@ async function suite(out: string) {
         !/swiftshader|software/i.test(host.chrome.glRenderer), 'Chrome GPU process did not identify an Apple GPU with a Metal renderer');
 
     await runNode(['node_modules/vite/bin/vite.js', 'build', '--config', 'examples/vite.config.ts'], { ...process.env, PAGES_BASE: '/gi/' });
-    assert((await readFile(join(root, 'examples/dist/11-radiance-cascades/index.html'), 'utf8')).includes('src="/gi/assets/'),
+    assert((await readFile(join(root, 'examples/dist/cascades/11-radiance-cascades/index.html'), 'utf8')).includes('src="/gi/assets/'),
         'gallery build is missing the /gi/ base');
     async function fixture(name: string, filters: string[], pair?: number, cadence: Cadence = 'normal') {
         const reportDir = join(out, name);

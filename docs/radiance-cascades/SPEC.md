@@ -36,7 +36,7 @@ device.queue.submit([encoder.finish()]);
 // Call rc.dispose() and transport.dispose() when the scene is released.
 ```
 
-The gallery uses Three.js to rasterize direct light, surface attributes and depth, and optionally to reconstruct a reduced-resolution image. The native transport calls the pathtracer's closest-hit and visibility queues for opaque emissive or Lambertian surfaces with point lights. A custom transport only needs to implement `beginFrame` and `encode`. [Transport](../../packages/core/src/techniques/radiance-cascades/transport.ts) · [Gallery adapter](../../examples/11-radiance-cascades/native-adapter.ts)
+The gallery uses Three.js to rasterize direct light, surface attributes and depth, and optionally to reconstruct a reduced-resolution image. The native transport calls the pathtracer's closest-hit and visibility queues for opaque emissive or Lambertian surfaces with point lights. A custom transport only needs to implement `beginFrame` and `encode`. [Transport](../../packages/core/src/techniques/radiance-cascades/transport.ts) · [Gallery adapter](../../examples/cascades/11-radiance-cascades/native-adapter.ts)
 
 ## Rough reflections
 
@@ -57,7 +57,7 @@ The matched rail captures below use 640 × 360, native presentation, one primary
 | 183 · amber | ![Native WebGPU, amber gallery](images/rail-183-interval.png) | ![Three.js reference, amber gallery](images/rail-183-three.png) |
 | 359 · blue | ![Native WebGPU, blue gallery](images/rail-359-interval.png) | ![Three.js reference, blue gallery](images/rail-359-three.png) |
 
-The recessed lamp stays on as the shutter travels for 30 ticks each way. The native transport retains static geometry and updates the shutter instance. The reference refits its BVH and retains probe history. The test measures a fixed receiver patch in scene-linear indirect light before exposure, tone mapping or temporal reconstruction. [Door and timeline](../../examples/11-radiance-cascades/door-scene.ts) · [Response test](../../tools/gpu/pages/rc-door-response/main.ts)
+The recessed lamp stays on as the shutter travels for 30 ticks each way. The native transport retains static geometry and updates the shutter instance. The reference refits its BVH and retains probe history. The test measures a fixed receiver patch in scene-linear indirect light before exposure, tone mapping or temporal reconstruction. [Door and timeline](../../examples/cascades/11-radiance-cascades/door-scene.ts) · [Response test](../../tools/gpu/pages/rc-door-response/main.ts)
 
 ![Normalized open-state receiver luminance as the shutter closes and reopens](images/shutter-response.png)
 

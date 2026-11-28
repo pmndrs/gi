@@ -16,7 +16,7 @@ const data: Record<string, unknown> = {};
 let adapter: AdapterSummary | null = null;
 const frame = document.createElement('iframe');
 frame.style.cssText = 'width:480px;height:270px;border:0;display:block;';
-frame.src = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/?verify=1`, location.origin).href;
+frame.src = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/?verify=1`, location.origin).href;
 document.body.append(frame);
 try {
     const gpuAdapter = await navigator.gpu?.requestAdapter();

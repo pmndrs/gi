@@ -7,7 +7,7 @@ const data: Record<string, unknown> = {};
 let adapter: AdapterSummary | null = null;
 const frame = document.createElement('iframe');
 frame.style.cssText = 'width:481px;height:271px;border:0;display:block;';
-frame.src = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/?verify=1&scene=gallery&backend=three&resolve=native&ratio=2`, location.origin).href;
+frame.src = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/?verify=1&scene=gallery&backend=three&resolve=native&ratio=2`, location.origin).href;
 document.body.append(frame);
 
 function controlValue(id: string, value: string, event = 'change') {
@@ -145,7 +145,7 @@ try {
     const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
     frame.style.width = '481px';
     frame.style.height = '271px';
-    frame.src = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/?verify=1&scene=gallery&backend=interval&resolve=upscale&ratio=1.5`, location.origin).href;
+    frame.src = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/?verify=1&scene=gallery&backend=interval&resolve=upscale&ratio=1.5`, location.origin).href;
     await loaded;
     const interval = await waitForRailControl(frame);
     const request = { frames: 8, camera: 'receiver', view: 'lit', cue: 'blue', advance: false } as const;
