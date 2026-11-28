@@ -60,7 +60,8 @@ async function startDDGI(spacing: number): Promise<DDGIVolume> {
     await next.start(renderer, scene);
     return next;
 }
-let volume = await startDDGI(probes.spacing);
+const settings = { spacing: 0.25 }; // the scene's own spacing; the panel offers 0.5 m too
+let volume = await startDDGI(settings.spacing);
 
 // One scene pass for both pictures. The cache reads its screen inputs; both composites read its colour, albedo and normal.
 const pipeline = new THREE.RenderPipeline(renderer);
@@ -75,7 +76,6 @@ function showPictures(): void {
 }
 showPictures();
 
-const settings = { spacing: probes.spacing };
 const gui = new GUI({ title: 'Contact detail' });
 gui.add(wipe, 'position', 0.02, 0.98, 0.01).name('wipe position').listen();
 gui.add(wipe, 'difference').name('difference |cache − DDGI|');
