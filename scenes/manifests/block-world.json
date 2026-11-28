@@ -1,0 +1,26 @@
+{
+    "id": "block-world",
+    "title": "Block world",
+    "description": "A generated town on the open ground, about 200 m across: an 8 x 8 grid of blocks, courtyards and plazas with 6 m streets, from a fixed seed, under the sun and the sky. For example X2: how DDGI's volumes and the radiance cache cover a big world.",
+    "tags": ["exterior", "large", "generated"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        { "kind": "procedural", "builder": "open-ground" },
+        { "kind": "procedural", "builder": "block-world", "options": { "seed": 1 } }
+    ],
+    "cameras": [
+        { "name": "down-the-street", "position": [-1.5, 1.7, 60], "target": [0, 4, 0], "fovYDeg": 65 },
+        { "name": "over-the-town", "position": [-70, 45, 95], "target": [0, 0, 0], "fovYDeg": 55 }
+    ],
+    "lights": [
+        { "type": "directional", "label": "sun", "color": [1, 0.95, 0.85], "intensity": 3, "direction": [-0.5, -0.62, -0.6] }
+    ],
+    "environment": { "type": "procedural", "sunDirection": [0.5, 0.62, 0.6], "turbidity": 3, "intensity": 1 },
+    "volume": { "center": [0, 16, 0], "size": [192, 32, 192], "probeSpacing": 8 },
+    "nativeCapable": true,
+    "referenceCube": { "position": [0, 0.5, 0] },
+    "credits": [
+        { "asset": null, "license": "MIT", "attribution": "MIT, this repo." }
+    ]
+}

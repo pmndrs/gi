@@ -274,6 +274,7 @@ describe('the manifests in scenes/manifests', async () => {
             'alpha-checker',
             'bistro-exterior',
             'bistro-interior',
+            'block-world',
             'cabinet-row',
             'cabinet-row-objects',
             'closed-door',

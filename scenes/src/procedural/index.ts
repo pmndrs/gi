@@ -1,4 +1,5 @@
 import type { BuilderOptions, ProceduralBuilder, ProceduralScene } from '../scene-data';
+import { buildBlockWorld } from './block-world';
 import { buildCabinetRow } from './cabinet-row';
 import { buildCornellBox } from './cornell-box';
 import { buildCourtyard } from './courtyard';
@@ -25,6 +26,8 @@ export const proceduralBuilders: Readonly<Record<string, ProceduralBuilder>> = {
     'closed-door': buildClosedDoor,
     'cabinet-row': buildCabinetRow,
     'open-ground': buildOpenGround,
+    // Examples, X2: a generated town of blocks and courtyards, about 200 m across (on open-ground's slab).
+    'block-world': buildBlockWorld,
     // Examples, C4: a dark room with a lamp, a flashlight and a box to drag.
     'dark-room': buildDarkRoom,
     // M4's textured scenes (T4.4).
@@ -47,6 +50,7 @@ export function buildProcedural(name: string, options?: BuilderOptions): Procedu
 
 export {
     buildAlphaChecker,
+    buildBlockWorld,
     buildCabinetRow,
     buildClosedDoor,
     buildCornellBox,

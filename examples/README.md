@@ -13,7 +13,7 @@ The examples read the library straight from `packages/`, so a change to it shows
 
 ## The examples
 
-They are grouped by method, one folder each: `ddgi/`, `cache/` and `cascades/` (and `together/` for pages that combine techniques, to come). Which method to use for what is in the guide, [DDGI or the radiance cache?](../docs/guides/ddgi-or-radiance-cache.md), and on the landing page. The plan for the sets is [docs/plans/examples.md](../docs/plans/examples.md).
+They are grouped by method, one folder each: `ddgi/`, `cache/` and `cascades/` (and `together/` for pages that combine techniques). Which method to use for what is in the guide, [DDGI or the radiance cache?](../docs/guides/ddgi-or-radiance-cache.md), and on the landing page. The plan for the sets is [docs/plans/examples.md](../docs/plans/examples.md).
 
 Every page has an explainer panel, top left: what you're seeing, how it works, what to try, and trade-offs with each number's source. Its text is plain data in the page's `about.ts`, so `main.ts` stays the example.
 
@@ -42,6 +42,12 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | C4 | **Fast changes: lag against ghosting** (`cache/c4-fast-changes`) | The cache on its defaults in a dark room (the `dark-room` scene): a lamp on a switch, a flashlight on the camera and a box to drag. A chart of the mean GI light over the last 120 frames marks each change and reads the frames to settle; a ghost view shows light still moving; `cellChangeReset` (register E9) switches on and off. |
 | C5 | **Light from surfaces** (`cache/c5-emissive`) | A room with no light objects, lit only by two emissive strips and a screen (the procedural `emissive-room`), through the cache on its defaults: a probe ray that hits an emitter takes its emission. Change the strips' colour and brightness, put one of two pictures made in code on the screen, or show GI only. |
 | C6 | **The cache switcher** (`cache/c6-cache-switcher`) | One world cache at a time from `RADIANCE_CACHE_VARIANT_PRESETS` (`?variant=`), on two closed rooms or the open courtyard (`?scene=courtyard`): a card per variant with how it works, its pros and cons, P6.5's measured bias, lag and memory and what it needs from the host; GPU time per pass and memory live; the cache's debug views (`?overlay=probe-atlas`, `probe-mask`, `probe-sh`). |
+
+### Together (`together/`)
+
+| # | Example | Shows |
+| --- | --- | --- |
+| X2 | **Scale** (`together/x2-scale`) | A generated town about 200 m across (the `block-world` scene, from a seed), flown through: DDGI with several volumes (`DDGISettings.volumes`: a coarse one over the town, and one or two finer windows that follow the camera, with their outlines), or the radiance cache with SHaRC and no volume, switched live. GPU time per pass and memory for each method as you fly. |
 
 ### Split Radiance Cascades (`cascades/`)
 

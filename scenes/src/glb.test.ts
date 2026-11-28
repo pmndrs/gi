@@ -59,6 +59,7 @@ describe('exported procedural scenes', async () => {
     it('covers the procedural scenes', () => {
         expect(manifests.map((m) => m.id).sort()).toEqual([
             'alpha-checker',
+            'block-world',
             'cabinet-row',
             'cabinet-row-objects',
             'closed-door',
