@@ -37,6 +37,7 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | # | Example | Shows |
 | --- | --- | --- |
 | C1 | **No volume needed** (`cache/c1-no-volume`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
+| C3 | **Light through a doorway** (`cache/c3-doorway`) | Two rooms, the camera in the unlit one: the world cache's second bounce from GI-1.2's own rays (`secondBounce: 'gi1-rays'`), from a DDGI volume stacked under the cache (the default), or from SHaRC (`worldCache: 'sharc'`), switched live, with the door open or shut. The far room's GI is read back and shown as a number and a bar for each. |
 
 ### Split Radiance Cascades (`cascades/`)
 
