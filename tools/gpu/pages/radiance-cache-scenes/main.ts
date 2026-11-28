@@ -164,7 +164,9 @@ async function scan(device: GPUDevice, technique: RadianceCacheTechnique, frame:
     let cellBad = 0;
     let firstCell: string | null = null;
     // The direct values, then the indirect ones (GI-1.2's second bounce, RC3.3).
-    for (const valueBase of [cache.layout.cellValues.valueBuffer * 8, cache.layout.cellValues.valueIndirectBuffer * 8]) {
+    // The indirect values only in a cache prepared with multibounce (register D67).
+    const valueArrays = [cache.layout.cellValues.valueBuffer, cache.layout.cellValues.valueIndirectBuffer].filter((base): base is number => base !== null);
+    for (const valueBase of valueArrays.map((base) => base * 8)) {
         // In batches, so the staging buffer stays small on a scene with many tiles.
         const batch = 4096;
         for (let start = 0; start < tiles.length; start += batch) {

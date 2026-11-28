@@ -92,7 +92,7 @@ import { GILimitError } from '../../../platform/contract/errors.ts';
 import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import type { HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_CHANGE_RESET_BIT, CELL_CHANGES_BINDING, CELL_CHANGES_WGSL, CELL_SHADING_COMMON_WGSL, cellShadingListLayout, type CellShadingListLayout } from './cell-shading-common.ts';
-import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl } from './hash-grid-wgsl.ts';
+import { HASH_GRID_KERNEL_GROUP, hashGridCacheWgsl, multibounceWgsl } from './hash-grid-wgsl.ts';
 import { TEMPORAL_FEEDBACK_WGSL } from './temporal-feedback.ts';
 import { WORLD_CACHE_PROBE_RAYS_WGSL } from './world-cache.ts';
 
@@ -888,7 +888,7 @@ const UPDATE_TILES_GROUP_X: u32 = ${side}u;
 const UPDATE_TILES_GROUP_Y: u32 = ${side}u;
 
 var<workgroup> lds_UpdateTiles_ValueBuffer: array<array<vec2u, ${side}>, ${side}>;
-var<workgroup> lds_UpdateTiles_ValueIndirectBuffer: array<array<vec2u, ${side}>, ${side}>;
+${multibounceWgsl(layout, `var<workgroup> lds_UpdateTiles_ValueIndirectBuffer: array<array<vec2u, ${side}>, ${side}>;`)}
 
 // Temporal accumulation of one cell (gi1.comp:2162-2177 for the direct values, 2179-2195 for
 // the indirect ones): the history and this frame's samples, each as a mean, blended with weight
@@ -935,7 +935,9 @@ fn UpdateTiles_SumDirect(position: vec2u, step: u32) -> vec4f {
     return radiance;
 }
 
-fn UpdateTiles_SumIndirect(position: vec2u, step: u32) -> vec4f {
+${multibounceWgsl(
+    layout,
+    `fn UpdateTiles_SumIndirect(position: vec2u, step: u32) -> vec4f {
     var radiance = vec4f(0.0);
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + 0u][position.y + 0u]);
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + step][position.y + 0u]);
@@ -943,7 +945,8 @@ fn UpdateTiles_SumIndirect(position: vec2u, step: u32) -> vec4f {
     radiance += HashGridCache_UnpackRadiance(lds_UpdateTiles_ValueIndirectBuffer[position.x + step][position.y + step]);
     return radiance;
 }
-
+`,
+)}
 // One coarser level (MIP 1, 2 or 3): a thread on the level's grid ('step' threads apart) sums
 // its 2 x 2 block of the level below and writes it to the tile and to the group's memory, where
 // the next level reads it.
@@ -955,12 +958,15 @@ fn UpdateTiles_FilterLevel(group_thread_id: vec2u, tile_cell_offset: vec2u, tile
     lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance;
     g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_radiance;
 
-    // USE_MULTI_BOUNCE
+    ${multibounceWgsl(
+        layout,
+        `// USE_MULTI_BOUNCE
     if (g_HashGridCacheConstants.use_multibounce != 0u) {
         let packed_radiance_indirect = HashGridCache_PackRadiance(UpdateTiles_SumIndirect(group_thread_id, step));
         lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_radiance_indirect;
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_radiance_indirect;
-    }
+    }`,
+    )}
 }
 
 @compute @workgroup_size(${side}, ${side})
@@ -1018,7 +1024,9 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
         lds_UpdateTiles_ValueBuffer[group_thread_id.x][group_thread_id.y] = packed_direct_radiance;
         g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEBUFFER + cell_index] = packed_direct_radiance;
 
-        // USE_MULTI_BOUNCE: the scratch UpdateMultibounceCells filled last frame (its one-frame lag).
+        ${multibounceWgsl(
+            layout,
+            `// USE_MULTI_BOUNCE: the scratch UpdateMultibounceCells filled last frame (its one-frame lag).
         // A frame with no indirect sample leaves the value and its count as they are (register
         // D37): Capsaicin's blend takes such a frame as a step down (the mean kept, the count one
         // less, and at 0 the value reads 0), and with only a cell's kept rays counting (about 0.3
@@ -1041,6 +1049,8 @@ fn ${POPULATION_ENTRY_POINT.updateTiles}(
             lds_UpdateTiles_ValueIndirectBuffer[group_thread_id.x][group_thread_id.y] = packed_indirect_radiance;
             g_HashGridCache_CellValues[HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index] = packed_indirect_radiance;
         }
+`,
+        )}
     }
 
     // MIP 1
@@ -1102,10 +1112,13 @@ fn ${POPULATION_ENTRY_POINT.resolveCells}(
 
     let direct_radiance = HashGridCache_FilteredRadianceDirect(cell_index);
     var radiance = (direct_radiance.rgb / max(direct_radiance.w, 1.0));
-    if (g_HashGridCacheConstants.use_multibounce != 0u) {  // USE_MULTI_BOUNCE
+    ${multibounceWgsl(
+        layout,
+        `if (g_HashGridCacheConstants.use_multibounce != 0u) {  // USE_MULTI_BOUNCE
         let indirect_radiance = HashGridCache_FilteredRadianceIndirect(cell_index);
         radiance += (indirect_radiance.rgb / max(indirect_radiance.w, 1.0));
-    }
+    }`,
+    )}
     ScreenProbes_AccumulateRadiance(query_index, radiance);
 }
 `;

@@ -80,7 +80,7 @@ describe('temporal feedback (RC3.6, register D68)', () => {
     });
 
     it('is read in GenerateReservoirs from group 3, before the light sample, and keeps the probe ray off the resolve list', () => {
-        const code = generateReservoirsWgsl(hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS)));
+        const code = generateReservoirsWgsl(hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true));
         expect(code).toContain('@group(3) @binding(0) var<uniform> g_HashGridCache_TemporalFeedback');
         const feedback = code.indexOf('HashGridCache_TemporalFeedback(surface)');
         expect(feedback).toBeGreaterThan(0);

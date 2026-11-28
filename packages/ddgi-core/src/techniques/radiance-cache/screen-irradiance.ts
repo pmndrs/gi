@@ -44,6 +44,7 @@ import {
     SCREEN_PROBES_CONSTANTS_OFFSETS,
 } from './wgsl/screen-irradiance.ts';
 import { SH_BLOCK_SIZE } from './wgsl/spherical-harmonics.ts';
+import { beginTimedPass } from './timed-pass.ts';
 
 const BUFFER_USAGE = { uniform: 0x40, copyDst: 0x08 } as const;
 const TEXTURE_USAGE = { copySrc: 0x01, copyDst: 0x02, textureBinding: 0x04, storageBinding: 0x08 } as const;
@@ -229,7 +230,7 @@ export class ScreenIrradiance {
     }
 
     /**
-     * Records the three passes, after `BlendScreenProbes` in the same
+     * Records the passes (each its own timed section), after `BlendScreenProbes` in the same
      * encoder. `camera` is the frame's (`TechniqueScreenFrame.camera`): its
      * projection sizes the interpolation's cells, its view gives the axis
      * linear depth is measured along.
@@ -250,31 +251,37 @@ export class ScreenIrradiance {
         const maxPerDimension = this.context.device.limits.maxComputeWorkgroupsPerDimension;
         const tile = SCREEN_IRRADIANCE_WORKGROUP.tile;
 
-        const pass = encoder.beginComputePass({ label: `${TECHNIQUE_ID}/irradiance`, timestampWrites: timer.computePass(`${TECHNIQUE_ID}/irradiance`) });
         // FilterProbeMask, level by level (gi1.cpp:2572-2584): each dispatch reads the level the previous one wrote.
-        kernels.filterProbeMask.bind(pass);
+        const maskPass = beginTimedPass(encoder, timer, 'FilterProbeMask');
+        kernels.filterProbeMask.bind(maskPass);
         groups.filterLevels.forEach((group, index) => {
             const level = index + 1;
-            pass.setBindGroup(1, group);
-            pass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
+            maskPass.setBindGroup(1, group);
+            maskPass.dispatchWorkgroups(Math.ceil(Math.max(layout.probeCount[0] >> level, 1) / tile), Math.ceil(Math.max(layout.probeCount[1] >> level, 1) / tile));
         });
+        maskPass.end();
         // FilterScreenProbes across, then down, over every possible ray (gi1.cpp:2590-2612).
         if (options.probeFilter) {
-            kernels.filter.bind(pass);
+            const filterPass = beginTimedPass(encoder, timer, 'FilterScreenProbes');
+            kernels.filter.bind(filterPass);
             for (const group of [groups.filterAcross, options.probeFilterHistory ? groups.filterDownIntoAtlas : groups.filterDown]) {
-                pass.setBindGroup(1, group);
-                dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+                filterPass.setBindGroup(1, group);
+                dispatchSplit(filterPass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
             }
+            filterPass.end();
         }
         // ProjectScreenProbes over every possible ray: one probe per workgroup (gi1.cpp:2618-2625).
-        kernels.project.bind(pass);
-        pass.setBindGroup(1, options.probeFilter && !options.probeFilterHistory ? groups.project : groups.projectUnfiltered);
-        dispatchSplit(pass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+        const projectPass = beginTimedPass(encoder, timer, 'ProjectScreenProbes');
+        kernels.project.bind(projectPass);
+        projectPass.setBindGroup(1, options.probeFilter && !options.probeFilterHistory ? groups.project : groups.projectUnfiltered);
+        dispatchSplit(projectPass, layout.maxRayCount / SCREEN_IRRADIANCE_WORKGROUP.probe, maxPerDimension);
+        projectPass.end();
         // InterpolateScreenProbes, a thread per pixel (gi1.cpp:2629-2636).
-        kernels.interpolate.bind(pass);
-        pass.setBindGroup(1, groups.interpolate);
-        pass.dispatchWorkgroups(Math.ceil(layout.width / tile), Math.ceil(layout.height / tile));
-        pass.end();
+        const interpolatePass = beginTimedPass(encoder, timer, 'InterpolateScreenProbes');
+        kernels.interpolate.bind(interpolatePass);
+        interpolatePass.setBindGroup(1, groups.interpolate);
+        interpolatePass.dispatchWorkgroups(Math.ceil(layout.width / tile), Math.ceil(layout.height / tile));
+        interpolatePass.end();
     }
 
     dispose(): void {

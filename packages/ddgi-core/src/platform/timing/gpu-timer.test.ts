@@ -103,7 +103,10 @@ function createFakeGpu(options: FakeGpuOptions = {}) {
             destination.data = values;
         },
         copyBufferToBuffer(source: FakeBuffer, _sourceOffset: number, destination: FakeBuffer, _destinationOffset: number, size: number) {
-            destination.data = (source.data as BigUint64Array).slice(0, size / 8);
+            // As on a GPU, values past the copied range stay what an earlier copy left there.
+            const copied = (source.data as BigUint64Array).slice(0, size / 8);
+            if (destination.data && destination.data.length > copied.length) destination.data.set(copied);
+            else destination.data = copied;
         },
     };
 
@@ -303,6 +306,48 @@ describe('timing frames', () => {
             timer.beginFrame();
             expect(timer.computePass('p')).toBeDefined();
         }
+    });
+});
+
+describe('passes after the last resolve (the screen stage resolving again)', () => {
+    it("reads back only the passes a resolve covered, never an older frame's timestamps for the rest", async () => {
+        const gpu = createFakeGpu();
+        // One slot, so the second frame reuses the read buffer the first filled with three passes.
+        const timer = createTimer(gpu, { slotCount: 1 });
+        await timer.ready;
+        runFrame(timer, gpu, ['first', 'second', 'third']);
+        await timer.drain();
+        timer.takeSamples();
+
+        // A frame resolved after its first pass, then given another that no resolve covered
+        // (a screen stage that threw before the platform resolved again).
+        timer.beginFrame();
+        timer.computePass('first');
+        timer.resolve(gpu.encoder);
+        timer.computePass('second');
+        timer.readback();
+        await timer.drain();
+
+        const [sample] = timer.takeSamples();
+        expect(sample.passes.map((pass) => pass.name)).toEqual(['first']);
+        expect(sample.passes[0].gpuMs).toBeCloseTo(expectedMs(1, 0), 9);
+    });
+
+    it('reads every pass when a later resolve covers them', async () => {
+        const gpu = createFakeGpu();
+        const timer = createTimer(gpu);
+        await timer.ready;
+        timer.beginFrame();
+        timer.computePass('world');
+        timer.resolve(gpu.encoder);
+        timer.computePass('screen');
+        timer.resolve(gpu.encoder);
+        timer.readback();
+        await timer.drain();
+
+        const [sample] = timer.takeSamples();
+        expect(sample.passes.map((pass) => pass.name)).toEqual(['world', 'screen']);
+        expect(sample.passes[1].gpuMs).toBeCloseTo(expectedMs(1, 1), 9);
     });
 });
 

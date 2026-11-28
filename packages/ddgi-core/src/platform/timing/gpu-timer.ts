@@ -134,7 +134,12 @@ export class GpuTimer implements GpuTimerScope {
 
     /** The slot of the submit being encoded, between `beginFrame` and `readback`. */
     private activeSlot: TimestampSlot | null = null;
-    private activeSlotResolved = false;
+    /**
+     * How many of the active slot's passes its latest `resolve` covered (0: not resolved). Only those
+     * are read back: a pass reserved after it (a screen stage that threw before the platform resolved
+     * again) has no timestamps of this frame in the read buffer, only an older frame's.
+     */
+    private activeSlotResolvedPasses = 0;
 
     private latestTimings = new Map<string, number>();
     private frameInProgress: FrameInProgress | null = null;
@@ -223,7 +228,7 @@ export class GpuTimer implements GpuTimerScope {
             return;
         }
         this.activeSlot = slot;
-        this.activeSlotResolved = false;
+        this.activeSlotResolvedPasses = 0;
     }
 
     /** Timestamp writes for a compute pass. `undefined` when this frame isn't timed. */
@@ -236,7 +241,12 @@ export class GpuTimer implements GpuTimerScope {
         return this.reserveQueries(name);
     }
 
-    /** Encodes copying the timestamps to a readable buffer. Call after the last timed pass, before `finish()`. */
+    /**
+     * Encodes copying the timestamps to a readable buffer. Call after the last timed pass, before `finish()`.
+     * A submit timed across several encoders may call it again after more passes (in a later encoder,
+     * submitted later): each call copies every pass so far, and the last copy in queue order is what the
+     * readback reads. The platform does this for its screen stage (`GIPlatformImpl.encodeScreen`).
+     */
     resolve(encoder: GPUCommandEncoder): void {
         const slot = this.activeSlot;
         if (!slot || slot.passNames.length === 0 || this.currentStatus !== 'ready') return;
@@ -244,7 +254,7 @@ export class GpuTimer implements GpuTimerScope {
         const { querySet, resolveBuffer, readBuffer } = this.resources[slot.index];
         encoder.resolveQuerySet(querySet, 0, queryCount, resolveBuffer, 0);
         encoder.copyBufferToBuffer(resolveBuffer, 0, readBuffer, 0, queryCount * BYTES_PER_TIMESTAMP);
-        this.activeSlotResolved = true;
+        this.activeSlotResolvedPasses = slot.passNames.length;
     }
 
     /**
@@ -259,17 +269,18 @@ export class GpuTimer implements GpuTimerScope {
         this.activeSlot = null;
         if (!slot) return;
 
-        const queryCount = this.ring.submit(slot);
-        if (queryCount === 0) return;
-        if (!this.activeSlotResolved || this.currentStatus !== 'ready') {
+        if (this.ring.submit(slot) === 0) return;
+        const resolvedPasses = this.activeSlotResolvedPasses;
+        if (resolvedPasses === 0 || this.currentStatus !== 'ready') {
             // `resolve` was skipped, so the buffer holds nothing worth reading.
             this.ring.release(slot);
             return;
         }
 
         const resources = this.resources[slot.index];
-        const passNames = [...slot.passNames];
-        const byteLength = queryCount * BYTES_PER_TIMESTAMP;
+        // Passes reserved after the latest resolve go untimed this frame (activeSlotResolvedPasses).
+        const passNames = slot.passNames.slice(0, resolvedPasses);
+        const byteLength = resolvedPasses * 2 * BYTES_PER_TIMESTAMP;
         const { frame, sequence } = slot;
         const wasStale = (): boolean => this.disposed || this.ring.isStale(slot);
 
