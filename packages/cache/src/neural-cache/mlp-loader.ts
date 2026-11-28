@@ -1,7 +1,7 @@
 /**
  * Loads `@pathtracer/mlp` (pmndrs/pathtracer's network, MIT) at run time, for
  * the neural tail only (P6.4). The package is an optional sibling from a
- * private repository (root package.json `linkedSiblings`): nothing imports it
+ * private repository (`linkedSiblings` in this package's package.json): nothing imports it
  * statically, so a checkout or a bundle without it builds and runs, and the
  * tail turns off with one warning. Where it is missing, or its clone isn't at
  * the pinned commit, vite and vitest resolve the import to a module that

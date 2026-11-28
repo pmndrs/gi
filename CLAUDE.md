@@ -21,7 +21,7 @@ A WebGPU-native GI platform with DDGI as its first technique (AMD GI-1.0's radia
 ## Rules
 
 - **Stay inside your task.** Note anything else you find in PROGRESS under "Next".
-- **Respect the boundary:** `ddgi-core` never imports an engine, and lint enforces it.
+- **Respect the boundaries:** the platform (`packages/core`) and the techniques (`packages/ddgi`, `packages/cache`) never import an engine; `packages/three` never imports a technique; no package reaches into another's files (import it by name, through its `exports`). Lint enforces all three.
 - **Readable code:** normal formatting, names that say what they are, and comments that explain *why*. No minified one-liners, magic parameter indices or test hooks in production shaders.
 - **Verify GPU work on a real GPU** with `pnpm test:gpu` and say which adapter. "It builds" is not "it works".
 - **No checks that only check other reports.** No byte-identical-repeat requirements, since temporal DDGI is stochastic.

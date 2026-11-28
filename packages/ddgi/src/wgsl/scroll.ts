@@ -70,7 +70,7 @@ export const SCROLL_EXTENT_WORDS = 8;
 export const SCROLL_EXTENT_BYTES = SCROLL_EXTENT_WORDS * 4;
 
 export const DDGI_SCROLL_WGSL = /* wgsl */ `
-// ---- ddgi/scroll (techniques/ddgi/wgsl/scroll.ts) ---------------------------------------
+// ---- ddgi/scroll (packages/ddgi/src/wgsl/scroll.ts) -------------------------------------
 
 struct DdgiScroll {
     origin: vec4f,            // xyz: world position of the window's first probe, after this frame's move

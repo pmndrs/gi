@@ -70,7 +70,7 @@ The speed limits above are planning numbers. Like any threshold, changing one is
 
 1. **Its own package, in this repo for now.**
    - `packages/bvh`, published later as `@pmndrs/bvh`, probably under pmndrs/bvh.
-   - It is engine-free, has no DDGI or GI dependencies, and ddgi-core depends on it.
+   - It is engine-free, has no DDGI or GI dependencies, and gi-core depends on it.
    - It ships through `/ddgi` until it's split out.
    - Dennis: "if its useful enough I might even say to make it pmndrs/bvh... I think that will be the plan, but lets keep it in the repo for now for simplicity sake."
 2. **The target builder is H-PLOC.** LBVH (B1) is the stepping stone, because H-PLOC is built from the same pieces: Morton codes, sort, and the Apetrei bottom-up pass.

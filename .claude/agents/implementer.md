@@ -24,7 +24,7 @@ How to work:
   - Comments that explain *why*, especially for GPU math.
   - Real configuration objects.
   - No minified one-liners, magic indices or test-only branches in production shaders.
-- **Respect the boundary:** `ddgi-core` never imports three.js or any engine. Engine code goes in adapter packages.
+- **Respect the boundaries:** the platform (`packages/core`) and the techniques (`packages/ddgi`, `packages/cache`) never import three.js or any engine. Engine code goes in `packages/three`, or a technique's own `<technique>-three` package. `packages/three` never imports a technique. Packages import each other by name, never by a path into another package.
 - **Follow the WebGPU conventions** in NOTES: fragment-readable data in textures; `addEventListener('uncapturederror')`; the host owns the device.
 - **Verify on a real GPU.** If your work touches the GPU, run `pnpm test:gpu` (on `--gpu nvidia` and `--gpu intel` when relevant) and say which adapter you verified on. "It builds" is not "it works".
 - **Run the basics before handing back:** `pnpm lint && pnpm typecheck && pnpm test`.

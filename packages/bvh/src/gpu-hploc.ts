@@ -204,7 +204,7 @@ export class GpuHplocBuilder {
     /**
      * Compiles the kernels (asynchronously, so the main thread doesn't stall).
      * Every compile is asked for before the first `await`, so a caller that
-     * starts other compiles in the same task (ddgi-core's `prepare`) has these
+     * starts other compiles in the same task (gi-core's `prepare`) has these
      * queued alongside, not behind them.
      */
     async prepare(): Promise<void> {

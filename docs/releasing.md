@@ -5,7 +5,7 @@
 - **You always say the version.** Upscaler can work out the next version from its commit messages ("Conventional Commits"). Ours aren't written that way, so there is no `auto`: the version comes from the tag, or you type it.
 - **The release notes are written by hand,** in [CHANGELOG.md](../CHANGELOG.md): one `## X.Y.Z` section per version. The workflow refuses a version without one.
 
-The published package, `@pmndrs/gi`, is `packages/gi`, not the repository root (which is a private workspace). The folder keeps its old name until the workspace folders are renamed ([DECISIONS](DECISIONS.md), 2026-11-10). The repository installs with pnpm; versioning and publishing use the npm CLI, because npm's Trusted Publishing is an npm CLI feature.
+The published package, `@pmndrs/gi`, is `packages/gi`, not the repository root (which is a private workspace). Its subpaths re-export the private workspace packages beside it (`core`, `ddgi`, `cache`, `three`, `ddgi-three`; [DECISIONS](DECISIONS.md), 2026-11-27), which the build bundles in. The repository installs with pnpm; versioning and publishing use the npm CLI, because npm's Trusted Publishing is an npm CLI feature.
 
 **Nothing has been published yet, and the workflow can't publish until the one-time steps below are done.**
 
@@ -119,6 +119,6 @@ It installs from the npm registry, so it needs the network. `--keep-temp` keeps 
 
 - **README.md** is the root README down to the line `<!-- The npm package README ends here. ... -->`; everything below it ("Working on this repository") stays on GitHub. Relative links become absolute `github.com/pmndrs/gi` links, since npmjs.com can't follow them. Edit the root README, never the copy (it's git-ignored).
 - **THIRD_PARTY.md** is the package's own (`packages/gi/THIRD_PARTY.md`, committed): only the code that ships in it: tinybvh's WebAssembly with the Emscripten runtime, the GPU tree builders ported from tinybvh and HIPRT, Split RC's raytracer code, and the radiance cache's port of AMD Capsaicin (with the platform's SSGI pass). The root `THIRD_PARTY.md` also lists test scenes and tools, which don't ship.
-- **licenses/** is copied from `packages/bvh/licenses/` and each technique's own `licenses/` folder (`radiance-cascades`, `radiance-cache`). The tinybvh and HIPRT texts are also inside the bundle, in `/*! */` comments that bundlers keep.
+- **licenses/** is copied from `packages/bvh/licenses/`, the platform's (`packages/core/src/platform/licenses/`) and each technique's own `licenses/` folder (`packages/cache/src/licenses/`; Split RC's `packages/core/src/techniques/radiance-cascades/licenses/` until it gets its own package). The tinybvh and HIPRT texts are also inside the bundle, in `/*! */` comments that bundlers keep.
 
 `@pmndrs/bvh` (the tree builders) is bundled into the package until pmndrs/bvh publishes its own; then it becomes a dependency.

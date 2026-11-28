@@ -61,7 +61,7 @@ export const PROBE_RESET_UNIFORM_WORDS = 20;
 export const PROBE_RESET_UNIFORM_BYTES = PROBE_RESET_UNIFORM_WORDS * 4;
 
 export const DDGI_PROBE_RESET_WGSL = /* wgsl */ `
-// ---- ddgi/reset-probes (techniques/ddgi/wgsl/probe-reset.ts) ---------------------------------------
+// ---- ddgi/reset-probes (packages/ddgi/src/wgsl/probe-reset.ts) -------------------------------------
 
 struct DdgiProbeReset {
     origin: vec4f,         // xyz: world position of the window's first probe (a fixed volume's first probe)

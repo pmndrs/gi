@@ -1,7 +1,7 @@
 /**
  * Compile-time check that procedural scene data can be handed to the
  * platform's scene contract as it is. There is no runtime import: a type-only
- * import is erased, so this does not couple `scenes` to `ddgi-core` at run time.
+ * import is erased, so this does not couple `scenes` to `gi-core` at run time.
  *
  * If the contract's light or material shapes change, `pnpm typecheck` fails
  * here and the scene data shapes should follow.

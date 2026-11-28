@@ -42,9 +42,9 @@ These were held in the old machine's local agent memory, so they're written out 
 
 ## The GI denoiser and linked siblings
 
-The radiance cache's GI denoiser (RC4.3) is `Gi1Denoiser` from the sibling library pmndrs/denoiser. It is on npm since `denoiser@2.1.0` (2026-11-26) and imported from `denoiser/ffx`, an ordinary root devDependency. Until then it was linked from a local clone of the denoiser repo; that link, its pin and its build steps are gone.
+The radiance cache's GI denoiser (RC4.3) is `Gi1Denoiser` from the sibling library pmndrs/denoiser. It is on npm since `denoiser@2.1.0` (2026-11-26) and imported from `denoiser/ffx`, an ordinary dependency of `packages/cache` (and of the published package). Until then it was linked from a local clone of the denoiser repo; that link, its pin and its build steps are gone.
 
-- **Working on both:** to try an unreleased denoiser change, point the root devDependency at a local clone for a while (`"denoiser": "link:../pmndrs-denoiser/packages/denoiser"`, after `corepack yarn workspaces foreach -R --topological-dev --from denoiser run build` there), and put the npm version back before merging.
+- **Working on both:** to try an unreleased denoiser change, point packages/cache's dependency at a local clone for a while (`"denoiser": "link:../../../pmndrs-denoiser/packages/denoiser"`, after `corepack yarn workspaces foreach -R --topological-dev --from denoiser run build` there), and put the npm version back before merging.
 - **Still linked:** `@pathtracer/mlp` (the neural tail, P6.4), optional, from pmndrs/pathtracer, which isn't on npm. `node tools/linked-siblings.ts --fetch` (or `pnpm siblings:fetch`) clones it next to this repository at its pin; without it the tail stays off and everything else works. CI (`ci.yml`, `deploy-pages.yml`) runs the same `--fetch` step before `pnpm install`; the repository is public, so no token is needed.
 
 ## First steps on the Mac

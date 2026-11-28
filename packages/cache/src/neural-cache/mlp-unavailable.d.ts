@@ -6,7 +6,7 @@
  * loads this at run time: the tail imports the package dynamically, and a
  * missing one turns the tail off (tools/optional-siblings.ts).
  *
- * Mirrors pmndrs/pathtracer `packages/mlp/src` at the pinned commit (root
+ * Mirrors pmndrs/pathtracer `packages/mlp/src` at the pinned commit (packages/cache
  * package.json `linkedSiblings`); keep it in step when the pin moves.
  */
 

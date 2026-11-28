@@ -72,7 +72,7 @@ M3 adds:
 
 - **B0 (tinybvh, WASM worker):** the best trees (lowest SAH cost). Sponza takes 3.9 s in the worker.
 - **B1 (GPU LBVH, branch `bvh-b1`, being merged into `m1`):** Sponza's 5.74 M triangles in 31.2 ms on the RTX. Its trees cost 1.22× tinybvh's SAH and trace at 0.82× (closest hit) and 0.80× (any hit). It builds every mesh of a batch with the same dispatches, in exactly the tracer's layout. It needs subgroups; without them `createMeshLayoutBuilder` uses tinybvh.
-- **What B1 still needs from the CPU:** node counts, depth and "refused" flags come back through a stats readback, and `GpuMeshRefit` takes a tree's shape from a CPU copy of its layout (`setTree`, via `readLayouts`). **It isn't wired into `ddgi-core` yet;** the platform builds with tinybvh only.
+- **What B1 still needs from the CPU:** node counts, depth and "refused" flags come back through a stats readback, and `GpuMeshRefit` takes a tree's shape from a CPU copy of its layout (`setTree`, via `readLayouts`). **It isn't wired into `gi-core` yet;** the platform builds with tinybvh only.
 - **B1a top level:** refit on the GPU every frame; the shape rebuilt in a worker when an instance is created or quality drifts (DECISIONS 2026-11-04). New instances appear when the worker's shape arrives (about 55 ms at 10,000 instances, less for small scenes).
 - **B2 (H-PLOC):** target trees within 1.15× tinybvh's SAH and trace speed ≥ 0.9× B0's. Dennis (2026-11-05): B2 is done **before M3 sign-off, not before M3 starts**. It must not block anything, and the fallbacks (tinybvh, LBVH) always stay. (DECISIONS 2026-11-04 had "B1–B2 before M3"; the M1 lead records the change.)
 
@@ -151,9 +151,9 @@ SPEC's tracing decision: deforming meshes "keep their BVH shape", refit every fr
 
 **Built (on `m1`):**
 
-- **Rigid movers: the top level is refit on the GPU every frame** (B1a, in `ddgi-core`'s tracer, `ray-queries.ts` and `top-level-gpu.ts`): 0.084 ms for 10,000 moving instances on the RTX. Its quality is tracked without a GPU readback: every 250 ms a worker computes the same relative SAH cost (`refitOnCpu`) from transforms the main thread packs for it (about 1.3 ms for 10,000 instances), and past 1.25× the built cost the top level is rebuilt in the worker (`top-level-async.ts`) and swapped in. The counters show `quality rebuilds`. 1.25× suits the top level because it's a small share of trace time.
+- **Rigid movers: the top level is refit on the GPU every frame** (B1a, in `gi-core`'s tracer, `ray-queries.ts` and `top-level-gpu.ts`): 0.084 ms for 10,000 moving instances on the RTX. Its quality is tracked without a GPU readback: every 250 ms a worker computes the same relative SAH cost (`refitOnCpu`) from transforms the main thread packs for it (about 1.3 ms for 10,000 instances), and past 1.25× the built cost the top level is rebuilt in the worker (`top-level-async.ts`) and swapped in. The counters show `quality rebuilds`. 1.25× suits the top level because it's a small share of trace time.
 - **Deforming meshes: the mesh-tree refit** (`GpuMeshRefit`, B1, in `packages/bvh`): it rewrites a mesh's triangle records from a vertex buffer and refits its boxes, with the same relative-cost signal (`latestStats.relativeCost`, behind `diagnostics: true`). Section 3 above plans its use.
-- **GPU builders:** the LBVH (B1) and H-PLOC (B2, the default GPU builder: Sponza's 5.74 M triangles in 46.6 ms, SAH 1.03× tinybvh's, trace speed 0.95–1.02×). Neither is wired into `ddgi-core` yet; that's the M2 item "fast first GI" (DECISIONS 2026-11-06 keeps it, as a lower item).
+- **GPU builders:** the LBVH (B1) and H-PLOC (B2, the default GPU builder: Sponza's 5.74 M triangles in 46.6 ms, SAH 1.03× tinybvh's, trace speed 0.95–1.02×). Neither is wired into `gi-core` yet; that's the M2 item "fast first GI" (DECISIONS 2026-11-06 keeps it, as a lower item).
 
 **Gaps for moving objects:**
 

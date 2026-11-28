@@ -4,7 +4,7 @@
  * JavaScript conversion makes (stage B0b). For every mesh of each scene it
  * builds tinybvh's tree twice:
  *
- * - `build` (the tree's shape) followed by ddgi-core's `buildMeshBvhFromTopology`;
+ * - `build` (the tree's shape) followed by gi-core's `buildMeshBvhFromTopology`;
  * - `buildLayout` (the layout written inside the WASM);
  *
  * and compares the nodes, triangles, parents and box byte for byte, plus the

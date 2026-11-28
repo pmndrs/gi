@@ -147,7 +147,7 @@ await volume.start(renderer, scene, { bake: bytes });   // no warm-up passes
 const loaded = volume.loadBake(bytes);          // { stale, changedParts, savedAt, library }
 ```
 
-- The file is engine-neutral (ddgi-core's `DDGITechnique.saveField` / `loadField`, platform.md "Saved bakes"), so it doesn't depend on three.
+- The file is engine-neutral (packages/ddgi's `DDGITechnique.saveField` / `loadField`, platform.md "Saved bakes"), so it doesn't depend on three.
 - It loads only into a volume with the same layout: the same probe grid and place, tile sizes, light groups and sun layer, and camera-following volumes. Anything else throws `SavedFieldError` (from `@pmndrs/gi/ddgi`) with a message naming what differs.
 - The file records a fingerprint of the scene it was baked for. If the scene changed since (an object, a material, a texture, a light, the sky), it loads anyway as a starting point: `loaded.stale` is true, `loaded.changedParts` says which parts changed, and every probe updates from the loaded light. `{ ifSceneChanged: 'refuse' }` (`bakeIfSceneChanged` for `start`) throws instead.
 - With `start(..., { bake })`, `volume.loadedBake` says what was loaded. `start` still waits for the ray-tracing trees and calibrates the budget; it only skips the warm-up passes.

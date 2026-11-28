@@ -69,7 +69,7 @@ function wgslColor(color: readonly [number, number, number]): string {
 
 export const DDGI_SHADING_WGSL = /* wgsl */ `
 ${DDGI_SAMPLE_WGSL}
-// ---- DDGI shading module (techniques/ddgi/shading.ts) -----------------------------------
+// ---- DDGI shading module (packages/ddgi/src/shading.ts) ---------------------------------
 
 const DDGI_DEBUG_VIEW_GI_ONLY: u32 = ${DDGI_DEBUG_VIEW.giOnly}u;
 const DDGI_DEBUG_VIEW_COVERAGE: u32 = ${DDGI_DEBUG_VIEW.coverage}u;

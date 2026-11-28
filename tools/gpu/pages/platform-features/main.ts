@@ -57,7 +57,7 @@ function featureData(results: Record<CheckedFeature, FeatureResult>): Record<str
     return Object.fromEntries(CHECKED_FEATURES.map((feature) => [feature, results[feature]]));
 }
 
-/** Whether the platform's own advice (`optionalFeatures`, ddgi-core) asks for the feature. */
+/** Whether the platform's own advice (`optionalFeatures`, gi-core) asks for the feature. */
 function platformAdvises(adapter: GPUAdapter): Record<string, boolean> {
     const advised = new Set<string>(optionalFeatures(adapter));
     return Object.fromEntries(
