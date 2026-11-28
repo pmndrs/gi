@@ -21,6 +21,21 @@ Rules:
 
 ---
 
+## 2026-11-28 · #54 equal-time comparison: two-room VALID; queue stopped · lead (main session, Opus 5.5)
+Did: the comparison ran overnight in short steps (`2fe2f64`: one calibration point per run, each with the bench lock's cool wait to 50 C). Dennis stopped the GPU queue in the morning ("we cant wait any more"), so two-room finished and Sponza didn't.
+Verified (RTX 3060 Laptop, every row VALID: started at 49 C, 0% thermal throttling; reports in `C:\Users\denni\Documents\dev\gi-shared-bounce-results\overnight\`): two-room at an equal budget of about 490 ms of radiance-cache GPU time, two trials each, against per-hit GI-1.2:
+
+| | shared-cell | budgeted GI-1.2 |
+|---|---|---|
+| still: bias | +0.37%, +0.25% | +7.3%, +7.8% |
+| still: p95 block error | 0.028, 0.031 | 0.121, 0.136 |
+| still: ms per frame | 9.28, 10.00 | 9.49, 10.63 |
+| 12 frames after lamp ×2 and crate move: bias | −36.9%, −34.3% | −41.0%, −41.1% |
+
+Shared-cell is the more accurate at the same GPU time on two-room, still and after the change. Both lag the change about equally.
+Not verified: Sponza (its calibration points at 20k, 37.5k, 55k and 90k cells ran VALID, but the trials were stopped); the doorway images (`doorway-images.png`, saved, not yet read); the Mac.
+Next: Sponza trials when the GPU is free; then decide whether shared-cell replaces budgeted cells' per-hit second bounce. It stays opt-in.
+
 ## 2026-11-28 · #54 shared-cell bounce: merged main, reviewed, first GPU runs · implementer (Opus 5.5)
 
 Branch `codex/shared-cell-bounce` (PR #54, draft). Merged `origin/main` twice (44 commits incl. #65's 10-buffer packing, then #64). Conflict only in `hash-grid-cache.ts` `dispose()`. Experiment, not GI-1.2; opt-in, default off.
