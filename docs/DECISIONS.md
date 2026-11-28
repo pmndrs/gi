@@ -2,6 +2,11 @@
 
 Settled choices, newest first. Each entry is short: the decision, why, and what would make us revisit it. Changing a threshold or target counts as a decision and goes here.
 
+## 2026-11-28
+
+- **P6.5's recommendation is accepted, and the radiance-cache experiments close as opt-in variants** (Dennis, 2026-11-28: "I'll go with your recs on things ... these long timing runs are delaying problem solving"). The default stays the GI-1.2 grid with DDGI as the second bounce when a volume is stacked (the smallest bias on all ten views, 3.1% averaged). SHaRC, budgeted cells, the neural tail, cache feedback (E12) and temporal feedback (D68) stay opt-in and off. DDGI is not stacked under SHaRC, which ignores it. With no volume, SHaRC becomes the default world cache (P6.7), and the grid's capacity shrinks (P6.8). *Timing:* only five split runs (Bistro exterior) are VALID; the rest is relative, and its ordering matched the VALID runs, so it is accepted for this decision; VALID timing is P6.9. *Revisit* if VALID timing or the Mac reverses an ordering.
+- **Three checks changed after failing runs are accepted** (Dennis, 2026-11-28, on the lead's recommendation). RC3.6's cache-feedback gate is now between 1.05x two bounces and 1.02x every bounce looking level, because direction-keyed cells only hold an indirect value where a probe ray hit first (0.758 looking down, 0.950 level). #26's `ddgi-gpu-trees` speed bar is one-sided: GPU trees may be at most 5% slower than tinybvh's, and faster no longer fails. #52's surface-ray tie-break walks are compared with the merged tree's own answers at the unchanged 99.99% bar, not with the instanced tree's, which differ by known rounding.
+
 ## 2026-11-27
 
 - **The workspace packages are flat and technique-chained: `core`, `three`, then each technique and its three.js part** (Dennis, 2026-11-27: "they are supposed to be technique chained. so a core is fine, but items related only to ddgi should be in a folder for it"; on the flat layout: "I like your flat idea and if it could be one adapter then even better but I doubt it will mesh so nicely"). Target folders, all directly under `packages/`:

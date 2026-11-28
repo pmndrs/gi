@@ -293,10 +293,10 @@ Measured: ten views of seven scenes (both Cornell boxes, two-room, two views eac
 
 ## Recommendation
 
-**Provisional, pending a VALID timing run.** Neither Bistro exterior (the one outdoor scene) nor RC3.6's modes changed it.
+**Accepted by Dennis, 2026-11-28 (DECISIONS).** Neither Bistro exterior (the one outdoor scene), RC3.6's modes nor the five VALID timing runs changed it. Points 2 and 3 are TASKS P6.7 and P6.8; VALID timing for the rest is P6.9.
 
 1. **Keep the GI-1.2 grid over DDGI (`gi12-ddgi`) as the default when the host has a DDGI volume.** It has the smallest bias on all ten views and is the quickest to clear a ghost. It is also the calmest when still, and on big scenes it costs less than the grid alone.
-2. **Use SHaRC, not the grid on its own rays, when there is no DDGI volume.** Today `secondBounce: 'auto'` without a volume falls back to GI-1.2's rays, which read 25-62% dark in every closed room. SHaRC needs nothing from the host and is within 2-5 points of the grid over DDGI, matching it in the open scenes. It also uses under a third of the memory. It would mean `'auto'` picking the world cache at `prepare` by whether a fallback is stacked. Dennis's call.
+2. **Use SHaRC, not the grid on its own rays, when there is no DDGI volume.** Today `secondBounce: 'auto'` without a volume falls back to GI-1.2's rays, which read 25-62% dark in every closed room. SHaRC needs nothing from the host and is within 2-5 points of the grid over DDGI, matching it in the open scenes. It also uses under a third of the memory. It means `'auto'` picking the world cache at `prepare` by whether a fallback is stacked (P6.7).
 3. **Shrink the GI-1.2 grid's capacity, whichever is picked.** Its 1 GiB is Capsaicin's default and stays mostly empty on these scenes. On a Mac or a smaller GPU it is the first thing that won't fit. Sizing it from measured bucket use is a task of its own.
 4. **Keep budgeted cells as an opt-in for big scenes**, where it saves GPU time. It reacts more slowly to light changes and costs more on small scenes.
 5. **Leave the neural tail opt-in.** It can't light emitters, it is slow to warm up, it pumps, it costs the most, and its package is private. DDGI or SHaRC carry the later bounces better here.
