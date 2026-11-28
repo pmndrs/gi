@@ -37,7 +37,8 @@
  */
 
 import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
-import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform, type LoadedField, type LoadFieldOptions, type ProbeResetRequest, type Vec3 } from '@pmndrs/gi-core';
+import type { GIPlatform, Vec3 } from '@pmndrs/gi-core';
+import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type LoadedField, type LoadFieldOptions, type ProbeResetRequest } from '@pmndrs/gi-ddgi';
 import { GI_LIGHT_PRIORITY, type GILight, type ThreeGI } from '@pmndrs/gi-three';
 import { toLightProbeGrid, type ExportedLightProbeGrid, type ToLightProbeGridOptions } from './light-probe-grid.ts';
 import { restartVolume, startVolume, type DDGIVolumeStartOptions, type StartedGI } from './volume-start.ts';
@@ -196,7 +197,7 @@ export class DDGIVolume extends Light {
      * Takes effect in the next render. Throws before `start` has finished,
      * like {@link restart} (the technique itself ignores a call before
      * `prepare`). `DDGITechnique.resetProbes` in
-     * ddgi-core says exactly what happens to each probe.
+     * packages/ddgi says exactly what happens to each probe.
      */
     resetProbes(what: ProbeResetRequest = {}): void {
         if (!this.started) throw new Error('@pmndrs/gi/three: the DDGIVolume has no GI yet; await volume.start(renderer, scene) before resetting its probes.');
@@ -248,7 +249,7 @@ export class DDGIVolume extends Light {
 
     /**
      * Saves the probes as a saved bake (a `.ddgibake` file, engine-neutral:
-     * ddgi-core's saved-field.ts): what they have learned, with the layout
+     * packages/ddgi's saved-field.ts): what they have learned, with the layout
      * it needs and a fingerprint of the scene it was baked for. Pass it to
      * `start(renderer, scene, { bake })` or {@link loadBake} later to begin
      * with finished GI. One GPU readback, here only; save after `start` has

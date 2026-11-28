@@ -26,7 +26,7 @@
  *   re-reading `texture()`.
  */
 
-import type { ShadingModule, ShadingParameter } from '../../platform/contract/shading-module.ts';
+import type { ShadingModule, ShadingParameter } from '@pmndrs/gi-core/platform/contract/shading-module';
 import { DDGI_SHADING_WGSL } from './wgsl/shading.ts';
 
 /** The textures the module reads from the technique. */

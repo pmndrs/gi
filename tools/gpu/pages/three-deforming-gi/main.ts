@@ -74,7 +74,7 @@ import {
 } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { TestView, type TestViewImages } from '../ddgi-shared/harness.ts';
 import { runThreePage } from '../three-shared/harness.ts';

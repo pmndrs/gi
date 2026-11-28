@@ -50,7 +50,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { cameraRelativeInverseViewProjection } from '../../../../packages/cache/src/camera.ts';
 import { halfBitsToFloat } from '../../../../packages/cache/src/capsaicin-math.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import type { WorldCacheKind } from '../../../../packages/cache/src/settings.ts';
 import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';

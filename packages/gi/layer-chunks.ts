@@ -8,7 +8,7 @@
 //   platform  the engine-free GI platform and the bundled tree builders
 //             (packages/core/src/platform, packages/bvh); `/core` loads
 //             only this one
-//   ddgi      the DDGI technique (packages/core/src/techniques/ddgi);
+//   ddgi      the DDGI technique (packages/ddgi);
 //             `/ddgi` loads it and the platform
 //   three     the three.js adapter (packages/three and packages/ddgi-three); `.` and `/three` load
 //             all three
@@ -43,7 +43,7 @@ export function layerChunk(id: string): Layer | undefined {
     if (path.includes('/techniques/radiance-cascades/')) return 'rc';
     if (path.includes('/packages/cache/src/')) return 'radiance-cache';
     if (path.includes('/packages/three/src/') || path.includes('/packages/ddgi-three/src/')) return 'three';
-    if (path.includes('/packages/core/src/techniques/ddgi/')) return 'ddgi';
+    if (path.includes('/packages/ddgi/src/')) return 'ddgi';
     if (path.includes('/packages/core/src/platform/') || path.includes('/packages/bvh/')) return 'platform';
     return undefined;
 }

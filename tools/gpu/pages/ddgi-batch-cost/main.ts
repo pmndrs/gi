@@ -90,9 +90,9 @@
 import { PerspectiveCamera, type Lighting, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
-import { DDGITechnique, type DirectLightPath } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique, type DirectLightPath } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { costOnCurve, SATURATION } from '../../../../packages/core/src/platform/work-budget.ts';
-import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from '../../../../packages/core/src/techniques/ddgi/wgsl/trace.ts';
+import { DDGI_TRACE_WGSL, TRACE_WORKGROUP_SIZE } from '../../../../packages/ddgi/src/wgsl/trace.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';

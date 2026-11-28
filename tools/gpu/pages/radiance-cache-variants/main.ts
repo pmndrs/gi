@@ -65,7 +65,7 @@
 import { BoxGeometry, FloatType, Mesh, MeshStandardMaterial, NodeMaterial, PerspectiveCamera, QuadMesh, Raycaster, RenderTarget, Vector2, Vector3, type Light, type Material, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type CompareValues, type RadianceCacheVariantPreset } from '../../../../packages/cache/src/compare-toggles.ts';
 import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';

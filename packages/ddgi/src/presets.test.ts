@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { STORE_LAYER_SIZE, storeLayout, TEXTURE_LAYER_SIZES } from '../../platform/textures/texture-store-wgsl.ts';
+import { STORE_LAYER_SIZE, storeLayout, TEXTURE_LAYER_SIZES } from '@pmndrs/gi-core/platform/textures/texture-store-wgsl';
 import { DDGI_PRESET_NAMES, ddgiPreset, isDDGIPresetName, recommendPreset } from './presets.ts';
 import { DEFAULT_DDGI_SETTINGS, effectiveRaysPerProbe, MAX_RAYS_PER_PROBE, MIN_RAYS_PER_PROBE, withDefaults } from './settings.ts';
 

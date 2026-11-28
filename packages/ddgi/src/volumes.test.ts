@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { GILimitError } from '../../platform/contract/errors.ts';
+import { GILimitError } from '@pmndrs/gi-core/platform/contract/errors';
 import { withDefaults } from './settings.ts';
-import { DEFAULT_MAX_PASSES_PER_FRAME } from '../../platform/timing/gpu-timer.ts';
+import { DEFAULT_MAX_PASSES_PER_FRAME } from '@pmndrs/gi-core/platform/timing/gpu-timer';
 import { MAX_VOLUMES, planVolumes, TIMED_PASSES_PER_VOLUME, UnitSharer, VOLUME_TABLE_ROW_FLOATS, VOLUME_TABLE_TEXEL, volumeEdgeCoverage, volumeFloorUnits, volumeSettingsList, writeVolumeParameters, writeVolumeWindow } from './volumes.ts';
 
 // Two-room's volume (17 x 7 x 9 probes at 0.5 m) and a dense one inside it (13 x 12 x 13 at 0.25 m).

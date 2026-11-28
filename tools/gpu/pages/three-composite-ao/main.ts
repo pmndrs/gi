@@ -42,7 +42,7 @@ import { nodeObject, sample, unpackRGBToNormal, uv, vec4 } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';

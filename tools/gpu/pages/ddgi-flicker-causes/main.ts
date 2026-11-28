@@ -61,9 +61,9 @@ import { halfToFloat, imageMean, readTextureBytes, TestView } from '../ddgi-shar
 import { startViewerScene, warmUp, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';
-import { MAT3_COLUMN_WORDS, UNIFORM_WORD } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
-import { frameRayRotation } from '../../../../packages/core/src/techniques/ddgi/ray-rotation.ts';
-import type { DDGISettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { MAT3_COLUMN_WORDS, UNIFORM_WORD } from '../../../../packages/ddgi/src/layout.ts';
+import { frameRayRotation } from '../../../../packages/ddgi/src/ray-rotation.ts';
+import type { DDGISettings } from '../../../../packages/ddgi/src/settings.ts';
 
 const env = import.meta.env as Record<string, unknown>;
 

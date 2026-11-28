@@ -52,7 +52,7 @@
 import { Box3, PerspectiveCamera, Vector3, type Mesh, type Object3D } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES } from '../../../../packages/three/src/scene-sync.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';

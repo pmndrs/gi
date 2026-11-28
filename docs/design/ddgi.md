@@ -15,7 +15,7 @@ A box of probes on a regular grid. Each probe stores, in two texture atlases, th
 
 ## Where things live
 
-- `packages/core/src/techniques/ddgi/`: the technique (`DDGITechnique implements GITechnique<DDGISettings>`), its WGSL, its tests.
+- `packages/ddgi/src/`: the technique (`DDGITechnique implements GITechnique<DDGISettings>`), its WGSL, its tests.
 - It sees only `TechniqueContext` (scene copy, ray queries, hit shading, kernel builder, timer). Never the host, never three.js.
 - Test pages: `tools/gpu/pages/ddgi-*`.
 

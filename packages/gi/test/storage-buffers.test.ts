@@ -34,9 +34,9 @@ import { GIPlatformImpl } from '@pmndrs/gi-core/platform/gi-platform';
 import { GpuMeshPacker } from '@pmndrs/gi-core/platform/scene/gpu-mesh-packing';
 import { createInventoryGpu, describeOver, recordComputePipelines, worstPipeline, type InventoryPipeline } from '@pmndrs/gi-core/platform/testing/storage-inventory';
 import { TraceBatchKernel } from '@pmndrs/gi-core/platform/trace/trace-gpu';
-import { DDGITechnique, type DDGITechniqueOptions } from '@pmndrs/gi-core/techniques/ddgi/ddgi-technique';
-import { exportIrradianceSH } from '@pmndrs/gi-core/techniques/ddgi/irradiance-sh';
-import { DEFAULT_DDGI_SETTINGS, type DDGISettingsInput } from '@pmndrs/gi-core/techniques/ddgi/settings';
+import { DDGITechnique, type DDGITechniqueOptions } from '@pmndrs/gi-ddgi/ddgi-technique';
+import { exportIrradianceSH } from '@pmndrs/gi-ddgi/irradiance-sh';
+import { DEFAULT_DDGI_SETTINGS, type DDGISettingsInput } from '@pmndrs/gi-ddgi/settings';
 import { loadMlp } from '@pmndrs/gi-cache/neural-cache/mlp-loader';
 import { RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE, RadianceCacheTechnique } from '@pmndrs/gi-cache/radiance-cache-technique';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings } from '@pmndrs/gi-cache/settings';
@@ -334,7 +334,7 @@ const PIPELINE_SOURCES: Readonly<Record<string, RegExp | 'no storage buffers'>> 
     'core/src/platform/sky/platform-sky.ts': /gi sky /,
     'core/src/platform/textures/texture-store.ts': /gi\/texture-store/,
     'core/src/platform/trace/trace-gpu.ts': /batch (closest|any)/,
-    'core/src/techniques/ddgi/irradiance-sh.ts': /export-sh/,
+    'ddgi/src/irradiance-sh.ts': /export-sh/,
     'core/src/techniques/radiance-cascades/native.ts': /^RC (begin|gather)/,
     'core/src/techniques/radiance-cascades/transport.ts': /^RC transport /,
     'three/src/instance-id-resolve.ts': 'no storage buffers',
@@ -466,7 +466,7 @@ describe('storage buffers per shader stage in every pipeline gi builds (pmndrs/g
 
     // Reads what the tests above counted, so it runs after them (alone, with -t, it reports everything uncounted).
     it('every source file that makes a pipeline is covered above (counted, or declares no storage buffer)', () => {
-        const makers = ['bvh/src', 'core/src', 'cache/src', 'three/src', 'ddgi-three/src']
+        const makers = ['bvh/src', 'core/src', 'ddgi/src', 'cache/src', 'three/src', 'ddgi-three/src']
             .flatMap((directory) => sourceFiles(join(PACKAGES, directory)))
             .filter((path) => MAKES_PIPELINE.test(readFileSync(path, 'utf8')))
             .map((path) => relative(PACKAGES, path).replaceAll('\\', '/'))

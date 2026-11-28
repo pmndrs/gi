@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DirtyRegion, SceneChanges } from '../../platform/contract/scene-copy.ts';
+import type { DirtyRegion, SceneChanges } from '@pmndrs/gi-core/platform/contract/scene-copy';
 import { MOVER_BOX_WORD, MOVER_BOX_WORDS, MOVER_TABLE_CAPACITY, MOVER_TABLE_HEADER_WORDS } from './layout.ts';
 import { MOVER_HOT_FRAMES, MoverTable } from './mover-table.ts';
 

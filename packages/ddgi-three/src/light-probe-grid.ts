@@ -36,7 +36,7 @@
 
 import { Data3DTexture, DataUtils, HalfFloatType, LinearFilter, RGBAFormat } from 'three/webgpu';
 import { LightProbeGrid } from 'three/addons/lighting/LightProbeGrid.js';
-import { L2_SH_FLOATS_PER_PROBE, type IrradianceSHGrid } from '@pmndrs/gi-core';
+import { L2_SH_FLOATS_PER_PROBE, type IrradianceSHGrid } from '@pmndrs/gi-ddgi';
 
 /** The JSON format's version: bump it when the layout changes, and read old versions explicitly. */
 export const LIGHT_PROBE_GRID_JSON_FORMAT_VERSION = 1;

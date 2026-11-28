@@ -18,7 +18,7 @@
 
 import { assert, drainDevice, runGpuTest, watchDevice } from '../../client.ts';
 import { CORNELL_POINT_IN_AIR_VOLUME, createDdgiScene, FieldProbe, runFrames, type SurfacePoint, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
-import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import type { DDGIField } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 
 const FRAMES = 200;
 /** Largest allowed difference, relative to the larger value (with a small floor for values near 0). */

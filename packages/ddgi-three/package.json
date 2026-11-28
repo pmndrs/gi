@@ -12,6 +12,7 @@
     },
     "dependencies": {
         "@pmndrs/gi-core": "workspace:*",
+        "@pmndrs/gi-ddgi": "workspace:*",
         "@pmndrs/gi-three": "workspace:*"
     },
     "peerDependencies": {

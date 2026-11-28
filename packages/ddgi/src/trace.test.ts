@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rayScratchTraceWgsl, RAY_RESULT_BYTES, WORK_ITEM_BYTES } from '../../platform/shade/direct.ts';
+import { rayScratchTraceWgsl, RAY_RESULT_BYTES, WORK_ITEM_BYTES } from '@pmndrs/gi-core/platform/shade/direct';
 import { RAY_RECORD_BYTES } from './layout.ts';
 import { DEFAULT_DDGI_SETTINGS, FIXED_RAYS } from './settings.ts';
 import { defaultLightGroups, layerPlan } from './light-groups.ts';

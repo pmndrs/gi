@@ -41,7 +41,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/ddgi/src/layout.ts';
 import { createDdgiScene, halfToFloat, imageMean, readBuffer, readProbeData, releaseDeviceOnPageHide, runFrames, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 import { applyHysteresisMode, FIXED_097, parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';
 

@@ -108,8 +108,8 @@ import type { LightDescriptor } from '../../../../packages/core/src/platform/con
 import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import type { DDGISettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import type { DDGISettings } from '../../../../packages/ddgi/src/settings.ts';
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/cache/src/capsaicin-math.ts';
 import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';

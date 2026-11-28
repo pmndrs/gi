@@ -14,8 +14,8 @@
 import { PerspectiveCamera } from 'three/webgpu';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
-import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import { DEFAULT_WARM_UP_PASSES, type DDGISettingsInput } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { DEFAULT_WARM_UP_PASSES, type DDGISettingsInput } from '../../../../packages/ddgi/src/settings.ts';
 import type { MeshTreeOptions } from '../../../../packages/core/src/platform/trace/ray-queries.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadScene, type LoadedScene, type LoadSceneOptions } from '../../../../apps/viewer/src/scene/load-scene.ts';

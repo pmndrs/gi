@@ -9,7 +9,7 @@
  * `lightGroups.count` (its weights are live) and `sunLayer`.
  */
 
-import type { Vec3 } from '../../platform/contract/math.ts';
+import type { Vec3 } from '@pmndrs/gi-core/platform/contract/math';
 import type { DDGILightGroups } from './light-groups.ts';
 
 export interface DDGIVolumeSettings {

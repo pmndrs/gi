@@ -32,7 +32,7 @@
  *   same rate.
  */
 
-import { GILimitError } from '../../platform/contract/errors.ts';
+import { GILimitError } from '@pmndrs/gi-core/platform/contract/errors';
 import { minProbesPerFrame, probeGrid, type DDGIVolumeSettings, type ProbeGrid } from './settings.ts';
 
 /** At most this many volumes in one technique (m3-moving.md §4.1). */

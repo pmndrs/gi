@@ -11,8 +11,8 @@
  */
 
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import type { DDGISettingsInput } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import type { DDGISettingsInput } from '../../../../packages/ddgi/src/settings.ts';
 import { describeScene, loadManifest, type DescribedScene, type SceneOptions } from '../../../../examples/webgpu/hello/src/scene.ts';
 import { runFrame } from '../ddgi-shared/harness.ts';
 

@@ -137,7 +137,7 @@ import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platfo
 import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/cache/src/capsaicin-math.ts';
 import { furnaceCeiling, skyStripsCeiling } from '../../../../packages/cache/src/neural-cache/neural-tail-cpu.ts';
 import { NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/cache/src/neural-cache/neural-tail-wgsl.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/cache/src/world-cache/capacity.ts';

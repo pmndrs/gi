@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { DIRECT_SKY_LIGHT_BIT } from '@pmndrs/gi-core/platform/contract/shade';
 import { checkFieldLimits, fieldBytes, fieldLayout, keyDeltaStrideWords, propagationScratchStrideWords, scratchLayout } from './layout.ts';
 import { ALL_LIGHT_GROUPS_MASK, defaultLightGroups, layerPlan, lightGroupCount, MAX_IRRADIANCE_LAYERS, sunLayerWeight, writeLayerWeights } from './light-groups.ts';
 import { probeGrid } from './settings.ts';
 import { blendKernelWgsl } from './wgsl/blend.ts';
 import { composeKernelWgsl } from './wgsl/compose.ts';
 import { propagateKernelWgsl } from './wgsl/propagate.ts';
+import { DDGI_LIGHT_GROUP_MASK } from './wgsl/trace.ts';
 import { writeKernelWgsl } from './wgsl/write.ts';
 
 describe('light groups: the layer plan (T2.5, m2-lights.md §5)', () => {
@@ -164,5 +166,14 @@ describe('light groups: the layout', () => {
         expect(() => blendKernelWgsl({ irradianceTexels: 6, distanceTexels: 14, scratch: scratchLayout(6, 14, MAX_IRRADIANCE_LAYERS), reduction: 'workgroup' })).not.toThrow();
         // Compose binds 2 storage buffers: the list and its state.
         expect(composeKernelWgsl({ irradianceTexels: 6, irradianceLayers: 3 }).match(/var<storage/g)).toHaveLength(2);
+    });
+});
+
+describe("the platform's direct sky light (RC3.4): DDGI never opts in", () => {
+    it('the sky light bit is above every light group, and DDGI\'s trace mask never holds it', () => {
+        expect(DIRECT_SKY_LIGHT_BIT & ALL_LIGHT_GROUPS_MASK).toBe(0);
+        // Its trace's group mask holds group bits only (gi/direct's layer masks are within
+        // ALL_LIGHT_GROUPS_MASK), and the functions gi/direct calls never read the bit.
+        expect(DDGI_LIGHT_GROUP_MASK & DIRECT_SKY_LIGHT_BIT).toBe(0);
     });
 });

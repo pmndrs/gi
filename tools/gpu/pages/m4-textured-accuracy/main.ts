@@ -50,7 +50,7 @@ import { Box3, BoxGeometry, Euler, FloatType, Layers, Matrix4, Mesh as ThreeMesh
 import { vec4 } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { DDGICompositeNode, DEFAULT_GI_OCCLUSION_RADIUS, type GIOcclusionSettings } from '../../../../packages/three/src/composite.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';

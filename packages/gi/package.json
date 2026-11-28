@@ -78,6 +78,7 @@
     "devDependencies": {
         "@pmndrs/gi-cache": "workspace:*",
         "@pmndrs/gi-core": "workspace:*",
+        "@pmndrs/gi-ddgi": "workspace:*",
         "@pmndrs/gi-ddgi-three": "workspace:*",
         "@pmndrs/gi-three": "workspace:*",
         "@types/three": "0.187.0",

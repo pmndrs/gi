@@ -249,7 +249,7 @@ const GI_DIRECT_SMALLEST_NORMAL_HALF: f32 = 6.103515625e-5;
 // A value rounded to one of its two neighbouring half floats at random, in
 // proportion to how close it is to each, so packing it is exact and its
 // expected value is the value (see the file comment). 'random' is uniform in
-// [0, 1). The same rounding as DDGI's ddgiStochasticHalf (techniques/ddgi/wgsl/half.ts).
+// [0, 1). The same rounding as DDGI's ddgiStochasticHalf (packages/ddgi/src/wgsl/half.ts).
 fn giDirectStochasticHalf(value: f32, random: f32) -> f32 {
     // Half floats have 10 fraction bits, so neighbours are 2^(e - 10) apart for
     // a value in [2^e, 2^(e+1)); frexp gives e exactly.

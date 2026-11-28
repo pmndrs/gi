@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
-import type { GpuTimerScope } from '../../platform/contract/timing.ts';
+import type { ComputeKernel } from '@pmndrs/gi-core/platform/contract/wgsl';
+import type { GpuTimerScope } from '@pmndrs/gi-core/platform/contract/timing';
 import { DDGITechnique } from './ddgi-technique.ts';
 import { PROBE_STATE } from './layout.ts';
 import { PendingProbeReset, probeResetFlags, ProbeResetPass, resetProbeDataTexel, type ProbeResetVolume } from './probe-reset.ts';
 import { DDGI_PROBE_RESET_WGSL, PROBE_RESET_UNIFORM_BYTES, PROBE_RESET_UNIFORM_WORD, PROBE_RESET_WORKGROUP_SIZE } from './wgsl/probe-reset.ts';
-import { wgslNameProblems } from '../../../../bvh/src/wgsl-names.ts';
+import { wgslNameProblems } from '@pmndrs/bvh/wgsl-names';
 
 describe('what resetProbes asks for (DV-12)', () => {
     it('asks for nothing with {}, no argument, or both flags false: each flag defaults to false', () => {

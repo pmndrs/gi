@@ -6,7 +6,7 @@
  * uniforms and the unit tests.
  */
 
-import type { FrameCamera } from '../../platform/contract/frame.ts';
+import type { FrameCamera } from '@pmndrs/gi-core/platform/contract/frame';
 import { CAMERA_FALLOFF_SPACINGS, OUT_OF_VIEW_WEIGHT, type ProbeGrid } from './settings.ts';
 
 /** A plane `[x, y, z, w]`: a point p is on its inner side when `x·px + y·py + z·pz + w ≥ 0`. */

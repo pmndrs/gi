@@ -106,11 +106,24 @@ importers:
         specifier: npm:@pmndrs/bvh@0.1.0
         version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
 
+  packages/ddgi:
+    dependencies:
+      '@pmndrs/gi-core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@pmndrs/bvh':
+        specifier: workspace:*
+        version: link:../bvh
+
   packages/ddgi-three:
     dependencies:
       '@pmndrs/gi-core':
         specifier: workspace:*
         version: link:../core
+      '@pmndrs/gi-ddgi':
+        specifier: workspace:*
+        version: link:../ddgi
       '@pmndrs/gi-three':
         specifier: workspace:*
         version: link:../three
@@ -137,6 +150,9 @@ importers:
       '@pmndrs/gi-core':
         specifier: workspace:*
         version: link:../core
+      '@pmndrs/gi-ddgi':
+        specifier: workspace:*
+        version: link:../ddgi
       '@pmndrs/gi-ddgi-three':
         specifier: workspace:*
         version: link:../ddgi-three

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GILimitError } from '../../platform/contract/errors.ts';
+import { GILimitError } from '@pmndrs/gi-core/platform/contract/errors';
 import {
     checkFieldLimits,
     distanceFormatFor,

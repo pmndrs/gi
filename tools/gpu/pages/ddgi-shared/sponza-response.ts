@@ -11,10 +11,10 @@
 
 import { PointLight, Vector3, type DirectionalLight } from 'three/webgpu';
 import { assert } from '../../client.ts';
-import { cameraWeight, frustumPlanes } from '../../../../packages/core/src/techniques/ddgi/camera.ts';
-import { isKeyProbe, PROBE_HISTORY_FLAG } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
-import { NEAR_CAMERA_WEIGHT } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
-import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { cameraWeight, frustumPlanes } from '../../../../packages/ddgi/src/camera.ts';
+import { isKeyProbe, PROBE_HISTORY_FLAG } from '../../../../packages/ddgi/src/layout.ts';
+import { NEAR_CAMERA_WEIGHT } from '../../../../packages/ddgi/src/settings.ts';
+import type { DDGIField } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, readProbeData, TestView, type TestViewImages } from './harness.ts';
 import { applyHysteresisMode, FIXED_097, parseHysteresisMode } from './hysteresis-modes.ts';

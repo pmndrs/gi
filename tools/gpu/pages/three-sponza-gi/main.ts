@@ -22,7 +22,7 @@ import { MeshLambertMaterial, PerspectiveCamera, RenderTarget, type Material, ty
 import { FloatType } from 'three';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { materialDescriptor } from '../../../../packages/three/src/convert.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';

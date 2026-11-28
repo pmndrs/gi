@@ -23,8 +23,8 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { PROBE_STATE } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
-import type { PhaseBReduction } from '../../../../packages/core/src/techniques/ddgi/wgsl/blend.ts';
+import { PROBE_STATE } from '../../../../packages/ddgi/src/layout.ts';
+import type { PhaseBReduction } from '../../../../packages/ddgi/src/wgsl/blend.ts';
 import { createDdgiScene, imageMean, releaseDeviceOnPageHide, runFrame, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 import { probeSnapshot, type ProbeSnapshot } from '../ddgi-shared/moving.ts';
 import { bookmarkCamera, runCameraFrame } from '../ddgi-shared/response.ts';

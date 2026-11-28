@@ -35,7 +35,7 @@
 import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, Vector3, type Object3D } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { HIT_RECORD_BYTES, packRays, RAY_BYTES } from '../../../../packages/core/src/platform/trace/index.ts';
 import { toFloat32Ray } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';

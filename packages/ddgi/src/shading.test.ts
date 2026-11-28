@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ShadingParameter } from '../../platform/contract/shading-module.ts';
+import type { ShadingParameter } from '@pmndrs/gi-core/platform/contract/shading-module';
 import { DDGITechnique } from './ddgi-technique.ts';
 import { DDGI_SHADING_PARAMETER_NAMES, DDGIShadingModule, type DDGIFieldTextures, type DDGIShadingSource } from './shading.ts';
 import { DDGI_DEBUG_VIEW } from './wgsl/shading.ts';

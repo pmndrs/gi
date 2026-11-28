@@ -5,7 +5,6 @@ import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueScreenFram
 import type { WgslModule } from './contract/wgsl.ts';
 import { DEFAULT_UNITS_PER_FRAME, GIPlatformImpl } from './gi-platform.ts';
 import { checkComputeLimits, checkLimitNeeds, isSupported, KERNEL_COMPUTE_LIMITS, mergeLimitNeeds, optionalFeatures, requiredLimits } from './device-requirements.ts';
-import { BLEND_WORKGROUP_SIZE } from '../techniques/ddgi/wgsl/blend.ts';
 import { countGroupStorageBuffers, countStorageBuffers, orderModules, placeModules, PlatformKernelBuilder } from './kernel-builder.ts';
 import { createFakeGpu, FakeBuffer, type FakeEncoder, type FakeGpu } from './scene/testing/fake-gpu.ts';
 import { createCpuTracer } from './trace/cpu-traversal.ts';
@@ -248,11 +247,6 @@ describe('device requirements', () => {
         // Capped at what the adapter has, so requestDevice can't fail over them.
         const small = { maxComputeInvocationsPerWorkgroup: 128, maxComputeWorkgroupSizeX: 128 };
         expect(requiredLimits(adapter({ ...storage, ...small }, []))).toEqual({ ...storage, ...small });
-    });
-
-    it('asks for workgroups as large as the largest kernel uses', () => {
-        expect(KERNEL_COMPUTE_LIMITS.maxComputeWorkgroupSizeX).toBeGreaterThanOrEqual(BLEND_WORKGROUP_SIZE);
-        expect(KERNEL_COMPUTE_LIMITS.maxComputeInvocationsPerWorkgroup).toBeGreaterThanOrEqual(BLEND_WORKGROUP_SIZE);
     });
 
     it('checkComputeLimits names the compute limit a device is below (compatibility mode defaults to 128)', () => {

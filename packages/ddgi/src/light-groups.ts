@@ -43,8 +43,8 @@
  * WGSL generators; the kernels loop over whatever the plan lists.
  */
 
-import type { ColorRGB } from '../../platform/contract/math.ts';
-import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
+import type { ColorRGB } from '@pmndrs/gi-core/platform/contract/math';
+import type { DirectionalLightDescriptor } from '@pmndrs/gi-core/platform/contract/scene';
 
 /** Light groups of the contract: a light's `group` is 0..3 (contract/scene.ts). */
 export const MAX_LIGHT_GROUPS = 4;

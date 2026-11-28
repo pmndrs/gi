@@ -11,8 +11,8 @@
  * so these resets are the DDGI technique's own.
  */
 
-import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
-import type { GpuTimerScope } from '../../platform/contract/timing.ts';
+import type { ComputeKernel } from '@pmndrs/gi-core/platform/contract/wgsl';
+import type { GpuTimerScope } from '@pmndrs/gi-core/platform/contract/timing';
 import { PROBE_DATA_FORMAT, PROBE_STATE } from './layout.ts';
 import { PROBE_RESET_UNIFORM_BYTES, PROBE_RESET_UNIFORM_WORD, PROBE_RESET_UNIFORM_WORDS, PROBE_RESET_WORKGROUP_SIZE } from './wgsl/probe-reset.ts';
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FrameBudget } from './contract/frame.ts';
-import type { GITechnique } from './contract/technique.ts';
+import type { FrameBudget } from '@pmndrs/gi-core/platform/contract/frame';
+import type { GITechnique } from '@pmndrs/gi-core/platform/contract/technique';
 import {
     CALIBRATION,
     CalibrationBurst,
@@ -14,8 +14,8 @@ import {
     type BudgetReport,
     type Calibration,
     type CalibrationMemory,
-} from './work-budget.ts';
-import { FLOOR_MAX_CALIBRATED_SHARE, FLOOR_SWEEP_SECONDS, minProbesPerFrame } from '../techniques/ddgi/settings.ts';
+} from '@pmndrs/gi-core/platform/work-budget';
+import { FLOOR_MAX_CALIBRATED_SHARE, FLOOR_SWEEP_SECONDS, minProbesPerFrame } from './settings.ts';
 
 /** Sponza on the RTX 3060 back to back: latency-bound below about 30 probes, then about 6 µs a probe. */
 const sponzaLike = (units: number) => 0.2 + 1.0 * (1 - Math.exp(-units / 12)) + 0.006 * units;

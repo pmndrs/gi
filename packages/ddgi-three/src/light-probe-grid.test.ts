@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DataUtils, SphericalHarmonics3, Vector3 } from 'three/webgpu';
-import { L2_SH_FLOATS_PER_PROBE, projectIrradianceToSH, shProjectionDirections, type IrradianceSHGrid } from '@pmndrs/gi-core';
+import { L2_SH_FLOATS_PER_PROBE, projectIrradianceToSH, shProjectionDirections, type IrradianceSHGrid } from '@pmndrs/gi-ddgi';
 import { LIGHT_PROBE_GRID_JSON_FORMAT_VERSION, lightProbeGridFromJSON, lightProbeGridToJSON, packCoefficientAtlas, toLightProbeGrid } from './light-probe-grid.ts';
 
 type Rgb = readonly [number, number, number];

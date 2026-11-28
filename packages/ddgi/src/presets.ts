@@ -27,7 +27,7 @@
  * bug.
  */
 
-import type { GIPlatformOptions } from '../../platform/contract/platform.ts';
+import type { GIPlatformOptions } from '@pmndrs/gi-core/platform/contract/platform';
 import type { DDGISettings } from './settings.ts';
 
 export type DDGIPresetName = 'low' | 'medium' | 'high';

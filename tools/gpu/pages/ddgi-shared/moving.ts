@@ -7,8 +7,8 @@
  * Not a page itself (no index.html).
  */
 
-import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import { PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import type { DDGIField } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/ddgi/src/layout.ts';
 import { halfToFloat, readBuffer, readProbeData } from './harness.ts';
 
 type Vec3 = [number, number, number];

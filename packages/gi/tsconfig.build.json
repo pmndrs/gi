@@ -20,12 +20,14 @@
             "@pmndrs/gi-core/*": ["packages/core/src/*"],
             "@pmndrs/gi-cache": ["packages/cache/src/index.ts"],
             "@pmndrs/gi-cache/*": ["packages/cache/src/*"],
+            "@pmndrs/gi-ddgi": ["packages/ddgi/src/index.ts"],
+            "@pmndrs/gi-ddgi/*": ["packages/ddgi/src/*"],
             "@pmndrs/gi-three": ["packages/three/src/index.ts"],
             "@pmndrs/gi-three/*": ["packages/three/src/*"],
             "@pmndrs/gi-ddgi-three": ["packages/ddgi-three/src/index.ts"],
             "@pmndrs/gi-ddgi-three/*": ["packages/ddgi-three/src/*"]
         }
     },
-    "include": ["src", "../core/src", "../cache/src", "../three/src", "../ddgi-three/src"],
+    "include": ["src", "../core/src", "../ddgi/src", "../cache/src", "../three/src", "../ddgi-three/src"],
     "exclude": ["**/*.test.ts"]
 }

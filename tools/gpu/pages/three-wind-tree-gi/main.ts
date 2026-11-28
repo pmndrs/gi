@@ -32,7 +32,7 @@
 import { PerspectiveCamera, type Mesh, type Object3D, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';

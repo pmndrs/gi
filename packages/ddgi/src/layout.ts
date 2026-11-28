@@ -5,7 +5,7 @@
  * unit-tested without a GPU and shared by the TypeScript and the WGSL.
  */
 
-import { GILimitError } from '../../platform/contract/errors.ts';
+import { GILimitError } from '@pmndrs/gi-core/platform/contract/errors';
 
 /** One texel of border on every side of a tile, so bilinear filtering never reads a neighbour's tile. */
 export const TILE_BORDER = 1;

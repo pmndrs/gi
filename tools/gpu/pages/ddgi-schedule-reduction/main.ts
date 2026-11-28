@@ -33,7 +33,7 @@
 
 import { assert, runGpuTest } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { cameraFalloffDistance, cameraWeight, frustumPlanes, inViewMargin } from '../../../../packages/core/src/techniques/ddgi/camera.ts';
+import { cameraFalloffDistance, cameraWeight, frustumPlanes, inViewMargin } from '../../../../packages/ddgi/src/camera.ts';
 import {
     FRUSTUM_PLANE_WORDS,
     PRIORITY_BUCKETS,
@@ -45,10 +45,10 @@ import {
     UNIFORM_BYTES,
     UNIFORM_WORD,
     UNIFORM_WORDS,
-} from '../../../../packages/core/src/techniques/ddgi/layout.ts';
-import { priorityBucket, priorityCount, scheduleOnCpu, scrambleStride } from '../../../../packages/core/src/techniques/ddgi/schedule.ts';
-import { DEFAULT_PRIORITY_SHARE, probeGrid } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
-import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl, type ScheduleReduction } from '../../../../packages/core/src/techniques/ddgi/wgsl/schedule.ts';
+} from '../../../../packages/ddgi/src/layout.ts';
+import { priorityBucket, priorityCount, scheduleOnCpu, scrambleStride } from '../../../../packages/ddgi/src/schedule.ts';
+import { DEFAULT_PRIORITY_SHARE, probeGrid } from '../../../../packages/ddgi/src/settings.ts';
+import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl, type ScheduleReduction } from '../../../../packages/ddgi/src/wgsl/schedule.ts';
 import { readBuffer, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { bookmarkCamera } from '../ddgi-shared/response.ts';
 

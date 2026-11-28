@@ -269,7 +269,7 @@ export function blendKernelWgsl(shape: BlendKernelShape): string {
 ${DDGI_COMMON_WGSL}
 ${DDGI_STOCHASTIC_HALF_WGSL}
 
-// ---- DDGI blend kernel (techniques/ddgi) -----------------------------------------------
+// ---- DDGI blend kernel (packages/ddgi) -------------------------------------------------
 
 const DDGI_BLEND_WORKGROUP_SIZE: u32 = ${BLEND_WORKGROUP_SIZE}u;
 const DDGI_IRRADIANCE_TEXELS: u32 = ${irradianceTexels}u;

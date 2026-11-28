@@ -41,7 +41,7 @@ import { MeshletDrawingPipeline } from 'three/addons/pipelines/MeshletDrawingPip
 import { VisibilityBufferDrawingPipeline } from 'three/addons/pipelines/VisibilityBufferDrawingPipeline.js';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { ForwardRenderer, type RenderView } from '../../../../examples/webgpu/hello/src/renderer.ts';
 import { CAMERA_FAR, CAMERA_NEAR } from '../../../../examples/webgpu/hello/src/camera.ts';

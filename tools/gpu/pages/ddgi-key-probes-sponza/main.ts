@@ -44,9 +44,9 @@
  */
 
 import { assert } from '../../client.ts';
-import { priorityCount } from '../../../../packages/core/src/techniques/ddgi/schedule.ts';
-import { DEFAULT_PRIORITY_SHARE } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
-import { keyProbeCount, PROBE_HISTORY_FLAG } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import { priorityCount } from '../../../../packages/ddgi/src/schedule.ts';
+import { DEFAULT_PRIORITY_SHARE } from '../../../../packages/ddgi/src/settings.ts';
+import { keyProbeCount, PROBE_HISTORY_FLAG } from '../../../../packages/ddgi/src/layout.ts';
 import { imageMean } from '../ddgi-shared/harness.ts';
 import { describeErrors, stepResponse } from '../ddgi-shared/response.ts';
 import {

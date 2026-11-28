@@ -32,7 +32,7 @@ import type { GITechnique, TechniqueContext } from '../../../../packages/core/sr
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { GpuTimer } from '../../../../packages/core/src/platform/timing/gpu-timer.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type RadianceCacheVariantPreset } from '../../../../packages/cache/src/compare-toggles.ts';
 import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';

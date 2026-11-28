@@ -9,9 +9,7 @@ import { createTextureSamplingModule, TEXTURE_SAMPLING_ENTRIES, textureSamplingW
 import { SKY_CHANGE_MODULE_ENTRIES, SKY_RADIANCE_SH_BYTES, skyChangeModuleWgsl } from './sky-change.ts';
 import { DEFAULT_HIT_SHADING_SETTINGS, PlatformHitShading } from './hit-shading.ts';
 import { DIRECT_SKY_LIGHT, DIRECT_SKY_LIGHT_BIT, SHADE_MODULE_ENTRIES, SHADE_UNIFORM_LAYOUT, shadeModuleWgsl } from './wgsl.ts';
-import { ALL_LIGHT_GROUPS_MASK } from '../../techniques/ddgi/light-groups.ts';
 import { LIGHT_GROUP_COUNT } from '../contract/scene.ts';
-import { DDGI_LIGHT_GROUP_MASK } from '../../techniques/ddgi/wgsl/trace.ts';
 
 /** Just enough of a GPUDevice to construct hit shading in Node. */
 function fakeDevice(features: string[] = []): GPUDevice {
@@ -98,11 +96,8 @@ describe('hit shading', () => {
         // table's indices or the "no light" answer.
         expect(DIRECT_SKY_LIGHT_BIT).toBe(1 << LIGHT_GROUP_COUNT);
         expect(DIRECT_SKY_LIGHT_BIT & ((1 << LIGHT_GROUP_COUNT) - 1)).toBe(0);
-        expect(DIRECT_SKY_LIGHT_BIT & ALL_LIGHT_GROUPS_MASK).toBe(0);
         expect(DIRECT_SKY_LIGHT).not.toBe(0xffffffff);
-        // DDGI never opts in: its trace's group mask holds group bits only (gi/direct's layer
-        // masks are within ALL_LIGHT_GROUPS_MASK), and the functions gi/direct calls never read the bit.
-        expect(DDGI_LIGHT_GROUP_MASK & DIRECT_SKY_LIGHT_BIT).toBe(0);
+        // DDGI's side (its light groups and trace mask never hold the bit) is in packages/ddgi's light-groups.test.ts.
         const splitIrradiance = code.slice(code.indexOf('fn giDirectSplitIrradiance('), code.indexOf('fn giDirectReaches('));
         expect(splitIrradiance.length).toBeGreaterThan(0);
         expect(splitIrradiance).not.toContain('GI_DIRECT_SKY_LIGHT');

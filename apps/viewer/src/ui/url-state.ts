@@ -56,7 +56,7 @@
 import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
-import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/core/src/techniques/ddgi/presets';
+import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/ddgi/src/presets';
 import { COMPARE_URL_NAMES, readCompareValues, writeCompareValues, type CompareValues } from '../../../../packages/cache/src/compare-toggles';
 
 /**

@@ -93,7 +93,7 @@
 import { FloatType, NodeMaterial, PerspectiveCamera, QuadMesh, RenderTarget, type Mesh, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import { setCompareValues } from '../../../../packages/cache/src/compare-toggles.ts';
 import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings, type WorldCacheKind } from '../../../../packages/cache/src/settings.ts';

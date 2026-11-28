@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { LightHandle } from '../../platform/contract/handles.ts';
-import type { LightDescriptor, PointLightDescriptor } from '../../platform/contract/scene.ts';
-import type { LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
+import type { LightHandle } from '@pmndrs/gi-core/platform/contract/handles';
+import type { LightDescriptor, PointLightDescriptor } from '@pmndrs/gi-core/platform/contract/scene';
+import type { LightChange, SceneChanges } from '@pmndrs/gi-core/platform/contract/scene-copy';
 import { MARK_ENTRY_FLAG, MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_GEOMETRY_WORDS, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD, MARK_LIGHT_WORDS } from './layout.ts';
 import {
     buildMarkTable,

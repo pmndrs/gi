@@ -51,7 +51,7 @@ import {
 import { DataUtils, FloatType } from 'three';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { GILight } from '../../../../packages/three/src/gi-light.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';

@@ -35,9 +35,9 @@
 import { ACESFilmicToneMapping, FloatType, MeshLambertMaterial, NoToneMapping, PerspectiveCamera, RenderTarget, type Mesh, type Object3D, type Scene } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import { exportIrradianceSH, L2_SH_FLOATS_PER_PROBE, type IrradianceSHGrid } from '../../../../packages/core/src/techniques/ddgi/irradiance-sh.ts';
-import { PROBE_STATE } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { exportIrradianceSH, L2_SH_FLOATS_PER_PROBE, type IrradianceSHGrid } from '../../../../packages/ddgi/src/irradiance-sh.ts';
+import { PROBE_STATE } from '../../../../packages/ddgi/src/layout.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { lightProbeGridFromJSON, lightProbeGridToJSON, toLightProbeGrid } from '../../../../packages/ddgi-three/src/light-probe-grid.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';

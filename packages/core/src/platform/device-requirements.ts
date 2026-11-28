@@ -25,7 +25,7 @@ export const MIN_BIND_GROUPS = 4;
  * Compute limits the platform's kernels need where compatibility-mode
  * devices default lower (128 threads per workgroup; core devices default to
  * 256, so these change nothing there). The largest workgroups, 256 threads
- * along x: DDGI's blend kernel (techniques/ddgi/wgsl/blend.ts,
+ * along x: DDGI's blend kernel (packages/ddgi/src/wgsl/blend.ts,
  * `BLEND_WORKGROUP_SIZE`) and the BVH refit's repair pass
  * (packages/bvh/src/gpu-refit.ts). Other dimensions stay at 8 or less.
  * Workgroup memory isn't listed here: every platform kernel fits 16,384

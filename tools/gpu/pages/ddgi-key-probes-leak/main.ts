@@ -28,7 +28,7 @@
 
 import { assert, runGpuTest } from '../../client.ts';
 import type { FrameCamera } from '../../../../packages/core/src/platform/contract/frame.ts';
-import { isKeyProbe } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import { isKeyProbe } from '../../../../packages/ddgi/src/layout.ts';
 import { createDdgiScene, imageMean, loadManifest, releaseDeviceOnPageHide, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 import { bookmarkCamera, convergeField, probeCoordinates, readHistory, runCameraFrame, runCameraFrames, type ConvergeOptions } from '../ddgi-shared/response.ts';
 

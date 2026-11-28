@@ -35,8 +35,8 @@
  * while a change was still being taken in loads as if that change were done.
  */
 
-import type { SceneFingerprint } from '../../platform/contract/scene-copy.ts';
-import { halfToFloat } from '../../platform/contract/helpers.ts';
+import type { SceneFingerprint } from '@pmndrs/gi-core/platform/contract/scene-copy';
+import { halfToFloat } from '@pmndrs/gi-core/platform/contract/helpers';
 import { BYTES_PER_TEXEL, PROBE_HISTORY_FLAG, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, type DistanceFormat } from './layout.ts';
 
 /** The first four bytes of every saved field. */

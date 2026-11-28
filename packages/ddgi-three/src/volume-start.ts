@@ -17,7 +17,7 @@
  *    `GILimitError` naming the limit, with the fix for three.
  *
  * **The start-up frames.** The warm-up itself is the DDGI technique's since
- * T2.4b (`warmUpPasses`, `warmUpMaxSeconds`, `warmUpMinPasses`; ddgi-core's
+ * T2.4b (`warmUpPasses`, `warmUpMaxSeconds`, `warmUpMinPasses`; packages/ddgi's
  * ddgi-technique.ts): it waits for the ray-tracing trees, then makes up to
  * {@link DEFAULT_WARM_UP}.passes passes over every probe whatever the
  * frame's budget, stopping early after `maxSeconds` once `minPasses` are
@@ -35,23 +35,19 @@
  */
 
 import { PerspectiveCamera, type Camera, type Scene, type WebGPURenderer } from 'three/webgpu';
+import { createGI, GILimitError, type EnvironmentDescriptor, type FrameBudget, type GIPlatform } from '@pmndrs/gi-core';
 import {
-    createGI,
     ddgiPreset,
     DDGITechnique,
     DEFAULT_WARM_UP_MAX_SECONDS,
     DEFAULT_WARM_UP_MIN_PASSES,
     DEFAULT_WARM_UP_PASSES,
-    GILimitError,
     type DDGIPreset,
     type DDGIPresetName,
     type DDGISettingsInput,
-    type EnvironmentDescriptor,
-    type FrameBudget,
-    type GIPlatform,
     type LoadedField,
     type LoadFieldOptions,
-} from '@pmndrs/gi-core';
+} from '@pmndrs/gi-ddgi';
 import { ThreeGI, type GILightOptions, type PmndrsSkyLike } from '@pmndrs/gi-three';
 import type { DDGIVolume } from './ddgi-volume.ts';
 
@@ -72,7 +68,7 @@ export const DEFAULT_WARM_UP: WarmUpSettings = { passes: DEFAULT_WARM_UP_PASSES,
 /**
  * The calibration stops after this many frames even if the platform is
  * still measuring: a burst gives up after 400 frames and its confirmation
- * after 2 × 300 (`CALIBRATION` in ddgi-core's work-budget.ts).
+ * after 2 × 300 (`CALIBRATION` in packages/core's work-budget.ts).
  */
 export const CALIBRATION_MAX_STEPS = 1000;
 /** Calibration frames queued at once, so the GPU never waits for the CPU between them. */

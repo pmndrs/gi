@@ -55,7 +55,7 @@ import type { FrameInput } from '../../../../packages/core/src/platform/contract
 import type { InstanceHandle, LightHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { halfBitsToFloat } from '../../../../packages/cache/src/capsaicin-math.ts';
 import type { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';

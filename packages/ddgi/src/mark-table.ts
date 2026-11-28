@@ -23,10 +23,10 @@
  * M2.
  */
 
-import type { LightHandle } from '../../platform/contract/handles.ts';
-import type { Aabb } from '../../platform/contract/math.ts';
-import type { LightDescriptor } from '../../platform/contract/scene.ts';
-import type { DirtyRegion, LightChange, SceneChanges } from '../../platform/contract/scene-copy.ts';
+import type { LightHandle } from '@pmndrs/gi-core/platform/contract/handles';
+import type { Aabb } from '@pmndrs/gi-core/platform/contract/math';
+import type { LightDescriptor } from '@pmndrs/gi-core/platform/contract/scene';
+import type { DirtyRegion, LightChange, SceneChanges } from '@pmndrs/gi-core/platform/contract/scene-copy';
 import { MARK_ENTRY_FLAG, MARK_ENTRY_WORD, MARK_ENTRY_WORDS, MARK_GEOMETRY_WORD, MARK_HEADER_WORDS, MARK_KIND, MARK_LIGHT_KIND, MARK_LIGHT_WORD } from './layout.ts';
 import type { ProbeGrid } from './settings.ts';
 

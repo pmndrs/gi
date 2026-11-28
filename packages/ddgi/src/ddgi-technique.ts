@@ -70,15 +70,15 @@
  * light uses.
  */
 
-import type { DebugView } from '../../platform/contract/stats.ts';
-import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, WorkFloorRate } from '../../platform/contract/technique.ts';
-import type { DirectWorkList, RayScratch } from '../../platform/contract/shade.ts';
-import type { ColorRGB } from '../../platform/contract/math.ts';
-import type { LightHandle } from '../../platform/contract/handles.ts';
-import type { DirectionalLightDescriptor } from '../../platform/contract/scene.ts';
-import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
-import type { ComputeKernel } from '../../platform/contract/wgsl.ts';
-import { GILimitError } from '../../platform/contract/errors.ts';
+import type { DebugView } from '@pmndrs/gi-core/platform/contract/stats';
+import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, WorkFloorRate } from '@pmndrs/gi-core/platform/contract/technique';
+import type { DirectWorkList, RayScratch } from '@pmndrs/gi-core/platform/contract/shade';
+import type { ColorRGB } from '@pmndrs/gi-core/platform/contract/math';
+import type { LightHandle } from '@pmndrs/gi-core/platform/contract/handles';
+import type { DirectionalLightDescriptor } from '@pmndrs/gi-core/platform/contract/scene';
+import type { SceneChanges } from '@pmndrs/gi-core/platform/contract/scene-copy';
+import type { ComputeKernel } from '@pmndrs/gi-core/platform/contract/wgsl';
+import { GILimitError } from '@pmndrs/gi-core/platform/contract/errors';
 import {
     BYTES_PER_TEXEL,
     CENSUS_BACK_FACE_SKIPS_TOTAL,
@@ -206,7 +206,7 @@ import { PROPAGATE_ENTRY_POINTS, PROPAGATE_FIND_WORKGROUP_SIZE, propagateKernelW
 import { SCHEDULE_ENTRY_POINTS, SCHEDULE_WORKGROUP_SIZE, scheduleKernelWgsl } from './wgsl/schedule.ts';
 import { DDGI_DEBUG_VIEW, DDGI_PROBE_IRRADIANCE_FUNCTION } from './wgsl/shading.ts';
 import { WRITE_ENTRY_POINTS, writeKernelWgsl } from './wgsl/write.ts';
-import { fingerprintDifferences } from '../../platform/contract/helpers.ts';
+import { fingerprintDifferences } from '@pmndrs/gi-core/platform/contract/helpers';
 import {
     alignUp,
     convertDistanceTexels,

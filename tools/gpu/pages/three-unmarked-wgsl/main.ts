@@ -18,7 +18,7 @@ import { BoxGeometry, Mesh, MeshLambertMaterial, MeshStandardMaterial, NodeMater
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { ddgi, giAlbedo } from '../../../../packages/three/src/composite.ts';
 import { advanceThreeFrame } from '../three-composite-shared/composite-check.ts';

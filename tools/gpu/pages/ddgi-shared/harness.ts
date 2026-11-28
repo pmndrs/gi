@@ -18,9 +18,9 @@ import type { InstanceHandle, LightHandle, MaterialHandle } from '../../../../pa
 import type { GIPlatformOptions } from '../../../../packages/core/src/platform/contract/platform.ts';
 import type { EnvironmentDescriptor, LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique, type DDGIField, type DDGITechniqueOptions } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import type { DDGISettingsInput } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
-import { DDGI_SAMPLE_WGSL } from '../../../../packages/core/src/techniques/ddgi/wgsl/sample.ts';
+import { DDGITechnique, type DDGIField, type DDGITechniqueOptions } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import type { DDGISettingsInput } from '../../../../packages/ddgi/src/settings.ts';
+import { DDGI_SAMPLE_WGSL } from '../../../../packages/ddgi/src/wgsl/sample.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import type { CameraBookmark, ManifestLight, SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { describeProceduralScene } from '../../../../scenes/src/platform-scene.ts';

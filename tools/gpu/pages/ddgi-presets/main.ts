@@ -25,8 +25,8 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { DDGI_PRESET_NAMES, ddgiPreset, type DDGIPresetName } from '../../../../packages/core/src/techniques/ddgi/presets.ts';
-import { effectiveRaysPerProbe, probeGrid } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { DDGI_PRESET_NAMES, ddgiPreset, type DDGIPresetName } from '../../../../packages/ddgi/src/presets.ts';
+import { effectiveRaysPerProbe, probeGrid } from '../../../../packages/ddgi/src/settings.ts';
 import { createDdgiScene, frameInput, imageMean, releaseDeviceOnPageHide, runFrames, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 import { everyProbeEveryFrame } from '../ddgi-shared/page-preset.ts';
 

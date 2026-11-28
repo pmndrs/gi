@@ -60,13 +60,13 @@
  */
 
 import { Box3, FrontSide, PerspectiveCamera, Vector3, type Material, type Mesh, type Object3D } from 'three/webgpu';
-import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi/src/settings.ts';
 import { PathTracer, type PathTraceOptions } from '../ddgi-shared/path-tracer.ts';
 import { ProbeValues } from '../ddgi-shared/probe-values.ts';
 import { assert } from '../../client.ts';
 import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';

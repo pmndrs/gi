@@ -19,7 +19,7 @@ import { type context, isBackgroundDepth, mrt, normalView, output, packNormalToR
 import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import type { GITechnique } from '../../../../packages/core/src/platform/contract/technique.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type DDGICompositeOptions } from '../../../../packages/three/src/composite.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';

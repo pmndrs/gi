@@ -21,7 +21,7 @@
  *   the table: its box and slot may no longer mean the same object.
  */
 
-import type { SceneChanges } from '../../platform/contract/scene-copy.ts';
+import type { SceneChanges } from '@pmndrs/gi-core/platform/contract/scene-copy';
 import { MOVER_BOX_WORD, MOVER_BOX_WORDS, MOVER_TABLE_CAPACITY, MOVER_TABLE_HEADER_WORDS, MOVER_TABLE_WORDS } from './layout.ts';
 
 /** How long an object that stopped moving keeps its entry: 5 s at 60 Hz, so a door swung again soon after is still known. */

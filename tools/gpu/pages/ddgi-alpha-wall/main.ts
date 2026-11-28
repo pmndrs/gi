@@ -30,7 +30,7 @@ import type { MaterialHandle } from '../../../../packages/core/src/platform/cont
 import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { checkerImage, CHECKER_SIZE } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
-import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import { THIN_WALL_EMBED_M, THIN_WALL_ROOM_SIZE_M, THIN_WALL_THICKNESS_M } from '../../../../scenes/src/procedural/thin-wall.ts';
 import { assert, runGpuTest } from '../../client.ts';
