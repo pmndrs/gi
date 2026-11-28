@@ -1,0 +1,133 @@
+/* The explainer panel (explainer.ts): top left, under the nav, ending above
+   the stats line. Folded, only its button shows. */
+.explainer {
+    /* Room kept at the bottom for the stats line (one line wide, up to three on a phone). */
+    --explainer-bottom-room: 44px;
+    position: fixed;
+    top: 56px;
+    left: 12px;
+    z-index: 20;
+    width: 360px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 56px - var(--explainer-bottom-room));
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    background: rgba(8, 10, 14, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    color: #cfd8e3;
+    font: 13px/1.5 system-ui, sans-serif;
+}
+@media (max-width: 720px) {
+    .explainer {
+        --explainer-bottom-room: 84px;
+    }
+}
+.explainer.closed {
+    width: auto;
+}
+.explainer-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 12px;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    color: #ffc878;
+    font: 600 12px/1.2 system-ui, sans-serif;
+    text-align: left;
+    cursor: pointer;
+}
+.explainer-toggle:hover,
+.explainer-toggle:focus-visible {
+    background: rgba(255, 200, 120, 0.1);
+}
+.explainer-chevron::before {
+    content: '▾';
+}
+.explainer.closed .explainer-chevron::before {
+    content: '▸';
+}
+.explainer.closed .explainer-body {
+    display: none;
+}
+.explainer-body {
+    overflow-y: auto;
+    padding: 0 12px 10px;
+    overscroll-behavior: contain;
+}
+.explainer-section {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.explainer-section > summary {
+    padding: 6px 0;
+    color: #e6edf5;
+    font-weight: 600;
+    cursor: pointer;
+}
+.explainer-section-body {
+    padding-bottom: 6px;
+}
+.explainer p {
+    margin: 0 0 6px;
+}
+.explainer code {
+    color: #ffc878;
+    font-size: 12px;
+}
+.explainer a {
+    color: #ffc878;
+}
+.explainer-steps {
+    margin: 0;
+    padding-left: 20px;
+}
+.explainer-steps li {
+    margin-bottom: 4px;
+}
+.explainer-diagram {
+    margin: 4px 0 6px;
+    color: #cfd8e3;
+}
+.explainer-diagram svg {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+.explainer-diagram figcaption {
+    color: #8b97a6;
+    font-size: 12px;
+}
+.explainer-tradeoffs {
+    width: 100%;
+    border-collapse: collapse;
+}
+.explainer-tradeoffs td {
+    padding: 3px 0;
+    vertical-align: top;
+}
+.explainer-tradeoffs .sign {
+    width: 18px;
+    font-weight: 700;
+}
+.explainer-tradeoffs .pro .sign {
+    color: #86efac;
+}
+.explainer-tradeoffs .con .sign {
+    color: #fda4af;
+}
+.explainer-tradeoffs .source {
+    display: block;
+    color: #8b97a6;
+    font-size: 11px;
+}
+.explainer-links {
+    margin: 4px 0 0;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 12px;
+}

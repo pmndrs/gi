@@ -10,7 +10,7 @@
  *
  *   PAGES_BASE=/gi/ pnpm examples:build
  *   node tools/examples/screenshots.ts [--out <dir>] [--filter <path substring>]
- *   node tools/examples/screenshots.ts --filter 11-radiance-cascades
+ *   node tools/examples/screenshots.ts --filter cascades/11-radiance-cascades
  *   node tools/examples/screenshots.ts --compare-backends --out docs/radiance-cascades/images
  *   Default output: bench/screenshots/t5.6 (gitignored).
  *
@@ -35,7 +35,7 @@ const READY_TIMEOUT_MS = 120_000;
 /** After the page reports GI, let it run this long before the picture: settled probes, a few seconds of motion. */
 const SETTLE_MS = 4000;
 /** Pages worth a second picture with other settings. */
-const EXTRA_PAGES = ['06-materials/?scene=glass-wall', '06-materials/?scene=uv-board', '10-debug/?view=gi-only', '10-debug/?view=coverage', '10-debug/?view=probe-states', 'webgpu/hello/?view=gi'];
+const EXTRA_PAGES = ['ddgi/06-materials/?scene=glass-wall', 'ddgi/06-materials/?scene=uv-board', 'ddgi/10-debug/?view=gi-only', 'ddgi/10-debug/?view=coverage', 'ddgi/10-debug/?view=probe-states', 'webgpu/hello/?view=gi'];
 
 interface PageState {
     frames: number;
@@ -138,7 +138,7 @@ async function main(): Promise<number> {
     if (pages.length === 0) throw new Error(`examples/dist is empty: run PAGES_BASE=${EXAMPLES_SITE_BASE} pnpm examples:build first.`);
     const compare = values['compare-backends'];
     const selected = compare
-        ? ['three', 'interval'].map(backend => `11-radiance-cascades/?scene=gallery&resolve=native&stride=2&backend=${backend}`)
+        ? ['three', 'interval'].map(backend => `cascades/11-radiance-cascades/?scene=gallery&resolve=native&stride=2&backend=${backend}`)
         : [...pages, ...EXTRA_PAGES].filter((page) => page.includes(values.filter));
     if (selected.length === 0) throw new Error(`No example matched --filter "${values.filter}".`);
 
@@ -181,7 +181,7 @@ async function main(): Promise<number> {
             browserErrors = [];
             await cdp.send('Page.navigate', { url: 'about:blank' });
             const url = new URL(page, `${site.origin}${EXAMPLES_SITE_BASE}`);
-            const isRail = page.startsWith('11-radiance-cascades/');
+            const isRail = page.startsWith('cascades/11-radiance-cascades/');
             if (isRail) url.searchParams.set('verify', '1');
             await cdp.send('Page.navigate', { url: url.href });
             if (isRail) {

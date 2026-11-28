@@ -24,7 +24,7 @@ document.body.append(iframe);
 async function open(scene: string, backend = 'interval') {
     const loaded = new Promise(resolve => iframe.addEventListener('load', resolve, { once: true }));
     const options = `verify=1&scene=${scene}&backend=${backend}&camera=receiver&cue=blue&motion=still&resolve=native&view=specular`;
-    iframe.src = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/?${options}`, location.origin).href;
+    iframe.src = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/?${options}`, location.origin).href;
     await loaded;
     return await waitForRailControl(iframe) as Control;
 }

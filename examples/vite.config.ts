@@ -1,20 +1,33 @@
-import { readdirSync } from 'fs';
+import { existsSync, readdirSync } from 'fs';
 import { resolve } from 'path';
 import { defineConfig, type Plugin } from 'vite';
 import { optionalSiblings, optionalSiblingsPlugin } from '../tools/optional-siblings.ts';
 
-// The examples site: a landing page and one folder per example
-// (`NN-name/index.html` + `main.ts`), plus the plain-WebGPU hello example.
-// `pnpm examples` serves it; `pnpm examples:build` builds it into examples/dist.
-// The library is read straight from source, so edits to it show up here at once.
+// The examples site: a landing page and the examples, grouped by method in
+// one folder each (`ddgi/01-hello/`, `cache/c1-no-volume/`, `cascades/11-…/`,
+// later `together/x1-…/`), each example an `index.html` + `main.ts`, plus the
+// plain-WebGPU hello example. `pnpm examples` serves it; `pnpm examples:build`
+// builds it into examples/dist. The library is read straight from source, so
+// edits to it show up here at once.
 const root = __dirname;
 const repoRoot = resolve(root, '..');
 
-/** Every numbered example folder (`01-hello`, `02-composite`, ...), found on disk so a new one can't be left out of the build. */
-const numberedExamples = readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^\d\d-/.test(entry.name))
-    .map((entry) => entry.name)
-    .sort();
+/** The method folders, in the landing page's order. */
+const METHOD_FOLDERS = ['ddgi', 'cache', 'together', 'cascades'];
+
+/**
+ * Every example folder (`ddgi/01-hello`, `cache/c1-no-volume`, ...): a folder
+ * named `NN-name` or `cN-`/`xN-name` under a method folder, found on disk so a
+ * new one can't be left out of the build.
+ */
+const examples = METHOD_FOLDERS.flatMap((method) => {
+    const folder = resolve(root, method);
+    if (!existsSync(folder)) return [];
+    return readdirSync(folder, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && /^[a-z]?\d+-/.test(entry.name) && existsSync(resolve(folder, entry.name, 'index.html')))
+        .map((entry) => `${method}/${entry.name}`)
+        .sort();
+});
 
 /**
  * Every example page gets the gallery's small nav (back to the examples, the
@@ -66,7 +79,7 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 index: resolve(root, 'index.html'),
-                ...Object.fromEntries(numberedExamples.map((name) => [name, resolve(root, name, 'index.html')])),
+                ...Object.fromEntries(examples.map((name) => [name, resolve(root, name, 'index.html')])),
                 'webgpu-hello': resolve(root, 'webgpu/hello/index.html'),
             },
             output: {

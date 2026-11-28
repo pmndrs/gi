@@ -7,10 +7,8 @@
  *
  * Everything comes from the public API: `gi.stats` for frames and memory,
  * and `cache.probes` for the irradiance image the composite reads. The mean
- * is one GPU readback, so it runs only every few seconds. There is no GPU
- * time: `gi.stats.passes` doesn't hold the cache's passes (they run in
- * `encodeScreen`, after the platform resolved its timestamps at the end of
- * `encode`), so their sum would leave out nearly all of its cost.
+ * is one GPU readback, so it runs only every few seconds. GPU time per
+ * pass, the screen stage's included since #52, is pass-timing.ts's.
  */
 
 import { halfToFloat, type GIPlatform } from '@pmndrs/gi/core';

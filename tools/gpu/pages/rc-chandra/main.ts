@@ -1,8 +1,8 @@
 import * as THREE from 'three/webgpu';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { add, normalWorld, positionWorld } from 'three/tsl';
-import { createNativeAdapter, type NativeAdapterOverrides } from '../../../../examples/11-radiance-cascades/native-adapter.ts';
-import { RealtimeRadianceCascades } from '../../../../examples/11-radiance-cascades/RealtimeRadianceCascades.js';
+import { createNativeAdapter, type NativeAdapterOverrides } from '../../../../examples/cascades/11-radiance-cascades/native-adapter.ts';
+import { RealtimeRadianceCascades } from '../../../../examples/cascades/11-radiance-cascades/RealtimeRadianceCascades.js';
 import { assert, drainDevice, reportGpuTest, summarizeAdapter, watchDevice } from '../../client.ts';
 import type { AdapterSummary } from '../../contract.ts';
 

@@ -86,7 +86,24 @@
                 border-top: 1px solid var(--border);
                 font-size: 13px;
             }
-            .presets a, .foot a {
+            .methods {
+                display: grid;
+                gap: 8px;
+                margin: 12px 0 16px;
+            }
+            .methods div {
+                padding: 10px 14px;
+                background: var(--card);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                color: var(--muted);
+            }
+            .methods strong {
+                color: var(--text);
+            }
+            p a,
+            .presets a,
+            .foot a {
                 color: var(--accent);
             }
         </style>
@@ -97,55 +114,63 @@
             <p>Real-time global illumination for WebGPU: light bounces off walls and floors, and follows moving lights, objects and the sun. Each example is the shortest code that shows one feature.</p>
             <p>These examples need WebGPU in Chrome or Edge 113+, or Safari 26+. Drag to orbit in the DDGI and radiance-cache examples, or ride the camera rail in Split Radiance Cascades.</p>
 
-            <h2>three.js</h2>
+            <h2>Which method for what</h2>
+            <div class="methods">
+                <div><strong>DDGI</strong> · Start here. A box of probes you place, like three's <code>LightProbeGrid</code>. The shortest set-up, the widest range of GPUs, its work inside a budget you set, saved bakes and a static fallback.</div>
+                <div><strong>Radiance cache</strong> · Probes on what the camera sees, over a world cache: no volume to place. For when a fixed grid is too coarse for the view, or no box fits the scene, and the device has the memory. Heavier and less tuned than DDGI today.</div>
+                <div><strong>Split Radiance Cascades</strong> · A separate study: a native WebGPU solver compared with a three.js reference, on a gallery you ride through.</div>
+            </div>
+            <p>The guide <a href="https://github.com/pmndrs/gi/blob/main/docs/guides/ddgi-or-radiance-cache.md">DDGI or the radiance cache?</a> compares the two, with numbers and their sources. Each example has an explainer panel: what you're seeing, how it works and what to try.</p>
+
+            <h2>DDGI</h2>
             <p>Through <code>@pmndrs/gi/three</code>: a <code>DDGIVolume</code> in the scene, like three's <code>LightProbeGrid</code>.</p>
             <div class="grid">
-                <a class="card" href="01-hello/">
+                <a class="card" href="ddgi/01-hello/">
                     <div class="number">01</div>
                     <div class="title">Hello GI</div>
                     <div class="description">A <code>DDGIVolume</code> in place of three's <code>LightProbeGrid</code>, on three's own probe-grid scene. The copy-paste starting point.</div>
                 </a>
-                <a class="card" href="02-composite/">
+                <a class="card" href="ddgi/02-composite/">
                     <div class="number">02</div>
                     <div class="title">GI composite with the upscaler</div>
                     <div class="description">GI added once per pixel with <code>ddgi()</code> on three's post-processing pipeline, through <code>@pmndrs/upscaler</code>: the fast path for dense scenes.</div>
                 </a>
-                <a class="card" href="03-lights/">
+                <a class="card" href="ddgi/03-lights/">
                     <div class="number">03</div>
                     <div class="title">Lights</div>
                     <div class="description">Move, dim, recolour and switch a lamp in the Cornell box. GI follows, and the room never goes dark while it does.</div>
                 </a>
-                <a class="card" href="04-moving-objects/">
+                <a class="card" href="ddgi/04-moving-objects/">
                     <div class="number">04</div>
                     <div class="title">Moving objects</div>
                     <div class="description">A door swings and a box slides. Nothing to call: GI sees the changes, and the far room goes dark when the door shuts.</div>
                 </a>
-                <a class="card" href="05-time-of-day/">
+                <a class="card" href="ddgi/05-time-of-day/">
                     <div class="number">05</div>
                     <div class="title">Time of day</div>
                     <div class="description">The sun crosses the sky over a courtyard. three's <code>SkyMesh</code> and sun light move together, and GI reads both.</div>
                 </a>
-                <a class="card" href="06-materials/">
+                <a class="card" href="ddgi/06-materials/">
                     <div class="number">06</div>
                     <div class="title">Materials</div>
                     <div class="description">Light through cut-out holes and glass, and textures with their own uv mapping, all seen by GI's rays.</div>
                 </a>
-                <a class="card" href="07-presets/">
+                <a class="card" href="ddgi/07-presets/">
                     <div class="number">07</div>
                     <div class="title">Quality presets</div>
                     <div class="description"><code>low</code>, <code>medium</code> and <code>high</code> switched live, with the probe count, memory and GPU time shown.</div>
                 </a>
-                <a class="card" href="08-saved-bake/">
+                <a class="card" href="ddgi/08-saved-bake/">
                     <div class="number">08</div>
                     <div class="title">Saved bake</div>
                     <div class="description">Save what the probes learned, reload the page from it, and start with finished GI, no warm-up.</div>
                 </a>
-                <a class="card" href="09-lightprobegrid/">
+                <a class="card" href="ddgi/09-lightprobegrid/">
                     <div class="number">09</div>
                     <div class="title">Export to LightProbeGrid</div>
                     <div class="description">GI exported as three's own <code>LightProbeGrid</code>, a static fallback, wiped against live GI.</div>
                 </a>
-                <a class="card" href="10-debug/">
+                <a class="card" href="ddgi/10-debug/">
                     <div class="number">10</div>
                     <div class="title">Debug views</div>
                     <div class="description">The probes and their states, GI alone, its coverage, and the irradiance atlas the probes write.</div>
@@ -155,26 +180,26 @@
             <h2>Radiance cache</h2>
             <p>Through <code>@pmndrs/gi/radiance-cache</code>, wired into three's post-processing pipeline with <code>@pmndrs/gi/three</code>: screen probes over a world cache, with no volume to place.</p>
             <div class="grid">
-                <a class="card" href="12-radiance-cache/">
-                    <div class="number">12</div>
-                    <div class="title">Radiance cache</div>
+                <a class="card" href="cache/c1-no-volume/">
+                    <div class="number">C1</div>
+                    <div class="title">No volume needed</div>
                     <div class="description">AMD's GI-1.0/1.2 on 01's scene: screen probes where the camera looks, lit through a world-space hash grid, with DDGI under it for the later bounces.</div>
                 </a>
             </div>
 
             <h2>Split Radiance Cascades</h2>
             <div class="grid">
-                <a class="card" href="11-radiance-cascades/">
+                <a class="card" href="cascades/11-radiance-cascades/">
                     <div class="number">11</div>
                     <div class="title">Lamp gallery camera rail</div>
                     <div class="description">Ride through the gallery as the side rooms change colour. Compare the native WebGPU solver and the Three.js reference in direct, indirect or combined light.</div>
                 </a>
             </div>
             <ul class="presets">
-                <li><a href="11-radiance-cascades/?scene=door&amp;camera=receiver&amp;view=indirect">Sliding shutter</a> · Watch the indirect light on a wall as a door covers and uncovers the lamp.</li>
-                <li><a href="11-radiance-cascades/?scene=polished">Polished gallery rail</a> · Follow the lamps’ reflections as the camera moves.</li>
-                <li><a href="11-radiance-cascades/?scene=roughness">Five floor finishes</a> · Compare the spread of a reflection across five roughness values.</li>
-                <li><a href="11-radiance-cascades/?scene=reflection-motion">Offscreen moving emitter</a> · Watch the reflection move while the camera stays still.</li>
+                <li><a href="cascades/11-radiance-cascades/?scene=door&amp;camera=receiver&amp;view=indirect">Sliding shutter</a> · Watch the indirect light on a wall as a door covers and uncovers the lamp.</li>
+                <li><a href="cascades/11-radiance-cascades/?scene=polished">Polished gallery rail</a> · Follow the lamps’ reflections as the camera moves.</li>
+                <li><a href="cascades/11-radiance-cascades/?scene=roughness">Five floor finishes</a> · Compare the spread of a reflection across five roughness values.</li>
+                <li><a href="cascades/11-radiance-cascades/?scene=reflection-motion">Offscreen moving emitter</a> · Watch the reflection move while the camera stays still.</li>
             </ul>
 
             <h2>No engine</h2>
@@ -188,7 +213,7 @@
             </div>
 
             <div class="foot">
-                The scenes are made in code (MIT). Source: <a href="https://github.com/pmndrs/gi/tree/main/examples">examples/</a> · Docs: <a href="https://github.com/pmndrs/gi/blob/main/docs/api/three.md">the three.js adapter</a>, <a href="https://github.com/pmndrs/gi/blob/main/docs/api/radiance-cache.md">the radiance cache</a>,<a href="https://github.com/pmndrs/gi/blob/main/docs/guides/adapter.md">writing an adapter</a>
+                The scenes are made in code (MIT). Source: <a href="https://github.com/pmndrs/gi/tree/main/examples">examples/</a> · Docs: <a href="https://github.com/pmndrs/gi/blob/main/docs/api/three.md">the three.js adapter</a>, <a href="https://github.com/pmndrs/gi/blob/main/docs/api/radiance-cache.md">the radiance cache</a>, <a href="https://github.com/pmndrs/gi/blob/main/docs/guides/adapter.md">writing an adapter</a>
             </div>
         </div>
     </body>
