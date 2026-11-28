@@ -44,7 +44,7 @@ showExplainer({
         'The two differ most where things meet: under the boxes, under the shelf board, between the legs and the wall. Those are the contacts.',
     ],
     how: [
-        "DDGI keeps light in probes on a grid, here 0.25 m apart. A surface reads the probes around it and blends them. The objects here are 0.1 to 0.35 m across, about one spacing or less, so the light around them changes over less than the spacing. That change is averaged away: it blurs.",
+        "DDGI keeps light in probes on a grid, here 0.25 m apart (or 0.5 m, from the panel). A surface reads the probes around it and blends them. The objects here are 0.1 to 0.35 m across, about one spacing or less, so the light around them changes over less than the spacing. That change is averaged away: it blurs.",
         'The radiance cache puts its probes on the surfaces the camera sees, one per 16 × 16 pixel tile, each tracing 64 rays from the surface itself. A probe on the shelf beside a box starts its rays there, so the box blocks the rays on its side. Its detail follows the screen, not a grid.',
         "The probes' rays end in a world cache. Here that is SHaRC (`worldCache: 'sharc'`), which needs no volume, so the cache's side has no probe grid at all.",
         "Both pictures come from one scene pass. Its depth, normals and motion feed the cache, and each technique's `ddgi()` composite adds its own GI to the same direct light. The wipe picks a side per pixel, or shows |cache − DDGI| × 4.",
