@@ -1,0 +1,42 @@
+{
+    "scene": "block-world",
+    "file": "block-world.exr",
+    "generator": "tools/sky/generate.ts",
+    "skyModel": "Preetham, Shirley and Smits 1999 (no sun disc; black below the horizon)",
+    "width": 512,
+    "height": 256,
+    "layout": "equirectangular, +Y up; row 0 is the zenith; u = atan2(z, x) / (2 pi) + 0.5, v (down from the top) = acos(y) / pi; the same as three.js equirectUV",
+    "sunDirection": [
+        0.501406,
+        0.621743,
+        0.601687
+    ],
+    "sunElevationDeg": 38.444,
+    "turbidity": 3,
+    "sunIlluminance": 2.86023,
+    "sunSource": "lights[0] \"sun\": intensity 3 x luminance of its colour",
+    "calibration": {
+        "model": "Ineichen and Perez 2002 clear sky (sea level), diffuse-to-direct horizontal ratio",
+        "skyToSunHorizontalRatio": 0.162991,
+        "diffuseFraction": 0.140148,
+        "airMass": 1.60576,
+        "intensity": 1,
+        "sunHorizontalIlluminance": 1.77833,
+        "targetSkyHorizontalIlluminance": 0.289852
+    },
+    "measured": {
+        "skyHorizontalIrradianceRgb": [
+            0.210119,
+            0.293383,
+            0.489655
+        ],
+        "skyHorizontalIlluminance": 0.289852,
+        "calibrationError": 2.76e-7
+    },
+    "flatEquivalentRadianceRgb": [
+        0.0668829,
+        0.0933866,
+        0.155862
+    ],
+    "pixelSha256": "80c96598f58edf2bd9883585b68a1a7be0b64c05405882461457198a332948a6"
+}

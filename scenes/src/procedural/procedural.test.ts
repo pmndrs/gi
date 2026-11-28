@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ProceduralScene, SceneInstanceData, SceneMeshData } from '../scene-data';
+import { BLOCK_WORLD_MAX_HEIGHT_M, blockWorldSun, buildBlockWorld } from './block-world';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
 import { buildCornellBox, CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from './cornell-box';
 import {
@@ -10,6 +11,7 @@ import {
 } from './furnace-room';
 import { createUnitBox, createUnitQuad, sceneBounds, triangleCount } from './geometry';
 import { buildProcedural, proceduralBuilders } from './index';
+import { OPEN_GROUND_HALF_SIZE_M } from './open-ground';
 import { buildThinWall, THIN_WALL_EMBED_M, THIN_WALL_THICKNESS_M } from './thin-wall';
 import { buildClosedDoor, buildTwoRoom } from './two-rooms';
 
@@ -86,8 +88,9 @@ describe.each(Object.keys(proceduralBuilders))('builder %s', (name) => {
     it('is built in realistic metres', () => {
         const { min, max } = sceneBounds(scene);
         // The open ground is a 200 m slab with a 1 m cube on it: open land under the
-        // sky, deliberately wide and flat. Every other scene is room-sized.
-        const limits = name === 'open-ground' ? { smallest: 1, largest: 250 } : { smallest: 2, largest: 20 };
+        // sky, deliberately wide and flat; the block world is a town on it, about as
+        // wide. Every other scene is room-sized.
+        const limits = name === 'open-ground' || name === 'block-world' ? { smallest: 1, largest: 250 } : { smallest: 2, largest: 20 };
         for (let axis = 0; axis < 3; axis++) {
             expect(max[axis] - min[axis]).toBeGreaterThan(limits.smallest);
             expect(max[axis] - min[axis]).toBeLessThan(limits.largest);
@@ -216,6 +219,45 @@ describe('cabinet-row', () => {
             const half = boxSize(instance).map((extent) => extent / 2);
             const inside = [0, 1, 2].every((axis) => Math.abs(centre[axis] - m[12 + axis]) < half[axis]);
             expect(inside, instance.name).toBe(false);
+        }
+    });
+});
+
+describe('block-world', () => {
+    it('builds the same town from the same seed, and another from another seed', () => {
+        expect(buildBlockWorld({ seed: 1 })).toEqual(buildBlockWorld({ seed: 1 }));
+        expect(buildBlockWorld()).toEqual(buildBlockWorld({ seed: 1 }));
+        expect(buildBlockWorld({ seed: 2 }).instances).not.toEqual(buildBlockWorld({ seed: 1 }).instances);
+    });
+
+    it('is about 200 m across, stands on the open ground and stays under its tallest height', () => {
+        for (const seed of [1, 2, 3]) {
+            const { min, max } = sceneBounds(buildBlockWorld({ seed }));
+            for (const axis of [0, 2]) {
+                expect(max[axis] - min[axis]).toBeGreaterThan(180);
+                expect(Math.max(-min[axis], max[axis])).toBeLessThanOrEqual(OPEN_GROUND_HALF_SIZE_M);
+            }
+            expect(min[1]).toBeLessThan(0); // sunk into the ground
+            expect(max[1]).toBeLessThanOrEqual(BLOCK_WORLD_MAX_HEIGHT_M);
+        }
+    });
+
+    it('has courtyards, buildings and plazas, and the sun as its one light', () => {
+        const scene = buildBlockWorld();
+        const names = scene.instances.map((instance) => instance.name);
+        expect(names.some((name) => name.includes('-over-gateway'))).toBe(true);
+        expect(names.some((name) => name.includes('-building-'))).toBe(true);
+        expect(names.some((name) => name.endsWith('-paving'))).toBe(true);
+        expect(scene.lights).toEqual([blockWorldSun()]);
+    });
+
+    it('leaves the streets clear: no solid stands where the streets cross at the origin', () => {
+        const scene = buildBlockWorld();
+        for (const instance of scene.instances) {
+            const centre = [instance.transform[12], instance.transform[14]];
+            const half = [boxSize(instance)[0] / 2, boxSize(instance)[2] / 2];
+            const covers = [0, 1].every((axis) => Math.abs(centre[axis]) < half[axis] + 2.9);
+            expect(covers, instance.name).toBe(false);
         }
     });
 });
