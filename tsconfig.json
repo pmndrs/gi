@@ -21,6 +21,7 @@
         "paths": {
             "@pmndrs/gi": ["packages/ddgi/src/index.ts"],
             "@pmndrs/gi/radiance-cascades": ["packages/ddgi/src/radiance-cascades.ts"],
+            "@pmndrs/gi/radiance-cache": ["packages/ddgi/src/radiance-cache.ts"],
             "@pmndrs/gi/core": ["packages/ddgi/src/core.ts"],
             "@pmndrs/gi/ddgi": ["packages/ddgi/src/ddgi.ts"],
             "@pmndrs/gi/three": ["packages/ddgi/src/three.ts"],

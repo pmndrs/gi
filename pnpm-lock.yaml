@@ -93,6 +93,9 @@ importers:
       '@pmndrs/rc-bvh':
         specifier: npm:@pmndrs/bvh@0.1.0
         version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
+      denoiser:
+        specifier: 2.1.0
+        version: 2.1.0(three@0.187.0)
     devDependencies:
       '@pmndrs/ddgi-core':
         specifier: workspace:*

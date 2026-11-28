@@ -48,6 +48,10 @@
         "./radiance-cascades": {
             "types": "./dist/radiance-cascades.d.ts",
             "import": "./dist/radiance-cascades.js"
+        },
+        "./radiance-cache": {
+            "types": "./dist/radiance-cache.d.ts",
+            "import": "./dist/radiance-cache.js"
         }
     },
     "main": "./dist/index.js",
@@ -81,6 +85,7 @@
         "vite": "^6.1.0"
     },
     "dependencies": {
-        "@pmndrs/rc-bvh": "npm:@pmndrs/bvh@0.1.0"
+        "@pmndrs/rc-bvh": "npm:@pmndrs/bvh@0.1.0",
+        "denoiser": "2.1.0"
     }
 }
