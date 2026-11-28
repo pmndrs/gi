@@ -1,6 +1,7 @@
 import { readdirSync } from 'fs';
 import { resolve } from 'path';
 import { defineConfig, type Plugin } from 'vite';
+import { optionalSiblings, optionalSiblingsPlugin } from '../tools/optional-siblings.ts';
 
 // The examples site: a landing page and one folder per example
 // (`NN-name/index.html` + `main.ts`), plus the plain-WebGPU hello example.
@@ -41,7 +42,10 @@ export default defineConfig({
     // dev and builds default to '/'. Links between pages are relative, so they
     // work under either.
     base: process.env.PAGES_BASE ?? '/',
-    plugins: [exampleNav()],
+    // Optional siblings (`@pathtracer/mlp`, the radiance cache's neural tail, which example 12 leaves off): the pinned
+    // clone in the dev server, else a module that throws when loaded. A build gets that module too (unless
+    // GI_BUNDLE_OPTIONAL_SIBLINGS=1), so the published site never bundles the private sibling.
+    plugins: [exampleNav(), optionalSiblingsPlugin()],
     resolve: {
         // Exact-match entries per public subpath: a plain '@pmndrs/gi' key is a
         // prefix alias and would send '@pmndrs/gi/core' to 'index.ts/core'.
@@ -81,6 +85,6 @@ export default defineConfig({
         port: 5203,
         open: false,
         // The scene builders and manifests live in scenes/, outside this folder.
-        fs: { allow: [repoRoot] },
+        fs: { allow: [repoRoot, ...optionalSiblings().flatMap((sibling) => (sibling.folder ? [sibling.folder] : []))] },
     },
 });

@@ -36,6 +36,7 @@ export const SNIPPET_DOCS = [
     { doc: 'docs/guides/adapter.md', slug: 'adapter-guide', context: 'core' },
     { doc: 'docs/api/platform.md', slug: 'platform', context: 'core' },
     { doc: 'docs/api/three.md', slug: 'three', context: 'three' },
+    { doc: 'docs/api/radiance-cache.md', slug: 'radiance-cache', context: 'radiance-cache' },
 ] as const;
 
 export const SNIPPETS_DIRECTORY = 'tools/docs/snippets';

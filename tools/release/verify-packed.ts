@@ -66,6 +66,8 @@ export const REQUIRED_FILES = [
     'licenses/pathtracer-MIT.txt',
     'licenses/pbrt-v4-Apache-2.0.txt',
     'licenses/capsaicin-MIT.txt',
+    'licenses/rtoy-samples-MIT.txt',
+    'licenses/assimp-BSD-3-Clause.txt',
 ];
 
 /**
@@ -512,11 +514,15 @@ function viteBuild(directory: string): void {
  * Windows can't delete either file while this process holds it.
  */
 export async function checkViteDevServer(directory: string): Promise<void> {
+    // The real path, for both the root and vite itself: vite serves only files under
+    // its root, compared after resolving them. With a Windows short name in the path
+    // (C:\Users\RUNNER~1, on CI), a short root refuses /main.ts with a 403, and a vite
+    // loaded from the short path looks for its own /@vite/client there and answers
+    // with index.html instead.
+    const root = realpathSync.native(directory);
     // The app's own vite, not the repository's: the one a user would run.
-    const vite = (await import(pathToFileURL(join(directory, 'node_modules/vite/dist/node/index.js')).href)) as typeof Vite;
-    // The real path: vite serves only files under its root, compared after resolving
-    // them, so a root with a Windows short name (C:\Users\RUNNER~1, on CI) refuses /main.ts with a 403.
-    const server = await vite.createServer({ root: realpathSync.native(directory), configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
+    const vite = (await import(pathToFileURL(join(root, 'node_modules/vite/dist/node/index.js')).href)) as typeof Vite;
+    const server = await vite.createServer({ root, configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
     await server.listen();
     const failures: string[] = [];
     try {

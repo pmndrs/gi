@@ -1,0 +1,5 @@
+{
+    "description": "P6.5: GPU time per frame and GPU memory of the radiance cache's world-cache variants (the compare panel's presets), the radiance cache's passes, the world cache's own and DDGI's (stacked at 256 probes a frame where the variant has it), on every scene at 1280x720 from its first bookmark, 120 timed frames after 240. Recorded, not gated; counts only with the bench lock's VALID verdict (run with the cool wait).",
+    "timeoutMs": 3600000,
+    "manual": true
+}

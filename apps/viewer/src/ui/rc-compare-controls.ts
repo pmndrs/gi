@@ -6,7 +6,10 @@
  * (`RADIANCE_CACHE_COMPARE_TOGGLES`), so a later branch adds a toggle there
  * and it appears here, in the links and in the tests with nothing else to
  * change. A small readout shows how much the GI changes per frame and the
- * frames since the last toggle change.
+ * frames since the last toggle change. A "Variant" list (P6.5,
+ * `RADIANCE_CACHE_VARIANT_PRESETS`) sets every toggle for one world-cache
+ * variant at once, and shows which variant the toggles make now ("mixed"
+ * when no preset does).
  *
  * Like the other panel parts it only builds controls and reports what the
  * user did; `ViewerApp` decides what that means.
@@ -17,6 +20,9 @@ import {
     COMPARE_GROUP_LABELS,
     COMPARE_GROUPS,
     compareTogglesIn,
+    RADIANCE_CACHE_VARIANT_PRESETS,
+    variantOfValues,
+    variantPreset,
     type CompareToggle,
     type CompareValues,
 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
@@ -50,6 +56,8 @@ export class RcCompareControls {
 
     private readonly controls: ToggleControl[] = [];
     private readonly readout = h('div', { className: 'value', text: '—' });
+    /** P6.5's world-cache variants; its value is the preset the toggles make now, or '' (mixed). */
+    private readonly variant = h('select');
     private values: CompareValues = {};
 
     constructor(private readonly handlers: RcCompareHandlers) {
@@ -60,9 +68,22 @@ export class RcCompareControls {
         ours.dataset.compare = 'all-ours';
         ours.addEventListener('click', () => this.set({}));
 
+        this.variant.dataset.compare = 'variant';
+        this.variant.append(h('option', { value: '', text: 'Mixed (no variant)' }));
+        for (const preset of RADIANCE_CACHE_VARIANT_PRESETS) {
+            const option = h('option', { value: preset.id, text: preset.label });
+            option.title = preset.help;
+            this.variant.append(option);
+        }
+        this.variant.addEventListener('change', () => {
+            const preset = variantPreset(this.variant.value);
+            if (preset) this.set(preset.values);
+        });
+
         this.section.append(
             withHelp(h('h2', { text: 'Radiance cache · compare' }), 'rcCompare'),
             h('div', { className: 'button-row' }, capsaicin, ours),
+            withHelp(h('div', {}, h('div', { className: 'label small', text: 'Variant ↺' }), this.variant), 'rcCompareVariant'),
             withHelp(h('div', { className: 'label' }, 'GI change per frame ', this.readout), 'rcCompareReadout'),
         );
         for (const group of COMPARE_GROUPS) {
@@ -112,6 +133,9 @@ export class RcCompareControls {
     }
 
     private showValues(): void {
+        const preset = variantOfValues(this.values);
+        this.variant.value = preset?.id ?? '';
+        this.variant.title = preset?.help ?? 'The toggles are a mix no variant preset makes.';
         const values = this.values as Record<string, Value | undefined>;
         for (const control of this.controls) {
             const value = values[control.entry.setting] ?? control.entry.defaultValue;
