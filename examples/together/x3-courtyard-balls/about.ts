@@ -57,7 +57,7 @@ showExplainer({
             { text: "Of the cache's variants, the grid over DDGI clears a moved box's ghost soonest: 90% of the way in 74 frames (median), budgeted cells 75, SHaRC 85.", source: SUMMARY },
         ],
         cons: [
-            { text: 'DDGI: after a 1 m slide, the pixels it changed were within 5% of settled from frame 15 to 29 (at 358 and 580 probes a frame).', source: DDGI_MOVES },
+            { text: 'DDGI: after a cabinet slid 1 m in the furnished room, the pixels it changed were within 5% of settled from frame 15 to 29 (at 358 and 580 probes a frame).', source: DDGI_MOVES },
             { text: 'No cache entry moves with its object yet: the light near a moved object is learnt again where it lands.', source: LIMITS },
             { text: "The denoiser that keeps the cache's still picture calm adds about 25 frames to a moved box's ghost (two-room).", source: LAG },
             {

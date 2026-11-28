@@ -23,7 +23,8 @@
  *   Each colonnade (x −8.6 to +7.6) is six columns with a curtain hanging
  *   to the floor in each of its five bays: the curtains' faces are at
  *   z = −2.12 and +1.51 (the columns' backs at −2.55 and +1.96), and the
- *   column bases stand 0.6 m into the strip.
+ *   column bases (to 1.8 m) stand 0.6 m into the atrium, their shafts
+ *   0.2 m.
  * - The ground-floor arcade runs all round, under vaults whose lowest point
  *   is about 2.6 m: along both long sides behind the curtains, and across
  *   both ends, where it opens onto the atrium (the sky is open only over
@@ -99,8 +100,13 @@ const SPONZA_BOXES: readonly Box[] = [
     // The two colonnades: columns and curtains, up through the galleries.
     box([-8.6, SPONZA_FLOOR, -2.55], [7.6, TOP, SPONZA_CURTAINS_Z[0]]),
     box([-8.6, SPONZA_FLOOR, SPONZA_CURTAINS_Z[1]], [7.6, TOP, 1.96]),
-    // The column bases, into the atrium.
-    ...SPONZA_COLUMNS_X.flatMap(([x0, x1]) => [box([x0, SPONZA_FLOOR, -2.2], [x1, 1.8, -1.5]), box([x0, SPONZA_FLOOR, 0.9], [x1, 1.8, 1.6])]),
+    // The columns: their bases (to 1.8 m) stand 0.6 m into the atrium, their shafts 0.2 m.
+    ...SPONZA_COLUMNS_X.flatMap(([x0, x1]) => [
+        box([x0, SPONZA_FLOOR, -2.2], [x1, 1.8, -1.5]),
+        box([x0, SPONZA_FLOOR, 0.9], [x1, 1.8, 1.6]),
+        box([x0, SPONZA_FLOOR, -2.2], [x1, TOP, -1.92]),
+        box([x0, SPONZA_FLOOR, 1.34], [x1, TOP, 1.6]),
+    ]),
     // The vaults over the arcade: everywhere but the open atrium.
     box([-13, VAULT, -7], [SPONZA_OPEN_X[0], TOP, 6]),
     box([SPONZA_OPEN_X[1], VAULT, -7], [12, TOP, 6]),
@@ -158,7 +164,7 @@ export async function loadSponza(renderer: THREE.WebGPURenderer, onProgress: (sh
         floorY: SPONZA_FLOOR,
         throwPath(radius, aim) {
             // Over the second-floor gallery's railing (about 8.6 m) or the roof's edge (about 11.6 m), on either side, down into the atrium.
-            const z = Math.random() < 0.5 ? SPONZA_CURTAINS_Z[0] + radius + 0.05 : SPONZA_CURTAINS_Z[1] - radius - 0.05;
+            const z = Math.random() < 0.5 ? SPONZA_CURTAINS_Z[0] + radius + 0.25 : SPONZA_CURTAINS_Z[1] - radius - 0.22;
             const height = (Math.random() < 0.5 ? 8.6 : 11.6) + radius;
             const inside = (x: number): number => THREE.MathUtils.clamp(x, SPONZA_OPEN_X[0] + radius, SPONZA_OPEN_X[1] - radius);
             const to = new THREE.Vector3(inside(aim?.x ?? random(-6.5, 5)), SPONZA_FLOOR + radius, THREE.MathUtils.clamp(aim?.z ?? random(-1.4, 0.8), SPONZA_CURTAINS_Z[0] + radius, SPONZA_CURTAINS_Z[1] - radius));
