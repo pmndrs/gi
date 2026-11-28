@@ -59,7 +59,7 @@ function validateSamples(samples: ReceiverSample[], expectedCount: number) {
 async function measure(backend: string) {
     const iframe = document.createElement('iframe');
     iframe.style.cssText = 'display:block;border:0;width:320px;height:180px';
-    const url = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/`, location.origin);
+    const url = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/`, location.origin);
     url.search = new URLSearchParams({ scene: 'door', camera: 'receiver', resolve: 'native', backend, verify: '1', stride: '2' }).toString();
     iframe.src = url.href;
     document.body.append(iframe);

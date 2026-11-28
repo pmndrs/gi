@@ -64,15 +64,15 @@ Where to go next:
 - [docs/api/three.md](docs/api/three.md): the three.js adapter, every option, and what it does with your scene.
 - [docs/guides/adapter.md](docs/guides/adapter.md): GI from plain WebGPU, or an adapter for another engine, step by step through [examples/webgpu/hello/](examples/webgpu/hello/).
 - [docs/api/platform.md](docs/api/platform.md): the engine-free API, `@pmndrs/gi/core` and `@pmndrs/gi/ddgi`.
-- [docs/api/radiance-cache.md](docs/api/radiance-cache.md): the second technique, the radiance cache (screen probes over a world cache, from AMD GI-1.0/1.2), with three.js or without; its example is `12-radiance-cache`. [DDGI or the radiance cache](docs/guides/ddgi-or-radiance-cache.md) says which to use, and how to stack DDGI under the cache.
+- [docs/api/radiance-cache.md](docs/api/radiance-cache.md): the second technique, the radiance cache (screen probes over a world cache, from AMD GI-1.0/1.2), with three.js or without; its example is `cache/c1-no-volume`. [DDGI or the radiance cache](docs/guides/ddgi-or-radiance-cache.md) says which to use, and how to stack DDGI under the cache.
 
 The examples run from this repository: `pnpm install`, then `pnpm examples`. The viewer (`pnpm dev`) shows every test scene with GI, its debug views and its settings.
 
 ## Split Radiance Cascades experiment
 
-**▶ [Try it live](https://pmndrs.github.io/gi/11-radiance-cascades/)**: a lamp-lit gallery you can walk through. You can also watch [a shutter close over a lamp](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=door&camera=receiver&view=indirect), follow [reflections on a polished floor](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=polished), or compare [five floor finishes](https://pmndrs.github.io/gi/11-radiance-cascades/?scene=roughness).
+**▶ [Try it live](https://pmndrs.github.io/gi/cascades/11-radiance-cascades/)**: a lamp-lit gallery you can walk through. You can also watch [a shutter close over a lamp](https://pmndrs.github.io/gi/cascades/11-radiance-cascades/?scene=door&camera=receiver&view=indirect), follow [reflections on a polished floor](https://pmndrs.github.io/gi/cascades/11-radiance-cascades/?scene=polished), or compare [five floor finishes](https://pmndrs.github.io/gi/cascades/11-radiance-cascades/?scene=roughness).
 
-Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. The example compares it with the Three.js reference on the same rail and offers temporal upscaling; locally it is at `/11-radiance-cascades/` under `pnpm examples`. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
+Import `NativeRadianceCascades` from `@pmndrs/gi/radiance-cascades` for the engine-independent WebGPU solver. Its WGSL passes own the probe cache and produce linear diffuse irradiance. The example compares it with the Three.js reference on the same rail and offers temporal upscaling; locally it is at `/cascades/11-radiance-cascades/` under `pnpm examples`. [Project spec](docs/radiance-cascades/SPEC.md) · [Implementation plan](docs/radiance-cascades/PLAN.md) · [Research](research/radiance-cascades/README.md)
 
 ## Browser support
 

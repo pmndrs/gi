@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import * as THREE from 'three/webgpu';
-import { makeDoorChamber } from '../../../../examples/11-radiance-cascades/door-scene.ts';
+import { makeDoorChamber } from '../../../../examples/cascades/11-radiance-cascades/door-scene.ts';
 
 const chamber = makeDoorChamber();
 const camera = new THREE.PerspectiveCamera(62, 16 / 9, 0.05, 40);

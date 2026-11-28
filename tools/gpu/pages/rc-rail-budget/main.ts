@@ -47,7 +47,7 @@ async function runArm(stride: number) {
     // A new browser document per arm resets probe history, low-discrepancy sequence and GPU allocations.
     const iframe = document.createElement('iframe');
     iframe.style.cssText = `display:block;border:0;width:${width}px;height:${height}px`;
-    const url = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/`, location.origin);
+    const url = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/`, location.origin);
     url.searchParams.set('verify', '1');
     url.searchParams.set('stride', String(stride));
     iframe.src = url.href;

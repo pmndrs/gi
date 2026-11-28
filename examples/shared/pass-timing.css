@@ -1,0 +1,60 @@
+/* GPU time per pass (pass-timing.ts). On its own it sits in the dock
+   (dock.css), bottom right; given a container it fills that instead. */
+.pass-timing {
+    box-sizing: border-box;
+    padding: 6px 10px;
+    color: #cfd8e3;
+    font: 12px/1.4 system-ui, sans-serif;
+}
+.pass-timing-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    color: #e6edf5;
+    font-weight: 600;
+}
+.pass-timing-total,
+.pass-ms {
+    color: #ffc878;
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+.pass-group {
+    margin-top: 4px;
+    color: #8b97a6;
+    font-size: 11px;
+}
+.pass > summary {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 8px;
+    padding: 1px 0;
+    list-style: none;
+    cursor: pointer;
+}
+.pass > summary::-webkit-details-marker {
+    display: none;
+}
+.pass > summary:hover .pass-name {
+    color: #ffc878;
+}
+.pass-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+}
+.pass-bar {
+    grid-column: 1 / -1;
+    height: 2px;
+    background: #ffc878;
+    opacity: 0.6;
+}
+.pass > p {
+    margin: 2px 0 6px;
+    color: #aab6c4;
+}
+.pass-timing-note {
+    margin: 6px 0 0;
+    color: #8b97a6;
+    font-size: 11px;
+}

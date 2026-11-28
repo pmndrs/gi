@@ -20,7 +20,7 @@ async function sequence(ratio: number, showCrop = true) {
     const query = new URLSearchParams({ verify: '1', backend: 'interval', scene: 'polished', camera: 'rail', view: 'lit',
         cue: 'blue', motion: 'still', specular: 'on', roughness: '0.24', sharpness: '0.3', resolve: mode, ratio: String(ratio) });
     const loaded = new Promise(resolve => frame.addEventListener('load', resolve, { once: true }));
-    frame.src = new URL(`${EXAMPLES_SITE_BASE}11-radiance-cascades/?${query}`, location.origin).href;
+    frame.src = new URL(`${EXAMPLES_SITE_BASE}cascades/11-radiance-cascades/?${query}`, location.origin).href;
     await loaded;
     try {
         const control = await waitForRailControl(frame);

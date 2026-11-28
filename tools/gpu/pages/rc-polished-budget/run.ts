@@ -36,7 +36,7 @@ if (process.argv[2] === '--inside-lock') {
 if (process.argv[3] && process.argv[3] !== '--uncapped') throw new Error('Usage: run.ts [output-directory] [--uncapped]');
 const cadence = process.argv[3] === '--uncapped' ? 'uncapped' : 'normal';
 const directory = resolve(process.argv[2] ?? 'bench/screenshots/rc-polished-budget');
-const gallery = readFileSync('examples/dist/11-radiance-cascades/index.html', 'utf8');
+const gallery = readFileSync('examples/dist/cascades/11-radiance-cascades/index.html', 'utf8');
 if (!gallery.includes('src="/gi/assets/')) throw new Error('Build examples with --base /gi/ before running the GPU harness.');
 mkdirSync(directory, { recursive: true });
 const pairs: ReturnType<typeof measurePair>[] = [];
