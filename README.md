@@ -28,6 +28,17 @@ One package, an import path per layer:
 
 `three` is an optional peer dependency, so a project that only imports `/core` and `/ddgi` doesn't install it. With TypeScript, add `@webgpu/types` for the WebGPU types.
 
+### Bundlers
+
+The ray-tracing trees come from [`@pmndrs/bvh`](https://www.npmjs.com/package/@pmndrs/bvh), which installs with the package and builds meshes' trees in web workers it starts from its own files. Vite and webpack 5 ship those files in a production build with no setup. Vite's dev server needs `@pmndrs/bvh` kept out of its dependency pre-bundling, or the workers aren't found and the trees are built on the main thread instead (it works, but slower):
+
+```js
+// vite.config.js
+export default { optimizeDeps: { exclude: ['@pmndrs/bvh'] } };
+```
+
+esbuild ships no worker files at all; see `@pmndrs/bvh`'s docs ("Workers", "Bundlers and dev servers").
+
 ## Getting started with three.js
 
 GI takes the place of three's `LightProbeGrid`, in as many lines. You give it a box and a number of probes; `start` copies your scene, warms the probes up, and from then on GI updates itself inside `renderer.render`:
