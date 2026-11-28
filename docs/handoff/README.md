@@ -38,7 +38,7 @@ Then M5 (tiers and release prep) is outlined in `PLAN.md` and `SPEC.md`.
 - three.js (r187) is the only adapter until v1 is validated. The core stays engine-neutral, enforced by a lint rule.
 - WebGPU feature-forward: subgroups first, one declared fallback per feature, no parallel GPU paths.
 - Port techniques faithfully first. Speedups are measured levers beside the faithful path, logged in a divergence register.
-- BVH: `packages/bvh` is engine-free and approved to split out to `pmndrs/bvh`. Port only permissively licensed code; never copy unlicensed repos.
+- BVH: the published `@pmndrs/bvh` (pinned, 0.1.1; `packages/bvh` was removed in #63). Fixes go to pmndrs/bvh as PRs or issues. Port only permissively licensed code; never copy unlicensed repos.
 
 **Agents:**
 - Code and review run on Opus, at medium effort or higher. Sonnet is only for small jobs, tests and measuring.

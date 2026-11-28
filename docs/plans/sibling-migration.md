@@ -1,6 +1,6 @@
 # Moving gi onto the published sibling libraries
 
-Plan written 2026-11-19 for Dennis's decision of that day (DECISIONS: gi uses the published `@pmndrs/bvh` and `@pmndrs/downsampler`; fixes go upstream as PRs or issues). Read against gi `main` 0d55a09, `radiance-cache` 7c80225, bvh 6163232 (0.1.0) and downsampler 78d5407 (0.1.0). Nothing here is done yet: it runs after the radiance-cache merge and the workspace rename (#32).
+Plan written 2026-11-19 for Dennis's decision of that day (DECISIONS: gi uses the published `@pmndrs/bvh` and `@pmndrs/downsampler`; fixes go upstream as PRs or issues). Read against gi `main` 0d55a09, `radiance-cache` 7c80225, bvh 6163232 (0.1.0) and downsampler 78d5407 (0.1.0). **Steps A and B are done** (pmndrs/gi#63, branch `bvh-published`, 2026-11-28, on `@pmndrs/bvh` 0.1.1); C to F are open.
 
 
 Read on 2026-11-19: gi `origin/main` 0d55a09, `origin/radiance-cache` 7c80225, bvh 6163232, downsampler 78d5407. Nothing was committed or filed.
@@ -18,8 +18,8 @@ The trace imports are the same on both branches. 0.1.0 exports only `.`, `/worke
 | `/gpu-mesh-refit` `GpuMeshRefit(+Kernels)` (deforming-trees) | root ✓; `setTree` with an offset now needs `nodeFormat` |
 | `/gpu-refit` `GpuBvhRefit`, `BVH_REFIT_STAT*` (ray-queries, top-level-gpu) | root ✓ |
 | `/gpu-instance-box`, `/refit-cpu` (`refitOnCpu`, `relativeSahCost`, `halfArea`, slot helpers, `PRIMITIVE_BOX_FLOATS`, `BVH_FLOAT_MAX`) | root ✓ (`refitOnCpu` refuses quantized nodes) |
-| radiance-cache only: `/gpu-scan` (`createScanPipelines` with `{reduction, io, layout}`, `encodeScan`, `ScanIo`, `SCAN_*`) in compute/gpu-compute.ts, wgsl.ts | **gap**: not exported, and it has no io and no fallback |
-| radiance-cache only: `/wgsl-names` `wgslNameProblems` (compute.test) | **gap**: not exported |
+| radiance-cache only: `/gpu-scan` (`createScanPipelines` with `{reduction, io, layout}`, `encodeScan`, `ScanIo`, `SCAN_*`) in compute/gpu-compute.ts, wgsl.ts | **gap**: not exported, and it has no io and no fallback. *Done (step A):* the scan is gi's, `platform/compute/scan.ts` and `workgroup-scan.ts` |
+| radiance-cache only: `/wgsl-names` `wgslNameProblems` (compute.test, and DDGI's probe-reset and scroll tests) | **gap**: not exported. *Done (step A):* gi's copy, `platform/testing/wgsl-names.ts` (§3, item 3) |
 
 Behind those imports, gi's own `platform/trace` (about 7,900 lines: walk, tree storage, GPU top level, deforming trees) is the pre-split code that bvh now owns (`src/trace`, `src/scene`). P3 deletes most of it.
 
@@ -37,10 +37,10 @@ Behind those imports, gi's own `platform/trace` (about 7,900 lines: walk, tree s
 
 ## 3. Upstream items
 
-1. **bvh issue: any-hit misses a hit at exactly `tMax`.** The docs promise `[tMin, tMax]` inclusive, and the triangle test is inclusive. Suspected cause: the slab test's entry distance (computed through `inverseDirection`) or `t = scaledT * (1/det)` rounds past a `tMax` that the caller computed exactly, and the any-hit walk has no slack the way the closest-hit walk's `farthest` does. Repro: pathtracer's interval boundary rays. Suggested fix: pad the `tMax` side of the slab test as the exit side already is, and pin it with an oracle case. gi's own walk has the same slab test, so the move adds no regression.
-2. **bvh PR for #3.** Turn the four walk `loop {}`s in `wgsl.ts` and `query-wgsl.ts` into constant-bounded `for` loops, add the final returns, and fix the `walk-counters` anchor. This matters most to gi: GI-1.0's kernels are large, and pathtracer measured 3.3x on D3D12. Prove it with trace-oracle, query-oracle and trace-inline.
-3. **Scan: move it into gi's `platform/compute`; do not PR it.** Move `ScanIo` and the workgroup fallback (gpu-scan plus workgroup-scan, about 400 lines) into gi. Reasons: bvh's declared no-subgroups fallback is tinybvh, so it never needs the workgroup path; exporting a general scan widens bvh past BVHs; and gi already owns compaction, indirect args and `rebind`. This is gi's code, not a frozen sibling copy. Copy `wgslNameProblems` too (about 20 lines).
-4. **bvh PR (or issue): a triangle-flags hook on placement in `SceneTrees`**, the twin of `requestTriangleFlags` (MIGRATING §8). The other route is `meshStatus(mesh).placement`.
+1. *Fixed in bvh 0.1.1 (pmndrs/bvh#4); gi's walk still has the old slab test until step C.* **bvh issue: any-hit misses a hit at exactly `tMax`.** The docs promise `[tMin, tMax]` inclusive, and the triangle test is inclusive. Suspected cause: the slab test's entry distance (computed through `inverseDirection`) or `t = scaledT * (1/det)` rounds past a `tMax` that the caller computed exactly, and the any-hit walk has no slack the way the closest-hit walk's `farthest` does. Repro: pathtracer's interval boundary rays. Suggested fix: pad the `tMax` side of the slab test as the exit side already is, and pin it with an oracle case. gi's own walk has the same slab test, so the move adds no regression.
+2. *Fixed in bvh 0.1.1 (pmndrs/bvh#3); gi's own walk gets it with step C.* **bvh PR for #3.** Turn the four walk `loop {}`s in `wgsl.ts` and `query-wgsl.ts` into constant-bounded `for` loops, add the final returns, and fix the `walk-counters` anchor. This matters most to gi: GI-1.0's kernels are large, and pathtracer measured 3.3x on D3D12. Prove it with trace-oracle, query-oracle and trace-inline.
+3. *Done in step A.* **Scan: move it into gi's `platform/compute`; do not PR it.** Move `ScanIo` and the workgroup fallback (gpu-scan plus workgroup-scan, about 400 lines) into gi. Reasons: bvh's declared no-subgroups fallback is tinybvh, so it never needs the workgroup path; exporting a general scan widens bvh past BVHs; and gi already owns compaction, indirect args and `rebind`. This is gi's code, not a frozen sibling copy. Copy `wgslNameProblems` too (about 20 lines).
+4. *Done in bvh 0.1.1 (pmndrs/bvh#5, `SceneTreesOptions.onTrianglesWritten`); gi uses it in step D.* **bvh PR (or issue): a triangle-flags hook on placement in `SceneTrees`**, the twin of `requestTriangleFlags` (MIGRATING §8). The other route is `meshStatus(mesh).placement`.
 5. **downsampler issue or PR: an ordered "first valid" uint fold with floor footprints** (see §4). DIVERGES l.164 already lists it as "no user has asked"; gi is that user.
 
 ## 4. Downsampler
@@ -61,12 +61,14 @@ downsampler's SPEC §14 lists only these as gi's users. DDGI's per-frame mark, s
 
 | Step | Work | Size | Risk |
 |---|---|---|---|
-| A | Scan into `platform/compute` | S | low |
-| B | Exact pin `@pmndrs/bvh@0.1.0`; root imports; renamed types; delete `packages/bvh` and its pages (bvh-\*, tlas-\*); `verify-packed`: bvh becomes a runtime dependency, not bundled; worker under Vite | M | low |
+| A | **Done** (#63). Scan into `platform/compute` | S | low |
+| B | **Done** (#63), with **0.1.1** in place of 0.1.0. Exact pin `@pmndrs/bvh@0.1.1`; root imports; renamed types; delete `packages/bvh` and its pages (bvh-\*; the tlas-\* pages stay until D, see below); `verify-packed`: bvh becomes a runtime dependency, not bundled; worker under Vite | M | low |
 | C | Walk: `traceModuleWgsl` (f32 nodes, `rayMasks: false` first), `gi*` wrappers, `bvhTrianglePasses`, CPU tracer options | L | med |
 | D | `SceneTrees` replaces gpu-mesh-trees, growable-storage, top-level-gpu, deforming-trees and the tree half of ray-queries; no `static` marks yet | L | high |
 | E | Measured levers, each a register row with RTX and M5 numbers: quantized nodes, merged statics, `hitNormal: false` for shadow batches, masks | M | med |
 | F | Motion: gi's own motion handling moves onto `@pmndrs/motion-vectors` (0.1.0; DECISIONS 2026-11-27). The three adapter may keep three's `velocity` node as its source. What gi does with motion itself takes the package: the velocity contract the screen inputs promise, cut detection for history resets (screen-probe history, the GI denoiser, DDGI's change intake), camera motion from depth where an engine gives no velocity, and the package's oracle audit of three's velocity as a GPU page. Behind a toggle against today's path, judged by ghosting first (Dennis: ghosting is bad, latency is acceptable) | M | med |
+
+**What B did beyond the table (2026-11-28):** gi's own mesh-tree and top-level workers gave way to `@pmndrs/bvh/worker`'s `createMeshBvhBuilder` and `createTopLevelBuilder`, or Vite would have inlined tinybvh into gi's dist with them; Vite dev servers (the examples, the viewer, verify:packed's app, and the README for users) keep `@pmndrs/bvh` out of `optimizeDeps`, as bvh's docs ask. The `tlas-oracle` and `tlas-bench` pages stay: they test gi's own top level (`top-level-gpu.ts` in `ray-queries`), which D replaces. tools/bvh (CPU tree tools of the copy) went with the copy.
 
 **Checks after each step:** lint, typecheck, unit tests. From C on, also: `trace-oracle` (0 mismatches), `trace-materials`, `trace-inline`, `trace-bench-quick` (all tracers agree), `trace-runtime-trees`, `ddgi-gpu-trees` (was `ddgi-tree-swap`), `ddgi-trees-no-subgroups`, `scene-*`, `three-composite`, `three-neutrality`, `three-deforming-gi`, `platform-compute` (both reduction paths), every `radiance-cache-*` page (hash-grid, image, overflow, probes, scenes, stability, temporal, three, viewer, world-cache), `examples-site`. Then the full `pnpm test:gpu`; accuracy pages within noise.
 

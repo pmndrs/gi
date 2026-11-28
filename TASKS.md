@@ -782,6 +782,7 @@ From 2026-11-19 the open follow-ups are GitHub issues on [pmndrs/gi](https://git
 - [#28](https://github.com/pmndrs/gi/issues/28) The hello example draws cutouts solid and glass opaque.
 - [#32](https://github.com/pmndrs/gi/issues/32) Rename the workspace from `ddgi` to `gi`, after the radiance-cache branch merges.
 - [#33](https://github.com/pmndrs/gi/issues/33) Release 0.1.0.
+- [#63](https://github.com/pmndrs/gi/issues/63) gi on the published `@pmndrs/bvh`: steps A (the scan into `platform/compute`) and B (pinned 0.1.1, `packages/bvh` and the alias gone, bvh's workers) done on branch `bvh-published`, 2026-11-28; steps C (bvh's walk), D (`SceneTrees`, `refine: false`) and E (measured levers) open ([docs/plans/sibling-migration.md](docs/plans/sibling-migration.md)). The Mac's BVH and DDGI pages for A and B are owed.
 - The old repo, `DennisSmolek/webgpu-ddgi`: Dennis picked "archive" (2026-11-18). That's his step.
 
 **Not yet issues: the radiance-cache track's follow-ups** (from P6.4's independent review, 2026-11-23; kept here by the merge into `main` until someone files them as issues)
