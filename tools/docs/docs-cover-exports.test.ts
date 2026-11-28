@@ -1,8 +1,9 @@
 /**
  * The docs cover what ships (docs/design/m5-coverage.md §4): every public
  * export of `@pmndrs/gi/core` and `@pmndrs/gi/ddgi` is named in
- * docs/api/platform.md, and every export of `@pmndrs/gi/three` in
- * docs/api/three.md, each in its subpath's "Every export of" section
+ * docs/api/platform.md, every export of `@pmndrs/gi/three` in
+ * docs/api/three.md and every export of `@pmndrs/gi/radiance-cache` in
+ * docs/api/radiance-cache.md, each in its subpath's "Every export of" section
  * (docs-cover-exports.ts). A new export fails here until its doc names it.
  */
 

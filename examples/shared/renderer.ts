@@ -16,6 +16,11 @@ export interface RendererOptions {
 
 /** A `WebGPURenderer` filling the window, with shadows and ACES tone mapping, its canvas in the page. */
 export async function createRenderer(options: RendererOptions = {}): Promise<THREE.WebGPURenderer> {
+    return (await createRendererAndDevice(options)).renderer;
+}
+
+/** The same renderer and its GPU device, for examples that make the GI platform themselves (`createGI(device)`). */
+export async function createRendererAndDevice(options: RendererOptions = {}): Promise<{ renderer: THREE.WebGPURenderer; device: GPUDevice }> {
     if (!navigator.gpu) throw new Error('This example needs WebGPU: Chrome or Edge 113+, or Safari 26+.');
     const { renderer, device } = await createGIRenderer({ renderer: { antialias: options.antialias ?? true } });
     // The host owns the device, so the host listens for its errors.
@@ -38,7 +43,7 @@ export async function createRenderer(options: RendererOptions = {}): Promise<THR
     renderer.shadowMap.enabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     document.body.append(renderer.domElement);
-    return renderer;
+    return { renderer, device };
 }
 
 /** Orbit controls around `target`, and the camera and canvas following the window's size. */
