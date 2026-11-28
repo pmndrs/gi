@@ -64,6 +64,18 @@
  * **Picking scenes, settings and frame counts** (vite env, as other pages):
  * `VITE_RC_ACCURACY_SCENES=two-room,sponza`, `VITE_RC_ACCURACY_CONFIGS=default,history off`,
  * `VITE_RC_ACCURACY_WARM_FRAMES`, `VITE_RC_ACCURACY_MEASURE_FRAMES`.
+ *
+ * **RC3.6 settings** (more than two bounces, picked by name only):
+ * `cache feedback` (register E12: GI-1.2's rays, each second hit bringing its
+ * cell's indirect value too), `temporal feedback` (D68: probe rays whose hit
+ * was on last frame's screen read last frame's lit image), `cache + temporal
+ * feedback`, and `fallback 256 temporal feedback` (DDGI stacked, 256 probes a
+ * frame, with temporal feedback). With any temporal-feedback setting picked,
+ * the technique is made with `useTemporalFeedback` on so it asks three for the
+ * lit colour and albedo (the other settings turn it off again).
+ * `VITE_RC_ACCURACY_NEURAL=tail` makes the technique with P6.4's neural tail
+ * for the whole run (read at prepare, as the backend is); run it with
+ * `gi1-rays`, the only second bounce the tail extends.
  * `VITE_RC_COMPARE` sets compare toggles (RC4.5, radiance-cache-probes/compare-env.ts)
  * under every configuration's own settings, for example RC4.1's blend weight:
  * `VITE_RC_COMPARE=rayGuidingCorrection=false`.
@@ -148,6 +160,13 @@ const E10_CONFIGURATIONS: readonly Configuration[] = [
     // With the screen probes' history off, which RC4.4 found too bright on Sponza.
     { name: 'fallback 512 history off', settings: { secondBounce: 'fallback' }, history: false, ddgiUnits: 512 },
 ];
+/** RC3.6: more than two bounces (registers E12, D68); run only when named. */
+const RC3_6_CONFIGURATIONS: readonly Configuration[] = [
+    { name: 'cache feedback', settings: { secondBounce: 'gi1-rays', cacheFeedback: true }, history: true },
+    { name: 'temporal feedback', settings: { secondBounce: 'gi1-rays', useTemporalFeedback: true }, history: true },
+    { name: 'cache + temporal feedback', settings: { secondBounce: 'gi1-rays', cacheFeedback: true, useTemporalFeedback: true }, history: true },
+    { name: 'fallback 256 temporal feedback', settings: { secondBounce: 'fallback', useTemporalFeedback: true }, history: true, ddgiUnits: 256 },
+];
 const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
 /**
  * `VITE_RC_ACCURACY_WORLD_CACHE=sharc`: the world-cache backend for the whole run (P6.1); the backend
@@ -155,9 +174,15 @@ const configurationNames = listFromEnv('VITE_RC_ACCURACY_CONFIGS');
  * Capsaicin's hash grid (multibounce, cell size) don't apply to the SHaRC cache.
  */
 const WORLD_CACHE: WorldCacheKind = env.VITE_RC_ACCURACY_WORLD_CACHE === 'sharc' ? 'sharc' : 'gi1-hash-grid';
+/** `VITE_RC_ACCURACY_NEURAL=tail`: P6.4's neural tail for the whole run (made at prepare). */
+const NEURAL_CACHE = env.VITE_RC_ACCURACY_NEURAL === 'tail' ? 'tail' : 'off';
+/** The run's settings under every configuration's own: the backend and the tail, made at prepare. */
+const RUN_SETTINGS: Partial<RadianceCacheSettings> = { worldCache: WORLD_CACHE, neuralCache: NEURAL_CACHE };
 const CONFIGURATIONS = configurationNames
-    ? [...ALL_CONFIGURATIONS, ...E10_CONFIGURATIONS].filter((configuration) => configurationNames.includes(configuration.name))
+    ? [...ALL_CONFIGURATIONS, ...E10_CONFIGURATIONS, ...RC3_6_CONFIGURATIONS].filter((configuration) => configurationNames.includes(configuration.name))
     : ALL_CONFIGURATIONS;
+/** RC3.6: a temporal-feedback setting needs the lit colour and albedo, asked for when the technique is made. */
+const NEEDS_LIT_IMAGE = CONFIGURATIONS.some((configuration) => configuration.settings.useTemporalFeedback === true);
 const NEEDS_DDGI = CONFIGURATIONS.some((configuration) => configuration.ddgiUnits !== undefined);
 
 /** Contact-sheet thumbnails, pixels across: four fit the runner's window (about 1,258 CSS pixels, NOTES). */
@@ -319,7 +344,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
     placeCamera(views[0]);
 
     const platform = new GIPlatformImpl(device, { label: `radiance-cache-accuracy ${sceneId}` });
-    const technique = platform.addTechnique(new RadianceCacheTechnique({ worldCache: WORLD_CACHE }));
+    const technique = platform.addTechnique(new RadianceCacheTechnique({ ...RUN_SETTINGS, useTemporalFeedback: NEEDS_LIT_IMAGE }));
     platform.setOutput(technique);
     // E10: DDGI stacked under the cache, with one light group so its environment layer can be weighed.
     const ddgiTechnique = NEEDS_DDGI
@@ -391,7 +416,7 @@ async function measureScene(context: ThreePageContext, sceneId: string, views: r
             const configurations: Record<string, ConfigurationResult> = {};
             const pictures: Record<string, RgbImage> = {};
             for (const configuration of CONFIGURATIONS) {
-                Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, { worldCache: WORLD_CACHE });
+                Object.assign(technique.settings, DEFAULT_RADIANCE_CACHE_SETTINGS, RUN_SETTINGS);
                 setCompareValues(technique.settings, PAGE_COMPARE_VALUES);
                 Object.assign(technique.settings, configuration.settings);
                 threeGI.budget = { units: configuration.ddgiUnits ?? 0 };

@@ -1,8 +1,9 @@
 /**
  * Lists the public exports of the published package's entry points:
  * `@pmndrs/gi/core` (the engine-free platform), `@pmndrs/gi/ddgi` (the DDGI
- * technique, engine-free) and `@pmndrs/gi/three` (the three.js adapter;
- * `@pmndrs/gi` itself is the same list).
+ * technique, engine-free), `@pmndrs/gi/three` (the three.js adapter;
+ * `@pmndrs/gi` itself is the same list) and `@pmndrs/gi/radiance-cache` (the
+ * radiance cache, engine-free).
  *
  * It reads the index files with TypeScript's parser and follows their
  * `export * from` and `export { ... } from` lines through the source, so it
@@ -25,6 +26,7 @@ export const PUBLIC_ENTRY_POINTS = [
     { name: '@pmndrs/gi/core', index: 'packages/ddgi-core/src/platform/index.ts', doc: 'docs/api/platform.md' },
     { name: '@pmndrs/gi/ddgi', index: 'packages/ddgi-core/src/techniques/ddgi/index.ts', doc: 'docs/api/platform.md' },
     { name: '@pmndrs/gi/three', index: 'packages/ddgi-three/src/index.ts', doc: 'docs/api/three.md' },
+    { name: '@pmndrs/gi/radiance-cache', index: 'packages/ddgi-core/src/techniques/radiance-cache/index.ts', doc: 'docs/api/radiance-cache.md' },
 ] as const;
 
 export type PublicEntryPoint = (typeof PUBLIC_ENTRY_POINTS)[number];

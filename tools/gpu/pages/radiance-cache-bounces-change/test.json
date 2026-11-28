@@ -1,0 +1,5 @@
+{
+    "description": "RC3.6: the ways of getting the bounces past the second, compared over time (a measurement): GI-1.2's rays, cache feedback (E12), temporal feedback (D68), both, DDGI stacked (P6.3) with and without temporal feedback, SHaRC (P6.1) and the neural tail (P6.4), on two-room (lamp doubled, lamp switched on, a box crossing) and Sponza (sun doubled): flicker when still, brightness, lag, ghosting after the box, memory. Fails only on NaN, infinite or negative E or device errors. VITE_RC_BOUNCES_MODES / _SCENES pick subsets.",
+    "timeoutMs": 7200000,
+    "manual": true
+}

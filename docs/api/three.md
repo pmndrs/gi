@@ -6,7 +6,7 @@ The adapter puts the GI platform's global illumination into a three.js r187 `Web
 - it runs one GI frame per rendered frame;
 - it lights every lit material through one GI light, or, on three's post-processing pipeline, adds GI once per pixel (`ddgi()`).
 
-The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/`](../../examples/) (`01-hello` and `02-composite` are the code below). [Every export](#every-export-of-pmndrsgithree) of `@pmndrs/gi/three` is listed at the end. (`@pmndrs/gi` itself exports the same names.) The engine-free names it works with come from the other subpaths: the platform's (`createGI`, `requiredLimits`, the scene types) from `@pmndrs/gi/core`, and DDGI's (`DDGITechnique`, the presets, `SavedFieldError`, the spherical-harmonics export) from `@pmndrs/gi/ddgi`.
+The code is in [`packages/ddgi-three/src/`](../../packages/ddgi-three/src/). The platform underneath is described in [platform.md](platform.md). Working examples: [`examples/`](../../examples/) (`01-hello` and `02-composite` are the code below). [Every export](#every-export-of-pmndrsgithree) of `@pmndrs/gi/three` is listed at the end. (`@pmndrs/gi` itself exports the same names.) The engine-free names it works with come from the other subpaths: the platform's (`createGI`, `requiredLimits`, the scene types) from `@pmndrs/gi/core`, and DDGI's (`DDGITechnique`, the presets, `SavedFieldError`, the spherical-harmonics export) from `@pmndrs/gi/ddgi`. The radiance cache, the second technique, comes from `@pmndrs/gi/radiance-cache` and reaches three through the pieces on this page (`ThreeGI`, `screenInputs`, `ddgi()`): [radiance-cache.md](radiance-cache.md).
 
 ## Getting started
 
@@ -195,7 +195,7 @@ The composite node for three's pipeline (see "Dense scenes" above). Built like t
 
 ### Screen inputs: `screenInputs(scenePass, threeGI, options?)`
 
-For screen-space techniques (RC1.1): fills the platform's `FrameScreen` from your own MRT scene pass every frame, through resizes, with no copy.
+For screen-space techniques (RC1.1), such as the radiance cache ([radiance-cache.md](radiance-cache.md)): fills the platform's `FrameScreen` from your own MRT scene pass every frame, through resizes, with no copy.
 
 ```ts
 import * as THREE from 'three/webgpu';

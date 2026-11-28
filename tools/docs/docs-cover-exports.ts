@@ -1,8 +1,9 @@
 /**
  * The docs-cover-exports check (docs/design/m5-coverage.md §4): every public
  * export of `@pmndrs/gi/core` and of `@pmndrs/gi/ddgi` must be named in
- * docs/api/platform.md, and every export of `@pmndrs/gi/three` in
- * docs/api/three.md, each in its own "Every export of `<subpath>`" section,
+ * docs/api/platform.md, every export of `@pmndrs/gi/three` in
+ * docs/api/three.md, and every export of `@pmndrs/gi/radiance-cache` in
+ * docs/api/radiance-cache.md, each in its own "Every export of `<subpath>`" section,
  * so the lists say which subpath a name comes from.
  *
  * "Named" means the name appears as a whole word inside code: an inline
