@@ -3,6 +3,7 @@ import type { ProceduralScene, SceneInstanceData, SceneMeshData } from '../scene
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
 import { buildCornellBox, CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from './cornell-box';
 import { buildDarkRoom, DARK_ROOM_SIZE_M, DRAG_BOX_NAME, DRAG_BOX_SIZE_M, DRAG_BOX_START } from './dark-room';
+import { buildEmissiveRoom, EMISSIVE_ROOM_MATERIALS } from './emissive-room';
 import {
     buildFurnaceRoom,
     FURNACE_ALBEDO,
@@ -146,6 +147,22 @@ describe('furnace-room', () => {
 
     it('has no lights, since the emission is the light', () => {
         expect(buildFurnaceRoom().lights).toEqual([]);
+    });
+});
+
+describe('emissive-room', () => {
+    const scene = buildEmissiveRoom();
+
+    it('has no lights: the strips and the screen are its only light', () => {
+        expect(scene.lights).toEqual([]);
+        const emitters = scene.instances.filter((instance) => Math.max(...scene.materials[instance.material].emissive) > 0).map((instance) => instance.name);
+        expect(emitters.sort()).toEqual(['screen-panel', 'strip-east', 'strip-west']);
+    });
+
+    it('names the emitter materials as pages look them up', () => {
+        expect(scene.materials[findInstance(scene, 'strip-west').material].name).toBe(EMISSIVE_ROOM_MATERIALS.strip);
+        expect(scene.materials[findInstance(scene, 'strip-east').material].name).toBe(EMISSIVE_ROOM_MATERIALS.strip);
+        expect(scene.materials[findInstance(scene, 'screen-panel').material].name).toBe(EMISSIVE_ROOM_MATERIALS.screen);
     });
 });
 

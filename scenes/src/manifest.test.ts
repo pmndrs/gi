@@ -282,6 +282,7 @@ describe('the manifests in scenes/manifests', async () => {
             'courtyard-tree',
             'courtyard-wind-tree',
             'dark-room',
+            'emissive-room',
             'furnace-room',
             'furnished-room',
             'glass-wall',

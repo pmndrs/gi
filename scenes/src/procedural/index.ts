@@ -3,6 +3,7 @@ import { buildCabinetRow } from './cabinet-row';
 import { buildCornellBox } from './cornell-box';
 import { buildCourtyard } from './courtyard';
 import { buildDarkRoom } from './dark-room';
+import { buildEmissiveRoom } from './emissive-room';
 import { buildFurnaceRoom } from './furnace-room';
 import { buildOpenGround } from './open-ground';
 import { buildAlphaChecker, buildGlassWall } from './see-through-walls';
@@ -31,6 +32,8 @@ export const proceduralBuilders: Readonly<Record<string, ProceduralBuilder>> = {
     'uv-board': buildUvBoard,
     'alpha-checker': buildAlphaChecker,
     'glass-wall': buildGlassWall,
+    // C5's room lit by emissive surfaces only.
+    'emissive-room': buildEmissiveRoom,
 };
 
 export function buildProcedural(name: string, options?: BuilderOptions): ProceduralScene {
@@ -49,6 +52,7 @@ export {
     buildCornellBox,
     buildCourtyard,
     buildDarkRoom,
+    buildEmissiveRoom,
     buildFurnaceRoom,
     buildGlassWall,
     buildOpenGround,

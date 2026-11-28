@@ -20,7 +20,7 @@ import { orbitCamera } from './renderer.ts';
 const manifests = import.meta.glob('../../scenes/manifests/*.json', { eager: true, import: 'default' }) as Record<string, SceneManifest>;
 
 /** The procedural scenes the examples use. */
-export type ExampleSceneId = 'cornell-box-point' | 'dark-room' | 'two-room' | 'closed-door' | 'cabinet-row' | 'cabinet-row-objects' | 'courtyard-tree' | 'alpha-checker' | 'glass-wall' | 'uv-board';
+export type ExampleSceneId = 'cornell-box-point' | 'emissive-room' | 'dark-room' | 'two-room' | 'closed-door' | 'cabinet-row' | 'cabinet-row-objects' | 'courtyard-tree' | 'alpha-checker' | 'glass-wall' | 'uv-board';
 
 export interface LoadSceneOptions {
     /** Which of the manifest's camera bookmarks to open on, 0-based. Default 0. */
