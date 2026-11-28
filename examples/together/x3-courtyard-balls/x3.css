@@ -1,0 +1,15 @@
+/* The line above the stats line: which courtyard this is, and Sponza's credit when it is shown. */
+.x3-place {
+    position: fixed;
+    left: 0;
+    bottom: 26px;
+    max-width: min(640px, calc(100vw - 24px));
+    padding: 4px 10px;
+    z-index: 10;
+    background: rgba(8, 10, 14, 0.75);
+    color: #cfd8e3;
+    font: 12px/1.45 system-ui, sans-serif;
+}
+.x3-place a {
+    color: #ffc878;
+}

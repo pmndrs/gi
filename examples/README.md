@@ -13,7 +13,7 @@ The examples read the library straight from `packages/`, so a change to it shows
 
 ## The examples
 
-They are grouped by method, one folder each: `ddgi/`, `cache/` and `cascades/` (and `together/` for pages that combine techniques, to come). Which method to use for what is in the guide, [DDGI or the radiance cache?](../docs/guides/ddgi-or-radiance-cache.md), and on the landing page. The plan for the sets is [docs/plans/examples.md](../docs/plans/examples.md).
+They are grouped by method, one folder each: `ddgi/`, `cache/`, `together/` (pages that combine or compare techniques) and `cascades/`. Which method to use for what is in the guide, [DDGI or the radiance cache?](../docs/guides/ddgi-or-radiance-cache.md), and on the landing page. The plan for the sets is [docs/plans/examples.md](../docs/plans/examples.md).
 
 Every page has an explainer panel, top left: what you're seeing, how it works, what to try, and trade-offs with each number's source. Its text is plain data in the page's `about.ts`, so `main.ts` stays the example.
 
@@ -37,6 +37,12 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | # | Example | Shows |
 | --- | --- | --- |
 | C1 | **No volume needed** (`cache/c1-no-volume`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
+
+### Together (`together/`)
+
+| # | Example | Shows |
+| --- | --- | --- |
+| X3 | **Balls in the courtyard** (`together/x3-courtyard-balls`) | Big glowing and PBR balls tossed into Sponza's atrium, bouncing and rolling until they settle (right-click throws another), under DDGI or one of three radiance-cache variants, switched live. Sponza is Crytek's model from Khronos's glTF samples, loaded from GitHub at run time (the site doesn't ship it); offline, the procedural courtyard. A chart of the picture's brightness marks each throw. |
 
 ### Split Radiance Cascades (`cascades/`)
 
