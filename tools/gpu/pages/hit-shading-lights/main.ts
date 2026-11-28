@@ -29,11 +29,11 @@
  *    checked by `hit-shading-many-lights`.
  */
 
-import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { countStorageBuffers, orderModules } from '../../../../packages/ddgi-core/src/platform/kernel-builder.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import type { LightHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { countStorageBuffers, orderModules } from '../../../../packages/core/src/platform/kernel-builder.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { boxMesh } from '../trace-oracle/cases.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { frame, normalize, ready, relativeError, ShadeKernel, type Vec3 } from '../hit-shading-shared/harness.ts';

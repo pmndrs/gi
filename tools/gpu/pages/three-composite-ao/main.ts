@@ -41,10 +41,10 @@ import { AccumulatedOcclusion, ssaoOn, upscaledComposite, type UpscalePreset } f
 import { nodeObject, sample, unpackRGBToNormal, uv, vec4 } from 'three/tsl';
 import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import { assert } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
+import { GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { floatsToBase64 } from '../ddgi-shared/harness.ts';

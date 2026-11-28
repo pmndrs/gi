@@ -12,10 +12,10 @@
  * exactly and the readback test can compare against it. The function also uses
  * `normal` and `screenUV`, so a wrong handedness or a wrong screen UV shows up.
  *
- * Only the contract's types are imported (no runtime code from ddgi-core).
+ * Only the contract's types are imported (no runtime code from gi-core).
  */
 
-import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-core/src/platform/contract/shading-module.ts';
+import type { ShadingModule, ShadingParameter } from '../../../../packages/core/src/platform/contract/shading-module.ts';
 
 export type Rgb = readonly [number, number, number];
 

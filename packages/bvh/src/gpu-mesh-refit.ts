@@ -26,7 +26,7 @@
  * A refit tree slowly gets worse as triangles move away from where it was
  * built. The refit's quality signal (`latestStats.relativeCost`, with
  * `diagnostics: true`) is the same as the top level's, so a caller can rebuild
- * (with a GPU builder) when it drifts. ddgi-core rebuilds only on drift held
+ * (with a GPU builder) when it drifts. gi-core rebuilds only on drift held
  * for about a second (DECISIONS 2026-11-09).
  */
 

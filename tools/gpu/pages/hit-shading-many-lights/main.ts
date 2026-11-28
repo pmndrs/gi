@@ -31,11 +31,11 @@
  *    before it).
  */
 
-import type { DirectWorkList, RayScratch } from '../../../../packages/ddgi-core/src/platform/contract/shade.ts';
-import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
-import type { ComputeKernel } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { RAY_RESULT_BYTES } from '../../../../packages/ddgi-core/src/platform/shade/direct.ts';
+import type { DirectWorkList, RayScratch } from '../../../../packages/core/src/platform/contract/shade.ts';
+import type { GpuTimerScope } from '../../../../packages/core/src/platform/contract/timing.ts';
+import type { ComputeKernel } from '../../../../packages/core/src/platform/contract/wgsl.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { RAY_RESULT_BYTES } from '../../../../packages/core/src/platform/shade/direct.ts';
 import {
     LIGHT_GRID_NO_LIGHT,
     LIGHT_GRID_PICK_BYTES,
@@ -43,8 +43,8 @@ import {
     LIGHT_GRID_TEXTURE_WIDTH,
     PlatformLightGrid,
     type LightGridReduction,
-} from '../../../../packages/ddgi-core/src/platform/shade/light-grid.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+} from '../../../../packages/core/src/platform/shade/light-grid.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { boxMesh } from '../trace-oracle/cases.ts';
 import { halfToFloat } from '../ddgi-shared/harness.ts';

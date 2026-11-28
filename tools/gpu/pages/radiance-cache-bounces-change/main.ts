@@ -51,15 +51,15 @@
  * Through the lock: `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-bounces-change --gpu nvidia`.
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { InstanceHandle, LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { InstanceHandle, LightHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { halfBitsToFloat } from '../../../../packages/cache/src/capsaicin-math.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

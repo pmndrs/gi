@@ -141,7 +141,7 @@ export interface TinyBvhBuilder {
     build(geometry: TinyBvhInput, options?: TinyBvhBuildOptions): TinyBvhBuild;
     /**
      * Builds one mesh's tree and returns it in the tracer's GPU layout, written
-     * inside the WASM. Byte for byte what ddgi-core's `buildMeshBvhFromTopology`
+     * inside the WASM. Byte for byte what gi-core's `buildMeshBvhFromTopology`
      * makes from `build`'s topology of the same mesh: the boxes are recomputed
      * from the triangles, not taken from tinybvh. Synchronous; one at a time.
      */

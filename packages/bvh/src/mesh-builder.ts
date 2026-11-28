@@ -10,7 +10,7 @@
  * buffers (or for the builder), or a GPU build that was refused (gpu-lbvh.ts
  * and gpu-hploc.ts, "Checks"), is built by tinybvh instead, and the result says so.
  *
- * tinybvh runs on the calling thread here. ddgi-core runs it in a worker
+ * tinybvh runs on the calling thread here. gi-core runs it in a worker
  * (`mesh-bvh-async.ts`); this package stays free of workers and engines.
  */
 

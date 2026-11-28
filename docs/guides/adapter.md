@@ -6,7 +6,7 @@ An adapter connects a renderer to the GI platform: three.js, Babylon, a game eng
 - [`src/scene.ts`](../../examples/webgpu/hello/src/scene.ts): the scene copy (meshes, materials, textures, lights, sky);
 - [`src/renderer.ts`](../../examples/webgpu/hello/src/renderer.ts) and [`src/shaders.ts`](../../examples/webgpu/hello/src/shaders.ts): sampling GI while shading.
 
-Run it with `pnpm --filter @pmndrs/ddgi-example-hello dev`. The three.js adapter ([`packages/ddgi-three/src/`](../../packages/ddgi-three/src/), described in [docs/api/three.md](../api/three.md)) does the same jobs for a whole engine. Every call used here is described in [docs/api/platform.md](../api/platform.md).
+Run it with `pnpm --filter @pmndrs/ddgi-example-hello dev`. The three.js adapter ([`packages/three/src/`](../../packages/three/src/), described in [docs/api/three.md](../api/three.md)) does the same jobs for a whole engine. Every call used here is described in [docs/api/platform.md](../api/platform.md).
 
 ## What an adapter does
 
@@ -322,7 +322,7 @@ let color = emission + albedo / PI * irradiance;
 - **Don't count the environment twice.** If your engine adds its own ambient or environment diffuse light, fade it by `1 − coverage` where GI covers the point. The three adapter does this for three's environment light.
 - **Debug views:** `ddgi.debugViews` lists them; `giDebugColorAt(position, normal, id)` draws a screen view by id (GI only, coverage, probe states). The probe points view gives a texture of positions you draw as small spheres.
 
-**An engine that declares shader resources itself** (three's `wgslFn`, Babylon's material plugins) uses `code` instead of `globalsCode`: declare each parameter its own way, in order, and call `giIrradiance(position, normal, viewDirection, screenUV, ...)` with them after the first four arguments. The three adapter builds this call in `entryWgsl` (`packages/ddgi-three/src/gi-light.ts`).
+**An engine that declares shader resources itself** (three's `wgslFn`, Babylon's material plugins) uses `code` instead of `globalsCode`: declare each parameter its own way, in order, and call `giIrradiance(position, normal, viewDirection, screenUV, ...)` with them after the first four arguments. The three adapter builds this call in `entryWgsl` (`packages/three/src/gi-light.ts`).
 
 ## Step 10: check your adapter
 

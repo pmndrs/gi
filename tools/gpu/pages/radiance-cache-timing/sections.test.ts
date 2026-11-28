@@ -1,12 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { SHARC_ENTRY_POINT } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/sharc/sharc-wgsl.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/cache/src/settings.ts';
+import { SHARC_ENTRY_POINT } from '../../../../packages/cache/src/world-cache/sharc/sharc-wgsl.ts';
 import { groupOf, SECTIONS, sectionOf, sectionRuns, type SceneTiming, type TimedSettings } from './sections.ts';
 import { radianceCacheTimingRows } from './to-csv.ts';
 
-const RADIANCE_CACHE_SOURCES = resolve(import.meta.dirname, '..', '..', '..', '..', 'packages', 'ddgi-core', 'src', 'techniques', 'radiance-cache');
+const RADIANCE_CACHE_SOURCES = resolve(import.meta.dirname, '..', '..', '..', '..', 'packages', 'cache', 'src');
 
 /** Every TypeScript source under the radiance cache, tests left out. */
 function sources(directory: string): string[] {

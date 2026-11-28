@@ -6,7 +6,7 @@ Written 2026-11-27 by the lead (Mac). The reference is the authors' own implemen
 
 **How this was built:** by reading Chandra's source next to ours, plus our own records (PROGRESS, DECISIONS, NOTES). No new measurements were taken. Numbers cite where they were recorded. Impacts without numbers are the lead's estimate and say so.
 
-**Paths:** `CH/` = Chandra's `src/` at `9af00e8`, `RC/` = `packages/ddgi-core/src/techniques/radiance-cascades/`, `GAL/` = `examples/11-radiance-cascades/`.
+**Paths:** `CH/` = Chandra's `src/` at `9af00e8`, `RC/` = `packages/core/src/techniques/radiance-cascades/`, `GAL/` = `examples/11-radiance-cascades/`.
 
 **Columns:** the same as the [DDGI file](../divergence.md). **Quality** and **Speed** say *better*, *worse* or *same* for the picture and for GPU time or memory. **Effort** runs from XS (an hour or two) to L (a milestone-sized piece). **WebGPU** says whether Chandra's way can be done in WebGPU today.
 

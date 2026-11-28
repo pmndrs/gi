@@ -28,8 +28,8 @@ export default defineConfig({
         // build, so point it at the source. Exact-match per subpath: a plain string
         // key is a prefix alias.
         alias: [
-            { find: /^@pmndrs\/gi$/, replacement: resolve(__dirname, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(__dirname, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi$/, replacement: resolve(__dirname, 'packages/gi/src/index.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(__dirname, 'packages/gi/src/$1.ts') },
         ],
     },
 });

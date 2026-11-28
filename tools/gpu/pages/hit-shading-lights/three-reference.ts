@@ -16,7 +16,7 @@
  *   max(dot(N, L), 0) (`PhysicalLightingModel.direct`: dotNL times the light's colour).
  */
 
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { normalize, type Vec3 } from '../hit-shading-shared/harness.ts';
 
 export type ThreeLight =

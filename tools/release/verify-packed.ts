@@ -2,7 +2,7 @@
 // scripts/verify-packed-subpaths.mjs. It checks what npm would publish, the way
 // a user gets it, with no GPU (CI runs it):
 //
-//   1. packs packages/ddgi with `npm pack`, the tool publish.yml publishes with;
+//   1. packs packages/gi with `npm pack`, the tool publish.yml publishes with;
 //   2. the tarball holds README, LICENSE, THIRD_PARTY.md, the bundled code's
 //      licence texts and every `exports` target, and its manifest asks
 //      consumers for nothing from this workspace;
@@ -10,7 +10,7 @@
 //      `/core` and `/ddgi` no package at all, `.` and `/three` only three,
 //      `/radiance-cache` only its denoiser (`denoiser/ffx`), never
 //      `@pathtracer/mlp` (an optional sibling it loads at run time); and only
-//      its own layers' chunks (packages/ddgi/layer-chunks.ts): `/core` no
+//      its own layers' chunks (packages/gi/layer-chunks.ts): `/core` no
 //      technique or three code, `/ddgi` no three code;
 //   4. a fresh project with the tarball, three and @webgpu/types installed by
 //      npm imports `.`, `/core`, `/ddgi`, `/three` and `/radiance-cache` under
@@ -39,18 +39,18 @@ import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import type * as Vite from 'vite';
 
-import { ENTRY_LAYERS, LAYER_CHUNKS, type Layer } from '../../packages/ddgi/layer-chunks.ts';
+import { ENTRY_LAYERS, LAYER_CHUNKS, type Layer } from '../../packages/gi/layer-chunks.ts';
 import { isDirectRun } from './release-version.ts';
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
-const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/ddgi');
+const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/gi');
 const TSC = join(REPOSITORY_ROOT, 'node_modules/typescript/bin/tsc');
 const PACKAGE_NAME = '@pmndrs/gi';
 
 export const USAGE = `Usage: node tools/release/verify-packed.ts [options]
 Builds and packs @pmndrs/gi, then checks the tarball as a user would get it
 (no GPU needed; installs three, vite and @webgpu/types from the npm registry).
-  --skip-build   pack the existing packages/ddgi/dist instead of building it
+  --skip-build   pack the existing packages/gi/dist instead of building it
   --keep-temp    keep the temporary projects for a look
   --help, -h     print this message`;
 
@@ -83,7 +83,7 @@ export const ENTRY_IMPORTS: Record<string, RegExp[]> = {
     ddgi: [],
     'radiance-cascades': [/^@pmndrs\/rc-bvh$/],
     // Its denoiser, an npm dependency. `@pathtracer/mlp` (the optional neural tail) is loaded
-    // through an `import()` no scanner sees (packages/ddgi/vite.config.ts), so it isn't listed.
+    // through an `import()` no scanner sees (packages/gi/vite.config.ts), so it isn't listed.
     'radiance-cache': [/^denoiser\/ffx$/],
 };
 
@@ -353,7 +353,7 @@ export function bareImports(entry: string, read?: (path: string) => string): Set
 }
 
 /**
- * The layer a file in dist holds (packages/ddgi/layer-chunks.ts): a chunk's
+ * The layer a file in dist holds (packages/gi/layer-chunks.ts): a chunk's
  * from its name (`chunks/ddgi-<hash>.js`), an entry's from the entry it is.
  */
 export function layerOf(packageDirectory: string, file: string): Layer | undefined {
@@ -447,7 +447,7 @@ export function checkTarballContents(paths: string[], manifest: Manifest): strin
     // devDependencies may name workspace packages: npm never installs a dependency's devDependencies.
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
         for (const [name, version] of Object.entries(manifest[field] ?? {})) {
-            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh' || OPTIONAL_RUNTIME_PACKAGES.includes(name)) {
+            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/gi-') || name === '@pmndrs/bvh' || OPTIONAL_RUNTIME_PACKAGES.includes(name)) {
                 failures.push(`${field} names ${name}@${version}, which isn't on npm`);
             }
         }

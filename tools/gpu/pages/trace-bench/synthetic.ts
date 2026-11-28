@@ -8,10 +8,10 @@ import {
     buildTopLevel,
     type MeshGeometry,
     type TraceInstance,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { buildMeshBvhWithTinyBvh } from '../../../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
+import { buildMeshBvhWithTinyBvh } from '../../../../packages/core/src/platform/trace/mesh-bvh-topology.ts';
 import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { SYNTHETIC_INSTANCE_COUNT, SYNTHETIC_SCENE_ID, TOP_LEVEL_REBUILD_RUNS } from './config.ts';
 import type { SyntheticResult } from './results.ts';
 import { maximum, median } from './statistics.ts';

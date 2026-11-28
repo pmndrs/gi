@@ -28,8 +28,8 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { InstanceHandle, LightHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+import type { InstanceHandle, LightHandle, MeshHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { createDdgiScene, releaseDeviceOnPageHide, runFrame } from '../ddgi-shared/harness.ts';
 import { pagePreset, presetReport } from '../ddgi-shared/page-preset.ts';
 

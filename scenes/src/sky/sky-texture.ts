@@ -14,7 +14,7 @@
  * too. {@link SKY_EQUIRECT_WGSL} is the matching lookup.
  */
 
-import { halfImageToTextureRgba } from '../../../packages/ddgi-core/src/platform/sky/half-float.ts';
+import { halfImageToTextureRgba } from '../../../packages/core/src/platform/sky/half-float.ts';
 import type { HalfRgbImage } from './exr-half.ts';
 
 /** Texture format of the sky. */

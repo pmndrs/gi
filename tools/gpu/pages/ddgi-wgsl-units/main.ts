@@ -13,9 +13,9 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { borderSource } from '../../../../packages/ddgi-core/src/techniques/ddgi/octahedral.ts';
-import { DDGI_BORDER_SOURCE_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/border.ts';
-import { DDGI_STOCHASTIC_HALF_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/half.ts';
+import { borderSource } from '../../../../packages/ddgi/src/octahedral.ts';
+import { DDGI_BORDER_SOURCE_WGSL } from '../../../../packages/ddgi/src/wgsl/border.ts';
+import { DDGI_STOCHASTIC_HALF_WGSL } from '../../../../packages/ddgi/src/wgsl/half.ts';
 import { halfToFloat } from '../ddgi-shared/harness.ts';
 
 /** Random numbers per value: the mean of this many roundings is checked against the value. */

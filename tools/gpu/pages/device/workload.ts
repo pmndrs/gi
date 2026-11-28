@@ -11,7 +11,7 @@
  * on the laptop's Intel GPU.
  */
 
-import { type GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/index.ts';
+import { type GpuTimer } from '../../../../packages/core/src/platform/timing/index.ts';
 
 export interface WorkloadConfig {
     /** Compute threads are `workgroupsX * workgroupsY * 64`. */

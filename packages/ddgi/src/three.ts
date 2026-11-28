@@ -1,3 +1,0 @@
-// `@pmndrs/gi/three`: the three.js WebGPURenderer adapter, with each technique's
-// three-facing pieces (DDGI's `DDGIVolume` and `ddgi()` composite).
-export * from '@pmndrs/ddgi-three';

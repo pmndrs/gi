@@ -21,7 +21,7 @@
  * a scene's peak is one tracer's structures plus the rays.
  */
 
-import { createMeshBvhBuilder, type MeshBvhBuilder } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+import { createMeshBvhBuilder, type MeshBvhBuilder } from '../../../../packages/core/src/platform/trace/index.ts';
 import type { AdapterSummary } from '../../contract.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import {

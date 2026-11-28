@@ -27,7 +27,7 @@ import { ao } from 'three/addons/tsl/display/GTAONode.js';
 import type GTAONode from 'three/addons/tsl/display/GTAONode.js';
 import { ssao } from 'three/addons/tsl/display/SSAONode.js';
 import { QualityMode, getQualityModeRatio, upscale, upscaleScene, type UpscalerNode } from '@pmndrs/upscaler';
-import { DDGICompositeNode, giAlbedo, DEFAULT_GI_OCCLUSION_RADIUS, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type CompositeGISource, type GIOcclusionSource } from '../../../../packages/ddgi-three/src/composite.ts';
+import { DDGICompositeNode, giAlbedo, DEFAULT_GI_OCCLUSION_RADIUS, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type CompositeGISource, type GIOcclusionSource } from '../../../../packages/three/src/composite.ts';
 
 export { QualityMode };
 

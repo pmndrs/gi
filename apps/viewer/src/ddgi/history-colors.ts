@@ -13,7 +13,7 @@
  * the probe spheres' shader mirrors (`probe-spheres.ts`).
  */
 
-import { DDGI_DEBUG_COLORS } from '../../../../packages/ddgi/src/ddgi';
+import { DDGI_DEBUG_COLORS } from '../../../../packages/gi/src/ddgi';
 
 export type Rgb = readonly [number, number, number];
 

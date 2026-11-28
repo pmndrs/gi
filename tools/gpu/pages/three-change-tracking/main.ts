@@ -34,13 +34,13 @@
 
 import { BoxGeometry, Mesh, MeshStandardMaterial, PerspectiveCamera, Vector3, type Object3D } from 'three/webgpu';
 import { assert } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { HIT_RECORD_BYTES, packRays, RAY_BYTES } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { toFloat32Ray } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { HOT_FRAMES } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { HIT_RECORD_BYTES, packRays, RAY_BYTES } from '../../../../packages/core/src/platform/trace/index.ts';
+import { toFloat32Ray } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
+import { HOT_FRAMES } from '../../../../packages/three/src/scene-sync.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { sceneLighting } from '../../../../apps/viewer/src/render/scene-lighting.ts';

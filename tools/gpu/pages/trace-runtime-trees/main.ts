@@ -45,13 +45,13 @@
  * --what "T3.2" -- pnpm test:gpu --gpu nvidia --filter trace-runtime-trees`).
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { MaterialHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { HIT_RECORD_BYTES, packRays, RAY_BYTES, type MeshGeometry, type TraceRay, type TraceSceneInstance } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import type { TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
-import { createRandom, randomUnitVector, tessellatedQuad, toFloat32Ray, type Random } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import type { AccelerationMemory, MeshTreeCounts, MeshTreeOptions } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { MaterialHandle, MeshHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { HIT_RECORD_BYTES, packRays, RAY_BYTES, type MeshGeometry, type TraceRay, type TraceSceneInstance } from '../../../../packages/core/src/platform/trace/index.ts';
+import type { TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
+import { createRandom, randomUnitVector, tessellatedQuad, toFloat32Ray, type Random } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import type { AccelerationMemory, MeshTreeCounts, MeshTreeOptions } from '../../../../packages/core/src/platform/trace/ray-queries.ts';
 import { buildProcedural } from '../../../../scenes/src/procedural/index.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import {
@@ -59,7 +59,7 @@ import {
     traceAnyReference,
     traceClosestReference,
     type ReferenceScene,
-} from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
+} from '../../../../packages/core/src/platform/trace/reference-tracer.ts';
 import { boxMesh, unpackRay, type OracleCase } from '../trace-oracle/cases.ts';
 import { evaluateCase, type ReferenceAnswers } from '../trace-oracle/check.ts';
 import { readBuffer } from '../tlas-oracle/top-level-check.ts';

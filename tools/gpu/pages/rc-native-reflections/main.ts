@@ -1,5 +1,5 @@
-import { NativeRadianceCascades, type NativeRcTransport } from '../../../../packages/ddgi-core/src/techniques/radiance-cascades/native.ts';
-import { halfToFloat } from '../../../../packages/ddgi-core/src/platform/sky/half-float.ts';
+import { NativeRadianceCascades, type NativeRcTransport } from '../../../../packages/core/src/techniques/radiance-cascades/native.ts';
+import { halfToFloat } from '../../../../packages/core/src/platform/sky/half-float.ts';
 import { assert, runGpuTest } from '../../client.ts';
 
 const width = 32, height = 16;

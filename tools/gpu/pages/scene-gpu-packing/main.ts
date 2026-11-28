@@ -21,13 +21,13 @@
  */
 
 import type { BufferGeometry, Mesh, Object3D } from 'three';
-import type { MeshDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { NONE } from '../../../../packages/ddgi-core/src/platform/scene/layout.ts';
-import { packMesh } from '../../../../packages/ddgi-core/src/platform/scene/mesh-packing.ts';
-import { PACK_MESH_PASS } from '../../../../packages/ddgi-core/src/platform/scene/gpu-mesh-packing.ts';
-import { PlatformScene, type UploadedMesh } from '../../../../packages/ddgi-core/src/platform/scene/platform-scene.ts';
-import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/gpu-timer.ts';
-import { meshDescriptor } from '../../../../packages/ddgi-three/src/convert.ts';
+import type { MeshDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { NONE } from '../../../../packages/core/src/platform/scene/layout.ts';
+import { packMesh } from '../../../../packages/core/src/platform/scene/mesh-packing.ts';
+import { PACK_MESH_PASS } from '../../../../packages/core/src/platform/scene/gpu-mesh-packing.ts';
+import { PlatformScene, type UploadedMesh } from '../../../../packages/core/src/platform/scene/platform-scene.ts';
+import { GpuTimer } from '../../../../packages/core/src/platform/timing/gpu-timer.ts';
+import { meshDescriptor } from '../../../../packages/three/src/convert.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';

@@ -10,6 +10,6 @@
  * package is used either way.
  */
 
-export * from '../../../../packages/ddgi/src/three';
-export * from '../../../../packages/ddgi/src/core';
-export * from '../../../../packages/ddgi/src/ddgi';
+export * from '../../../../packages/gi/src/three';
+export * from '../../../../packages/gi/src/core';
+export * from '../../../../packages/gi/src/ddgi';

@@ -12,7 +12,7 @@
  *
  * For each mesh and strength:
  * - a tinybvh tree of the rest pose goes into a one-instance trace scene
- *   (ddgi-core's assembly and batch kernel, the tracer DDGI uses);
+ *   (gi-core's assembly and batch kernel, the tracer DDGI uses);
  * - 600 frames at 60 fps: the CPU writes the frame's pose, `GpuMeshRefit`
  *   refits the tree in the scene's own buffers (nothing else rebuilds it);
  * - every 100 frames (and at 600) the refit tree and a fresh tinybvh build of
@@ -37,7 +37,7 @@ import {
     TraceBatchKernel,
     type TraceRay,
     type TraceSceneBuffers,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
 import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
 import type { GpuLayoutMeshBvh } from '../../../../packages/bvh/src/gpu-layout.ts';
 import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';

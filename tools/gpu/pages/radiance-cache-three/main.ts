@@ -41,11 +41,11 @@
 
 import type { Node } from 'three/webgpu';
 import { isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { RADIANCE_CACHE_DEBUG_VIEW } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
-import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
-import { GILight } from '../../../../packages/ddgi-three/src/gi-light.ts';
-import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { RADIANCE_CACHE_DEBUG_VIEW } from '../../../../packages/cache/src/wgsl/debug.ts';
+import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
+import { GILight } from '../../../../packages/three/src/gi-light.ts';
+import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
 import { assert } from '../../client.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';

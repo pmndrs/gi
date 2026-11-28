@@ -27,9 +27,9 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { PlatformSky, SKY_BAKE_PASS } from '../../../../packages/ddgi-core/src/platform/sky/platform-sky.ts';
-import { SKY_HARMONICS_LAYOUT } from '../../../../packages/ddgi-core/src/platform/sky/projection-wgsl.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { PlatformSky, SKY_BAKE_PASS } from '../../../../packages/core/src/platform/sky/platform-sky.ts';
+import { SKY_HARMONICS_LAYOUT } from '../../../../packages/core/src/platform/sky/projection-wgsl.ts';
 
 import { createDdgiScene, frameInput, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 

@@ -1,13 +1,11 @@
 import { PerspectiveCamera, Scene } from 'three';
 import { builtinAOContext, float, mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { describe, expect, it, vi } from 'vitest';
-import { GILimitError, type GIPlatform, type SceneApi, type ShadingModule } from '@pmndrs/ddgi-core';
-import { flowContextData, hasCompositeMark } from './composite-mark.ts';
-import { ddgi, giAlbedo } from './composite.ts';
-import { GILight } from './gi-light.ts';
+import { GILimitError, type GIPlatform, type SceneApi, type ShadingModule } from '@pmndrs/gi-core';
+import { ddgi, giAlbedo, GILight, ThreeGI } from '@pmndrs/gi-three';
+import { flowContextData, hasCompositeMark } from '@pmndrs/gi-three/composite-mark';
 import { ThreeGILimitError } from './volume-start.ts';
 import { DDGIVolume } from './ddgi-volume.ts';
-import { ThreeGI } from './three-gi.ts';
 
 function fakeShading(): ShadingModule {
     return { techniqueId: 'fake', code: '', parameters: [], provides: { radiance: false }, globalsCode: () => '', writeUniforms: () => {}, version: 1 };
@@ -100,6 +98,21 @@ describe('ThreeGI with updateOnRender', () => {
         expect(threeGI.light.onRender).not.toBeNull();
         threeGI.updateOnRender = false;
         expect(threeGI.light.onRender).toBeNull();
+    });
+});
+
+describe('ThreeGI with a DDGIVolume', () => {
+    it("has the GI light follow the volume's intensity and priority; the volume is no light of the scene", () => {
+        const scene = new Scene();
+        const volume = new DDGIVolume(4, 4, 4);
+        scene.add(volume);
+        const threeGI = new ThreeGI(fakePlatform().gi, scene, { volume });
+        volume.intensity = 0.5;
+        volume.priority = 7;
+        threeGI.update(new PerspectiveCamera());
+        expect(threeGI.light.intensity).toBe(0.5);
+        expect(threeGI.light.priority).toBe(7);
+        expect(threeGI.sync.counts.lights).toBe(0);
     });
 });
 

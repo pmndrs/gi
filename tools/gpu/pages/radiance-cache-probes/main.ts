@@ -1,6 +1,6 @@
 /**
  * RC2.1: the radiance cache's screen probes on the GPU, checked against the
- * CPU ports of Capsaicin's rules (packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts).
+ * CPU ports of Capsaicin's rules (packages/cache/src/capsaicin-math.ts).
  *
  * Three scenes, each at 1280 × 720 with one frame of the technique, its
  * `FrameScreen` drawn engine-free by primary rays through the platform's
@@ -44,9 +44,9 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc2.1 probes" -- pnpm test:gpu --filter radiance-cache-probes --gpu nvidia` (or intel).
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import {
     INVALID_ID,
     mapToHemiOctahedronInverse,
@@ -57,12 +57,12 @@ import {
     toProbeFrame,
     unpackHalf3,
     type Direction,
-} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
-import { PROBE_RAY_BYPASS, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+} from '../../../../packages/cache/src/capsaicin-math.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/cache/src/settings.ts';
+import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/cache/src/wgsl/debug.ts';
+import { PROBE_RAY_BYPASS, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/cache/src/wgsl/screen-probes.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

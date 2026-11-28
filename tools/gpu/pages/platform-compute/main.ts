@@ -1,5 +1,5 @@
 /**
- * RC1.3: the platform's GPU utilities (packages/ddgi-core/src/platform/compute)
+ * RC1.3: the platform's GPU utilities (packages/core/src/platform/compute)
  * against their CPU twins, on both paths.
  *
  * For every size (0, 1, one scan tile - 1, one tile, one tile + 1, a few
@@ -45,12 +45,12 @@
  */
 
 import { SCAN_TILE_ITEMS } from '../../../../packages/bvh/src/gpu-scan.ts';
-import type { ComputeReduction, GpuCompaction, GpuIndirectArgs, GpuPrefixScan } from '../../../../packages/ddgi-core/src/platform/contract/compute.ts';
-import { compactOnCpu, exclusiveScanOnCpu, indirectArgsOnCpu } from '../../../../packages/ddgi-core/src/platform/compute/cpu-reference.ts';
-import { PlatformGpuCompute } from '../../../../packages/ddgi-core/src/platform/compute/gpu-compute.ts';
-import { INDIRECT_ARGS_COUNT_WORD } from '../../../../packages/ddgi-core/src/platform/compute/wgsl.ts';
-import { PlatformKernelBuilder } from '../../../../packages/ddgi-core/src/platform/kernel-builder.ts';
-import type { ComputeKernel } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
+import type { ComputeReduction, GpuCompaction, GpuIndirectArgs, GpuPrefixScan } from '../../../../packages/core/src/platform/contract/compute.ts';
+import { compactOnCpu, exclusiveScanOnCpu, indirectArgsOnCpu } from '../../../../packages/core/src/platform/compute/cpu-reference.ts';
+import { PlatformGpuCompute } from '../../../../packages/core/src/platform/compute/gpu-compute.ts';
+import { INDIRECT_ARGS_COUNT_WORD } from '../../../../packages/core/src/platform/compute/wgsl.ts';
+import { PlatformKernelBuilder } from '../../../../packages/core/src/platform/kernel-builder.ts';
+import type { ComputeKernel } from '../../../../packages/core/src/platform/contract/wgsl.ts';
 import { assert, drainDevice, runGpuTest, watchDevice } from '../../client.ts';
 import { readBuffer, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';

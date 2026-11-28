@@ -38,7 +38,7 @@ const MAX_RESULT_BODY_BYTES = 1_000_000;
  */
 const MAX_INCOMING_FOLDER_BYTES = 20_000_000;
 /** The only folders the page may read through vite: the test pages and the code they import. */
-const SERVED_FOLDERS = [GPU_TOOLS_DIR, join(REPO_ROOT, 'packages', 'ddgi-core', 'src')];
+const SERVED_FOLDERS = [GPU_TOOLS_DIR, join(REPO_ROOT, 'packages', 'core', 'src')];
 /** Apple rejects certificates valid for more than 398 days; a month is plenty for a test session. */
 const CERTIFICATE_DAYS = 30;
 const CERTIFICATE_MAX_AGE_MS = (CERTIFICATE_DAYS - 2) * 24 * 60 * 60 * 1000;

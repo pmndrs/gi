@@ -37,7 +37,7 @@
  * "gpu trees" -- pnpm test:gpu --gpu nvidia --filter ddgi-gpu-trees`.
  */
 
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { assert } from '../../client.ts';
 import { startViewerScene, warmUp, yieldToCallbacks, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';

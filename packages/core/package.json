@@ -1,0 +1,18 @@
+{
+    "name": "@pmndrs/gi-core",
+    "version": "0.0.0",
+    "private": true,
+    "description": "The engine-free GI platform of @pmndrs/gi on a bare GPUDevice (and, until it moves to packages/radiance-cascades, Split RC). Bundled into the published package; never published on its own.",
+    "license": "MIT",
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": "./src/index.ts",
+        "./*": "./src/*.ts"
+    },
+    "dependencies": {
+        "@pmndrs/bvh": "workspace:*",
+        "@pmndrs/rc-bvh": "npm:@pmndrs/bvh@0.1.0",
+        "@pmndrs/raytracer": "0.1.0"
+    }
+}

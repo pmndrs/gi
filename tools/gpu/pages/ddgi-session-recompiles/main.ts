@@ -50,9 +50,9 @@
  */
 
 import { Color, Mesh, PerspectiveCamera, PointLight, RectAreaLight, SpotLight, Vector3, type Light, type Object3D } from 'three/webgpu';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
 import { DDGIVolume } from '../../../../packages/ddgi-three/src/ddgi-volume.ts';
 import type { StartedGI } from '../../../../packages/ddgi-three/src/volume-start.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';

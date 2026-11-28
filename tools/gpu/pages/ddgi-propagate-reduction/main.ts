@@ -23,8 +23,8 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { PROBE_HISTORY_WORDS } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
+import { PROBE_HISTORY_WORDS } from '../../../../packages/ddgi/src/layout.ts';
+import type { PhaseBReduction } from '../../../../packages/ddgi/src/wgsl/blend.ts';
 import { createDdgiScene, readBuffer, readTextureBytes, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
 
 const WARM_FRAMES = 64;

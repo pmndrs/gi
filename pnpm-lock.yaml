@@ -26,9 +26,6 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.64
         version: 0.1.74
-      denoiser:
-        specifier: 2.1.0
-        version: 2.1.0(three@0.187.0)
       eslint:
         specifier: ^9.18.0
         version: 9.39.5
@@ -61,7 +58,7 @@ importers:
     dependencies:
       '@pmndrs/gi':
         specifier: workspace:*
-        version: link:../../packages/ddgi
+        version: link:../../packages/gi
       '@pmndrs/upscaler':
         specifier: 0.5.0
         version: 0.5.0(three@0.187.0)
@@ -80,7 +77,7 @@ importers:
     dependencies:
       '@pmndrs/gi':
         specifier: workspace:*
-        version: link:../../../packages/ddgi
+        version: link:../../../packages/gi
     devDependencies:
       vite:
         specifier: ^6.1.0
@@ -88,7 +85,57 @@ importers:
 
   packages/bvh: {}
 
+  packages/cache:
+    dependencies:
+      '@pmndrs/gi-core':
+        specifier: workspace:*
+        version: link:../core
+      denoiser:
+        specifier: 2.1.0
+        version: 2.1.0(three@0.187.0)
+
+  packages/core:
+    dependencies:
+      '@pmndrs/bvh':
+        specifier: workspace:*
+        version: link:../bvh
+      '@pmndrs/raytracer':
+        specifier: 0.1.0
+        version: 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
+      '@pmndrs/rc-bvh':
+        specifier: npm:@pmndrs/bvh@0.1.0
+        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
+
   packages/ddgi:
+    dependencies:
+      '@pmndrs/gi-core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@pmndrs/bvh':
+        specifier: workspace:*
+        version: link:../bvh
+
+  packages/ddgi-three:
+    dependencies:
+      '@pmndrs/gi-core':
+        specifier: workspace:*
+        version: link:../core
+      '@pmndrs/gi-ddgi':
+        specifier: workspace:*
+        version: link:../ddgi
+      '@pmndrs/gi-three':
+        specifier: workspace:*
+        version: link:../three
+    devDependencies:
+      '@types/three':
+        specifier: 0.187.0
+        version: 0.187.0
+      three:
+        specifier: 0.187.0
+        version: 0.187.0
+
+  packages/gi:
     dependencies:
       '@pmndrs/rc-bvh':
         specifier: npm:@pmndrs/bvh@0.1.0
@@ -97,12 +144,21 @@ importers:
         specifier: 2.1.0
         version: 2.1.0(three@0.187.0)
     devDependencies:
-      '@pmndrs/ddgi-core':
+      '@pmndrs/gi-cache':
         specifier: workspace:*
-        version: link:../ddgi-core
-      '@pmndrs/ddgi-three':
+        version: link:../cache
+      '@pmndrs/gi-core':
+        specifier: workspace:*
+        version: link:../core
+      '@pmndrs/gi-ddgi':
+        specifier: workspace:*
+        version: link:../ddgi
+      '@pmndrs/gi-ddgi-three':
         specifier: workspace:*
         version: link:../ddgi-three
+      '@pmndrs/gi-three':
+        specifier: workspace:*
+        version: link:../three
       '@types/three':
         specifier: 0.187.0
         version: 0.187.0
@@ -119,23 +175,11 @@ importers:
         specifier: ^6.1.0
         version: 6.4.5(@types/node@24.19.2)(tsx@4.23.15)
 
-  packages/ddgi-core:
+  packages/three:
     dependencies:
-      '@pmndrs/bvh':
+      '@pmndrs/gi-core':
         specifier: workspace:*
-        version: link:../bvh
-      '@pmndrs/raytracer':
-        specifier: 0.1.0
-        version: 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
-      '@pmndrs/rc-bvh':
-        specifier: npm:@pmndrs/bvh@0.1.0
-        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
-
-  packages/ddgi-three:
-    dependencies:
-      '@pmndrs/ddgi-core':
-        specifier: workspace:*
-        version: link:../ddgi-core
+        version: link:../core
     devDependencies:
       '@types/three':
         specifier: 0.187.0

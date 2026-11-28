@@ -10,7 +10,7 @@ import { bookmarkLabel } from '../scene/manifests';
 import { TONE_MAPPERS, type ToneMappingName } from '../core/viewer-core';
 import type { NavigationMode } from '../controls/camera-rig';
 import { TECHNIQUE_LABELS, type GiTechniqueId, type TechniqueId, type UpscaleQuality } from '../techniques/types';
-import type { DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
+import type { DDGIPresetName } from '../../../../packages/ddgi/src/presets';
 import { h } from './dom';
 import { DEFAULT_HELP, HELP, type HelpKey } from './help-text';
 import {

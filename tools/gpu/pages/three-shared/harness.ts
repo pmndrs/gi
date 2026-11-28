@@ -9,7 +9,7 @@
 
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import type { AdapterSummary } from '../../contract.ts';
-import { createGIRenderer } from '../../../../packages/ddgi-three/src/host.ts';
+import { createGIRenderer } from '../../../../packages/three/src/host.ts';
 import type { WebGPURenderer } from 'three/webgpu';
 
 /** Render and compute pipelines created so far: a recompile shows up as a change. */

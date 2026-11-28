@@ -7,8 +7,8 @@
  * Not a page itself (no index.html).
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 

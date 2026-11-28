@@ -17,14 +17,14 @@
  * Default device limits, on purpose.
  */
 
-import { GILimitError } from '../../../../packages/ddgi-core/src/platform/contract/errors.ts';
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { MaterialHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { GITechnique, TechniqueContext, TechniqueFrame } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
-import type { ComputeKernel } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
-import { createGI } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { RAY_BYTES } from '../../../../packages/ddgi-core/src/platform/trace/trace-gpu.ts';
-import type { TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
+import { GILimitError } from '../../../../packages/core/src/platform/contract/errors.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { MaterialHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { GITechnique, TechniqueContext, TechniqueFrame } from '../../../../packages/core/src/platform/contract/technique.ts';
+import type { ComputeKernel } from '../../../../packages/core/src/platform/contract/wgsl.ts';
+import { createGI } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { RAY_BYTES } from '../../../../packages/core/src/platform/trace/trace-gpu.ts';
+import type { TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { buildOracleCases, FULL_SIZES, sharedEdgeCase, type OracleCase } from '../trace-oracle/cases.ts';
 import {

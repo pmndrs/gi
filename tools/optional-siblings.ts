@@ -1,7 +1,8 @@
 /**
- * Optional sibling libraries (root package.json `linkedSiblings` entries with
- * `optional: true`): development code from a private sibling repository that
- * a public checkout can't fetch. Today: `@pathtracer/mlp` from
+ * Optional sibling libraries (`linkedSiblings` entries with `optional: true`,
+ * in the package.json of the package that uses them: tools/sibling-manifests.ts):
+ * development code from a private sibling repository that a public checkout
+ * can't fetch. Today: `@pathtracer/mlp` from
  * pmndrs/pathtracer, which the radiance cache's neural tail (P6.4) loads with
  * a dynamic import behind `neuralCache: 'tail'`.
  *
@@ -24,9 +25,11 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Plugin } from 'vite';
+
+import { linkedSiblingEntries } from './sibling-manifests.ts';
 
 const ROOT = resolve(import.meta.dirname, '..');
 
@@ -53,8 +56,7 @@ export interface OptionalSibling {
 }
 
 function siblingEntries(): Record<string, SiblingEntry> {
-    const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { linkedSiblings?: Record<string, SiblingEntry> };
-    return manifest.linkedSiblings ?? {};
+    return linkedSiblingEntries<SiblingEntry>(ROOT);
 }
 
 function headOf(clone: string): string {

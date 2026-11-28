@@ -129,23 +129,23 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "p6.4 neural tail" -- pnpm test:gpu --filter radiance-cache-neural-tail --gpu nvidia`.
  */
 
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { furnaceCeiling, skyStripsCeiling } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-cpu.ts';
-import { NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/neural-cache/neural-tail-wgsl.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
-import { NEURAL_TAIL_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
-import { HASH_GRID_CONSTANTS_WORD } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-wgsl.ts';
-import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/cache/src/capsaicin-math.ts';
+import { furnaceCeiling, skyStripsCeiling } from '../../../../packages/cache/src/neural-cache/neural-tail-cpu.ts';
+import { NEURAL_TAIL_RECORD_KIND, NEURAL_TAIL_RECORD_VEC4 } from '../../../../packages/cache/src/neural-cache/neural-tail-wgsl.ts';
+import { DDGITechnique } from '../../../../packages/ddgi/src/ddgi-technique.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/cache/src/world-cache/capacity.ts';
+import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/cache/src/world-cache/hash-grid-cpu.ts';
+import { NEURAL_TAIL_WORDS } from '../../../../packages/cache/src/world-cache/hash-grid-population-wgsl.ts';
+import { HASH_GRID_CONSTANTS_WORD } from '../../../../packages/cache/src/world-cache/hash-grid-wgsl.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/cache/src/world-cache/world-cache.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
