@@ -1,0 +1,93 @@
+{
+    "id": "dark-room",
+    "title": "Dark room",
+    "description": "One closed room with no sky: a ceiling lamp on a switch, a flashlight and a red box to drag, for watching GI follow fast changes (examples, C4).",
+    "tags": ["interior", "dynamic"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "dark-room"
+        }
+    ],
+    "cameras": [
+        {
+            "name": "from-the-door",
+            "position": [0.6, 1.6, 4.1],
+            "target": [3.0, 0.5, 1.6],
+            "fovYDeg": 65
+        },
+        {
+            "name": "from-the-far-corner",
+            "position": [4.6, 1.8, 0.4],
+            "target": [2.2, 0.4, 2.6],
+            "fovYDeg": 65
+        }
+    ],
+    "lights": [
+        {
+            "type": "point",
+            "label": "ceiling-lamp",
+            "color": [1, 0.94, 0.84],
+            "intensity": 10,
+            "position": [2.5, 2.35, 2.25],
+            "range": 12
+        },
+        {
+            "type": "spot",
+            "label": "flashlight",
+            "color": [1, 0.97, 0.92],
+            "intensity": 40,
+            "position": [0.6, 1.6, 4.1],
+            "direction": [2.4, -1.1, -2.5],
+            "range": 12,
+            "innerConeDeg": 14,
+            "outerConeDeg": 22
+        }
+    ],
+    "motions": [
+        {
+            "id": "light-sweep",
+            "label": "ceiling-lamp sweeps at 1 m/s and back",
+            "target": "light:ceiling-lamp",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [1.0, 2.2, 2.25] },
+                { "t": 3, "position": [4.0, 2.2, 2.25] },
+                { "t": 6, "position": [1.0, 2.2, 2.25] }
+            ]
+        },
+        {
+            "id": "light-step",
+            "label": "ceiling-lamp jumps every 3 s",
+            "target": "light:ceiling-lamp",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [1.0, 2.2, 2.25] },
+                { "t": 3, "position": [4.0, 2.2, 2.25] },
+                { "t": 6, "position": [1.0, 2.2, 2.25] }
+            ]
+        }
+    ],
+    "environment": {
+        "type": "none"
+    },
+    "volume": {
+        "center": [2.5, 1.35, 2.25],
+        "size": [5.4, 3.1, 4.9],
+        "probeSpacing": 0.5
+    },
+    "nativeCapable": false,
+    "referenceCube": {
+        "position": [1.3, 0.5, 3.0]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "MIT, this repo."
+        }
+    ]
+}

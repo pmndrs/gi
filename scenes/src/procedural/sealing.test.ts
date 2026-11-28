@@ -19,6 +19,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ProceduralScene, Vector3Tuple } from '../scene-data';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
+import { buildDarkRoom, DARK_ROOM_SIZE_M } from './dark-room';
 import { buildFurnaceRoom, FURNACE_SIZE_M } from './furnace-room';
 import { SceneBuilder } from './geometry';
 import { buildThinWall, THIN_WALL_THICKNESS_M } from './thin-wall';
@@ -206,6 +207,13 @@ describe('sealing', () => {
         }
     });
 
+    it('dark room: no ray leaves, including rays along every seam', () => {
+        const seams = boxEdgePoints([0, 0, 0], DARK_ROOM_SIZE_M);
+        for (const origin of [[1, 1.5, 3.5], [4.5, 2.2, 0.5]] as Vec[]) {
+            expectContained(buildDarkRoom(), origin, seams, () => true, 'dark room');
+        }
+    });
+
     it('two rooms: no ray leaves the building, from either room', () => {
         const seams = boxEdgePoints([0, 0, 0], [ROOM_B_X1_M, ROOM_HEIGHT_M, ROOM_SIZE_M]);
         for (const scene of [buildTwoRoom(), buildClosedDoor()]) {
@@ -285,6 +293,10 @@ describe('no flush seams', () => {
         const pattern = /^(floor|ceiling|wall-|partition|door-panel)/;
         expect(flushPairs(axisAlignedBoxes(buildTwoRoom(), pattern))).toEqual([]);
         expect(flushPairs(axisAlignedBoxes(buildClosedDoor(), pattern))).toEqual([]);
+    });
+
+    it('dark room shell', () => {
+        expect(flushPairs(axisAlignedBoxes(buildDarkRoom(), /^room-/))).toEqual([]);
     });
 
     it('furnace room shell', () => {

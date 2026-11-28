@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProceduralScene, SceneInstanceData, SceneMeshData } from '../scene-data';
 import { buildCabinetRow, PANEL_THICKNESS_M } from './cabinet-row';
 import { buildCornellBox, CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from './cornell-box';
+import { buildDarkRoom, DARK_ROOM_SIZE_M, DRAG_BOX_NAME, DRAG_BOX_SIZE_M, DRAG_BOX_START } from './dark-room';
 import {
     buildFurnaceRoom,
     FURNACE_ALBEDO,
@@ -217,6 +218,26 @@ describe('cabinet-row', () => {
             const inside = [0, 1, 2].every((axis) => Math.abs(centre[axis] - m[12 + axis]) < half[axis]);
             expect(inside, instance.name).toBe(false);
         }
+    });
+});
+
+describe('dark-room', () => {
+    it('has the box the C4 page drags, standing on the floor inside the room', () => {
+        const scene = buildDarkRoom();
+        const box = findInstance(scene, DRAG_BOX_NAME);
+        boxSize(box).forEach((extent) => expect(extent).toBeCloseTo(DRAG_BOX_SIZE_M));
+        expect([box.transform[12], box.transform[13], box.transform[14]]).toEqual([...DRAG_BOX_START]);
+        expect(DRAG_BOX_START[1] - DRAG_BOX_SIZE_M / 2).toBe(0);
+        for (const axis of [0, 2]) {
+            expect(DRAG_BOX_START[axis] - DRAG_BOX_SIZE_M / 2).toBeGreaterThan(0);
+            expect(DRAG_BOX_START[axis] + DRAG_BOX_SIZE_M / 2).toBeLessThan(DARK_ROOM_SIZE_M[axis]);
+        }
+    });
+
+    it('has a lamp and a flashlight and nothing else that gives light, so with both off the room is black', () => {
+        const scene = buildDarkRoom();
+        expect(scene.lights.map((light) => `${light.type} ${light.label}`)).toEqual(['point ceiling-lamp', 'spot flashlight']);
+        for (const material of scene.materials) expect(material.emissive).toEqual([0, 0, 0]);
     });
 });
 
