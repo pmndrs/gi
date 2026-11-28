@@ -1,12 +1,12 @@
 /**
- * First mesh trees from the GPU (T2.12 at load, T3.2 at runtime;
- * docs/design/m3-moving.md §2.2-2.3, "fast first GI"): every mesh the scene
- * uploads, when it is loaded and when meshes are added or replaced while it
- * runs, has its tree built on the GPU with H-PLOC (`@pmndrs/bvh`, B2, the
- * default GPU builder), so rays can see it a few frames later instead of
- * after tinybvh's time in the worker (seconds for a whole scene). tinybvh
- * still builds every mesh, and the tracer swaps its tree in when it arrives
- * (ray-queries.ts).
+ * Mesh trees from the GPU (T2.12 at load, T3.2 at runtime;
+ * docs/design/m3-moving.md §2.2-2.3, "fast first GI"; final since #26):
+ * every mesh the scene uploads, when it is loaded and when meshes are added
+ * or replaced while it runs, has its tree built on the GPU with H-PLOC
+ * (`@pmndrs/bvh`, B2, the default GPU builder), so rays can see it a few
+ * frames later instead of after tinybvh's time in the worker (seconds for a
+ * whole scene). The GPU's tree is the mesh's tree from then on; tinybvh
+ * builds only the meshes the GPU refuses (ray-queries.ts).
  *
  * **One batch for all of a frame's meshes.** H-PLOC builds every mesh of a
  * batch with the same dispatches; building meshes one by one is
@@ -32,8 +32,8 @@
  * theirs. A drift rebuild builds from the scene copy's positions on the GPU
  * (`GpuLbvhBufferGeometry`), which the batch copies in its own encoder.
  *
- * Without subgroups there is no GPU builder: every mesh waits for tinybvh, as
- * in M1 (the declared fallback, DECISIONS 2026-11-04).
+ * Without subgroups there is no GPU builder: every mesh's tree comes from
+ * tinybvh, as in M1 (the declared fallback, DECISIONS 2026-11-04).
  */
 
 import { GpuHplocBuilder, planGpuHplocBatches } from '@pmndrs/bvh/gpu-hploc';
@@ -117,7 +117,7 @@ export interface GpuBuiltTree {
     readonly layout: GpuLayoutMeshBvh | null;
 }
 
-/** A mesh the GPU didn't give a usable tree: it waits for tinybvh's. */
+/** A mesh the GPU didn't give a usable tree: it falls back to tinybvh's. */
 export interface GpuRefusedTree {
     readonly slot: number;
     readonly generation: number;
@@ -136,13 +136,13 @@ export interface GpuTreeBatchResult {
 
 /** What {@link FirstTreeBuilder.build} started. */
 export interface GpuTreeBuilds {
-    /** Meshes too big for any batch on this device (or for H-PLOC): they wait for tinybvh. */
+    /** Meshes too big for any batch on this device (or for H-PLOC): they fall back to tinybvh. */
     readonly notBuilt: readonly GpuRefusedTree[];
     /** One promise per batch. They never reject: a failed batch reports its meshes as refused. */
     readonly batches: readonly Promise<GpuTreeBatchResult>[];
 }
 
-/** Builds first trees for many meshes at once. The tracer's only GPU builder today is H-PLOC ({@link GpuMeshTrees}). */
+/** Builds mesh trees for many meshes at once. The tracer's only GPU builder today is H-PLOC ({@link GpuMeshTrees}). */
 export interface FirstTreeBuilder {
     /** Compiles the builder's kernels. */
     prepare(): Promise<void>;
@@ -150,7 +150,7 @@ export interface FirstTreeBuilder {
     build(requests: readonly GpuTreeRequest[], options?: GpuTreeBuildOptions): GpuTreeBuilds;
 }
 
-/** H-PLOC first trees ({@link FirstTreeBuilder}) on a device with subgroups. */
+/** H-PLOC mesh trees ({@link FirstTreeBuilder}) on a device with subgroups. */
 export class GpuMeshTrees implements FirstTreeBuilder {
     static isSupported(device: GPUDevice): boolean {
         return GpuHplocBuilder.isSupported(device);

@@ -421,9 +421,6 @@ async function startScene(
     threeGI.update(camera, 0);
     const copiedAt = performance.now();
     const stagingAfterFirstEncodeBytes = platform.sceneCopy.memory.stagingBuffers;
-    // Asked for once the builds have started (before, nothing is pending and it resolves at once).
-    let refinedAt = NaN;
-    void platform.rays.whenRefined().then(() => (refinedAt = performance.now()));
     // The GI light joined the scene when `prepare` resolved (ThreeGI). With `when-light-joins`, three's
     // materials for it start compiling now, alongside the tree builds (after the uploads, which start the
     // GPU's build); by default they compile in series, after the first warm-up step (THREE_COMPILE).
@@ -534,7 +531,6 @@ async function startScene(
         meshes_on_gpu_trees_at_first_gi: treesAtFirstGi.onGpuTrees,
         meshes_on_tinybvh_trees_at_first_gi: treesAtFirstGi.onTinybvhTrees,
         gpu_trees_refused: treesAtFirstGi.gpuTreesRefused,
-        refined_from_creation_ms: fromCreation(refinedAt),
         first_gi_step_from_load_ms: fromLoad(firstGiAt),
         first_gi_shown_from_load_ms: fromLoad(firstGiShownAt),
         first_pass_from_load_ms: fromLoad(firstPassAt),
@@ -567,8 +563,8 @@ async function startScene(
     }
     log(
         `${manifest.id} (${direct} direct light): ${probeCount} probes; files ${startup.load_files_ms} ms (fetch and parse ${startup.load_fetch_parse_ms}, three compile ${startup.load_three_compile_ms}, first draw ${startup.load_three_first_draw_ms}), prepare ${startup.prepare_ms}, copy ${startup.scene_copy_cpu_ms}, trees ${startup.trees_ms}; ` +
-            `T2.12 stages: first GI frame ${startup.first_gi_frame_ms}, first trees ${startup.first_trees_wait_ms} (GPU build ${startup.gpu_tree_build_ms}; ${startup.meshes_on_gpu_trees_at_first_gi} on GPU trees, ${startup.meshes_on_tinybvh_trees_at_first_gi} on tinybvh's, ${startup.gpu_trees_refused} refused), ` +
-            `placed ${startup.trees_placed_frame_ms}, first step ${startup.first_gi_step_ms}, draw ${startup.first_gi_draw_ms} (three's GI compile ${startup.three_gi_compile_ms}, waited ${startup.three_gi_compile_wait_ms}); tinybvh all in at ${startup.refined_from_creation_ms} after creation; ` +
+            `T2.12 stages: first GI frame ${startup.first_gi_frame_ms}, first trees ${startup.first_trees_wait_ms} (GPU build ${startup.gpu_tree_build_ms}; ${startup.meshes_on_gpu_trees_at_first_gi} on GPU trees, ${startup.meshes_on_tinybvh_trees_at_first_gi} on tinybvh's (the fallback), ${startup.gpu_trees_refused} refused), ` +
+            `placed ${startup.trees_placed_frame_ms}, first step ${startup.first_gi_step_ms}, draw ${startup.first_gi_draw_ms} (three's GI compile ${startup.three_gi_compile_ms}, waited ${startup.three_gi_compile_wait_ms}); ` +
             `first GI drawn ${startup.first_gi_shown_from_load_ms} ms from load (${startup.first_gi_shown_from_creation_ms} after creation), first pass ${startup.first_pass_from_creation_ms}, ` +
             `settled ${startup.settled_from_creation_ms} (${startup.warmup_passes} passes in ${startup.warmup_ms} ms); ` +
             `calibrated in ${startup.calibration_ms} ms (${calibration.frames} frames, ${calibration.curve.length} sizes, spread ${startup.calibration_spread}): ${calibration.units} probes, ` +

@@ -693,6 +693,12 @@ Through three, `volume.resetProbes(what)` (three.md).
 
 ## Revisions
 
+### GPU mesh trees are final, 2026-11-28 (pmndrs/gi#26)
+
+- **Technique-facing meaning of `RayQueries.building`:** true until every mesh has its tree, the GPU's (H-PLOC) or, where the GPU gives none, tinybvh's (the declared fallback). No tree replaces a mesh's tree of the same version any more, so there is no second, "refining" phase; a deforming mesh's drift rebuild still doesn't count. No WGSL or binding changed.
+- **Host-visible:** `stats.counters['platform mesh trees']` loses "GPU trees replaced by tinybvh" (always 0 now). "meshes on tinybvh trees" counts fallback trees only. `stats.memory.acceleration` is smaller where the GPU's trees filled the node buffer: it no longer grows with an eighth of headroom for the swap.
+- **Implementation-only, for the repository's tools:** `MeshTreeOptions.holdRefinements`, `rays.releaseRefinements()`, `rays.whenRefined()`, `rays.refining` and `MeshTreeCounts.swaps` are gone. `gpuFirst: false` still forces the fallback (M1's path), so tools test it on a device with subgroups. The page `ddgi-tree-swap` became `ddgi-gpu-trees`.
+
 ### Apple's storage-buffer limit, 2026-11-26 (pmndrs/gi#49)
 
 - **Technique-facing: `TechniqueRequirements.limits`** (optional, `RequiredLimits`): device limits a technique's kernels need above WebGPU's defaults. The radiance cache declares `maxStorageBuffersPerShaderStage: 10` (its most in any pass, packed to fit Apple GPUs' 10 in Chrome; a device three.js makes itself has 8). `prepare` throws a `GILimitError` naming the first declared limit the device is below, before compiling anything.

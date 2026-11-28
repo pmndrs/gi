@@ -4,29 +4,29 @@
  *
  * It keeps the tracer's GPU buffers in step with the scene:
  *
- * - **Mesh trees.** When the scene uploads a mesh, tinybvh (WASM) builds its
- *   tree off the main thread, and the tree is placed into the shared node and
- *   triangle buffers when it arrives, at the start of a later `encode`. Until
+ * - **Mesh trees come from the GPU** (T2.12, "fast first GI"; T3.2 at
+ *   runtime; final since #26). On a device with subgroups, every mesh the
+ *   scene uploads is built on the GPU with H-PLOC: the scene as it is first
+ *   loaded, and meshes added or replaced (`updateMesh`) while it runs. A
+ *   frame's uploads go in one batch (gpu-mesh-trees.ts). Their trees arrive a
+ *   few frames later, after a small stats readback, and are copied into the
+ *   shared node and triangle buffers at the start of a later `encode`. Until
  *   then rays see the mesh's previous shape, or miss it if it is new
- *   (`building` is true meanwhile).
- * - **First trees from the GPU** (T2.12, "fast first GI"; T3.2 at runtime).
- *   On a device with subgroups, every mesh the scene uploads is also built on
- *   the GPU with H-PLOC: the scene as it is first loaded, and meshes added or
- *   replaced (`updateMesh`) while it runs. A frame's uploads go in one batch (gpu-mesh-trees.ts). Their
- *   trees arrive a few frames later, after a small stats readback, and are
- *   copied into the same shared buffers, so rays see a mesh long before
- *   tinybvh is done. tinybvh's tree then replaces each mesh's GPU tree as it
- *   arrives (the "swap"): only that mesh's range and its mesh-table entry
- *   change, so nothing recompiles and the top level keeps its shape. A GPU
- *   tree that was refused, or is too deep for the trace stack, is never used:
- *   that mesh waits for tinybvh. `building` is true until every mesh has a
- *   tree of its current version; `refining` while tinybvh trees are still to
- *   come.
+ *   (`building` is true meanwhile). The GPU's tree is the mesh's tree: it
+ *   traces as fast as tinybvh's (DECISIONS 2026-11-28), so nothing replaces it.
+ * - **tinybvh, the declared fallback** (DECISIONS 2026-11-04 and
+ *   2026-11-09). tinybvh (WASM) builds a mesh's tree off the main thread only
+ *   when the GPU gives that version of the mesh no usable tree: no subgroups,
+ *   the GPU builder off (`gpuFirst: false`) or its kernels failed to compile,
+ *   or a GPU tree refused (the builder's checks, too big for the device's
+ *   buffers, too deep for the trace stack, a failed batch, or a deforming
+ *   mesh whose layout readback failed). The scene's CPU copy of the mesh is
+ *   kept until the GPU's answer, so the fallback can start then.
  * - **One tinybvh build per mesh at a time.** A mesh replaced again while
  *   its tinybvh build runs keeps only its newest version waiting behind it.
- *   Why: the worker builds in order, and once GPU trees let a host reshape a
- *   mesh every few frames, a build per upload would queue up faster than the
- *   worker clears them, and the final tinybvh tree would come later and later.
+ *   Why: the worker builds in order, and a host that reshapes a mesh every
+ *   few frames would otherwise queue builds faster than the worker clears
+ *   them, and the mesh's tree would come later and later.
  * - **Deforming meshes** (T3.3, deforming-trees.ts). A pose doesn't build a
  *   tree: the mesh's placed tree is refit on the GPU in the same frame, from
  *   the positions the scene copy just took, and its top-level box is the
@@ -104,21 +104,15 @@ export interface PlatformRayQueriesOptions {
  */
 export interface MeshTreeOptions {
     /**
-     * First trees from the GPU (H-PLOC) for every uploaded mesh (at load, and added or replaced
-     * later), on a device with subgroups. Default true; false is M1's path, tinybvh only.
+     * Mesh trees from the GPU (H-PLOC) for every uploaded mesh (at load, and added or replaced
+     * later), on a device with subgroups. Default true; false forces the fallback, tinybvh only
+     * (M1's path), so tools can test it on a device that has subgroups.
      */
     readonly gpuFirst?: boolean;
-    /**
-     * tinybvh's trees wait instead of replacing a mesh's GPU tree, until
-     * {@link PlatformRayQueries.releaseRefinements}. A mesh with no tree yet
-     * still takes tinybvh's at once. For tools that check a scene mid-swap or
-     * time the swap frame. Default false.
-     */
-    readonly holdRefinements?: boolean;
-    /** GPU trees deeper than this are refused, and the mesh waits for tinybvh. Default {@link GPU_TREE_MAX_DEPTH}. */
+    /** GPU trees deeper than this are refused, and the mesh falls back to tinybvh. Default {@link GPU_TREE_MAX_DEPTH}. */
     readonly gpuMaxDepth?: number;
     /**
-     * Builds the first trees instead of the GPU H-PLOC. For unit tests, which
+     * Builds the trees instead of the GPU H-PLOC. For unit tests, which
      * run in Node without a GPU; it is used whatever the device's features.
      */
     readonly firstTreeBuilder?: FirstTreeBuilder;
@@ -127,7 +121,7 @@ export interface MeshTreeOptions {
 /**
  * Levels kept free on the trace stack for the top level and the instance
  * marker. The stack (64 entries) is shared by both levels, so a GPU tree
- * deeper than {@link GPU_TREE_MAX_DEPTH} waits for tinybvh's rather than
+ * deeper than {@link GPU_TREE_MAX_DEPTH} falls back to tinybvh's rather than
  * risk a scene that can't be traced. 16 levels hold a top level over tens of
  * thousands of instances.
  */
@@ -153,7 +147,7 @@ interface PlacedTree {
     readonly generation: number;
 }
 
-/** A finished build waiting to be placed at a later `update`: tinybvh's, from the worker, or the GPU's, in its batch's buffers. */
+/** A finished build waiting to be placed at a later `update`: the GPU's, in its batch's buffers, or tinybvh's (the fallback), from the worker. */
 type ArrivedTree =
     | { readonly source: 'tinybvh'; readonly slot: number; readonly generation: number; readonly bvh: MeshBvh }
     | {
@@ -168,20 +162,21 @@ type ArrivedTree =
 /**
  * What one version of a mesh (one upload of a slot) has from each builder.
  * `gpu` is `'none'` when the mesh wasn't built on the GPU: no subgroups, the
- * GPU builder off, or its kernels not compiled (yet). tinybvh's
- * `'building'` includes a build waiting for the slot's previous one to end.
+ * GPU builder off, or its kernels not compiled. tinybvh is `'none'` unless
+ * the GPU gave this version no tree (the fallback); its `'building'`
+ * includes a build waiting for the slot's previous one to end.
  */
 interface MeshTreeState {
     readonly generation: number;
     gpu: 'none' | 'building' | 'built' | 'refused';
-    tinybvh: 'building' | 'built' | 'failed';
+    tinybvh: 'none' | 'building' | 'built' | 'failed';
 }
 
 /** Counts of the mesh trees, for `stats.counters` and the tools. */
 export interface MeshTreeCounts {
     /** Meshes whose rays see a GPU-built tree now. */
     readonly onGpuTrees: number;
-    /** Meshes whose rays see tinybvh's tree now. */
+    /** Meshes whose rays see tinybvh's tree now (the fallback). */
     readonly onTinybvhTrees: number;
     /** Meshes with no tree yet, and one to come (rays miss them meanwhile). */
     readonly waitingForFirstTree: number;
@@ -189,10 +184,8 @@ export interface MeshTreeCounts {
     readonly tinybvhBuilding: number;
     /** GPU trees built and usable, since the platform was made. */
     readonly gpuTreesBuilt: number;
-    /** GPU trees refused (the builder's checks, too deep, too big, or a failed build), since the platform was made. */
+    /** GPU trees refused (the builder's checks, too deep, too big, a failed build, a lost layout), since the platform was made. Each such mesh falls back to tinybvh. */
     readonly gpuTreesRefused: number;
-    /** GPU trees replaced by tinybvh's, since the platform was made. */
-    readonly swaps: number;
     /** Milliseconds from the latest GPU batch's submit to its stats on the CPU; 0 before any. */
     readonly lastGpuBuildMs: number;
 }
@@ -216,17 +209,6 @@ export interface AccelerationMemory {
 /** Starting sizes; both buffers double when they fill. */
 const INITIAL_NODES = 1024;
 const INITIAL_TRIANGLES = 2048;
-
-/**
- * Room asked for when placing GPU trees makes the node buffer grow
- * (growable-storage.ts). tinybvh's trees replace them soon after and can
- * have more nodes (Sponza: 0.6% more in all, more for single meshes; the
- * triangles are the same). Without room, the first replacement that didn't
- * fit its old range doubled the buffer: Sponza's nodes went from 193 MB to
- * 386 MB (T2.12). An eighth covers the difference with margin. Only GPU
- * trees ask: tinybvh's are final, and grow the buffer as in M1.
- */
-const GPU_TREE_NODE_HEADROOM = 1 / 8;
 
 /** Bindings of a batch kernel's own group (group 1): rays in, results out. */
 const BATCH_GROUP = 1;
@@ -260,28 +242,30 @@ export class PlatformRayQueries implements RayQueries {
     private readonly tinybvhRunning = new Set<number>();
     /** The newest upload of a slot whose tinybvh build waits for that slot's running one to end. */
     private readonly tinybvhWaiting = new Map<number, { readonly mesh: UploadedMesh; readonly generation: number }>();
+    /**
+     * Uploads whose GPU build is still running, kept for the tinybvh fallback
+     * should the GPU refuse them: the scene's CPU copy of the mesh
+     * (`UploadedMesh.geometry`), let go of once the GPU's tree is usable.
+     */
+    private readonly awaitingGpu = new Map<number, { readonly mesh: UploadedMesh; readonly generation: number }>();
     private buildFailure: Error | null = null;
     /** Set when the top level no longer matches the instances or the placed trees. */
     private topLevelStale = false;
     private builtWaiters: (() => void)[] = [];
-    private refinedWaiters: (() => void)[] = [];
 
     /**
-     * The GPU's first trees (T2.12 at load, T3.2 at runtime): null without
+     * The GPU's mesh trees (T2.12 at load, T3.2 at runtime): null without
      * subgroups, with `gpuFirst: false`, or when its kernels failed to compile.
      */
     private firstTrees: FirstTreeBuilder | null;
     private firstTreesReady = false;
     private readonly gpuMaxDepth: number;
-    /** Slots whose tinybvh tree waits instead of replacing their GPU tree; null holds none. */
-    private refinementHold: ((slot: number) => boolean) | null;
     /** Batch output buffers alive until their trees are copied out (or dropped). */
     private readonly liveOutputs = new Set<GpuTreeOutputs>();
     /** Outputs whose trees this frame copied out or dropped: released at the next update, after the host submitted the copies. */
     private outputsToRelease: GpuTreeOutputs[] = [];
     private gpuTreesBuilt = 0;
     private gpuTreesRefused = 0;
-    private swaps = 0;
     private lastGpuBuildMs = 0;
 
     /** `gi/triangle-flags`: keeps triangle flag bit 0 ("consult the material") right (T4.2). */
@@ -339,7 +323,6 @@ export class PlatformRayQueries implements RayQueries {
         const meshTrees = options.meshTrees ?? {};
         this.warn = options.warn ?? ((message) => console.warn(message));
         this.gpuMaxDepth = meshTrees.gpuMaxDepth ?? GPU_TREE_MAX_DEPTH;
-        this.refinementHold = meshTrees.holdRefinements ? () => true : null;
         if (meshTrees.gpuFirst === false) this.firstTrees = null;
         else if (meshTrees.firstTreeBuilder) this.firstTrees = meshTrees.firstTreeBuilder;
         else this.firstTrees = GpuMeshTrees.isSupported(device) ? new GpuMeshTrees(device, { label: this.label }) : null;
@@ -372,19 +355,14 @@ export class PlatformRayQueries implements RayQueries {
     }
 
     /**
-     * True while a mesh waits for its first tree (from the GPU or tinybvh) or
-     * a top-level shape is still being built. Rays meanwhile see a mesh's
-     * previous shape, or miss it if it is new, and miss instances created (or
-     * shown) since the current top-level shape. tinybvh trees still to come
-     * for meshes that already have a GPU tree don't count: see `refining`.
+     * True while a mesh waits for its tree (from the GPU, or the tinybvh
+     * fallback) or a top-level shape is still being built. Rays meanwhile see
+     * a mesh's previous shape, or miss it if it is new, and miss instances
+     * created (or shown) since the current top-level shape. A deforming
+     * mesh's drift rebuild doesn't count: the mesh traces on its refit tree.
      */
     get building(): boolean {
         return this.meshesWaitingForFirstTree() > 0 || (this.gpuTopLevel?.building ?? false);
-    }
-
-    /** True while tinybvh trees are still being built (each will replace a mesh's GPU tree, or be its first). */
-    get refining(): boolean {
-        return this.pendingBuilds > 0;
     }
 
     /** Which builders the meshes' trees come from now, and what the GPU builds gave. */
@@ -402,7 +380,6 @@ export class PlatformRayQueries implements RayQueries {
             tinybvhBuilding: this.pendingBuilds,
             gpuTreesBuilt: this.gpuTreesBuilt,
             gpuTreesRefused: this.gpuTreesRefused,
-            swaps: this.swaps,
             lastGpuBuildMs: this.lastGpuBuildMs,
         };
     }
@@ -417,7 +394,6 @@ export class PlatformRayQueries implements RayQueries {
             'tinybvh builds running': counts.tinybvhBuilding,
             'GPU trees built': counts.gpuTreesBuilt,
             'GPU trees refused': counts.gpuTreesRefused,
-            'GPU trees replaced by tinybvh': counts.swaps,
             'last GPU build ms (submit to stats)': counts.lastGpuBuildMs,
         };
     }
@@ -491,37 +467,19 @@ export class PlatformRayQueries implements RayQueries {
         return this.builder.usesWorker;
     }
 
-    /** Whether the scene's first trees are built on the GPU (a device with subgroups, and `gpuFirst` not turned off). */
+    /** Whether meshes' trees are built on the GPU (a device with subgroups, `gpuFirst` not turned off, and the kernels compiled). */
     get gpuFirstTrees(): boolean {
         return this.firstTrees !== null;
     }
 
     /**
-     * Resolves once every mesh has its first tree (or none is coming) and no
-     * top-level shape is building. They still reach the GPU only at the next
-     * `update` (the platform's next `encode`). tinybvh trees that will
-     * replace GPU trees may still be building: see `whenRefined`.
+     * Resolves once every mesh has its tree (or none is coming), the tinybvh
+     * fallback's included, and no top-level shape is building. They still
+     * reach the GPU only at the next `update` (the platform's next `encode`).
      */
     async whenBuilt(): Promise<void> {
         if (this.meshesWaitingForFirstTree() > 0) await new Promise<void>((resolve) => this.builtWaiters.push(resolve));
         await this.gpuTopLevel?.whenIdle();
-    }
-
-    /** Resolves once every tinybvh build has finished, as {@link whenBuilt} does; held trees still wait for `releaseRefinements`. */
-    async whenRefined(): Promise<void> {
-        if (this.pendingBuilds > 0) await new Promise<void>((resolve) => this.refinedWaiters.push(resolve));
-        await this.whenBuilt();
-    }
-
-    /**
-     * Lets tinybvh trees held by `holdRefinements` replace GPU trees from the
-     * next `update`: all of them, or only those of the mesh slots `which`
-     * accepts (the rest stay held).
-     */
-    releaseRefinements(which?: (meshSlot: number) => boolean): void {
-        const held = this.refinementHold;
-        if (!held) return;
-        this.refinementHold = which ? (slot) => held(slot) && !which(slot) : null;
     }
 
     /** Meshes whose triangle flags `gi/triangle-flags` has rewritten, since the platform was made (a mesh rewritten twice counts twice). */
@@ -630,6 +588,7 @@ export class PlatformRayQueries implements RayQueries {
         for (const slot of upload.meshesRemoved) {
             this.bumpGeneration(slot);
             this.treeStates.delete(slot);
+            this.awaitingGpu.delete(slot);
             this.dropWaitingTinybvhBuild(slot);
             this.releaseTree(slot);
             this.deforming?.meshRemoved(slot);
@@ -759,8 +718,8 @@ export class PlatformRayQueries implements RayQueries {
         for (const outputs of this.liveOutputs) outputs.destroy();
         this.liveOutputs.clear();
         this.tinybvhWaiting.clear();
+        this.awaitingGpu.clear();
         for (const resolve of this.builtWaiters.splice(0)) resolve();
-        for (const resolve of this.refinedWaiters.splice(0)) resolve();
     }
 
     // -----------------------------------------------------------------------
@@ -774,32 +733,23 @@ export class PlatformRayQueries implements RayQueries {
     }
 
     /**
-     * Meshes whose current version has no tree yet and still has one coming.
-     * A mesh's first tree is whichever builder's arrives first (tinybvh's
-     * small meshes often beat the GPU's batch, and a busy GPU may be slower
-     * than the worker), except where tinybvh's trees are held: there a
-     * running GPU build goes first (`takeArrived`).
+     * Meshes whose current version has no tree yet and still has one coming:
+     * the GPU's, or tinybvh's after the GPU refused it (one builder at a time,
+     * so never both).
      */
     private meshesWaitingForFirstTree(): number {
         let waiting = 0;
-        for (const [slot, state] of this.treeStates) {
-            const tinybvhUsable = state.tinybvh === 'built' && !(state.gpu === 'building' && this.holdsRefinement(slot));
-            const hasTree = state.gpu === 'built' || tinybvhUsable;
+        for (const state of this.treeStates.values()) {
+            const hasTree = state.gpu === 'built' || state.tinybvh === 'built';
             const treeComing = state.gpu === 'building' || state.tinybvh === 'building';
             if (!hasTree && treeComing) waiting++;
         }
         return waiting;
     }
 
-    /** Whether tinybvh's tree for this slot waits for `releaseRefinements` (the `holdRefinements` option). */
-    private holdsRefinement(slot: number): boolean {
-        return this.refinementHold !== null && this.refinementHold(slot);
-    }
-
-    /** Resolves `whenBuilt` and `whenRefined` waiters whose condition now holds. */
+    /** Resolves `whenBuilt` waiters once no mesh waits for its tree. */
     private notifyWaiters(): void {
         if (this.meshesWaitingForFirstTree() === 0) for (const resolve of this.builtWaiters.splice(0)) resolve();
-        if (this.pendingBuilds === 0) for (const resolve of this.refinedWaiters.splice(0)) resolve();
     }
 
     /** The slot's state, if `generation` is still its current version. */
@@ -810,18 +760,25 @@ export class PlatformRayQueries implements RayQueries {
 
     /**
      * Starts the trees of this frame's uploaded meshes: one GPU build for all
-     * of them (gpu-mesh-trees.ts), whether the scene is loading or running,
-     * and tinybvh in the worker for every mesh.
+     * of them (gpu-mesh-trees.ts), whether the scene is loading or running.
+     * Without the GPU builder, tinybvh builds every mesh in the worker (the
+     * fallback); with it, tinybvh builds only the meshes the GPU refuses.
      */
     private startBuilds(meshes: readonly UploadedMesh[]): void {
         const builder = this.firstTreesReady ? this.firstTrees : null;
         const gpuRequests: GpuTreeRequest[] = [];
         for (const mesh of meshes) {
             const generation = this.bumpGeneration(mesh.slot);
-            this.treeStates.set(mesh.slot, { generation, gpu: builder ? 'building' : 'none', tinybvh: 'building' });
+            this.treeStates.set(mesh.slot, { generation, gpu: builder ? 'building' : 'none', tinybvh: 'none' });
+            if (!builder) {
+                this.startTinybvhBuild(mesh, generation);
+                continue;
+            }
             // The scene's copies of the mesh's positions and indices (UploadedMesh.geometry). The GPU build
-            // writes them into its own buffers (queue.writeBuffer) before build() returns.
-            if (builder) gpuRequests.push({ slot: mesh.slot, generation, geometry: mesh.geometry });
+            // writes them into its own buffers (queue.writeBuffer) before build() returns; they are kept
+            // until the GPU's answer, for the fallback (a refusal can come from inside build()).
+            this.awaitingGpu.set(mesh.slot, { mesh, generation });
+            gpuRequests.push({ slot: mesh.slot, generation, geometry: mesh.geometry });
         }
         if (builder && gpuRequests.length > 0) {
             // Deforming meshes' trees are read back too (the refit needs their shape), so they get a batch
@@ -831,15 +788,15 @@ export class PlatformRayQueries implements RayQueries {
             if (others.length > 0) this.startGpuBuilds(builder, others, { readLayouts: false, rebuild: false });
             if (deforming.length > 0) this.startGpuBuilds(builder, deforming, { readLayouts: true, rebuild: false });
         }
-        // tinybvh after the GPU's build has started: the worker builder transfers mesh.geometry's arrays,
-        // which detaches them, so the GPU's writeBuffer must already have copied them (keep this order).
-        for (const mesh of meshes) this.startTinybvhBuild(mesh);
     }
 
     /**
      * Starts one GPU build. `rebuild` marks a deforming mesh's drift rebuild:
      * its mesh already has a tree, so a refused rebuild leaves the mesh as it
-     * is instead of waiting for tinybvh. Returns whether anything started.
+     * is instead of falling back to tinybvh. Returns whether anything started.
+     * Refusals are handled only after `builder.build` returns, so the GPU's
+     * `writeBuffer`s have copied every mesh before a fallback build transfers
+     * (detaches) its arrays to the worker.
      */
     private startGpuBuilds(builder: FirstTreeBuilder, requests: readonly GpuTreeRequest[], kind: { readonly readLayouts: boolean; readonly rebuild: boolean }): boolean {
         const refuse = (slot: number, generation: number): void => {
@@ -850,7 +807,7 @@ export class PlatformRayQueries implements RayQueries {
         try {
             builds = builder.build(requests, { readLayouts: kind.readLayouts });
         } catch (error) {
-            const what = kind.rebuild ? 'the mesh keeps its refit tree' : 'the meshes wait for tinybvh';
+            const what = kind.rebuild ? 'the mesh keeps its refit tree' : 'the meshes fall back to tinybvh';
             this.warn(`@pmndrs/gi: the GPU mesh tree build failed, so ${what}: ${describe(error)}`);
             for (const { slot, generation } of requests) refuse(slot, generation);
             return false;
@@ -884,8 +841,8 @@ export class PlatformRayQueries implements RayQueries {
     /**
      * Starts the drift rebuild of the deforming mesh whose refit has drifted
      * longest, once it has held (deforming-trees.ts), with H-PLOC from the
-     * scene copy's positions. Skipped while that mesh still has a first tree
-     * or tinybvh's tree coming (it would replace the rebuild), and in a frame
+     * scene copy's positions. Skipped while that mesh still has its tree
+     * coming (from the GPU or the fallback), and in a frame
      * whose scene upload made a new vertex buffer: the build copies the
      * positions in its own submit, before the host's, and a new buffer holds
      * nothing until the host's growth copies run.
@@ -904,7 +861,7 @@ export class PlatformRayQueries implements RayQueries {
         deforming.rebuildStarted(slot, started);
     }
 
-    /** A batch's stats are back: usable trees queue for placement; refused ones leave their meshes to tinybvh (or, rebuilt, to their refit tree). */
+    /** A batch's stats are back: usable trees queue for placement; refused ones fall back to tinybvh (or, rebuilt, keep their refit tree). */
     private gpuBatchFinished(result: GpuTreeBatchResult, rebuild: boolean): void {
         this.lastGpuBuildMs = result.buildMs;
         for (const outputs of new Set(result.built.map((built) => built.outputs))) {
@@ -917,28 +874,39 @@ export class PlatformRayQueries implements RayQueries {
             else this.gpuRefused(slot, generation);
         };
         for (const { slot, generation } of result.refused) refuse(slot, generation);
-        if (result.failure) this.warn(`@pmndrs/gi: ${result.failure}, so ${rebuild ? 'the mesh keeps its refit tree' : 'the meshes wait for tinybvh'}`);
+        if (result.failure) this.warn(`@pmndrs/gi: ${result.failure}, so ${rebuild ? 'the mesh keeps its refit tree' : 'the meshes fall back to tinybvh'}`);
         for (const built of result.built) {
             const state = this.currentState(built.slot, built.generation);
-            if (!state || built.tree.maxDepth > this.gpuMaxDepth) {
-                // A mesh removed or replaced meanwhile, or a tree too deep for the trace stack.
+            // A deforming mesh's refit needs the tree's layout; if its readback failed, the tree can't follow poses.
+            const layoutLost = built.layout === null && (this.deforming?.has(built.slot) ?? false);
+            if (!state || built.tree.maxDepth > this.gpuMaxDepth || layoutLost) {
+                // A mesh removed or replaced meanwhile, a tree too deep for the trace stack, or one the refit can't use.
                 if (state) refuse(built.slot, built.generation);
                 this.outputsToRelease.push(built.outputs);
                 continue;
             }
             // A rebuild's mesh already had its first tree: its state stays as the first builds left it.
-            if (!rebuild) state.gpu = 'built';
+            if (!rebuild) {
+                state.gpu = 'built';
+                // The GPU's tree is final: the fallback won't be needed, so let go of the CPU copy.
+                if (this.awaitingGpu.get(built.slot)?.generation === built.generation) this.awaitingGpu.delete(built.slot);
+            }
             this.gpuTreesBuilt++;
             this.arrived.push({ source: 'gpu', slot: built.slot, generation: built.generation, built, rebuild });
         }
         this.notifyWaiters();
     }
 
+    /** The GPU gave this version of the mesh no tree: tinybvh builds it from the CPU copy kept for this (the fallback). */
     private gpuRefused(slot: number, generation: number): void {
         const state = this.currentState(slot, generation);
         if (!state) return;
         state.gpu = 'refused';
         this.gpuTreesRefused++;
+        const kept = this.awaitingGpu.get(slot);
+        if (kept?.generation !== generation) return;
+        this.awaitingGpu.delete(slot);
+        this.startTinybvhBuild(kept.mesh, generation);
     }
 
     /**
@@ -946,8 +914,9 @@ export class PlatformRayQueries implements RayQueries {
      * build still runs, leaves it waiting behind that one in place of any
      * older upload already waiting (see the file comment).
      */
-    private startTinybvhBuild(mesh: UploadedMesh): void {
-        const generation = this.generations.get(mesh.slot) ?? 0;
+    private startTinybvhBuild(mesh: UploadedMesh, generation: number): void {
+        const state = this.currentState(mesh.slot, generation);
+        if (state) state.tinybvh = 'building';
         if (this.tinybvhRunning.has(mesh.slot)) {
             // An older upload waiting here is out of date: its build is never started, so it stops counting.
             if (!this.tinybvhWaiting.has(mesh.slot)) this.pendingBuilds++;
@@ -991,44 +960,22 @@ export class PlatformRayQueries implements RayQueries {
 
     /**
      * The finished builds to place this frame, for meshes that still exist in
-     * the version they were built from. A GPU tree whose mesh already has
-     * tinybvh's (placed, or placed this frame) is dropped: it would only be
-     * worse. Where tinybvh's trees are held (`holdRefinements`, for tools),
-     * tinybvh's tree waits while the mesh's GPU build runs or would replace
-     * its GPU tree, until `releaseRefinements`: the GPU's tree, when there is
-     * one, is then always the first, and the swap comes when the tool says.
+     * the version they were built from. A version gets one tree, from the GPU
+     * or else from the fallback, so nothing here replaces a tree of the same
+     * version, except a deforming mesh's drift rebuild: it is newer than any
+     * tree its mesh has (it was built from a later pose), tinybvh's too.
      */
     private takeArrived(): ArrivedTree[] {
         const taken: ArrivedTree[] = [];
-        const waiting: ArrivedTree[] = [];
-        const tinybvhNow = new Set<number>();
-        // GPU trees of the meshes' current versions only: a stale one must not hold back a newer version's tinybvh tree.
-        const gpuQueued = new Set(this.arrived.filter((tree) => tree.source === 'gpu' && !tree.rebuild && this.currentState(tree.slot, tree.generation)).map((tree) => tree.slot));
         for (const tree of this.arrived) {
-            const state = this.currentState(tree.slot, tree.generation);
-            if (!state || tree.source !== 'tinybvh') continue;
-            const placed = this.placed.get(tree.slot);
-            const gpuTreeFirst = state.gpu === 'building' || (placed?.source === 'gpu' && placed.generation === tree.generation) || gpuQueued.has(tree.slot);
-            if (gpuTreeFirst && this.holdsRefinement(tree.slot)) {
-                waiting.push(tree);
-            } else {
+            if (this.currentState(tree.slot, tree.generation)) {
                 taken.push(tree);
-                tinybvhNow.add(tree.slot);
-            }
-        }
-        for (const tree of this.arrived) {
-            if (tree.source !== 'gpu') continue;
-            const placed = this.placed.get(tree.slot);
-            const hasTinybvhTree = tinybvhNow.has(tree.slot) || (placed?.source === 'tinybvh' && placed.generation === tree.generation);
-            // A drift rebuild is newer than any tree its mesh has (it was built from a later pose), tinybvh's too.
-            if (this.currentState(tree.slot, tree.generation) && (tree.rebuild || !hasTinybvhTree)) {
-                taken.push(tree);
-            } else {
+            } else if (tree.source === 'gpu') {
                 this.outputsToRelease.push(tree.built.outputs);
                 if (tree.rebuild) this.deforming?.rebuildRefused(tree.slot);
             }
         }
-        this.arrived = waiting;
+        this.arrived = [];
         return taken;
     }
 
@@ -1055,10 +1002,9 @@ export class PlatformRayQueries implements RayQueries {
      * allocation records those first).
      */
     private placeTrees(encoder: GPUCommandEncoder, arrived: readonly ArrivedTree[]): void {
-        // A rebuilt mesh replaces its old tree, and tinybvh's replaces the GPU's: free the old one
+        // A replaced or rebuilt mesh's new tree takes the place of its old one: free the old one
         // first so the space can be reused. Queue order makes reuse safe: frames already submitted
         // read the old tree before any write or copy below runs.
-        const swaps = arrived.filter((tree) => tree.source === 'tinybvh' && this.placed.get(tree.slot)?.source === 'gpu').length;
         for (const tree of arrived) this.releaseTree(tree.slot);
 
         const sizes = arrived.map(treeSize);
@@ -1067,9 +1013,7 @@ export class PlatformRayQueries implements RayQueries {
         let nodeOffsets: number[] | null = null;
         let triangleOffsets: number[];
         try {
-            // GPU trees will be replaced by tinybvh's, which may need a little more room.
-            const nodeHeadroom = arrived.some((tree) => tree.source === 'gpu') ? GPU_TREE_NODE_HEADROOM : 0;
-            nodeOffsets = this.allocateAll(this.nodes, encoder, nodeCounts, (placed) => ({ offset: placed.nodeOffset, count: placed.nodeCount }), nodeHeadroom);
+            nodeOffsets = this.allocateAll(this.nodes, encoder, nodeCounts, (placed) => ({ offset: placed.nodeOffset, count: placed.nodeCount }));
             triangleOffsets = this.allocateAll(this.triangles, encoder, triangleCounts, (placed) => ({
                 offset: placed.triangleOffset,
                 count: placed.triangleCount,
@@ -1081,7 +1025,6 @@ export class PlatformRayQueries implements RayQueries {
             this.arrived.push(...arrived);
             throw error;
         }
-        this.swaps += swaps;
 
         arrived.forEach((tree, index) => {
             const size = sizes[index];
@@ -1130,16 +1073,10 @@ export class PlatformRayQueries implements RayQueries {
 
     /**
      * Allocates one range per entry of `counts`. If they don't all fit, the
-     * storage grows once (copying the trees already placed), with `headroom`
-     * (growable-storage.ts), and they are allocated again.
+     * storage grows once (copying the trees already placed), and they are
+     * allocated again.
      */
-    private allocateAll(
-        storage: GrowableStorage,
-        encoder: GPUCommandEncoder,
-        counts: readonly number[],
-        rangeOf: (tree: PlacedTree) => ResidentRange,
-        headroom = 0,
-    ): number[] {
+    private allocateAll(storage: GrowableStorage, encoder: GPUCommandEncoder, counts: readonly number[], rangeOf: (tree: PlacedTree) => ResidentRange): number[] {
         const offsets: number[] = [];
         for (const count of counts) {
             const offset = storage.allocate(count);
@@ -1147,7 +1084,7 @@ export class PlatformRayQueries implements RayQueries {
                 // Undo, grow once for everything, then allocate again.
                 offsets.forEach((placedOffset, index) => storage.release(placedOffset, counts[index]));
                 const total = counts.reduce((sum, value) => sum + value, 0);
-                storage.grow(encoder, total, [...this.placed.values()].map(rangeOf), headroom);
+                storage.grow(encoder, total, [...this.placed.values()].map(rangeOf));
                 return counts.map((value) => {
                     const grown = storage.allocate(value);
                     if (grown === null) throw new Error('trace buffer allocation failed after growing');

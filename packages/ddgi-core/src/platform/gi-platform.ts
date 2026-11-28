@@ -9,8 +9,8 @@
  * 1. the scene copy's uploads (`PlatformScene.encode`), and the texture
  *    store's new layers (`gi/texture-store`, textures/texture-store.ts);
  * 2. the tracer acting on them: removed meshes, new mesh trees (the GPU's
- *    first trees at load, then tinybvh's from the worker), and the top
- *    level's refit or rebuild;
+ *    H-PLOC trees, or tinybvh's from the worker where the GPU gives none),
+ *    and the top level's refit or rebuild;
  * 2b. hit shading: its settings, and the sky's projection when the
  *    environment changed (`shade/hit-shading.ts`, T1.4);
  * 3. each technique's `encode`, fallbacks before the techniques stacked on them,
@@ -90,10 +90,11 @@ export interface GIPlatformImplOptions extends GIPlatformOptions {
      */
     readonly rayBatches?: boolean;
     /**
-     * How mesh trees are made (T2.12): by default the scene's first trees come
-     * from the GPU (H-PLOC) on a device with subgroups, and tinybvh's replace
-     * them as they arrive. Tools turn the GPU off (M1's path), hold the swap
-     * to check a scene mid-swap, or refuse deeper GPU trees.
+     * How mesh trees are made (T2.12, #26): by default every mesh's tree comes
+     * from the GPU (H-PLOC) on a device with subgroups, and tinybvh (in the
+     * worker) builds only what the GPU can't, the declared fallback. Tools
+     * turn the GPU off to test the fallback (M1's path), or refuse deeper GPU
+     * trees.
      */
     readonly meshTrees?: MeshTreeOptions;
 }
