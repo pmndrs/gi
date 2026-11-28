@@ -9,7 +9,7 @@ const DEVICE_NEEDS = docsLink('api/radiance-cache.md#what-it-needs-from-the-devi
 const DIAGRAM = `<svg viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Side view. The camera looks at the ground. A screen probe on the ground sends rays; where they land, the world cache holds a cell, and the cells are larger the farther they are from the camera.">
   <line x1="10" y1="128" x2="310" y2="128" stroke="currentColor" stroke-opacity="0.6"/>
   <line x1="300" y1="30" x2="300" y2="128" stroke="currentColor" stroke-opacity="0.6"/>
-  <path d="M14 46 l16 -8 v16 z" fill="currentColor"/>
+  <path d="M30 46 l-16 -8 v16 z" fill="currentColor"/>
   <line x1="30" y1="46" x2="80" y2="128" stroke="currentColor" stroke-dasharray="3 2" stroke-opacity="0.7"/>
   <g stroke="#ffc878" stroke-width="1.2">
     <line x1="80" y1="128" x2="140" y2="128"/><line x1="80" y1="128" x2="300" y2="100"/>
@@ -25,8 +25,8 @@ const DIAGRAM = `<svg viewBox="0 0 320 150" xmlns="http://www.w3.org/2000/svg" r
   <g fill="currentColor" font-family="system-ui, sans-serif" font-size="10">
     <text x="12" y="28">camera</text>
     <text x="60" y="146">screen probe</text>
-    <text x="150" y="98">cells where rays land,</text>
-    <text x="150" y="110">larger farther away</text>
+    <text x="120" y="30">cells only where rays land,</text>
+    <text x="120" y="42">larger farther from the camera</text>
   </g>
 </svg>`;
 

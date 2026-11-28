@@ -30,7 +30,11 @@ import { showCacheStats } from '../../shared/cache-stats.ts';
 
 // The screen inputs need a single-sampled pass.
 const { renderer, device } = await createRendererAndDevice({ antialias: false });
-const { scene, camera, lights, sky } = loadScene('courtyard-tree', renderer);
+const { scene, camera, controls, lights, sky } = loadScene('courtyard-tree', renderer);
+// From the north-west corner, toward the walls in shade and the gateway.
+camera.position.set(-4.2, 2.6, -4.2);
+controls.target.set(1, 0.8, 2);
+controls.update();
 const sun = lights[0] as THREE.DirectionalLight;
 if (!sky) throw new Error('The courtyard has a sky.');
 
@@ -48,8 +52,8 @@ const screen = screenInputs(scenePass, threeGI);
 scenePass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView), ...screen.outputs }));
 pipeline.outputNode = screen.encodeBefore(ddgi(scenePass, threeGI));
 
-// GI on or off (the composite's intensity), and the sun's height and compass direction (the scene's own sun to start).
-const settings = { gi: true, height: 58, direction: 53 };
+// GI on or off (the composite's intensity), and the sun's height and compass direction (the scene's own sun direction to start).
+const settings = { gi: true, height: 40, direction: 53 };
 const gui = new GUI({ title: 'C1 · No volume needed' });
 gui.add(settings, 'gi').name('GI');
 gui.add(settings, 'height', 3, 85, 1).name('sun height (°)');
