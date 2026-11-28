@@ -66,6 +66,8 @@ export const REQUIRED_FILES = [
     'licenses/pathtracer-MIT.txt',
     'licenses/pbrt-v4-Apache-2.0.txt',
     'licenses/capsaicin-MIT.txt',
+    'licenses/rtoy-samples-MIT.txt',
+    'licenses/assimp-BSD-3-Clause.txt',
 ];
 
 /**

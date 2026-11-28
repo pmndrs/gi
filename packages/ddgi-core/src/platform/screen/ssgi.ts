@@ -3,7 +3,8 @@
  * (Main, IntegrateHalfArc, IntegrateBentNormal, RotFromToMatrix, IntersectDirPlaneOneSided)
  * and ssgi.cpp (the constants). ssgi.comp in turn takes IntersectDirPlaneOneSided and the
  * near-field light from h3r2tic's rtoy-samples (ssgi.glsl) and RotFromToMatrix from the
- * Open Asset Import Library, as its comments say.
+ * Open Asset Import Library, as its comments say. Their licences are in ../licenses/
+ * (rtoy-samples-MIT.txt, assimp-BSD-3-Clause.txt).
  *
  * Copyright (c) 2025 Advanced Micro Devices, Inc. All rights reserved.
  *
