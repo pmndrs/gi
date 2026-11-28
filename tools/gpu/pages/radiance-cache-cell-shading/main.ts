@@ -705,6 +705,7 @@ async function readLitCells(device: GPUDevice, scenario: Scenario, state: RaySta
     const target = counters[HASH_GRID_COUNTER.cellShadedTarget];
     const lit = Math.min(counters[HASH_GRID_COUNTER.cellShadedCount], target);
     const { valueBuffer, valueIndirectBuffer } = cache.layout.cellValues;
+    if (valueIndirectBuffer === null) throw new Error('the shared-cell checks need the multibounce arrays (useMultibounce at prepare, register D67)');
     const cells: LitCellValue[] = [];
     for (let slot = 0; slot < lit; slot++) {
         const entry = cellWords[cellLists.layout.lit + slot] & CELL_CANDIDATE_ENTRY_MASK;

@@ -70,6 +70,7 @@ import { CAPSAICIN_WGSL } from '../wgsl/capsaicin.ts';
 import { CELL_SHADING_BINS, type HashGridCacheBufferLayout } from './capacity.ts';
 import { CELL_SHADING_COMMON_WGSL, CELL_SHADING_MAX_CHANGE_EVENTS, CELL_SHADING_SALT } from './cell-shading-common.ts';
 import { LIGHT_MASK_WGSL, MULTIBOUNCE_SAMPLING_WGSL, populationHeadWgsl, PROBE_RAY_SURFACE_WGSL } from './hash-grid-population-wgsl.ts';
+import { multibounceWgsl } from './hash-grid-wgsl.ts';
 
 /** Bytes of `HashGridCacheCellShading`: four words, then 32 bytes an event. */
 export const CELL_SHADING_UNIFORM_BYTES = 16 + 32 * CELL_SHADING_MAX_CHANGE_EVENTS;
@@ -181,9 +182,12 @@ fn HashGridCache_ClaimCell(visibility_index: u32) -> HashGridCache_Claim {
 
     if (changed) {
         HashGridCache_MarkChanged(cell_index);
-        if (g_HashGridCacheConstants.use_multibounce != 0u) {
+        ${multibounceWgsl(
+            layout,
+            `if (g_HashGridCacheConstants.use_multibounce != 0u) {
             HashGridCache_KeepOneSample(HASHGRIDCACHE_VALUEINDIRECTBUFFER + cell_index);
-        }
+        }`,
+        )}
     }
 
     // New (no count), changed (now or on an earlier frame, not lit since), converging (whole counts

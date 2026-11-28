@@ -55,7 +55,7 @@ describe("experiment E10: the world cache's second bounce from a stacked techniq
     });
 
     it("includes the module's globals in group 3 and weighs its irradiance by its coverage", () => {
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         const code = sampleBounceSourceCellsWgsl(layout, fakeModule(false));
         expect(BOUNCE_SOURCE_GROUP).toBe(3);
         expect(code).toContain(`// globals at group ${BOUNCE_SOURCE_GROUP}`);

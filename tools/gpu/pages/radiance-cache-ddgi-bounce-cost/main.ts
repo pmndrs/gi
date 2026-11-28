@@ -31,6 +31,7 @@ import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-p
 import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/gpu-timer.ts';
 import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { PROBE_TRACE_SECTIONS, timedPassName } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/timed-pass.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
@@ -181,7 +182,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
             const ddgiPasses = prefixed('ddgi/');
             results[setting.secondBounce === 'gi1-rays' ? 'gi1-rays' : `fallback, ${setting.ddgiUnits} probes`] = {
                 worldCacheMs: round(worldCacheMs),
-                probeTraceMs: round(mean('radiance-cache/sample-populate')),
+                probeTraceMs: round(PROBE_TRACE_SECTIONS.reduce((sum, section) => sum + mean(timedPassName(section)), 0)),
                 radianceCacheMs: round(radianceCacheMs),
                 ddgiMs: round(ddgiPasses.reduce((sum, name) => sum + mean(name), 0)),
                 ddgiPasses: Object.fromEntries(ddgiPasses.map((name) => [name, round(mean(name))])),

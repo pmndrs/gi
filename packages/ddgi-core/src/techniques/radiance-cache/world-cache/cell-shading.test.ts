@@ -99,7 +99,7 @@ describe("lever E8's estimate (a CPU model of one cell)", () => {
 });
 
 describe("lever E8's kernels and lists", () => {
-    const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+    const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
 
     it('declare their entry points, and the population passes branch on the setting', () => {
         const claim = claimCellsWgsl(layout);

@@ -392,7 +392,9 @@ async function meanIndirect(device: GPUDevice, cache: HashGridCache): Promise<{ 
     const tileBytes = capacity.numCellsPerTile * 8;
     const staging = device.createBuffer({ label: 'ddgi-bounce tiles', size: count * tileBytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     const encoder = device.createCommandEncoder({ label: 'ddgi-bounce tiles' });
-    const base = cache.layout.cellValues.valueIndirectBuffer * 8;
+    const indirect = cache.layout.cellValues.valueIndirectBuffer;
+    if (indirect === null) throw new Error('the world cache was prepared without multibounce: it has no indirect values (register D67)');
+    const base = indirect * 8;
     tiles.forEach((tile, index) => encoder.copyBufferToBuffer(cache.buffers.cellValues, base + tile * tileBytes, staging, index * tileBytes, tileBytes));
     device.queue.submit([encoder.finish()]);
     const words = new Uint32Array(await readRange(device, staging, 0, count * tileBytes));

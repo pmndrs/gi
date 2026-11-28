@@ -14,7 +14,9 @@
  *    'gi1-rays'`, `'fallback'` with DDGI stacked under it, `'shared-cell'`
  *    (pmndrs/gi#54), `neuralCache:
  *    'tail'` (where this checkout has the optional network; it says so in
- *    the data otherwise), SSGI on, and the denoiser off.
+ *    the data otherwise), SSGI on, the denoiser off, and `useMultibounce`
+ *    off at prepare (register D67: the second-bounce passes aren't made and
+ *    the rest are built without their indirect lines).
  *
  * The scene is built in: a floor, a wall and a box under a constant sky with
  * a sun, so it needs no downloaded assets. Correctness only; the analytic
@@ -57,6 +59,7 @@ const CONFIGURATIONS: readonly Configuration[] = [
     { name: "neuralCache 'tail'", settings: { neuralCache: 'tail', secondBounce: 'gi1-rays' } },
     { name: 'ssgi on', settings: { ssgi: true } },
     { name: 'denoiser off', settings: { denoiser: false } },
+    { name: 'useMultibounce off at prepare', settings: { useMultibounce: false } },
 ];
 
 function quad(corners: readonly (readonly [number, number, number])[], normal: readonly [number, number, number]): { positions: Float32Array; normals: Float32Array; indices: Uint32Array } {

@@ -205,9 +205,12 @@ const CACHE_AXES: readonly Axis<CacheConfiguration>[] = [
 /**
  * The settings that change the cache's bindings, as found on 2026-11-27.
  * The test finds them again and fails if the set moved, so a new one gets
- * crossed with the others.
+ * crossed with the others. `useMultibounce` since P6.6 (register D67, merged
+ * 2026-11-28): prepared without it, the hash grid's three second-bounce
+ * passes, E10's pass and the neural tail aren't made, and the other passes
+ * are built without their indirect lines (same bindings, fewer pipelines).
  */
-const CACHE_BINDING_AXES = ['ssgi', 'worldCache', 'secondBounce', 'neuralCache', 'ddgiBelow'];
+const CACHE_BINDING_AXES = ['ssgi', 'worldCache', 'secondBounce', 'neuralCache', 'ddgiBelow', 'useMultibounce'];
 
 async function cachePipelines(configuration: CacheConfiguration, features: readonly string[]): Promise<InventoryPipeline[]> {
     return inventory(features, async (device) => {
@@ -382,7 +385,13 @@ describe('storage buffers per shader stage in every pipeline gi builds (pmndrs/g
                 expect(labels, title).toMatch(configuration.settings.worldCache === 'sharc' ? /Sharc/ : /PopulateCells/);
                 expect(labels, title).toMatch(/^gi1 /m);
                 if (configuration.settings.ssgi) expect(labels, title).toMatch(/ssgi/i);
-                if (configuration.settings.neuralCache === 'tail' && mlp && configuration.settings.worldCache !== 'sharc') expect(labels, title).toMatch(/^nn /m);
+                // The tail extends GI-1.2's second bounce, so it is made only with multibounce at prepare (register D67).
+                const tailMade = configuration.settings.neuralCache === 'tail' && mlp && configuration.settings.worldCache !== 'sharc' && configuration.settings.useMultibounce !== false;
+                if (tailMade) expect(labels, title).toMatch(/^nn /m);
+                if (configuration.settings.worldCache !== 'sharc') {
+                    if (configuration.settings.useMultibounce === false) expect(labels, title).not.toMatch(/MultibounceCells/);
+                    else expect(labels, title).toMatch(/PopulateMultibounceCells/);
+                }
                 over.push(...describeOver(pipelines, APPLE_STORAGE_BUFFERS_PER_STAGE).map((line) => `${title}: ${line}`));
                 worst = Math.max(worst, worstPipeline(pipelines)?.storageBuffers ?? 0);
             }
