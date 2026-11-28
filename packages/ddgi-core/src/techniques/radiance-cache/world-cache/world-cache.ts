@@ -21,6 +21,7 @@ import type { FrameCamera } from '../../../platform/contract/frame.ts';
 import type { ChangeEvent } from '../../../platform/contract/change-events.ts';
 import type { Aabb } from '../../../platform/contract/math.ts';
 import type { TechniqueContext } from '../../../platform/contract/technique.ts';
+import type { WorldCacheTemporalFeedback } from './temporal-feedback.ts';
 
 // ---- The probe-ray buffer ------------------------------------------------------------------------
 
@@ -133,6 +134,12 @@ export interface WorldCacheFrame {
      * a change with no bounds. Absent: no change.
      */
     readonly changes?: WorldCacheChanges;
+    /**
+     * Optional (RC3.6, register D68): last frame's camera, lit image, depth and
+     * normals, for `useTemporalFeedback`. Absent on a frame with no valid last
+     * frame (the first, after a resize or a reset) or without a lit image.
+     */
+    readonly temporalFeedback?: WorldCacheTemporalFeedback;
 }
 
 /** The scene's changes for a world cache: the change events, and those armed this frame as boxes (the radiance cache's `HistoryChanges`). */

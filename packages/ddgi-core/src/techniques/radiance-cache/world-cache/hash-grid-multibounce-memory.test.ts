@@ -58,6 +58,8 @@ function recordingContext(): { context: WorldCacheContext; made: Made; warnings:
             return { label: descriptor.label, size: descriptor.size, destroy: () => {} };
         },
         createBindGroup: () => ({}),
+        createTexture: () => ({ createView: () => ({}), destroy: () => {} }),
+        createSampler: () => ({}),
         pushErrorScope: () => {},
         popErrorScope: () => Promise.resolve(null),
         queue: { writeBuffer: () => {} },

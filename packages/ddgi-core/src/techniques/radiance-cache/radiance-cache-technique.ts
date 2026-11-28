@@ -49,7 +49,7 @@
 import type { GpuCompaction, GpuIndirectArgs, GpuScreenSpaceGI, ScreenSpaceGITextures } from '../../platform/contract/compute.ts';
 import { ChangeEventTracker } from '../../platform/contract/change-events.ts';
 import { GILimitError } from '../../platform/contract/errors.ts';
-import type { FrameScreen } from '../../platform/contract/frame.ts';
+import type { FrameCamera, FrameScreen } from '../../platform/contract/frame.ts';
 import type { RayScratch } from '../../platform/contract/shade.ts';
 import type { DebugView } from '../../platform/contract/stats.ts';
 import type { GITechnique, TechniqueContext, TechniqueFrame, TechniqueRequirements, TechniqueScreenFrame } from '../../platform/contract/technique.ts';
@@ -66,6 +66,7 @@ import { beginTimedPass, POPULATE_TRACE_SECTION, SSGI_SECTION, timedPassName } f
 import { loadMlp } from './neural-cache/mlp-loader.ts';
 import { NeuralTail } from './neural-cache/neural-tail.ts';
 import type { WorldCache, WorldCacheChanges, WorldCacheProbeRays } from './world-cache/world-cache.ts';
+import type { WorldCacheTemporalFeedback } from './world-cache/temporal-feedback.ts';
 import { DEBUG_ENTRY_POINT, DEBUG_GROUP, DEBUG_UNIFORM_BYTES, DEBUG_UNIFORM_OFFSETS, DEBUG_WGSL, RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from './wgsl/debug.ts';
 import {
     BLEND_GROUP,
@@ -279,6 +280,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
     private latestFrameIndex = 0;
     /** The camera of the latest `encodeScreen`, which the next one reprojects from. */
     private previousCamera: PreviousCamera | null = null;
+    /**
+     * RC3.6 (register D68): the lit image the last frame wrote (its size and camera), which this
+     * frame's temporal feedback reads; null when the last frame wrote none (or after a reset).
+     */
+    private litImage: { readonly width: number; readonly height: number; readonly camera: Pick<FrameCamera, 'position' | 'view' | 'projection' | 'jitter'> } | null = null;
     private readonly frameWords = new ArrayBuffer(FRAME_UNIFORM_BYTES);
     /**
      * The scene's changes as events (platform contract): the world cache's
@@ -296,9 +302,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         // The SHaRC overrides are copied too, so changing them never touches the frozen defaults.
         this.settings = { ...DEFAULT_RADIANCE_CACHE_SETTINGS, ...settings, sharc: { ...settings.sharc } };
         const ssgi = this.settings.ssgi;
+        // The host's lit colour and albedo make the lit image SSGI (D51) and the temporal feedback (D68) read.
+        const litImage = ssgi || this.settings.useTemporalFeedback;
         this.requirements = {
             queries: ['rays'],
-            screen: { velocity: true, albedo: ssgi, lighting: ssgi },
+            screen: { velocity: true, albedo: litImage, lighting: litImage },
             limits: { maxStorageBuffersPerShaderStage: RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE },
         };
         this.shading = new RadianceCacheShadingModule({ shadingTextures: () => this.shadingTextures() }, ssgi);
@@ -482,8 +490,12 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
 
         // 7: the mask's mips, the SH and the irradiance per pixel (RC2.2), then the GI denoiser (RC4.3),
         // before step 8 copies this frame's depth and normals over the previous ones it reads.
-        this.encodeIrradiance(encoder, frame, prepared, resources);
+        const wroteLitImage = this.encodeIrradiance(encoder, frame, prepared, resources);
         this.encodeDenoiser(encoder, frame, prepared, resources, armed);
+        const camera = frame.camera;
+        this.litImage = wroteLitImage
+            ? { width: layout.width, height: layout.height, camera: { position: [camera.position[0], camera.position[1], camera.position[2]], view: Array.from(camera.view), projection: Array.from(camera.projection), jitter: camera.jitter ? [camera.jitter[0], camera.jitter[1]] : undefined } }
+            : null;
 
         // 6 and 8: the cache's LRU order for the next frame, and this frame's depth and normals kept.
         history.encodeReorder(encoder, screen);
@@ -508,9 +520,11 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
      * The passes after the blend (screen-irradiance.ts), on this frame's
      * probes and screen; first the platform's SSGI (Capsaicin runs its SSGI
      * technique before GI-1, gi1_renderer.cpp:61), lit by the image the
-     * previous frame's interpolation wrote (register D51).
+     * previous frame's interpolation wrote (register D51). Returns whether the
+     * interpolation wrote this frame's lit image (for SSGI or the temporal
+     * feedback, D68, the next frame).
      */
-    private encodeIrradiance(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): void {
+    private encodeIrradiance(encoder: GPUCommandEncoder, frame: TechniqueScreenFrame, prepared: Prepared, resources: ScreenResources): boolean {
         const irradiance = this.irradiance;
         if (!irradiance) throw new Error('@pmndrs/gi: prepare the radiance cache before encodeScreen');
         const settings = this.settings;
@@ -528,6 +542,8 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 history: prepared.history.screenTexturesFor(resources.layout),
                 timestampWrites: this.context?.timer.computePass(timedPassName(SSGI_SECTION)),
             }) ?? null;
+        // The lit image for next frame's SSGI (D51) or temporal feedback (D68), from the host's lit colour and albedo.
+        const writeLitImage = (occlusion !== null || settings.useTemporalFeedback) && screen.lighting !== undefined && screen.albedo !== undefined;
         irradiance.encode(
             encoder,
             {
@@ -539,12 +555,13 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
                 depth: screen.depth,
                 normal: screen.normal,
                 occlusion,
-                lighting: occlusion ? (screen.lighting ?? null) : null,
-                albedo: occlusion ? (screen.albedo ?? null) : null,
+                lighting: writeLitImage ? (screen.lighting ?? null) : null,
+                albedo: writeLitImage ? (screen.albedo ?? null) : null,
             },
             frame.camera,
             { interpolationJitter: settings.interpolationJitter, probeFilter: settings.probeFilter, probeFilterHistory: settings.probeFilterHistory },
         );
+        return writeLitImage;
     }
 
     /**
@@ -710,6 +727,7 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
         this.denoiser?.reset();
         this.screenSpaceGI?.reset();
         this.previousCamera = null;
+        this.litImage = null;
     }
 
     dispose(): void {
@@ -786,7 +804,24 @@ export class RadianceCacheTechnique implements GITechnique<RadianceCacheSettings
             capacity: resources.layout.maxRayCount,
             radiance: resources.rayScratch.rayResults,
         };
-        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height, changes }, rays);
+        const temporalFeedback = this.temporalFeedbackFor(resources);
+        cache.encodeFrame(encoder, { frame: frame.frame, camera: frame.camera, width: resources.layout.width, height: resources.layout.height, changes, ...(temporalFeedback ? { temporalFeedback } : {}) }, rays);
+    }
+
+    /**
+     * RC3.6 (register D68): last frame's screen for `useTemporalFeedback`, when the last frame wrote
+     * its lit image at this size and the platform kept its depth and normals; otherwise none.
+     */
+    private temporalFeedbackFor(resources: ScreenResources): WorldCacheTemporalFeedback | null {
+        const litImage = this.litImage;
+        const prepared = this.prepared;
+        const irradiance = this.irradiance;
+        const { layout } = resources;
+        if (!this.settings.useTemporalFeedback || !litImage || !prepared || !irradiance) return null;
+        if (litImage.width !== layout.width || litImage.height !== layout.height) return null;
+        const history = prepared.history.screenTexturesFor(layout);
+        if (!history.valid) return null;
+        return { camera: litImage.camera, lighting: irradiance.combinedFor(layout), depth: history.depth, normal: history.normal, width: layout.width, height: layout.height };
     }
 
     private resourcesFor(context: TechniqueContext, prepared: Prepared, screen: FrameScreen): ScreenResources {
