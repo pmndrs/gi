@@ -116,7 +116,7 @@ export function showFarRoom(
     });
     const note = document.createElement('div');
     note.className = 'far-room-note';
-    note.textContent = "This page's own reading: the mean GI irradiance over the far room's pixels, the doorway left out. The cache takes a few seconds to settle after a change; % is against DDGI's reading.";
+    note.textContent = "This page's own reading: the mean GI irradiance over the far room's pixels, the doorway left out. The cache takes a few seconds to settle after a change; % is against DDGI's reading, with the door open.";
     panel.prepend(header);
     panel.append(note);
     floatingDock().append(panel);
@@ -133,8 +133,10 @@ export function showFarRoom(
         title.textContent = `Far room's GI, door ${state.open ? 'open' : 'shut'}`;
         frames.textContent = platform ? `${Math.max(0, platform.stats.frame - startFrame)} frames since the change · ${(platform.stats.memory.total / 2 ** 20).toFixed(0)} MB` : 'starting…';
         const values = rows.map(({ bounce }) => readings.get(key(bounce, state.open)));
-        const scale = Math.max(...values.map((value) => value ?? 0)) || 1;
-        const ddgiValue = values[0];
+        // One scale for both door states, so a shut door's bars read as dark.
+        const scale = Math.max(0, ...readings.values()) || 1;
+        // With the door shut every reading is close to 0, and a ratio of them means nothing.
+        const ddgiValue = state.open ? values[0] : undefined;
         for (const [index, { bounce, row, bar, value }] of rows.entries()) {
             const reading = values[index];
             row.classList.toggle('active', bounce === state.bounce);
