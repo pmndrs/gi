@@ -1,0 +1,25 @@
+{
+    "id": "emissive-room",
+    "title": "Room lit by emissive surfaces",
+    "description": "A living room with no lights at all: two light strips under the ceiling and a screen on the far wall are its only light, so everything else in it is lit by GI's rays finding the emitters.",
+    "tags": ["interior", "emissive-light"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        { "kind": "procedural", "builder": "emissive-room" }
+    ],
+    "cameras": [
+        { "name": "behind-the-sofa", "position": [3.0, 1.75, 0.35], "target": [3.0, 1.0, 4.5], "fovYDeg": 70 },
+        { "name": "corner", "position": [5.5, 2.2, 0.4], "target": [1.8, 0.8, 3.8], "fovYDeg": 70 },
+        { "name": "from-the-screen", "position": [3.0, 1.5, 4.3], "target": [3.0, 0.7, 0.8], "fovYDeg": 70 }
+    ],
+    "lights": [],
+    "environment": { "type": "none" },
+    "exposureEv": 1,
+    "volume": { "center": [3.0, 1.4, 2.5], "size": [6.4, 3.0, 5.4], "probeSpacing": 0.5 },
+    "nativeCapable": true,
+    "referenceCube": { "position": [1.0, 0.5, 3.0] },
+    "credits": [
+        { "asset": null, "license": "MIT", "attribution": "MIT, this repo." }
+    ]
+}

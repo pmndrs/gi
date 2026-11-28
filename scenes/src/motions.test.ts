@@ -256,7 +256,7 @@ describe('the built-in motions of each scene with a lamp (m2-lights.md §7)', as
     const lit = manifests.filter((manifest) => manifest.lights.some((light) => light.type !== 'directional'));
 
     it('are in every scene with a lamp, and only there', () => {
-        expect(lit.map((manifest) => manifest.id).sort()).toEqual(['alpha-checker', 'bistro-interior', 'cabinet-row', 'closed-door', 'cornell-box-point', 'furnished-room', 'glass-wall', 'sponza', 'thin-wall', 'two-room']);
+        expect(lit.map((manifest) => manifest.id).sort()).toEqual(['alpha-checker', 'bistro-interior', 'cabinet-row', 'cabinet-row-objects', 'closed-door', 'cornell-box-point', 'dark-room', 'furnished-room', 'glass-wall', 'sponza', 'thin-wall', 'two-room']);
         for (const manifest of manifests) {
             // Object and camera motions (M3's scenarios) are checked below.
             const ids = (manifest.motions ?? [])
