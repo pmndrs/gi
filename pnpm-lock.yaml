@@ -15,8 +15,8 @@ importers:
         specifier: ^9.18.0
         version: 9.39.5
       '@pmndrs/upscaler':
-        specifier: 0.5.0
-        version: 0.5.0(three@0.187.0)
+        specifier: 0.6.0
+        version: 0.6.0(@babylonjs/core@9.33.2)(three@0.187.0)
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -60,8 +60,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/gi
       '@pmndrs/upscaler':
-        specifier: 0.5.0
-        version: 0.5.0(three@0.187.0)
+        specifier: 0.6.0
+        version: 0.6.0(@babylonjs/core@9.33.2)(three@0.187.0)
       gputex:
         specifier: 0.14.0
         version: 0.14.0(three@0.187.0)
@@ -626,8 +626,8 @@ packages:
       three:
         optional: true
 
-  '@pmndrs/downsampler@0.1.0':
-    resolution: {integrity: sha512-PQf5QLUEy5qRl+2e0gHVfdMcfinqHjG/HJKO4xk+EJrOgeucNzUesGuSHq/eyAy8s22hvf/4oQPV3fntM7WKSw==}
+  '@pmndrs/downsampler@0.1.1':
+    resolution: {integrity: sha512-WIeAeJn4CAfDpZaXo0yXyrrqF8tehcpnzVJUPX//S+V1r5+7FcqxZp+4PQsU3Rphoxg0/3z4x2aBY2T44us1sg==}
     peerDependencies:
       three: '>=0.170.0'
     peerDependenciesMeta:
@@ -637,10 +637,19 @@ packages:
   '@pmndrs/raytracer@0.1.0':
     resolution: {integrity: sha512-MqSddR0bsbwlZ58/9+yeuLO8LQADocEXsy4jobnh1amEfImPHiB9WjERGoS+mUzL/jlJg7vyE3O3N2jaJkHYBA==}
 
-  '@pmndrs/upscaler@0.5.0':
-    resolution: {integrity: sha512-bi3+OckPIpHYMGbvML5StLpZU7Eaqjhti4JEP/GIwonCvS35EsB+dKQhwgR18ymqP9lXTDf4md/P8RVtIuRJwg==}
+  '@pmndrs/upscaler@0.6.0':
+    resolution: {integrity: sha512-L8yyjU1vc3vB283OThPb1NO2DS4o1Ul7k7YcI6uPFtuPtXmlad/S+NUgUBFc3oRaAnIId0y9Go7BD/iz305H6g==}
     peerDependencies:
+      '@babylonjs/core': '>=9.31.0 <10'
+      pixi.js: '>=8.22.0 <9'
       three: '>=0.184.0'
+    peerDependenciesMeta:
+      '@babylonjs/core':
+        optional: true
+      pixi.js:
+        optional: true
+      three:
+        optional: true
 
   '@rollup/rollup-android-arm-eabi@4.67.4':
     resolution: {integrity: sha512-/v/pUAPOcwp+r1Hjjdg0cBV1TE89CzGKrKh2FgkIQw2QBcIMmVPOCSfuOZStCn4Xh/98HXfo/ht6ztcssctPNg==}
@@ -1749,20 +1758,23 @@ snapshots:
       '@babylonjs/core': 9.33.2
       three: 0.187.0
 
-  '@pmndrs/downsampler@0.1.0(three@0.187.0)':
+  '@pmndrs/downsampler@0.1.1(three@0.187.0)':
     optionalDependencies:
       three: 0.187.0
 
   '@pmndrs/raytracer@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
     dependencies:
       '@pmndrs/bvh': 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
-      '@pmndrs/downsampler': 0.1.0(three@0.187.0)
+      '@pmndrs/downsampler': 0.1.1(three@0.187.0)
     transitivePeerDependencies:
       - '@babylonjs/core'
       - three
 
-  '@pmndrs/upscaler@0.5.0(three@0.187.0)':
+  '@pmndrs/upscaler@0.6.0(@babylonjs/core@9.33.2)(three@0.187.0)':
     dependencies:
+      '@pmndrs/downsampler': 0.1.1(three@0.187.0)
+    optionalDependencies:
+      '@babylonjs/core': 9.33.2
       three: 0.187.0
 
   '@rollup/rollup-android-arm-eabi@4.67.4':
