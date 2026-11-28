@@ -23,6 +23,8 @@ One package, an import path per layer:
 | `@pmndrs/gi/three` (or `@pmndrs/gi`) | three.js `WebGPURenderer`, with DDGI's `DDGIVolume` and `ddgi()` composite | `three` r187 (`~0.187.0`) |
 | `@pmndrs/gi/core` | The GI platform on your own `GPUDevice`: the scene, rays, light and sky that techniques build on, for plain WebGPU or an adapter for another engine | nothing: three isn't needed |
 | `@pmndrs/gi/ddgi` | The DDGI technique, engine-free, run on the platform from `/core` | nothing: three isn't needed |
+| `@pmndrs/gi/radiance-cache` | The radiance cache (based on AMD GI-1.0/1.2: screen probes over a world cache), engine-free, run on the platform from `/core`; with three.js its screen inputs, GI light and composite come from `/three` | nothing: three isn't needed (its denoiser, `denoiser`, installs with the package) |
+| `@pmndrs/gi/radiance-cascades` | Split radiance cascades on your own `GPUDevice` (the experiment below) | nothing: three isn't needed |
 
 `three` is an optional peer dependency, so a project that only imports `/core` and `/ddgi` doesn't install it. With TypeScript, add `@webgpu/types` for the WebGPU types.
 
@@ -86,6 +88,7 @@ GI runs on WebGPU only; there is no WebGL fallback.
 - [The three.js adapter](docs/api/three.md): every option, and what it does with your scene.
 - [The platform API](docs/api/platform.md): `@pmndrs/gi/core` and `@pmndrs/gi/ddgi` on a bare `GPUDevice`.
 - [Writing an adapter](docs/guides/adapter.md): GI from plain WebGPU, or for another engine, step by step.
+- [The radiance cache's design](docs/design/radiance-cache.md): what `@pmndrs/gi/radiance-cache` ports from AMD GI-1.0/1.2 and every way it differs. Its API page is still to come.
 - [Examples](https://pmndrs.github.io/gi/).
 - [CHANGELOG.md](CHANGELOG.md): what each release contains.
 - [THIRD_PARTY.md](THIRD_PARTY.md): code from others and the test scenes, with their licences.

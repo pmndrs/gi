@@ -60,9 +60,14 @@ import {
     type GIPlatform,
     type ScreenInputsNode,
 } from '../ddgi/library';
-// Not in the published package (internal until validated, docs/design/radiance-cache.md): by path.
-import { RADIANCE_CACHE_DEBUG_VIEW, RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/index.ts';
-import { applyCompareValues, hostCompareValue, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+// `@pmndrs/gi/radiance-cache`, read from source by path for the reason library.ts gives.
+import {
+    applyCompareValues,
+    hostCompareValue,
+    RADIANCE_CACHE_DEBUG_VIEW,
+    RadianceCacheTechnique,
+    type CompareValues,
+} from '../../../../packages/ddgi/src/radiance-cache';
 import { RcChangeMeter } from './rc-change-meter';
 import { applyViewLayers, LAYER_RADIANCE_CACHE, type GiMode } from '../scene/layers';
 import type { GiTechnique, TechniqueContext, TechniqueId, UpscaleSettings } from './types';

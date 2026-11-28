@@ -47,7 +47,7 @@ export default defineConfig({
         // prefix alias and would send '@pmndrs/gi/core' to 'index.ts/core'.
         alias: [
             { find: /^@pmndrs\/gi$/, replacement: resolve(repoRoot, 'packages/ddgi/src/index.ts') },
-            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades)$/, replacement: resolve(repoRoot, 'packages/ddgi/src/$1.ts') },
+            { find: /^@pmndrs\/gi\/(core|ddgi|three|radiance-cascades|radiance-cache)$/, replacement: resolve(repoRoot, 'packages/ddgi/src/$1.ts') },
         ],
     },
     // Our own dependency cache, so this server and the viewer's don't fight over node_modules/.vite.

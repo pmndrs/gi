@@ -7,22 +7,37 @@
 //      licence texts and every `exports` target, and its manifest asks
 //      consumers for nothing from this workspace;
 //   3. each entry's import graph (JS and .d.ts) reaches only what it may:
-//      `/core` and `/ddgi` no package at all, `.` and `/three` only three; and
-//      only its own layers' chunks (packages/ddgi/layer-chunks.ts): `/core` no
-//      DDGI or three code, `/ddgi` no three code;
+//      `/core` and `/ddgi` no package at all, `.` and `/three` only three,
+//      `/radiance-cache` only its denoiser (`denoiser/ffx`), never
+//      `@pathtracer/mlp` (an optional sibling it loads at run time); and only
+//      its own layers' chunks (packages/ddgi/layer-chunks.ts): `/core` no
+//      technique or three code, `/ddgi` no three code;
 //   4. a fresh project with the tarball, three and @webgpu/types installed by
-//      npm imports `.`, `/core`, `/ddgi` and `/three` under Node and typechecks
-//      a file using each, under both `bundler` and `nodenext` module resolution;
+//      npm imports `.`, `/core`, `/ddgi`, `/three` and `/radiance-cache` under
+//      Node and typechecks a file using each (the radiance cache wired into
+//      three as tools/gpu/pages/radiance-cache-three does, from public paths
+//      only), under both `bundler` and `nodenext` module resolution;
 //   5. a fresh project with the tarball and @webgpu/types only (no three)
-//      imports and typechecks `/core` and `/ddgi`, and finds no name in both.
+//      imports and typechecks `/core`, `/ddgi`, `/radiance-cascades` and
+//      `/radiance-cache`, and finds no name in both `/core` and `/ddgi`;
+//   6. a fresh vite app importing every public subpath builds with `vite build`
+//      and is served by vite's dev server, and every file the built or served
+//      code fetches with `new URL(..., import.meta.url)` is there. Typechecks
+//      and Node imports run no bundler: they missed BVH workers that the
+//      package build had pointed at an absolute `/assets/` path.
 //
-// Steps 4 and 5 install from the npm registry, so they need the network.
+// Neither project has `@pathtracer/mlp`: `/radiance-cache` must import and
+// typecheck without it.
+//
+// Steps 4 to 6 install from the npm registry, so they need the network.
 import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import ts from 'typescript';
+import type * as Vite from 'vite';
 
 import { ENTRY_LAYERS, LAYER_CHUNKS, type Layer } from '../../packages/ddgi/layer-chunks.ts';
 import { isDirectRun } from './release-version.ts';
@@ -34,7 +49,7 @@ const PACKAGE_NAME = '@pmndrs/gi';
 
 export const USAGE = `Usage: node tools/release/verify-packed.ts [options]
 Builds and packs @pmndrs/gi, then checks the tarball as a user would get it
-(no GPU needed; installs three and @webgpu/types from the npm registry).
+(no GPU needed; installs three, vite and @webgpu/types from the npm registry).
   --skip-build   pack the existing packages/ddgi/dist instead of building it
   --keep-temp    keep the temporary projects for a look
   --help, -h     print this message`;
@@ -50,6 +65,7 @@ export const REQUIRED_FILES = [
     'licenses/hiprt.txt',
     'licenses/pathtracer-MIT.txt',
     'licenses/pbrt-v4-Apache-2.0.txt',
+    'licenses/capsaicin-MIT.txt',
 ];
 
 /**
@@ -64,10 +80,16 @@ export const ENTRY_IMPORTS: Record<string, RegExp[]> = {
     core: [],
     ddgi: [],
     'radiance-cascades': [/^@pmndrs\/rc-bvh$/],
+    // Its denoiser, an npm dependency. `@pathtracer/mlp` (the optional neural tail) is loaded
+    // through an `import()` no scanner sees (packages/ddgi/vite.config.ts), so it isn't listed.
+    'radiance-cache': [/^denoiser\/ffx$/],
 };
 
 /** Entries that must work with no engine installed. */
-const ENGINE_FREE_ENTRIES = ['core', 'ddgi', 'radiance-cascades'];
+const ENGINE_FREE_ENTRIES = ['core', 'ddgi', 'radiance-cascades', 'radiance-cache'];
+
+/** Packages the published package may load but must never name in its manifest or install (not on npm). */
+export const OPTIONAL_RUNTIME_PACKAGES = ['@pathtracer/mlp'];
 
 interface Consumer {
     /** Packages installed next to the tarball (versions are the repository's own). */
@@ -83,13 +105,38 @@ interface Consumer {
 export const CONSUMERS: Record<string, Consumer> = {
     three: {
         packages: ['three', '@types/three', '@webgpu/types'],
-        imports: [PACKAGE_NAME, `${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/three`],
-        // The README's getting started, plus one name from each other entry.
+        imports: [PACKAGE_NAME, `${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/three`, `${PACKAGE_NAME}/radiance-cache`],
+        // The README's getting started, plus one name from each other entry, and the radiance
+        // cache wired into three from public paths (tools/gpu/pages/radiance-cache-three, the viewer).
         source: `import * as THREE from 'three/webgpu';
+import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { DDGIVolume as RootDDGIVolume } from '@pmndrs/gi';
-import { requiredLimits } from '@pmndrs/gi/core';
+import { createGI, requiredLimits } from '@pmndrs/gi/core';
 import { ddgiPreset, type DDGIPresetName } from '@pmndrs/gi/ddgi';
-import { createGIRenderer, DDGIVolume } from '@pmndrs/gi/three';
+import { RADIANCE_CACHE_DEBUG_VIEW, RadianceCacheTechnique, type RadianceCacheSettings } from '@pmndrs/gi/radiance-cache';
+import { createGIRenderer, ddgi, DDGIVolume, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, GILight, screenInputs, ThreeGI } from '@pmndrs/gi/three';
+
+export async function radianceCache(scene: THREE.Scene, camera: THREE.PerspectiveCamera, settings: Partial<RadianceCacheSettings> = {}) {
+    const { renderer, device } = await createGIRenderer();
+    const gi = createGI(device);
+    const technique = gi.addTechnique(new RadianceCacheTechnique(settings));
+    gi.setOutput(technique);
+    const preparing = gi.prepare();
+    const threeGI = new ThreeGI(gi, scene, { preparing });
+    await preparing;
+    const scenePass = pass(scene, camera);
+    const stage = screenInputs(scenePass, threeGI);
+    scenePass.setMRT(mrt({ output, [GI_ALBEDO_OUTPUT]: giAlbedo, [GI_NORMAL_OUTPUT]: packNormalToRGB(normalView), ...stage.outputs }));
+    const pipeline = new THREE.RenderPipeline(renderer);
+    pipeline.outputNode = stage.encodeBefore(ddgi(scenePass, threeGI));
+    // Or the composite on a light of its own, beside another technique's (the GPU page's way).
+    const ownLight = ddgi(scenePass, { light: new GILight(technique.shading) });
+    renderer.setAnimationLoop(() => {
+        threeGI.update(camera, 1 / 60);
+        pipeline.render();
+    });
+    return { technique, ownLight, probes: technique.probes, shView: RADIANCE_CACHE_DEBUG_VIEW.sphericalHarmonics };
+}
 
 export async function start(preset: DDGIPresetName = 'low'): Promise<void> {
     const { renderer } = await createGIRenderer();
@@ -118,15 +165,26 @@ const volume = new three.DDGIVolume(6, 5, 6, 6, 6, 6);
 const settings = volume.ddgiVolume();
 const technique = new ddgi.DDGITechnique({ volume: settings });
 if (!(technique instanceof ddgi.DDGITechnique)) throw new Error('DDGITechnique failed instanceof');
+const cache = await import('${PACKAGE_NAME}/radiance-cache');
+const radianceCache = new cache.RadianceCacheTechnique();
+new three.GILight(radianceCache.shading);
 `,
     },
     core: {
         packages: ['@webgpu/types'],
-        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/radiance-cascades`],
-        // The platform and DDGI on a bare device, as in docs/api/platform.md.
+        imports: [`${PACKAGE_NAME}/core`, `${PACKAGE_NAME}/ddgi`, `${PACKAGE_NAME}/radiance-cascades`, `${PACKAGE_NAME}/radiance-cache`],
+        // The platform and DDGI on a bare device, as in docs/api/platform.md; the radiance cache the same way.
         source: `import { createGI, requiredLimits } from '@pmndrs/gi/core';
 import { DDGITechnique, ddgiPreset, recommendPreset } from '@pmndrs/gi/ddgi';
 import { NativeRadianceCascades, createRcTransport, type NativeRcTransport, type RcTransportScene } from '@pmndrs/gi/radiance-cascades';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, RadianceCacheTechnique } from '@pmndrs/gi/radiance-cache';
+
+export async function startRadianceCache(device: GPUDevice) {
+    const gi = createGI(device);
+    gi.setOutput(gi.addTechnique(new RadianceCacheTechnique({ ...DEFAULT_RADIANCE_CACHE_SETTINGS, neuralCache: 'off' })));
+    await gi.prepare();
+    return gi;
+}
 
 export async function makeTransport(device: GPUDevice, scene: RcTransportScene): Promise<NativeRcTransport> {
     return createRcTransport(device, scene);
@@ -152,6 +210,32 @@ for (const name of ['DDGITechnique', 'ddgiPreset']) if (name in core) throw new 
 for (const name of ['createGI', 'DDGITechnique', 'ddgiPreset']) if (!(name in core) && !(name in ddgi)) throw new Error(name + ' is missing');
 `,
     },
+};
+
+/**
+ * A vite app, the way most users bundle the package. It imports every public
+ * subpath and keeps names from each reachable, so the bundle holds the code
+ * that starts the BVH workers. Built with `vite build` and served by vite's dev
+ * server, which pre-bundles the package into node_modules/.vite first.
+ */
+export const VITE_APP = {
+    packages: ['three', 'vite', '@webgpu/types'],
+    html: `<!doctype html>
+<html>
+    <body>
+        <script type="module" src="/main.ts"></script>
+    </body>
+</html>
+`,
+    source: `import { createGI, requiredLimits } from '@pmndrs/gi/core';
+import { DDGITechnique, ddgiPreset } from '@pmndrs/gi/ddgi';
+import { RadianceCacheTechnique } from '@pmndrs/gi/radiance-cache';
+import { NativeRadianceCascades, createRcTransport } from '@pmndrs/gi/radiance-cascades';
+import { createGIRenderer, DDGIVolume } from '@pmndrs/gi/three';
+
+// Published on globalThis so the bundler keeps every subpath's code.
+Object.assign(globalThis, { createGI, requiredLimits, DDGITechnique, ddgiPreset, RadianceCacheTechnique, NativeRadianceCascades, createRcTransport, createGIRenderer, DDGIVolume });
+`,
 };
 
 /** Two module resolutions users have: bundlers (vite and the like) and Node's own. */
@@ -306,6 +390,42 @@ export function checkImportGraph(packageDirectory: string, read?: (path: string)
     return failures;
 }
 
+/**
+ * The string targets of `new URL('...', import.meta.url)` in a JS file: files
+ * the code fetches from beside itself (workers, WebAssembly, images). A
+ * comment before the string is allowed, as vite writes `/* @vite-ignore *\/`.
+ * A template with `${...}` in it is skipped: its path is made at run time, so
+ * there is no file to look for (vite's own client builds
+ * `${base}__open-in-editor?file=...` this way).
+ */
+export function importMetaUrls(source: string): string[] {
+    const pattern = /new\s+URL\(\s*(?:\/\*[\s\S]*?\*\/\s*)*(['"`])([^'"`]+)\1\s*,\s*import\.meta\.url\s*\)/g;
+    return [...source.matchAll(pattern)].filter((match) => !(match[1] === '`' && match[2].includes('${'))).map((match) => match[2]);
+}
+
+/** Targets that aren't files to look for: inline data and other origins. */
+const NOT_A_FILE = /^(data|blob|https?):/;
+
+/**
+ * The `new URL(..., import.meta.url)` targets in a built app that the build
+ * didn't write. `files` maps each built file's path relative to the output
+ * folder (`assets/index-x.js`, forward slashes) to its text. A target starting
+ * with `/` is from the site root, which is the output folder.
+ */
+export function missingBuiltUrls(files: Record<string, string>): string[] {
+    const failures: string[] = [];
+    for (const [file, text] of Object.entries(files)) {
+        if (!file.endsWith('.js')) continue;
+        for (const target of importMetaUrls(text)) {
+            if (NOT_A_FILE.test(target)) continue;
+            // The output folder is the URL root, so the path past "/" is the built file's name.
+            const path = decodeURI(new URL(target, `file:///${file}`).pathname.slice(1));
+            if (!(path in files)) failures.push(`${file} fetches '${target}', which the build didn't write`);
+        }
+    }
+    return failures;
+}
+
 interface Manifest {
     exports: Record<string, Record<string, string>>;
     dependencies?: Record<string, string>;
@@ -325,7 +445,7 @@ export function checkTarballContents(paths: string[], manifest: Manifest): strin
     // devDependencies may name workspace packages: npm never installs a dependency's devDependencies.
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
         for (const [name, version] of Object.entries(manifest[field] ?? {})) {
-            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh') {
+            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/ddgi-') || name === '@pmndrs/bvh' || OPTIONAL_RUNTIME_PACKAGES.includes(name)) {
                 failures.push(`${field} names ${name}@${version}, which isn't on npm`);
             }
         }
@@ -360,6 +480,85 @@ function importUnderNode(directory: string, specifiers: string[], nodeCheck = ''
     if (Object.keys(module).length === 0) throw new Error(specifier + ' has no exports');
 }
 ${nodeCheck}`;
+    run(process.execPath, ['--input-type=module', '-e', script], { cwd: directory });
+}
+
+function filesUnder(directory: string, prefix = ''): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? filesUnder(join(directory, entry.name), `${prefix}${entry.name}/`) : [`${prefix}${entry.name}`],
+    );
+}
+
+/** Step 6, building: `vite build` succeeds, and every file the bundle fetches from beside itself was written. */
+function viteBuild(directory: string): void {
+    run(process.execPath, [join(directory, 'node_modules/vite/bin/vite.js'), 'build', '--logLevel', 'warn'], { cwd: directory });
+    const out = join(directory, 'dist');
+    const files = Object.fromEntries(filesUnder(out).map((file) => [file, readFileSync(join(out, file), 'utf8')]));
+    const failures = missingBuiltUrls(files);
+    if (!Object.values(files).some((text) => text.includes('new Worker('))) {
+        failures.push('the built app starts no worker, so it lacks the code this check is for (VITE_APP keeps too few names)');
+    }
+    if (failures.length) throw new Error(`The vite app's build:\n${failures.join('\n')}`);
+}
+
+/**
+ * Step 6, serving: vite's dev server serves the app's entry and every module it
+ * imports as JavaScript, and every `new URL(..., import.meta.url)` target in
+ * them. The dev server answers an unknown path with the app's index.html, so
+ * an HTML answer counts as missing.
+ *
+ * Runs in its own Node process (`viteDevServer`): the dev server loads
+ * rollup's native addon and starts esbuild from the app's node_modules, and
+ * Windows can't delete either file while this process holds it.
+ */
+export async function checkViteDevServer(directory: string): Promise<void> {
+    // The app's own vite, not the repository's: the one a user would run.
+    const vite = (await import(pathToFileURL(join(directory, 'node_modules/vite/dist/node/index.js')).href)) as typeof Vite;
+    // The real path: vite serves only files under its root, compared after resolving
+    // them, so a root with a Windows short name (C:\Users\RUNNER~1, on CI) refuses /main.ts with a 403.
+    const server = await vite.createServer({ root: realpathSync.native(directory), configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
+    await server.listen();
+    const failures: string[] = [];
+    try {
+        const origin = server.resolvedUrls?.local[0];
+        if (!origin) throw new Error("vite's dev server reported no address.");
+        const seen = new Set<string>();
+        const queue: Array<{ url: string; from: string; kind: 'module' | 'file' }> = [{ url: new URL('/main.ts', origin).href, from: 'index.html', kind: 'module' }];
+        while (queue.length) {
+            const { url, from, kind } = queue.shift() as (typeof queue)[number];
+            if (seen.has(url)) continue;
+            seen.add(url);
+            const response = await fetch(url);
+            const type = response.headers.get('content-type') ?? '';
+            const text = await response.text();
+            const path = new URL(url).pathname;
+            if (!response.ok) failures.push(`${from} loads ${path}: HTTP ${response.status}`);
+            else if (kind === 'module' && !type.includes('javascript')) failures.push(`${from} imports ${path}, served as ${type || 'no type'}`);
+            else if (kind === 'file' && type.includes('html')) failures.push(`${from} fetches ${path}, which isn't there (the dev server answered with index.html)`);
+            if (!response.ok || !type.includes('javascript')) continue;
+            for (const specifier of importSpecifiers(text)) {
+                if (!NOT_A_FILE.test(specifier)) queue.push({ url: new URL(specifier, url).href, from: path, kind: 'module' });
+            }
+            for (const target of importMetaUrls(text)) {
+                if (!NOT_A_FILE.test(target)) queue.push({ url: new URL(target, url).href, from: path, kind: 'file' });
+            }
+        }
+    } finally {
+        await server.close();
+    }
+    if (failures.length) throw new Error(`The vite app under vite's dev server:\n${failures.join('\n')}`);
+}
+
+/** Step 6, serving, in a fresh Node process that exits when it is done (see checkViteDevServer). */
+function viteDevServer(directory: string): void {
+    const script = `const { checkViteDevServer } = await import(${JSON.stringify(import.meta.url)});
+try {
+    await checkViteDevServer(${JSON.stringify(directory)});
+    process.exit(0);
+} catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+}`;
     run(process.execPath, ['--input-type=module', '-e', script], { cwd: directory });
 }
 
@@ -409,7 +608,7 @@ function main(): void {
             ...checkImportGraph(unpacked),
         ];
         if (failures.length) throw new Error(`The tarball:\n${failures.join('\n')}`);
-        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /radiance-cascades reaches only its published BVH dependency.`);
+        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /radiance-cascades reaches only its published BVH dependency, /radiance-cache only denoiser/ffx.`);
 
         for (const [name, consumer] of Object.entries(CONSUMERS)) {
             const directory = join(temporaryRoot, `consumer-${name}`);
@@ -418,6 +617,9 @@ function main(): void {
             if (!consumer.packages.includes('three') && existsSync(join(directory, 'node_modules/three'))) {
                 throw new Error(`Consumer '${name}' got three installed, though it didn't ask for it.`);
             }
+            for (const optional of OPTIONAL_RUNTIME_PACKAGES) {
+                if (existsSync(join(directory, 'node_modules', optional))) throw new Error(`Consumer '${name}' got ${optional} installed: the check is that it works without it.`);
+            }
             importUnderNode(directory, consumer.imports, consumer.nodeCheck);
             for (const resolution of Object.keys(RESOLUTIONS) as Array<keyof typeof RESOLUTIONS>) {
                 const tsconfig = join(directory, `tsconfig.${resolution}.json`);
@@ -425,10 +627,25 @@ function main(): void {
                 run(process.execPath, [TSC, '-p', tsconfig], { cwd: directory });
             }
         }
+
+        const app = join(temporaryRoot, 'consumer-vite');
+        console.log(`Vite app (${VITE_APP.packages.join(', ')}): npm install, vite build, vite dev server...`);
+        createConsumer(app, archive, { packages: VITE_APP.packages, imports: [], source: VITE_APP.source });
+        writeFileSync(join(app, 'index.html'), VITE_APP.html);
+        viteBuild(app);
+        viteDevServer(app);
         console.log('Packed-consumer check passed.');
     } finally {
         if (options.keepTemp) console.log(`Kept the temporary projects in ${temporaryRoot}`);
-        else rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        else {
+            // The folder holds only npm installs (no links out). A failed delete
+            // must not hide the check's own result.
+            try {
+                rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+            } catch (error) {
+                console.warn(`Couldn't delete ${temporaryRoot}: ${error instanceof Error ? error.message : error}`);
+            }
+        }
     }
 }
 
