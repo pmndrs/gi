@@ -207,6 +207,17 @@ describe('cabinet-row', () => {
         expect(doors(open)).toBe(0);
     });
 
+    it('adds the shelf on legs and the small objects only with objects true, after everything else', () => {
+        const plain = buildCabinetRow();
+        const withObjects = buildCabinetRow({ objects: true });
+        expect(plain.instances.some((instance) => instance.name.startsWith('shelf-'))).toBe(false);
+        expect(withObjects.instances.filter((instance) => instance.name.startsWith('shelf-leg-'))).toHaveLength(4);
+        // The plain scene's instances and materials come first, unchanged, so its references still hold.
+        expect(withObjects.instances.slice(0, plain.instances.length)).toEqual(plain.instances);
+        expect(withObjects.materials.slice(0, plain.materials.length)).toEqual(plain.materials);
+        expect(() => buildCabinetRow({ objects: 'yes' })).toThrow(/objects/);
+    });
+
     it('is a hollow volume: no board occupies the middle of a base unit', () => {
         const scene = buildCabinetRow();
         // Centre of the first base unit: x 0.6..1.2, y 0.1..0.82, z 0..0.58.
