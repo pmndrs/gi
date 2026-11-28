@@ -56,7 +56,7 @@ showExplainer({
     diagram: DIAGRAM,
     diagramCaption: 'Every variant keeps the screen probes and the denoiser; only the world cache and its later bounces change.',
     tryThis: [
-        `Pick \`GI-1.2 grid alone\` under \`Variant\`: the rooms go darker. P6.5 measured this view 44% too dark against Cycles ([radiance-cache-variants.md](${VARIANTS}#summary)).`,
+        `Pick \`GI-1.2 grid alone\` under \`Variant\`: the rooms go darker. P6.5 measured two-room's first view 44% too dark this way against Cycles ([radiance-cache-variants.md](${VARIANTS}#summary)).`,
         'Pick `SHaRC cache alone`: most of the light comes back with no DDGI volume, and the memory line drops by about 1 GiB.',
         'Switch `Scene` to the courtyard and step through the variants again: under the open sky they look much alike.',
         'Set `Overlay` to `Probe mask`: each colour is one probe, its white dot the pixel it sits on. Orbit, and the colours follow the surfaces.',

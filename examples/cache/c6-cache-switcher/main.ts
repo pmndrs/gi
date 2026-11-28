@@ -122,7 +122,11 @@ panel.readouts(() => {
     if (steps !== undefined) lines.push(`Neural tail: ${steps.toLocaleString('en')} training steps`);
     return lines;
 });
-showPassTiming(gi, { container: panel.timing });
+showPassTiming(gi, {
+    container: panel.timing,
+    // A pass the shared list doesn't describe yet: CountScreenProbes, a scan and ScatterScreenProbes (docs/design/radiance-cache.md).
+    descriptions: { 'radiance-cache/LookupScreenProbes': 'Counts the probes reprojection kept and gathers them into one list, for the passes after it.' },
+});
 showCacheStats(device, gi, cache, () => (under ? `${preset.id}, DDGI under it` : preset.id));
 
 renderer.setAnimationLoop(() => {
