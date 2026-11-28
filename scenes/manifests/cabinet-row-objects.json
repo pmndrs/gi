@@ -1,0 +1,92 @@
+{
+    "id": "cabinet-row-objects",
+    "title": "Cabinet row with objects",
+    "description": "The hollow cabinet row with small things where light meets a contact: an open shelf on legs, 2 cm off the wall, with boxes on it, under it and in front of it, and jars and a bread bin on the worktop. Objects 0.1-0.35 m across, about the probe spacing or less, for the contact-detail example (C2).",
+    "tags": ["interior", "contact-detail", "thin-geometry"],
+    "units": "meters",
+    "upAxis": "y",
+    "parts": [
+        {
+            "kind": "procedural",
+            "builder": "cabinet-row",
+            "options": {
+                "closedFronts": true,
+                "objects": true
+            }
+        }
+    ],
+    "cameras": [
+        {
+            "name": "shelf-and-worktop",
+            "position": [2.6, 1.35, 2.3],
+            "target": [3.3, 0.55, 0.3],
+            "fovYDeg": 60
+        },
+        {
+            "name": "worktop-jars",
+            "position": [1.5, 1.35, 1.3],
+            "target": [1.3, 0.9, 0.1],
+            "fovYDeg": 55
+        },
+        {
+            "name": "front-of-the-run",
+            "position": [1.6, 1.5, 3.0],
+            "target": [2.4, 0.8, 0.3],
+            "fovYDeg": 65
+        }
+    ],
+    "lights": [
+        {
+            "type": "point",
+            "label": "ceiling-lamp",
+            "color": [1, 0.96, 0.88],
+            "intensity": 12,
+            "position": [2.4, 2.35, 1.7],
+            "range": 12
+        }
+    ],
+    "motions": [
+        {
+            "id": "light-sweep",
+            "label": "ceiling-lamp sweeps at 1 m/s and back",
+            "target": "light:ceiling-lamp",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [0.8, 2.2, 1.7] },
+                { "t": 3.2, "position": [4.0, 2.2, 1.7] },
+                { "t": 6.4, "position": [0.8, 2.2, 1.7] }
+            ]
+        },
+        {
+            "id": "light-step",
+            "label": "ceiling-lamp jumps every 3 s",
+            "target": "light:ceiling-lamp",
+            "interpolation": "step",
+            "loop": true,
+            "keyframes": [
+                { "t": 0, "position": [0.8, 2.2, 1.7] },
+                { "t": 3, "position": [4.0, 2.2, 1.7] },
+                { "t": 6, "position": [0.8, 2.2, 1.7] }
+            ]
+        }
+    ],
+    "environment": {
+        "type": "none"
+    },
+    "volume": {
+        "center": [2.4, 1.3, 1.6],
+        "size": [5.0, 2.8, 3.4],
+        "probeSpacing": 0.25
+    },
+    "nativeCapable": true,
+    "referenceCube": {
+        "position": [3.6, 0.5, 1.4]
+    },
+    "credits": [
+        {
+            "asset": null,
+            "license": "MIT",
+            "attribution": "MIT, this repo."
+        }
+    ]
+}

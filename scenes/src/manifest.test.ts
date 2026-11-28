@@ -275,6 +275,7 @@ describe('the manifests in scenes/manifests', async () => {
             'bistro-exterior',
             'bistro-interior',
             'cabinet-row',
+            'cabinet-row-objects',
             'closed-door',
             'cornell-box',
             'cornell-box-point',
