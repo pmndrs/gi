@@ -18,7 +18,7 @@
  * `SETTLE_FRAMES` frames, then `TIMED_FRAMES` timed frames: the mean time of
  * each world-cache section (`radiance-cache/<section>`, Capsaicin's
  * `TimedSection` names and the lever's `ClaimCells`, `PrioritizeCells`,
- * `ShadeCells`) and their sum; the probe trace (`radiance-cache/sample-populate`)
+ * `ShadeCells`) and their sum; the probe trace (`PROBE_TRACE_SECTIONS`, one pass `radiance-cache/sample-populate` before P6.6)
  * and the screen passes beside them; and the last frame's counts: probe-ray
  * entries, second-bounce entries, shadow rays, cells hit and cells lit.
  *
@@ -32,6 +32,7 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core
 import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
 import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/gpu-timer.ts';
 import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { PROBE_TRACE_SECTIONS, timedPassName } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/timed-pass.ts';
 import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
 import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
 import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
@@ -193,7 +194,7 @@ async function measureScene(device: GPUDevice, id: string): Promise<Record<strin
             const budgeted = setting.settings.cellShading === 'budgeted';
             results[name] = {
                 worldCacheMs: round(worldCacheMs),
-                probeTraceMs: round(mean('radiance-cache/sample-populate')),
+                probeTraceMs: round(PROBE_TRACE_SECTIONS.reduce((sum, section) => sum + mean(timedPassName(section)), 0)),
                 techniqueMs: round(allMs),
                 timedFrames,
                 sections,

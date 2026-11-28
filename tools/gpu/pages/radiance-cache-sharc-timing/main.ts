@@ -9,7 +9,7 @@
  * Each configuration warms for `WARM_FRAMES` frames from an empty cache, then
  * times `TIMED_FRAMES` frames with the platform's `GpuTimer` (timestamp
  * queries per pass; the technique's context gets this page's timer, since the
- * platform's own resolves before the screen stage). Per frame it sums the
+ * platform's own resolved before the screen stage until P6.6). Per frame it sums the
  * world cache's passes (GI-1.2: the purge, population, multibounce, update and
  * resolve sections; SHaRC: its update passes, `SharcResolve`, `SharcLookup`) and
  * every pass of the technique; it reports their medians, each cache pass's
@@ -80,7 +80,7 @@ const CACHE_SECTIONS = new Set([
     'SharcLookup',
 ]);
 
-/** The technique with this page's timer in its context (the platform's own timer resolves before the screen stage). */
+/** The technique with this page's timer in its context (written when the platform's own timer resolved before the screen stage; since P6.6 it times it too, see radiance-cache-timing). */
 class TimedRadianceCache extends RadianceCacheTechnique {
     private readonly pageTimer: GpuTimer;
 

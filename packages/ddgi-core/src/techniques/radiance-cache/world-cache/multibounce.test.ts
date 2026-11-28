@@ -243,7 +243,7 @@ describe("a sparse cell's indirect value over frames (UpdateTiles, register D37)
 });
 
 describe('the multibounce kernels and lists', () => {
-    const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+    const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
 
     it("keep room for a second-bounce entry's BRDF, pdf and ray per probe ray", () => {
         const maxRayCount = 230_400;

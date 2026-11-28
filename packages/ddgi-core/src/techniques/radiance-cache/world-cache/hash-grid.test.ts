@@ -197,7 +197,7 @@ describe('the tile layout (gi1.cpp:442-461) and cell indices (hash_grid_cache.hl
 
 describe('the packed buffers (register D6) and the device limits (D14)', () => {
     const capacity = hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS);
-    const layout = hashGridCacheBufferLayout(capacity);
+    const layout = hashGridCacheBufferLayout(capacity, true);
 
     it('packs the value, indirect value and both update scratch arrays at Capsaicin\'s sizes', () => {
         // gi1.cpp:487-547: uint2 per cell twice, num_cells << 2 uints twice.
@@ -209,16 +209,16 @@ describe('the packed buffers (register D6) and the device limits (D14)', () => {
         expect(cellResetFrameWords(capacity) * 4).toBe((262144 * 64) / 2 * 4);
         // One words buffer (pmndrs/gi#49): tile words, then update scratch, on a 256-byte boundary.
         expect(layout.updateScratch.updateCellValueBuffer * 4).toBe(Math.ceil(layout.tileWords.bytes / 256) * 256);
-        expect(layout.updateScratch.updateCellValueIndirectBuffer - layout.updateScratch.updateCellValueBuffer).toBe(22282240 * 4);
+        expect((layout.updateScratch.updateCellValueIndirectBuffer ?? Number.NaN) - layout.updateScratch.updateCellValueBuffer).toBe(22282240 * 4);
         expect(layout.words.bytes).toBe(5243136 + 713031680);
         expect(layout.totalBytes).toBe(356515840 + layout.words.bytes);
         // Offsets on the 256-byte storage-binding alignment.
         const offsets = [layout.tileWords.hashBuffer, layout.tileWords.decayTileBuffer, layout.tileWords.packedTileIndexBuffer0, layout.tileWords.packedTileIndexBuffer1, layout.tileWords.updateListedTileBuffer];
-        offsets.push(layout.updateScratch.updateCellValueBuffer, layout.updateScratch.updateCellValueIndirectBuffer);
+        offsets.push(layout.updateScratch.updateCellValueBuffer, layout.updateScratch.updateCellValueIndirectBuffer ?? Number.NaN);
         for (const offsetWords of offsets) {
             expect((offsetWords * 4) % 256).toBe(0);
         }
-        expect((layout.cellValues.valueIndirectBuffer * 8) % 256).toBe(0);
+        expect(((layout.cellValues.valueIndirectBuffer ?? Number.NaN) * 8) % 256).toBe(0);
     });
 
     it('throws GILimitError naming maxStorageBufferBindingSize at WebGPU\'s default limits', () => {
@@ -279,7 +279,7 @@ describe('the constants and the shared WGSL', () => {
         expect(owner.get(31)).toBe('environmentLightEnable');
         expect(owner.get(32)).toBe('useNeuralTail');
         // The WGSL struct is as long as the block: one u32 or f32 per word, the eye a vec3f.
-        const struct = /struct HashGridCacheConstants \{([^}]*)\}/.exec(hashGridCacheWgsl(1, hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS))))?.[1] ?? '';
+        const struct = /struct HashGridCacheConstants \{([^}]*)\}/.exec(hashGridCacheWgsl(1, hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true)))?.[1] ?? '';
         const fields = struct.split(/\r?\n/).map((line) => line.replace(/\/\/.*$/, '').trim()).filter((line) => line.endsWith(','));
         expect(fields.length + 2).toBe(HASH_GRID_CONSTANTS_BYTES / 4); // + 2: the vec3f eye is three words
         expect(fields.findIndex((field) => field.startsWith('use_neural_tail:')) + 2).toBe(HASH_GRID_CONSTANTS_WORD.useNeuralTail);
@@ -294,7 +294,7 @@ describe('the constants and the shared WGSL', () => {
     });
 
     it('declares every ported function once, with the packed offsets baked in', () => {
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         const code = hashGridCacheWgsl(1, layout);
         for (const name of [
             'pcgHash',

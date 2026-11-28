@@ -108,7 +108,7 @@ describe('the neural tail (P6.4, register E11)', () => {
 
     it('lays its parameter words out as the WGSL struct does', () => {
         // Parsed from the kernel's own struct: each field's word (vec4f 4, mat4x4f 16, u32 1), named as the TypeScript key in snake case.
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         const struct = /struct NeuralTailParams \{([^}]*)\}/.exec(gatherScreenRecordsWgsl(layout))?.[1] ?? '';
         const sizes: Record<string, number> = { vec4f: 4, mat4x4f: 16, u32: 1, f32: 1 };
         const offsets = new Map<string, number>();
@@ -148,7 +148,7 @@ describe('the neural tail (P6.4, register E11)', () => {
     });
 
     it('lays the hash grid ray-list uniform out in its bytes', () => {
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         const struct = /struct HashGridCacheRayLists \{([^}]*)\}/.exec(gatherCellRecordsWgsl(layout))?.[1] ?? '';
         const fields = struct.split(/\r?\n/).map((line) => line.replace(/\/\/.*$/, '').trim()).filter((line) => line.endsWith(','));
         expect(fields.every((field) => field.endsWith(': u32,'))).toBe(true);
@@ -160,7 +160,7 @@ describe('the neural tail (P6.4, register E11)', () => {
     });
 
     it('builds its kernels and the network hooks', () => {
-        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS));
+        const layout = hashGridCacheBufferLayout(hashGridCacheCapacity(DEFAULT_HASH_GRID_CACHE_OPTIONS), true);
         expect(gatherCellRecordsWgsl(layout)).toContain(`fn ${NEURAL_TAIL_ENTRY_POINT.gatherCellRecords}(`);
         expect(gatherCellRecordsWgsl(layout)).toContain('HashGridCache_FilteredRadianceIndirect(cell_index)');
         expect(gatherQueriesWgsl(layout)).toContain(`fn ${NEURAL_TAIL_ENTRY_POINT.gatherQueries}(`);
