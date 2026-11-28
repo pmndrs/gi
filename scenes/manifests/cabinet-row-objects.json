@@ -18,8 +18,8 @@
     "cameras": [
         {
             "name": "shelf-and-worktop",
-            "position": [2.6, 1.35, 2.3],
-            "target": [3.3, 0.55, 0.3],
+            "position": [3.7, 1.1, 1.65],
+            "target": [3.9, 0.4, 0.2],
             "fovYDeg": 60
         },
         {
@@ -70,6 +70,7 @@
             ]
         }
     ],
+    "exposureEv": -1.5,
     "environment": {
         "type": "none"
     },

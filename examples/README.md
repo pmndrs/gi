@@ -37,6 +37,7 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 | # | Example | Shows |
 | --- | --- | --- |
 | C1 | **No volume needed** (`cache/c1-no-volume`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
+| C2 | **Contact detail** (`cache/c2-contact-detail`) | The cache (SHaRC world cache, no volume) and a `DDGIVolume` on one scene pass of `cabinet-row-objects`, each through its own `ddgi()` composite, wiped by the mouse (`shared/wipe.ts`) with a difference view. DDGI's probe spacing switches between 0.25 m and 0.5 m, so its blur at contacts shows against the cache's screen probes. |
 
 ### Split Radiance Cascades (`cascades/`)
 
