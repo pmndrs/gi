@@ -19,6 +19,6 @@ export default {
         three: 'src/three.ts',
     },
     output: { dir: 'dist', format: 'es', manualChunks: layerChunk, chunkFileNames: 'chunks/[name]-[hash].d.ts' },
-    external: ['@pmndrs/rc-bvh', /^denoiser(\/|$)/, /^three(\/|$)/],
+    external: [/^@pmndrs\/bvh(\/|$)/, /^denoiser(\/|$)/, /^three(\/|$)/],
     plugins: [dts({ respectExternal: true, tsconfig: 'tsconfig.build.json' })],
 };

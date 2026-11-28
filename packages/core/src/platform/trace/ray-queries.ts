@@ -58,7 +58,7 @@
  * `module.version` so kernels rebuild their bind group only.
  */
 
-import { GpuBvhRefit } from '@pmndrs/bvh/gpu-refit';
+import { GpuBvhRefit } from '@pmndrs/bvh';
 import { GILimitError, GINotReadyError } from '../contract/errors.ts';
 import type { InstanceHandle } from '../contract/handles.ts';
 import type { RayQueries } from '../contract/queries.ts';

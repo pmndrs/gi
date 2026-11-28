@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { assembleTraceScene, createCpuTracer } from '../../../../packages/core/src/platform/trace/index.ts';
 import { buildMeshBvhWithTinyBvh } from '../../../../packages/core/src/platform/trace/mesh-bvh-topology.ts';
-import { createTinyBvhBuilder } from '../../../../packages/bvh/src/index.ts';
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
 import { type TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
 import { buildOracleCases, sharedEdgeCase, SMALL_SIZES, unpackRay, type OracleCase } from './cases.ts';
 import {

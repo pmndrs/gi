@@ -16,11 +16,16 @@ const MODULE_WORKER = /new\s+Worker\(\s*new\s+URL\(\s*(['"])(\.{1,2}\/[^'"]+)\1\
  * `vite build` of any app importing the package fails. Even a relative URL to
  * a worker file breaks under vite's dev server, which moves the package into
  * node_modules/.vite and leaves the worker behind. An inlined worker needs no
- * file, so it works in any bundler, dev server or plain browser. (The BVH
- * workers carry tinybvh's WebAssembly inline already, so they fetch nothing.)
+ * file, so it works in any bundler, dev server or plain browser.
  *
  * The source keeps the standard `new Worker(new URL(...))` form, so the
  * workspace's own apps and tests start the worker from its file as before.
+ *
+ * Since gi moved onto the published `@pmndrs/bvh` (pmndrs/gi#63) the package
+ * starts no worker of its own: the BVH workers are `@pmndrs/bvh/worker`'s,
+ * external like the rest of that package, and the user's bundler ships them
+ * from it (README, "Bundlers"). The plugin stays as the guard for any worker
+ * gi adds later.
  */
 function inlineWorkers(): Plugin {
     return {
@@ -52,7 +57,10 @@ function inlineWorkers(): Plugin {
 // platform), `/ddgi` (the DDGI technique), `/radiance-cache` (the radiance
 // cache), `/radiance-cascades` (Split RC), `/three` (the three.js adapter) and
 // `.` (the same as `/three`). The private workspace packages (@pmndrs/gi-core,
-// -three, -ddgi, -ddgi-three, -cache) are bundled in.
+// -three, -ddgi, -ddgi-three, -cache) are bundled in, and so is Split RC's
+// interval tracer (@pmndrs/raytracer). The npm dependencies stay external:
+// @pmndrs/bvh (the platform's tree builders and workers, and the BVH the
+// raytracer traces), denoiser, and the peer three.
 //
 // Each module lands in exactly one chunk, so every entry sees the same classes
 // (an `instanceof` across subpaths must hold). The chunks are cut by layer
@@ -89,16 +97,7 @@ function optionalRuntimeImports(): Plugin {
 export default defineConfig({
     // Module workers, as the source asks for: the inlined worker runs as an ES module.
     worker: { format: 'es' },
-    plugins: [inlineWorkers(), {
-        name: 'rc-traversal-bvh',
-        enforce: 'pre',
-        resolveId(id, importer) {
-            // The pinned interval tracer uses the published BVH ABI; DDGI has its own workspace tree.
-            if (id === '@pmndrs/bvh' && importer?.replaceAll('\\', '/').includes('/raytracer/')) {
-                return { id: '@pmndrs/rc-bvh', external: true };
-            }
-        },
-    }, optionalRuntimeImports()],
+    plugins: [inlineWorkers(), optionalRuntimeImports()],
     build: {
         lib: {
             entry: {
@@ -113,8 +112,8 @@ export default defineConfig({
         },
         rollupOptions: {
             // three and its addons (the composite uses three's own GTAO) stay the user's copy;
-            // the npm dependencies (the RC BVH, the radiance cache's denoiser) are installed with the package.
-            external: ['@pmndrs/rc-bvh', /^denoiser(\/|$)/, /^three(\/|$)/],
+            // the npm dependencies (the BVH with its workers, the radiance cache's denoiser) are installed with the package.
+            external: [/^@pmndrs\/bvh(\/|$)/, /^denoiser(\/|$)/, /^three(\/|$)/],
             output: {
                 manualChunks: layerChunk,
                 chunkFileNames: 'chunks/[name]-[hash].js',

@@ -18,6 +18,9 @@ const ENGINE_FREE_IMPORTS = {
         '@pmndrs/gi-three/*',
         '@pmndrs/gi-ddgi-three',
         '@pmndrs/gi-ddgi-three/*',
+        // @pmndrs/bvh's engine adapters; its root and /worker are engine-free.
+        '@pmndrs/bvh/three',
+        '@pmndrs/bvh/babylon',
     ],
     message: 'The platform and the techniques must stay engine-free: do not import three, babylon, pixi or the three.js packages here. Put engine code in packages/three, or in a technique\'s own <technique>-three package.',
 };
@@ -48,10 +51,12 @@ const PACKAGES_DIR = fileURLToPath(new URL('./packages/', import.meta.url));
 const CORE_SRC = fileURLToPath(new URL('./packages/core/src/', import.meta.url));
 /** Technique packages under packages/: each builds on the platform contract alone. Split RC joins when it moves out of core. */
 const TECHNIQUE_PACKAGES = new Set(['ddgi', 'cache']);
-/** A bare specifier naming one of this repository's packages: `@pmndrs/gi`, `@pmndrs/gi-*`, `@pmndrs/bvh`. */
-const OWN_PACKAGE = /^@pmndrs\/(gi|gi-[\w-]+|bvh)(\/|$)/;
+/** A bare specifier naming one of this repository's packages: `@pmndrs/gi`, `@pmndrs/gi-*`. */
+const OWN_PACKAGE = /^@pmndrs\/(gi|gi-[\w-]+)(\/|$)/;
+/** The published BVH package (an npm dependency of core since pmndrs/gi#63): the platform's, reached by techniques through the contract's ray queries. */
+const BVH_PACKAGE = /^@pmndrs\/bvh(\/|$)/;
 
-const BOUNDARY_MESSAGE = (to) => `This reaches into packages/${to}'s files. Import another package by its name (@pmndrs/gi-…, @pmndrs/bvh), through its package.json exports.`;
+const BOUNDARY_MESSAGE = (to) => `This reaches into packages/${to}'s files. Import another package by its name (@pmndrs/gi-…), through its package.json exports.`;
 const SRC_SPECIFIER_MESSAGE = 'A package name followed by /src/ reaches into that package\'s files. Import it through its package.json exports (`@pmndrs/gi-core/platform/contract/math`, not `…/src/…`).';
 const THREE_MESSAGE = 'packages/three is the three.js layer every technique shares, so it may not import a technique package (or Split RC inside core, or the published package). Put three.js code only one technique uses in that technique\'s <technique>-three package (DDGI\'s is packages/ddgi-three); describe what three needs from a technique by its shape (ThreeGI\'s volume).';
 const TECHNIQUE_PACKAGE_MESSAGE = 'A technique package may import only the platform contract from the workspace (@pmndrs/gi-core/platform/contract/*) and its own files. Reach platform features through the contract (add to it if something is missing), not through platform internals, the core entry point, the BVH package or another technique. Tests may use internals as fixtures.';
@@ -84,14 +89,12 @@ function threeViolation(importer, specifier) {
     const own = (name) => specifier === name || specifier.startsWith(`${name}/`);
     if (own('@pmndrs/gi-three')) return null;
     if (own('@pmndrs/gi-core') && !specifier.startsWith('@pmndrs/gi-core/techniques/')) return null;
-    // packages/bvh is below the platform and holds no technique.
-    if (own('@pmndrs/bvh')) return null;
     return THREE_MESSAGE;
 }
 
 /** A technique package's own code reaches the workspace only through the platform contract. */
 function techniquePackageViolation(importer, specifier) {
-    if (!TECHNIQUE_PACKAGES.has(packageOf(importer)) || isTest(importer) || !OWN_PACKAGE.test(specifier)) return null;
+    if (!TECHNIQUE_PACKAGES.has(packageOf(importer)) || isTest(importer) || !(OWN_PACKAGE.test(specifier) || BVH_PACKAGE.test(specifier))) return null;
     return specifier.startsWith('@pmndrs/gi-core/platform/contract/') ? null : TECHNIQUE_PACKAGE_MESSAGE;
 }
 
@@ -101,9 +104,11 @@ function techniquePackageViolation(importer, specifier) {
 // in `platform/` may change under a technique. So a technique folder may import
 // `platform/contract` and its own folder, and nothing else from the repo's
 // packages: not the platform's implementation (`platform/trace`, ...), not the
-// core's entry point (it re-exports the whole platform), not `packages/bvh`
-// (the tracer is reached through the contract's ray queries), and not another
-// technique. The platform never imports a technique (or the entry point that
+// core's entry point (it re-exports the whole platform), and not another
+// technique. (Split RC's transport traces with `@pmndrs/raytracer` over the
+// published `@pmndrs/bvh`, npm dependencies, not the repo's packages; the
+// technique packages reach the tracer through the contract's ray queries and
+// may not import `@pmndrs/bvh`.) The platform never imports a technique (or the entry point that
 // assembles them). Tests are exempt: they may use internals as fixtures.
 
 /** Path segments of `file` below gi-core's `src/`, or null when it is outside. */
@@ -235,34 +240,6 @@ export default tseslint.config(
             'local/three-imports-no-technique': 'error',
             'local/technique-layers': 'error',
             'local/core-layers': 'error',
-        },
-    },
-    {
-        // The BVH package is engine-free and below the platform: it may not import the
-        // platform, the GI code, the three.js packages or any engine (docs/design/bvh-framework.md).
-        files: ['packages/bvh/**/*.ts'],
-        rules: {
-            'no-restricted-imports': ['error', {
-                patterns: [{
-                    group: [
-                        'three',
-                        'three/*',
-                        'three-mesh-bvh',
-                        'three-mesh-bvh/*',
-                        '@babylonjs/*',
-                        'pixi.js',
-                        'pixi.js/*',
-                        '@pmndrs/gi',
-                        '@pmndrs/gi/*',
-                        '@pmndrs/gi-*',
-                    ],
-                    message: 'packages/bvh must stay engine-free and independent of the GI code: no gi-core, the technique or three.js packages, three or other engines here.',
-                }],
-            }],
-            'no-restricted-syntax': ['error', {
-                selector: "ImportExpression[source.value=/^(three|@babylonjs\\/|pixi\\.js|@pmndrs\\/gi(\\/|-|$))/]",
-                message: 'packages/bvh must stay engine-free and independent of the GI code: no gi-core, the technique or three.js packages, three or other engines here.',
-            }],
         },
     },
     {

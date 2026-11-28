@@ -44,9 +44,9 @@
  * `warn`. Without diagnostics there are no readbacks at all.
  */
 
-import { BVH_INSTANCE_BOX_WGSL } from '@pmndrs/bvh/gpu-instance-box';
-import { GpuBvhRefit, type BvhRefitStats } from '@pmndrs/bvh/gpu-refit';
-import { BVH_FLOAT_MAX, PRIMITIVE_BOX_FLOATS } from '@pmndrs/bvh/refit-cpu';
+import { BVH_INSTANCE_BOX_WGSL } from '@pmndrs/bvh';
+import { GpuBvhRefit, type BvhRefitStats } from '@pmndrs/bvh';
+import { BVH_FLOAT_MAX, PRIMITIVE_BOX_FLOATS } from '@pmndrs/bvh';
 import { GILimitError } from '../contract/errors.ts';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { ComputeKernel, KernelBuilder } from '../contract/wgsl.ts';

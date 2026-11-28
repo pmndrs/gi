@@ -8,7 +8,7 @@
  * GPUs (tools/gpu/pages/trace-oracle).
  */
 
-import type { GpuLbvhMeshTree } from '@pmndrs/bvh/gpu-lbvh';
+import type { GpuMeshTreeRange } from '@pmndrs/bvh';
 import { describe, expect, it } from 'vitest';
 import { PlatformKernelBuilder } from '../kernel-builder.ts';
 import { PlatformScene } from '../scene/platform-scene.ts';
@@ -107,7 +107,7 @@ class StandInGpuBuilder implements FirstTreeBuilder {
         const nodes = this.device.createBuffer({ label: 'stand-in nodes', size: nodeBytes, usage: 0 });
         const triangles = this.device.createBuffer({ label: 'stand-in triangles', size: triangleBytes, usage: 0 });
         const parents = this.device.createBuffer({ label: 'stand-in parents', size: 4, usage: 0 });
-        const meshes: GpuLbvhMeshTree[] = [];
+        const meshes: GpuMeshTreeRange[] = [];
         let nodeOffset = 0;
         let triangleOffset = 0;
         trees.forEach((tree, index) => {

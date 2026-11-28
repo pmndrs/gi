@@ -30,15 +30,15 @@
  * `readLayouts`, which reads their batch's trees back once, after the stats.
  * The tracer puts them in a batch of their own, so the readback is only
  * theirs. A drift rebuild builds from the scene copy's positions on the GPU
- * (`GpuLbvhBufferGeometry`), which the batch copies in its own encoder.
+ * (`GpuMeshBuffers`), which the batch copies in its own encoder.
  *
  * Without subgroups there is no GPU builder: every mesh's tree comes from
  * tinybvh, as in M1 (the declared fallback, DECISIONS 2026-11-04).
  */
 
-import { GpuHplocBuilder, planGpuHplocBatches } from '@pmndrs/bvh/gpu-hploc';
-import type { GpuLayoutMeshBvh } from '@pmndrs/bvh/gpu-layout';
-import type { GpuLbvhBufferGeometry, GpuLbvhMeshTree, GpuLbvhTrees } from '@pmndrs/bvh/gpu-lbvh';
+import { GpuHplocBuilder, planGpuHplocBatches } from '@pmndrs/bvh';
+import type { GpuLayoutMeshBvh } from '@pmndrs/bvh';
+import type { GpuMeshBuffers, GpuMeshTreeRange, GpuTreeBuffers } from '@pmndrs/bvh';
 import type { MeshGeometry } from './mesh-bvh.ts';
 
 /**
@@ -49,7 +49,7 @@ import type { MeshGeometry } from './mesh-bvh.ts';
 export interface GpuTreeRequest {
     readonly slot: number;
     readonly generation: number;
-    readonly geometry: MeshGeometry | GpuLbvhBufferGeometry;
+    readonly geometry: MeshGeometry | GpuMeshBuffers;
 }
 
 /** Options of one {@link FirstTreeBuilder.build}. */
@@ -64,11 +64,11 @@ export interface GpuTreeBuildOptions {
  * once every tree has let go of them.
  */
 export class GpuTreeOutputs {
-    private readonly trees: GpuLbvhTrees;
+    private readonly trees: GpuTreeBuffers;
     private users: number;
     private destroyed = false;
 
-    constructor(trees: GpuLbvhTrees, users: number) {
+    constructor(trees: GpuTreeBuffers, users: number) {
         this.trees = trees;
         this.users = users;
         if (users === 0) this.destroy();
@@ -112,7 +112,7 @@ export interface GpuBuiltTree {
     readonly generation: number;
     readonly outputs: GpuTreeOutputs;
     /** Where the tree sits in `outputs` (nodes and triangles), its counts, depth and box. */
-    readonly tree: GpuLbvhMeshTree;
+    readonly tree: GpuMeshTreeRange;
     /** The tree's layout on the CPU, when the build asked for `readLayouts` and the readback worked; else null. */
     readonly layout: GpuLayoutMeshBvh | null;
 }
@@ -182,7 +182,7 @@ export class GpuMeshTrees implements FirstTreeBuilder {
 
         // Every batch goes into one encoder and one submit; each then reads its own stats back.
         const encoder = this.device.createCommandEncoder({ label: this.label });
-        const recorded: { members: GpuTreeRequest[]; finish: () => Promise<GpuLbvhTrees> }[] = [];
+        const recorded: { members: GpuTreeRequest[]; finish: () => Promise<GpuTreeBuffers> }[] = [];
         const failed: { members: GpuTreeRequest[]; reason: string }[] = [];
         for (const indices of plan.batches) {
             const members = indices.map((index) => requests[index]);
@@ -198,7 +198,7 @@ export class GpuMeshTrees implements FirstTreeBuilder {
         this.device.queue.submit([encoder.finish()]);
 
         const batches = recorded.map(async ({ members, finish }): Promise<GpuTreeBatchResult> => {
-            let trees: GpuLbvhTrees;
+            let trees: GpuTreeBuffers;
             try {
                 trees = await finish();
             } catch (error) {

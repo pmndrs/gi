@@ -38,7 +38,7 @@ import {
     type BenchProfileName,
 } from './config.ts';
 import { createDispatchTimer, type DispatchTimer } from './dispatch-timer.ts';
-import { GpuLbvhBuilder } from '../../../../packages/bvh/src/gpu-lbvh.ts';
+import { GpuLbvhBuilder } from '@pmndrs/bvh';
 import {
     buildGpuScene,
     buildOursScene,

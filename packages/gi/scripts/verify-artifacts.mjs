@@ -3,6 +3,8 @@
 // resolve it), and that each entry loads only its own layers' chunks
 // (layer-chunks.ts): `/core` no DDGI or three code, `/ddgi` no three code. The
 // radiance cache's optional `@pathtracer/mlp` stays external, out of every .d.ts.
+// `@pmndrs/bvh` (tinybvh's WebAssembly, the GPU builders, the workers) stays
+// external too: nothing in dist embeds WebAssembly or tinybvh's notice.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
@@ -25,7 +27,7 @@ for (const entry of publicEntries) {
 // The files npm ships beside dist: README and LICENSE are copied from the
 // repository root by tools/release/package-files.ts; THIRD_PARTY.md is the
 // package's own; licenses/ holds the bundled code's licence texts it points to.
-for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY.md', 'licenses/tinybvh.txt', 'licenses/emscripten-runtime.txt', 'licenses/hiprt.txt', 'licenses/pathtracer-MIT.txt', 'licenses/pbrt-v4-Apache-2.0.txt', 'licenses/capsaicin-MIT.txt', 'licenses/rtoy-samples-MIT.txt', 'licenses/assimp-BSD-3-Clause.txt']) {
+for (const file of ['README.md', 'LICENSE', 'THIRD_PARTY.md', 'licenses/pathtracer-MIT.txt', 'licenses/pbrt-v4-Apache-2.0.txt', 'licenses/capsaicin-MIT.txt', 'licenses/rtoy-samples-MIT.txt', 'licenses/assimp-BSD-3-Clause.txt']) {
     if (!existsSync(resolve(packageRoot, file))) problems.push(`missing ${file} in packages/gi`);
 }
 
@@ -46,9 +48,8 @@ function walk(directory) {
 
 // A WebAssembly module embedded as base64 starts with these characters (the bytes "\0asm", then version 1).
 const embeddedWasmMarker = 'AGFzbQEAAAA';
-// The tinybvh WASM must carry its licences (packages/bvh/licenses), which the
-// generated module puts in a /*! */ comment for bundlers to keep.
-const wasmLicenseLines = ['Copyright (c) 2024 Jacco Bikker', 'Copyright (c) 2010-2014 Emscripten authors', 'Rich Felker'];
+// tinybvh's notice, which @pmndrs/bvh's WASM module and H-PLOC port carry: in our dist it would mean bvh got bundled.
+const bundledBvhMarker = 'Jacco Bikker';
 
 // Optional packages a technique loads at run time (vite.config.ts `OPTIONAL_RUNTIME_IMPORTS`):
 // never bundled, never imported by a .d.ts (comments may name it), and loaded only through the hidden `import()` a
@@ -70,11 +71,9 @@ for (const file of existsSync(dist) ? walk(dist) : []) {
         // vite.config.ts renders it as `((specifier) => import(specifier))('<name>')`.
         else if (new RegExp(String.raw`\)\)\(\s*` + quoted + String.raw`\s*\)`).test(text)) keptOptionalImports.add(name);
     }
-    if (file.endsWith('.js') && text.includes(embeddedWasmMarker)) {
-        for (const line of wasmLicenseLines) {
-            if (!text.includes(line)) problems.push(`${file} embeds WebAssembly but lacks the licence line "${line}"`);
-        }
-    }
+    // Since pmndrs/gi#63 tinybvh ships in @pmndrs/bvh's distribution, not ours (THIRD_PARTY.md).
+    if (file.endsWith('.js') && text.includes(embeddedWasmMarker)) problems.push(`${file} embeds WebAssembly: @pmndrs/bvh (tinybvh) must stay an external dependency`);
+    if (file.endsWith('.js') && text.includes(bundledBvhMarker)) problems.push(`${file} holds tinybvh's notice: @pmndrs/bvh's code was bundled`);
 }
 
 for (const name of optionalRuntimeImports) {
@@ -138,4 +137,4 @@ if (problems.length) {
     console.error(problems.join('\n'));
     process.exit(1);
 }
-console.log(`Verified dist: entries ${publicEntries.join(', ')} with types; /core loads only the platform chunk, /ddgi no three chunk; no private package names; ${optionalRuntimeImports.join(', ')} external behind a hidden import(); README, LICENSE, THIRD_PARTY.md and licenses/ present.`);
+console.log(`Verified dist: entries ${publicEntries.join(', ')} with types; /core loads only the platform chunk, /ddgi no three chunk; no private package names; no bundled @pmndrs/bvh; ${optionalRuntimeImports.join(', ')} external behind a hidden import(); README, LICENSE, THIRD_PARTY.md and licenses/ present.`);

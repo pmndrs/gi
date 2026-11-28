@@ -318,12 +318,6 @@ const MAKES_PIPELINE = /\bcreate(Compute|Render)Pipeline(Async)?\s*\(/;
  * (checked: the file declares no storage buffer).
  */
 const PIPELINE_SOURCES: Readonly<Record<string, RegExp | 'no storage buffers'>> = {
-    'bvh/src/gpu-hploc.ts': /mesh trees hploc/,
-    'bvh/src/gpu-lbvh.ts': /mesh trees lbvh/,
-    'bvh/src/gpu-mesh-refit.ts': /^gi mesh refit$/,
-    'bvh/src/gpu-radix-sort.ts': /mesh trees sort/,
-    'bvh/src/gpu-refit.ts': /refit bvhRefit/,
-    'bvh/src/gpu-scan.ts': /mesh trees scan/,
     'core/src/platform/compute/gpu-compute.ts': /gi\/indirect-args|gi\/compaction/,
     'core/src/platform/compute/scan.ts': /gi\/(scan |compaction)/,
     'core/src/platform/kernel-builder.ts': /radiance-cache\/|ddgi\//,
@@ -343,6 +337,12 @@ const PIPELINE_SOURCES: Readonly<Record<string, RegExp | 'no storage buffers'>> 
 
 /** Pipelines from dependencies, made on our device through the files above: the labels they must show up under. */
 const DEPENDENCY_PIPELINES: Readonly<Record<string, RegExp>> = {
+    // The platform's mesh trees (H-PLOC with its sort and scan), deforming-mesh refits and top-level refit (pmndrs/gi#63).
+    '@pmndrs/bvh@0.1.1 (GpuHplocBuilder)': /mesh trees hploc/,
+    '@pmndrs/bvh@0.1.1 (GpuHplocBuilder: its radix sort)': /mesh trees sort/,
+    '@pmndrs/bvh@0.1.1 (GpuHplocBuilder: its scan)': /mesh trees scan/,
+    '@pmndrs/bvh@0.1.1 (GpuMeshRefit)': /^gi mesh refit /,
+    '@pmndrs/bvh@0.1.1 (GpuBvhRefit)': /refit bvhRefit/,
     'denoiser@2.1.0 (Gi1Denoiser)': /^gi1 /,
     '@pmndrs/raytracer (RtIntervalTracer)': /^RC interval /,
     ...(mlp ? { '@pathtracer/mlp (the neural tail)': /^nn / } : {}),
@@ -467,7 +467,7 @@ describe('storage buffers per shader stage in every pipeline gi builds (pmndrs/g
 
     // Reads what the tests above counted, so it runs after them (alone, with -t, it reports everything uncounted).
     it('every source file that makes a pipeline is covered above (counted, or declares no storage buffer)', () => {
-        const makers = ['bvh/src', 'core/src', 'ddgi/src', 'cache/src', 'three/src', 'ddgi-three/src']
+        const makers = ['core/src', 'ddgi/src', 'cache/src', 'three/src', 'ddgi-three/src']
             .flatMap((directory) => sourceFiles(join(PACKAGES, directory)))
             .filter((path) => MAKES_PIPELINE.test(readFileSync(path, 'utf8')))
             .map((path) => relative(PACKAGES, path).replaceAll('\\', '/'))

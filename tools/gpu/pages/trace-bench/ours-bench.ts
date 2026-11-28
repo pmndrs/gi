@@ -16,10 +16,10 @@ import {
     type TraceInstance,
     type TraceSceneData,
 } from '../../../../packages/core/src/platform/trace/index.ts';
-import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
-import { GpuLbvhBuilder, type GpuLbvhGeometry } from '../../../../packages/bvh/src/gpu-lbvh.ts';
-import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
-import { createTinyBvhBuilder, type TinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
+import { GpuHplocBuilder } from '@pmndrs/bvh';
+import { GpuLbvhBuilder, type GpuMeshGeometry } from '@pmndrs/bvh';
+import { treeSahCost } from '@pmndrs/bvh';
+import { createTinyBvhBuilder, type TinyBvhBuilder } from '@pmndrs/bvh';
 import { GPU_BUILD_LOADED_MS, GPU_BUILD_LOADED_RUNS, GPU_BUILD_TIMED_RUNS, RC_LOADED_DISPATCHES, TOP_LEVEL_REBUILD_RUNS, type TracerId } from './config.ts';
 import { measureDispatches, type DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';
@@ -250,7 +250,7 @@ export async function timePassesBackToBack(
  * time with a yield between meshes (Sponza: tens of seconds). A mesh the GPU
  * refuses is left out of both sums and counted.
  */
-async function compareWithTinybvhHploc(builder: GpuHplocBuilder, geometries: readonly GpuLbvhGeometry[]): Promise<{ sahCostRatio: number; refused: number }> {
+async function compareWithTinybvhHploc(builder: GpuHplocBuilder, geometries: readonly GpuMeshGeometry[]): Promise<{ sahCostRatio: number; refused: number }> {
     const built = await builder.buildMany(geometries, { mortonCodes: 'tinybvh-63', tieBreak: 'tinybvh', maxLeafPrimitives: 1 });
     let layouts;
     try {

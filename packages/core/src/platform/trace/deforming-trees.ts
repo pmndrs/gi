@@ -40,10 +40,10 @@
  * deforming meshes in their rest pose (platform-scene.ts, `posesTraced`).
  */
 
-import { GpuMeshRefit, GpuMeshRefitKernels } from '@pmndrs/bvh/gpu-mesh-refit';
-import type { GpuLayoutMeshBvh } from '@pmndrs/bvh/gpu-layout';
-import type { GpuLbvhBufferGeometry } from '@pmndrs/bvh/gpu-lbvh';
-import { relativeSahCost } from '@pmndrs/bvh/refit-cpu';
+import { GpuMeshRefit, GpuMeshRefitKernels } from '@pmndrs/bvh';
+import type { GpuLayoutMeshBvh } from '@pmndrs/bvh';
+import type { GpuMeshBuffers } from '@pmndrs/bvh';
+import { relativeSahCost } from '@pmndrs/bvh';
 import type { GpuTimerScope } from '../contract/timing.ts';
 import type { MeshLayout } from '../scene/mesh-packing.ts';
 import { BVH_NODE_BYTES, TRIANGLE_BYTES } from './layout.ts';
@@ -237,6 +237,8 @@ export class DeformingTrees {
         }
         mesh.shapeGeneration = this.nextShapeGeneration++;
         mesh.refit.setTree(layout, {
+            // gi's node buffer holds 64-byte f32 nodes (its own walk, until step C of docs/plans/sibling-migration.md).
+            nodeFormat: 'f32',
             nodeWordOffset: placement.nodeOffset * NODE_WORDS,
             triangleWordOffset: placement.triangleOffset * TRIANGLE_WORDS,
             generation: mesh.shapeGeneration,
@@ -304,7 +306,7 @@ export class DeformingTrees {
     }
 
     /** The scene copy's positions and indices of the mesh, as a GPU builder reads them (the drift rebuild). */
-    rebuildGeometry(slot: number, vertices: GPUBuffer): GpuLbvhBufferGeometry | null {
+    rebuildGeometry(slot: number, vertices: GPUBuffer): GpuMeshBuffers | null {
         const mesh = this.meshes.get(slot);
         if (!mesh) return null;
         return { ...sceneCopyVertices(vertices, mesh.layout, mesh.vertexOffset), triangleCount: mesh.layout.triangleCount };

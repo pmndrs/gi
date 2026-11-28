@@ -48,7 +48,7 @@ import {
     type TraceSceneData,
 } from '../../../../packages/core/src/platform/trace/index.ts';
 import { type TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
-import { createMeshLayoutBuilder, createTinyBvhBuilder, type MeshLayoutBuilder } from '../../../../packages/bvh/src/index.ts';
+import { createMeshLayoutBuilder, createTinyBvhBuilder, type MeshLayoutBuilder } from '@pmndrs/bvh';
 import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import type { MeshTreeCounts } from '../../../../packages/core/src/platform/trace/ray-queries.ts';

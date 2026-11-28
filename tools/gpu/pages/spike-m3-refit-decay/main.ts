@@ -38,11 +38,11 @@ import {
     type TraceRay,
     type TraceSceneBuffers,
 } from '../../../../packages/core/src/platform/trace/index.ts';
-import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
-import type { GpuLayoutMeshBvh } from '../../../../packages/bvh/src/gpu-layout.ts';
-import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';
-import { treeSahCost } from '../../../../packages/bvh/src/layout-check.ts';
-import { createTinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
+import { GpuHplocBuilder } from '@pmndrs/bvh';
+import type { GpuLayoutMeshBvh } from '@pmndrs/bvh';
+import { GpuMeshRefit } from '@pmndrs/bvh';
+import { treeSahCost } from '@pmndrs/bvh';
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
 import { assert, runGpuTest } from '../../client.ts';
 import { createDispatchTimer, measureDispatches, type DispatchTimer } from '../trace-bench/dispatch-timer.ts';
 import { makeProceduralTree, SWAY_STRENGTHS, type SwayingMesh, type SwayStrength } from './tree.ts';

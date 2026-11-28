@@ -14,6 +14,9 @@ importers:
       '@eslint/js':
         specifier: ^9.18.0
         version: 9.39.5
+      '@pmndrs/bvh':
+        specifier: 0.1.1
+        version: 0.1.1(@babylonjs/core@9.33.2)(three@0.187.0)
       '@pmndrs/upscaler':
         specifier: 0.5.0
         version: 0.5.0(three@0.187.0)
@@ -83,8 +86,6 @@ importers:
         specifier: ^6.1.0
         version: 6.4.5(@types/node@24.19.2)(tsx@4.23.15)
 
-  packages/bvh: {}
-
   packages/cache:
     dependencies:
       '@pmndrs/gi-core':
@@ -97,14 +98,11 @@ importers:
   packages/core:
     dependencies:
       '@pmndrs/bvh':
-        specifier: workspace:*
-        version: link:../bvh
+        specifier: 0.1.1
+        version: 0.1.1(@babylonjs/core@9.33.2)(three@0.187.0)
       '@pmndrs/raytracer':
         specifier: 0.1.0
         version: 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
-      '@pmndrs/rc-bvh':
-        specifier: npm:@pmndrs/bvh@0.1.0
-        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
 
   packages/ddgi:
     dependencies:
@@ -133,9 +131,9 @@ importers:
 
   packages/gi:
     dependencies:
-      '@pmndrs/rc-bvh':
-        specifier: npm:@pmndrs/bvh@0.1.0
-        version: '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)'
+      '@pmndrs/bvh':
+        specifier: 0.1.1
+        version: 0.1.1(@babylonjs/core@9.33.2)(three@0.187.0)
       denoiser:
         specifier: 2.1.0
         version: 2.1.0(three@0.187.0)
@@ -611,8 +609,8 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@pmndrs/bvh@0.1.0':
-    resolution: {integrity: sha512-5pVuSDX4Ud7WMprV197XtGwlMZDwZCVI/SYzMEihg7CZiiUOqH8NcvqQN85aPNRXmTu7taNTLZDNRPxNQF+CCg==}
+  '@pmndrs/bvh@0.1.1':
+    resolution: {integrity: sha512-Bb0xkpyHVy2kLLXWeG2eN0AeDV1r7vwFGCctdqQL3T4fceB43vu4OePDkxIjpP4mPa4NEfkrT+7K33UvPjt5Dg==}
     peerDependencies:
       '@babylonjs/core': '>=9.35.0 <10.0.0'
       three: '>=0.187.0 <0.188.0'
@@ -1740,7 +1738,7 @@ snapshots:
   '@napi-rs/lzma-linux-x64-gnu@1.5.1':
     optional: true
 
-  '@pmndrs/bvh@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
+  '@pmndrs/bvh@0.1.1(@babylonjs/core@9.33.2)(three@0.187.0)':
     optionalDependencies:
       '@babylonjs/core': 9.33.2
       three: 0.187.0
@@ -1751,7 +1749,7 @@ snapshots:
 
   '@pmndrs/raytracer@0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)':
     dependencies:
-      '@pmndrs/bvh': 0.1.0(@babylonjs/core@9.33.2)(three@0.187.0)
+      '@pmndrs/bvh': 0.1.1(@babylonjs/core@9.33.2)(three@0.187.0)
       '@pmndrs/downsampler': 0.1.0(three@0.187.0)
     transitivePeerDependencies:
       - '@babylonjs/core'

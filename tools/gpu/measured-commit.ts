@@ -12,7 +12,8 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
 
 /**
  * The files whose changes can move a trace-bench number, as git pathspecs:
- * - the core (tracer, builder, timer) and the BVH package (tinybvh);
+ * - the core (tracer, builder, timer); the BVH package (tinybvh) is the
+ *   pinned @pmndrs/bvh in the lockfile;
  * - the GPU runner and page client (the files directly in tools/gpu);
  * - the trace pages themselves (trace-bench*, trace-oracle);
  * - the scene manifests, which set the probe volume and the sun;
@@ -24,7 +25,6 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
  */
 export const MEASURED_PATHS = [
     'packages/core',
-    'packages/bvh',
     ':(glob)tools/gpu/*',
     ':(glob)tools/gpu/pages/trace-*/**',
     ':(glob)tools/gpu/pages/tlas-*/**',

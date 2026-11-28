@@ -6,10 +6,11 @@
 //                npmjs.com can't resolve a link relative to the repository.
 //   LICENSE      the repository's licence, unchanged.
 //   licenses/    the full licence texts of the bundled code, which
-//                packages/gi/THIRD_PARTY.md points to: packages/bvh's
-//                (tinybvh, the Emscripten runtime, HIPRT) and each
-//                technique's own `licenses/` folder (TECHNIQUE_LICENSES),
-//                and the platform's (PLATFORM_LICENSES).
+//                packages/gi/THIRD_PARTY.md points to: each technique's own
+//                `licenses/` folder (TECHNIQUE_LICENSES) and the platform's
+//                (PLATFORM_LICENSES). tinybvh's, the Emscripten runtime's and
+//                HIPRT's ship with @pmndrs/bvh, an npm dependency since
+//                pmndrs/gi#63, not here.
 //
 // packages/gi/THIRD_PARTY.md itself is written by hand and committed: it
 // lists only what ships in the package, unlike the root THIRD_PARTY.md, which
@@ -22,7 +23,6 @@ import { isDirectRun } from './release-version.ts';
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/gi');
-const BUNDLED_LICENSES = join(REPOSITORY_ROOT, 'packages/bvh/licenses');
 /**
  * Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4; inside
  * packages/core until it moves to packages/radiance-cascades) and the radiance cache's (AMD Capsaicin).
@@ -124,11 +124,11 @@ function writePackageFiles(): void {
     writeFileSync(join(PACKAGE_DIRECTORY, 'README.md'), readme);
     copyFileSync(join(REPOSITORY_ROOT, 'LICENSE'), join(PACKAGE_DIRECTORY, 'LICENSE'));
 
-    // Start from an empty folder, so a licence removed from packages/bvh doesn't linger.
+    // Start from an empty folder, so a licence removed from a source folder doesn't linger.
     const licenses = join(PACKAGE_DIRECTORY, 'licenses');
     rmSync(licenses, { recursive: true, force: true });
     mkdirSync(licenses);
-    const sources = [BUNDLED_LICENSES, PLATFORM_LICENSES, ...TECHNIQUE_LICENSES];
+    const sources = [PLATFORM_LICENSES, ...TECHNIQUE_LICENSES];
     const texts = sources.flatMap(source => readdirSync(source).filter(name => name.endsWith('.txt')).map(name => {
         copyFileSync(join(source, name), join(licenses, name));
         return name;

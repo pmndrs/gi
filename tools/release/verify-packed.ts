@@ -5,9 +5,12 @@
 //   1. packs packages/gi with `npm pack`, the tool publish.yml publishes with;
 //   2. the tarball holds README, LICENSE, THIRD_PARTY.md, the bundled code's
 //      licence texts and every `exports` target, and its manifest asks
-//      consumers for nothing from this workspace;
+//      consumers for nothing from this workspace, and depends on the published
+//      `@pmndrs/bvh` at an exact version (pmndrs/gi#63: not bundled);
 //   3. each entry's import graph (JS and .d.ts) reaches only what it may:
-//      `/core` and `/ddgi` no package at all, `.` and `/three` only three,
+//      every entry `@pmndrs/bvh`'s engine-free root and `/worker` (the
+//      platform's trees and their workers), and besides that `/core`,
+//      `/ddgi` and `/radiance-cascades` nothing, `.` and `/three` only three,
 //      `/radiance-cache` only its denoiser (`denoiser/ffx`), never
 //      `@pathtracer/mlp` (an optional sibling it loads at run time); and only
 //      its own layers' chunks (packages/gi/layer-chunks.ts): `/core` no
@@ -22,9 +25,12 @@
 //      `/radiance-cache`, and finds no name in both `/core` and `/ddgi`;
 //   6. a fresh vite app importing every public subpath builds with `vite build`
 //      and is served by vite's dev server, and every file the built or served
-//      code fetches with `new URL(..., import.meta.url)` is there. Typechecks
-//      and Node imports run no bundler: they missed BVH workers that the
-//      package build had pointed at an absolute `/assets/` path.
+//      code fetches with `new URL(..., import.meta.url)` is there: the BVH
+//      workers, which `@pmndrs/bvh` starts from its own files. The app's
+//      vite.config keeps `@pmndrs/bvh` out of `optimizeDeps`, as the README
+//      tells users to. Typechecks and Node imports run no bundler: they missed
+//      BVH workers that the package build had pointed at an absolute
+//      `/assets/` path.
 //
 // Neither project has `@pathtracer/mlp`: `/radiance-cache` must import and
 // typecheck without it.
@@ -60,9 +66,6 @@ export const REQUIRED_FILES = [
     'README.md',
     'LICENSE',
     'THIRD_PARTY.md',
-    'licenses/tinybvh.txt',
-    'licenses/emscripten-runtime.txt',
-    'licenses/hiprt.txt',
     'licenses/pathtracer-MIT.txt',
     'licenses/pbrt-v4-Apache-2.0.txt',
     'licenses/capsaicin-MIT.txt',
@@ -71,21 +74,29 @@ export const REQUIRED_FILES = [
 ];
 
 /**
- * The bare specifiers each entry's import graph may reach. `/core` (the
- * platform) and `/ddgi` (the DDGI technique) are engine-free, so they may reach
- * none: they must work with three absent.
+ * The bare specifiers each entry's import graph may reach. Every entry holds
+ * the platform, which builds and walks its trees with `@pmndrs/bvh`'s
+ * engine-free root and starts its workers from `@pmndrs/bvh/worker` (an npm
+ * dependency since pmndrs/gi#63, not bundled). `/core` (the platform) and
+ * `/ddgi` (the DDGI technique) are engine-free, so they may reach nothing
+ * else: they must work with three absent.
  */
+const BVH_SPECIFIERS = [/^@pmndrs\/bvh$/, /^@pmndrs\/bvh\/worker$/];
 const THREE_SPECIFIERS = [/^three$/, /^three\/(webgpu|tsl)$/, /^three\/addons\//];
 export const ENTRY_IMPORTS: Record<string, RegExp[]> = {
-    index: THREE_SPECIFIERS,
-    three: THREE_SPECIFIERS,
-    core: [],
-    ddgi: [],
-    'radiance-cascades': [/^@pmndrs\/rc-bvh$/],
+    index: [...BVH_SPECIFIERS, ...THREE_SPECIFIERS],
+    three: [...BVH_SPECIFIERS, ...THREE_SPECIFIERS],
+    core: BVH_SPECIFIERS,
+    ddgi: BVH_SPECIFIERS,
+    // Split RC's interval tracer (@pmndrs/raytracer, bundled) traces over the same @pmndrs/bvh.
+    'radiance-cascades': BVH_SPECIFIERS,
     // Its denoiser, an npm dependency. `@pathtracer/mlp` (the optional neural tail) is loaded
     // through an `import()` no scanner sees (packages/gi/vite.config.ts), so it isn't listed.
-    'radiance-cache': [/^denoiser\/ffx$/],
+    'radiance-cache': [...BVH_SPECIFIERS, /^denoiser\/ffx$/],
 };
+
+/** npm dependencies every entry imports, which the manifest must pin at an exact version (`0.1.1`, not `^0.1.1`). */
+export const PINNED_DEPENDENCIES = ['@pmndrs/bvh'];
 
 /** Entries that must work with no engine installed. */
 const ENGINE_FREE_ENTRIES = ['core', 'ddgi', 'radiance-cascades', 'radiance-cache'];
@@ -229,6 +240,10 @@ export const VITE_APP = {
     </body>
 </html>
 `,
+    // As the README's "Bundlers" asks: @pmndrs/bvh starts its workers from its own files, which
+    // Vite's dev server can't find in a pre-bundled copy (node_modules/.vite/deps).
+    config: `export default { optimizeDeps: { exclude: ['@pmndrs/bvh'] } };
+`,
     source: `import { createGI, requiredLimits } from '@pmndrs/gi/core';
 import { DDGITechnique, ddgiPreset } from '@pmndrs/gi/ddgi';
 import { RadianceCacheTechnique } from '@pmndrs/gi/radiance-cache';
@@ -239,6 +254,9 @@ import { createGIRenderer, DDGIVolume } from '@pmndrs/gi/three';
 Object.assign(globalThis, { createGI, requiredLimits, DDGITechnique, ddgiPreset, RadianceCacheTechnique, NativeRadianceCascades, createRcTransport, createGIRenderer, DDGIVolume });
 `,
 };
+
+/** The vite app's config file (VITE_APP.config). */
+const VITE_CONFIG = 'vite.config.mjs';
 
 /** Two module resolutions users have: bundlers (vite and the like) and Node's own. */
 const RESOLUTIONS = {
@@ -436,7 +454,7 @@ interface Manifest {
     devDependencies?: Record<string, string>;
 }
 
-/** Files missing from the tarball, and dependencies a consumer couldn't resolve. */
+/** Files missing from the tarball, dependencies a consumer couldn't resolve, and pinned dependencies missing or not pinned. */
 export function checkTarballContents(paths: string[], manifest: Manifest): string[] {
     const failures: string[] = [];
     const present = new Set(paths.map((path) => path.replace(/^package\//, '')));
@@ -447,10 +465,15 @@ export function checkTarballContents(paths: string[], manifest: Manifest): strin
     // devDependencies may name workspace packages: npm never installs a dependency's devDependencies.
     for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
         for (const [name, version] of Object.entries(manifest[field] ?? {})) {
-            if (version.includes('&path:') || version.startsWith('workspace:') || name.startsWith('@pmndrs/gi-') || name === '@pmndrs/bvh' || OPTIONAL_RUNTIME_PACKAGES.includes(name)) {
+            if (version.includes('&path:') || version.startsWith('workspace:') || version.startsWith('link:') || name.startsWith('@pmndrs/gi-') || OPTIONAL_RUNTIME_PACKAGES.includes(name)) {
                 failures.push(`${field} names ${name}@${version}, which isn't on npm`);
             }
         }
+    }
+    for (const name of PINNED_DEPENDENCIES) {
+        const version = manifest.dependencies?.[name];
+        if (version === undefined) failures.push(`dependencies lack ${name}, which every entry imports`);
+        else if (!/^\d+\.\d+\.\d+$/.test(version)) failures.push(`dependencies name ${name}@${version}; pin it at an exact version`);
     }
     return failures;
 }
@@ -522,7 +545,8 @@ export async function checkViteDevServer(directory: string): Promise<void> {
     const root = realpathSync.native(directory);
     // The app's own vite, not the repository's: the one a user would run.
     const vite = (await import(pathToFileURL(join(root, 'node_modules/vite/dist/node/index.js')).href)) as typeof Vite;
-    const server = await vite.createServer({ root, configFile: false, logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
+    // The app's own config (VITE_APP.config), as `vite build` reads it.
+    const server = await vite.createServer({ root, configFile: join(root, VITE_CONFIG), logLevel: 'error', server: { host: '127.0.0.1', port: 0 } });
     await server.listen();
     const failures: string[] = [];
     try {
@@ -614,7 +638,7 @@ function main(): void {
             ...checkImportGraph(unpacked),
         ];
         if (failures.length) throw new Error(`The tarball:\n${failures.join('\n')}`);
-        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; /core and /ddgi reach no package, '.' and /three only three; /radiance-cascades reaches only its published BVH dependency, /radiance-cache only denoiser/ffx.`);
+        console.log(`Contents and import graphs clean: ${REQUIRED_FILES.join(', ')} present; ${PINNED_DEPENDENCIES.join(', ')} pinned; every entry reaches @pmndrs/bvh (root, /worker) and besides it /core, /ddgi and /radiance-cascades no package, '.' and /three only three, /radiance-cache only denoiser/ffx.`);
 
         for (const [name, consumer] of Object.entries(CONSUMERS)) {
             const directory = join(temporaryRoot, `consumer-${name}`);
@@ -638,6 +662,7 @@ function main(): void {
         console.log(`Vite app (${VITE_APP.packages.join(', ')}): npm install, vite build, vite dev server...`);
         createConsumer(app, archive, { packages: VITE_APP.packages, imports: [], source: VITE_APP.source });
         writeFileSync(join(app, 'index.html'), VITE_APP.html);
+        writeFileSync(join(app, VITE_CONFIG), VITE_APP.config);
         viteBuild(app);
         viteDevServer(app);
         console.log('Packed-consumer check passed.');

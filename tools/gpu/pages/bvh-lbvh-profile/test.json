@@ -1,5 +1,0 @@
-{
-    "description": "B1 profile (manual): the GPU LBVH build of a scene's meshes, whole and step by step (each step in its own timed pass). For finding what to speed up; the trace-bench-lbvh pages give the recorded numbers.",
-    "timeoutMs": 300000,
-    "manual": true
-}

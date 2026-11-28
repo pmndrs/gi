@@ -22,12 +22,12 @@
         "test:gpu": "node tools/gpu/run.ts",
         "device:serve": "node tools/gpu/serve-lan.ts",
         "assets:fetch": "node tools/assets/fetch.ts",
-        "bvh:wasm": "node packages/bvh/native/build-wasm.ts",
         "scenes:export": "pnpm --filter @pmndrs/ddgi-scenes export"
     },
     "devDependencies": {
         "@babylonjs/core": "9.33.2",
         "@eslint/js": "^9.18.0",
+        "@pmndrs/bvh": "0.1.1",
         "@pmndrs/upscaler": "0.5.0",
         "@types/node": "24.19.2",
         "@types/three": "0.187.0",

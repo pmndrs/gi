@@ -50,10 +50,10 @@ import {
     type WebGPURenderer,
 } from 'three/webgpu';
 import { computeSkinning, Fn, If, instanceIndex, int, ivec2, storage, texture, textureStore, uvec2, vec4, vertexIndex } from 'three/tsl';
-import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';
-import { checkGpuLayout } from '../../../../packages/bvh/src/layout-check.ts';
-import { createTinyBvhBuilder } from '../../../../packages/bvh/src/tinybvh.ts';
-import type { GpuLayoutMeshBvh } from '../../../../packages/bvh/src/gpu-layout.ts';
+import { GpuMeshRefit } from '@pmndrs/bvh';
+import { checkGpuLayout } from '@pmndrs/bvh';
+import { createTinyBvhBuilder } from '@pmndrs/bvh';
+import type { GpuLayoutMeshBvh } from '@pmndrs/bvh';
 import { assert } from '../../client.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 

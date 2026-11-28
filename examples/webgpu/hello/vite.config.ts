@@ -11,5 +11,7 @@ export default defineConfig({
         ],
     },
     build: { target: 'esnext' },
+    // @pmndrs/bvh starts its workers from its own files, which a pre-bundled copy can't find (README, "Bundlers").
+    optimizeDeps: { exclude: ['@pmndrs/bvh'] },
     server: { port: 5201, open: false },
 });

@@ -77,6 +77,8 @@ export default defineConfig({
     },
     // Optional siblings (`@pathtracer/mlp` for the radiance cache's neural tail): the pinned clone, or a module that throws when loaded.
     plugins: [recordingsList(), optionalSiblingsPlugin()],
+    // @pmndrs/bvh starts its workers from its own files, which a pre-bundled copy can't find (README, "Bundlers").
+    optimizeDeps: { exclude: ['@pmndrs/bvh'] },
     // Top-level await (renderer.init) needs a modern target. Two pages: the viewer and the native compare page.
     build: { target: 'esnext', rollupOptions: { input: { main: resolve(__dirname, 'index.html'), compare: resolve(__dirname, 'compare.html') } } },
     server: {

@@ -4,7 +4,7 @@
  * refit itself is checked on real GPUs (tools/gpu/pages/tlas-oracle).
  */
 
-import { refitOnCpu, PRIMITIVE_BOX_FLOATS } from '@pmndrs/bvh/refit-cpu';
+import { refitOnCpu, PRIMITIVE_BOX_FLOATS } from '@pmndrs/bvh';
 import { describe, expect, it } from 'vitest';
 import { PlatformKernelBuilder } from '../kernel-builder.ts';
 import { PlatformScene } from '../scene/platform-scene.ts';
@@ -16,7 +16,7 @@ import { transformBounds } from './top-level.ts';
 import { topLevelGatherWgsl } from './top-level-gpu.ts';
 import { buildTopLevelShape, TopLevelShapeKeeper, type TopLevelBuildInput } from './top-level-shape.ts';
 import { GILimitError } from '../contract/errors.ts';
-import { BVH_REFIT_STAT, BVH_REFIT_STATS_BYTES } from '@pmndrs/bvh/gpu-refit';
+import { BVH_REFIT_STAT, BVH_REFIT_STATS_BYTES } from '@pmndrs/bvh';
 
 /** A build input over `count` instances whose slot is their index. */
 function randomInput(seed: number, count: number): TopLevelBuildInput {

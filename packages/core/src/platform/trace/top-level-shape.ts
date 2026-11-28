@@ -17,7 +17,7 @@
  * has passed the given ratio of its as-built cost.
  */
 
-import { halfArea, leafSlotsOf, parentSlotsOf, PRIMITIVE_BOX_FLOATS, refitOnCpu, relativeSahCost } from '@pmndrs/bvh/refit-cpu';
+import { halfArea, leafSlotsOf, parentSlotsOf, PRIMITIVE_BOX_FLOATS, refitOnCpu, relativeSahCost } from '@pmndrs/bvh';
 import { BVH_NODE_BYTES } from './layout.ts';
 import { buildSahTree, DEFAULT_SAH_OPTIONS } from './sah-builder.ts';
 import { transformBounds } from './top-level.ts';

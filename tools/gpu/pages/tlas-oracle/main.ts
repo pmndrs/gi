@@ -32,8 +32,8 @@
  * must show in `stats.passes` and its counters in `stats.counters`.
  */
 
-import { GpuBvhRefit } from '../../../../packages/bvh/src/gpu-refit.ts';
-import { PRIMITIVE_BOX_FLOATS, refitOnCpu } from '../../../../packages/bvh/src/refit-cpu.ts';
+import { GpuBvhRefit } from '@pmndrs/bvh';
+import { PRIMITIVE_BOX_FLOATS, refitOnCpu } from '@pmndrs/bvh';
 import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
 import type { InstanceHandle, MeshHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';

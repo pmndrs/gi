@@ -1,7 +1,7 @@
 import {
     assembleTraceScene, buildTopLevel, createTinyBvhBuilder, uploadTraceScene,
     type Mat4, type MeshGeometry, type TraceSceneInstance, type TraceInstance,
-} from '@pmndrs/rc-bvh';
+} from '@pmndrs/bvh';
 import { buildCaps, dispatchGrid, RtIntervalTracer, sceneFormatOf } from '@pmndrs/raytracer';
 import { RC_TRANSPORT_WGSL } from './transport-wgsl.ts';
 

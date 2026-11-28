@@ -69,6 +69,8 @@ export default defineConfig({
     },
     // Our own dependency cache, so this server and the viewer's don't fight over node_modules/.vite.
     cacheDir: resolve(repoRoot, 'node_modules/.vite-examples'),
+    // @pmndrs/bvh starts its workers from its own files, which a pre-bundled copy can't find (README, "Bundlers").
+    optimizeDeps: { exclude: ['@pmndrs/bvh'] },
     build: {
         // Top-level await (renderer.init, volume.start) needs a modern target.
         target: 'esnext',

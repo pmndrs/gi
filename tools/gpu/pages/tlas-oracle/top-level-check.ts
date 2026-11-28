@@ -11,7 +11,7 @@
  * - every record's world-to-object rows match the double-precision inverse.
  */
 
-import { BVH_FLOAT_MAX } from '../../../../packages/bvh/src/refit-cpu.ts';
+import { BVH_FLOAT_MAX } from '@pmndrs/bvh';
 import {
     BVH_NODE_WORDS,
     EMPTY_CHILD_INDEX,

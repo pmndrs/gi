@@ -18,7 +18,7 @@ import {
     type TinyBvhBuilder,
 } from '@pmndrs/bvh';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { BVH_NODE_BYTES, MAX_LEAF_PRIMITIVES, MAX_REFERENCE_INDEX, TRIANGLE_BYTES } from './layout.ts';
+import { BVH_NODE_BYTES, MAX_LEAF_PRIMITIVES, MAX_REFERENCE_INDEX, TRIANGLE_BYTES, TRIANGLE_FLAG_ALPHA_TEST } from './layout.ts';
 import type { MeshBvh, MeshGeometry } from './mesh-bvh.ts';
 import { buildMeshBvhFromTopology, TOPOLOGY_WORDS_PER_NODE } from './mesh-bvh-topology.ts';
 import { createRandom, randomTriangleSoup, tessellatedQuad, type Random } from './oracle-fixtures.ts';
@@ -168,8 +168,12 @@ describe('tinybvh GPU layout written in WASM (B0b)', () => {
         const indices = grid.indices as Uint32Array;
         expect(indices.every((index) => index < 0x10000)).toBe(true);
         compareBothWays({ positions: grid.positions, indices: Uint16Array.from(indices) });
-        const triangleFlags = Uint32Array.from({ length: indices.length / 3 }, (_, triangle) => (triangle * 2654435761) >>> 0);
+        // Bit 0 (TRIANGLE_FLAG_ALPHA_TEST) only: since @pmndrs/bvh 0.1 every builder refuses bits 1-31, which
+        // the layout reserves (bit 1 a merged mesh's flip, bits 16-31 its material; MIGRATING-FROM-DDGI §4).
+        const triangleFlags = Uint32Array.from({ length: indices.length / 3 }, (_, triangle) => ((triangle * 2654435761) >>> 31) & TRIANGLE_FLAG_ALPHA_TEST);
+        expect(triangleFlags.some((flags) => flags !== 0) && triangleFlags.some((flags) => flags === 0)).toBe(true);
         compareBothWays({ ...grid, triangleFlags });
+        expect(() => compareBothWays({ ...grid, triangleFlags: triangleFlags.map((flags) => flags | 2) })).toThrow(/reserved/);
     });
 
     it('matches when some coordinates are NaN, and both refuse the tree when whole triangles are', () => {

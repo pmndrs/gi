@@ -1,4 +1,0 @@
-{
-    "description": "B1: BLAS refit. Meshes deform (waves, a twist, a big move) over several frames; the tree's triangles and boxes are refit on the GPU from an interleaved vertex buffer and must equal the deformed mesh exactly (layout checker), for GPU LBVH and tinybvh trees, and for a mesh placed inside shared scene buffers.",
-    "timeoutMs": 120000
-}

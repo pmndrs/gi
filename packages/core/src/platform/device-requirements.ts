@@ -27,7 +27,7 @@ export const MIN_BIND_GROUPS = 4;
  * 256, so these change nothing there). The largest workgroups, 256 threads
  * along x: DDGI's blend kernel (packages/ddgi/src/wgsl/blend.ts,
  * `BLEND_WORKGROUP_SIZE`) and the BVH refit's repair pass
- * (packages/bvh/src/gpu-refit.ts). Other dimensions stay at 8 or less.
+ * (@pmndrs/bvh's GpuBvhRefit). Other dimensions stay at 8 or less.
  * Workgroup memory isn't listed here: every platform kernel fits 16,384
  * bytes, the default in both modes; `requiredLimits` asks for the adapter's
  * maximum anyway (below), for technique kernels sized to it.

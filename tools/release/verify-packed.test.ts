@@ -41,8 +41,8 @@ describe('the import graph', () => {
     const files: Record<string, string> = {
         '/pkg/dist/radiance-cascades.js': "export * from './chunks/rc-r4.js';",
         '/pkg/dist/radiance-cascades.d.ts': "export * from './chunks/rc-r4.js';",
-        '/pkg/dist/chunks/rc-r4.js': "import '@pmndrs/rc-bvh'; export const rc = 1;",
-        '/pkg/dist/chunks/rc-r4.d.ts': "export type { MeshGeometry } from '@pmndrs/rc-bvh';",
+        '/pkg/dist/chunks/rc-r4.js': "import '@pmndrs/bvh'; export const rc = 1;",
+        '/pkg/dist/chunks/rc-r4.d.ts': "export type { MeshGeometry } from '@pmndrs/bvh';",
         '/pkg/dist/radiance-cache.js': "export * from './chunks/radiance-cache-d5.js';",
         '/pkg/dist/radiance-cache.d.ts': "export * from './chunks/radiance-cache-d5.js';",
         // The optional neural tail's package through the hidden import() the build writes (packages/gi/vite.config.ts).
@@ -57,7 +57,8 @@ describe('the import graph', () => {
         '/pkg/dist/three.d.ts': "export * from 'three/addons/lighting/LightProbeGrid.js'; export * from './chunks/three-c3.js';",
         '/pkg/dist/index.js': "export * from './three.js';",
         '/pkg/dist/index.d.ts': "export * from './three.js';",
-        '/pkg/dist/chunks/platform-a1.js': "export const x = 1; import('./platform-a1.js');",
+        // The platform's trees and workers come from the published BVH package (pmndrs/gi#63).
+        '/pkg/dist/chunks/platform-a1.js': "import { createTinyBvhBuilder } from '@pmndrs/bvh'; import { createMeshBvhBuilder } from '@pmndrs/bvh/worker'; export const x = 1; import('./platform-a1.js');",
         '/pkg/dist/chunks/platform-a1.d.ts': 'export declare const x: number;',
         '/pkg/dist/chunks/ddgi-b2.js': "import { x } from './platform-a1.js'; export const y = x;",
         '/pkg/dist/chunks/ddgi-b2.d.ts': "export { x as y } from './platform-a1.js';",
@@ -77,9 +78,9 @@ describe('the import graph', () => {
     });
 
     test('follows relative imports to every bare one, through cycles', () => {
-        expect([...bareImports(resolve('/pkg/dist/index.js'), read)]).toEqual(['three/webgpu']);
-        expect([...bareImports(resolve('/pkg/dist/core.js'), read)]).toEqual([]);
-        expect([...bareImports(resolve('/pkg/dist/ddgi.js'), read)]).toEqual([]);
+        expect([...bareImports(resolve('/pkg/dist/index.js'), read)]).toEqual(['three/webgpu', '@pmndrs/bvh', '@pmndrs/bvh/worker']);
+        expect([...bareImports(resolve('/pkg/dist/core.js'), read)]).toEqual(['@pmndrs/bvh', '@pmndrs/bvh/worker']);
+        expect([...bareImports(resolve('/pkg/dist/ddgi.js'), read)]).toEqual(['@pmndrs/bvh', '@pmndrs/bvh/worker']);
     });
 
     test('a clean package passes', () => {
@@ -93,13 +94,18 @@ describe('the import graph', () => {
         expect(failures).toContain("dist/ddgi.js reaches 'three', which /ddgi must not need");
     });
 
+    test("the BVH package's engine adapters are refused, as any other engine import", () => {
+        const leaky = { ...files, '/pkg/dist/chunks/platform-a1.js': "import { bvhFromObject } from '@pmndrs/bvh/three';" };
+        expect(checkImportGraph(resolve('/pkg'), reader(leaky))).toContain("dist/core.js reaches '@pmndrs/bvh/three', which /core must not need");
+    });
+
     test('/radiance-cascades cannot acquire a Three dependency', () => {
         const leaky = { ...files, '/pkg/dist/chunks/rc-r4.js': "import 'three';" };
         expect(checkImportGraph(resolve('/pkg'), reader(leaky))).toContain("dist/radiance-cascades.js reaches 'three', which /radiance-cascades must not need");
     });
 
     test('/radiance-cache reaches its denoiser only, and loads no DDGI or three code', () => {
-        expect([...bareImports(resolve('/pkg/dist/radiance-cache.js'), read)]).toEqual(['denoiser/ffx']);
+        expect([...bareImports(resolve('/pkg/dist/radiance-cache.js'), read)]).toEqual(['denoiser/ffx', '@pmndrs/bvh', '@pmndrs/bvh/worker']);
         const withThree = { ...files, '/pkg/dist/chunks/radiance-cache-d5.d.ts': "import type { Node } from 'three/webgpu'; export * from './ddgi-b2.js';" };
         expect(checkImportGraph(resolve('/pkg'), reader(withThree))).toEqual([
             "dist/radiance-cache.d.ts reaches 'three/webgpu', which /radiance-cache must not need",
@@ -145,6 +151,7 @@ describe('checkTarballContents', () => {
     const manifest = {
         exports: { '.': { types: './dist/index.d.ts', import: './dist/index.js' } },
         peerDependencies: { three: '~0.187.0' },
+        dependencies: { '@pmndrs/bvh': '0.1.1' },
     };
     const complete = [...REQUIRED_FILES, 'dist/index.d.ts', 'dist/index.js'];
 
@@ -160,14 +167,23 @@ describe('checkTarballContents', () => {
     test('refuses dependencies a consumer could not install', () => {
         const failures = checkTarballContents(complete, {
             ...manifest,
-            dependencies: { '@pmndrs/gi-core': 'workspace:*', '@pmndrs/bvh': '0.0.0' },
+            dependencies: { '@pmndrs/gi-core': 'workspace:*', denoiser: 'link:../denoiser', '@pmndrs/bvh': '0.1.1' },
         });
-        expect(failures).toHaveLength(2);
+        expect(failures).toEqual(["dependencies names @pmndrs/gi-core@workspace:*, which isn't on npm", "dependencies names denoiser@link:../denoiser, which isn't on npm"]);
+    });
+
+    test('needs @pmndrs/bvh as a dependency, pinned exactly: every entry imports it, and nothing bundles it', () => {
+        expect(checkTarballContents(complete, { ...manifest, dependencies: {} })).toEqual(['dependencies lack @pmndrs/bvh, which every entry imports']);
+        expect(checkTarballContents(complete, { ...manifest, dependencies: { '@pmndrs/bvh': '^0.1.1' } })).toEqual(['dependencies name @pmndrs/bvh@^0.1.1; pin it at an exact version']);
+        expect(checkTarballContents(complete, { ...manifest, dependencies: { '@pmndrs/bvh': 'workspace:*' } })).toEqual([
+            "dependencies names @pmndrs/bvh@workspace:*, which isn't on npm",
+            'dependencies name @pmndrs/bvh@workspace:*; pin it at an exact version',
+        ]);
     });
 
     test('refuses the optional neural package in any dependency field: it is not on npm', () => {
         for (const field of ['dependencies', 'peerDependencies', 'optionalDependencies'] as const) {
-            expect(checkTarballContents(complete, { ...manifest, [field]: { '@pathtracer/mlp': '0.1.0' } })).toEqual([`${field} names @pathtracer/mlp@0.1.0, which isn't on npm`]);
+            expect(checkTarballContents(complete, { ...manifest, [field]: { ...(field === 'dependencies' ? manifest.dependencies : {}), '@pathtracer/mlp': '0.1.0' } })).toEqual([`${field} names @pathtracer/mlp@0.1.0, which isn't on npm`]);
         }
     });
 

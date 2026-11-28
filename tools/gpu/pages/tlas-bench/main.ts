@@ -27,8 +27,8 @@
  */
 
 import type { InstanceHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
-import { GpuBvhRefit } from '../../../../packages/bvh/src/gpu-refit.ts';
-import { PRIMITIVE_BOX_FLOATS } from '../../../../packages/bvh/src/refit-cpu.ts';
+import { GpuBvhRefit } from '@pmndrs/bvh';
+import { PRIMITIVE_BOX_FLOATS } from '@pmndrs/bvh';
 import { BVH_NODE_BYTES } from '../../../../packages/core/src/platform/trace/layout.ts';
 import { transformBounds } from '../../../../packages/core/src/platform/trace/top-level.ts';
 import { buildTopLevelShape } from '../../../../packages/core/src/platform/trace/top-level-shape.ts';
