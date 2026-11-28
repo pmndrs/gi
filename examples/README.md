@@ -36,7 +36,7 @@ Every page has an explainer panel, top left: what you're seeing, how it works, w
 
 | # | Example | Shows |
 | --- | --- | --- |
-| C1 | **No volume needed** (`cache/c1-no-volume`) | `@pmndrs/gi/radiance-cache` on 01's scene, from public paths: screen probes over a world-space hash grid, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`, with a DDGI volume stacked under it for the later bounces. `?ddgi=off` runs the cache alone. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
+| C1 | **No volume needed** (`cache/c1-no-volume`) | The radiance cache alone (`@pmndrs/gi/radiance-cache`, `worldCache: 'sharc'`) lighting a sunlit courtyard with no probe box: screen probes over a world cache of cells keyed by position, wired in through `screenInputs` and `ddgi()` on three's `RenderPipeline`. GI on and off, and the sun's height and direction. [docs/api/radiance-cache.md](../docs/api/radiance-cache.md) explains each line. |
 
 ### Together (`together/`)
 
