@@ -26,8 +26,8 @@
  * denoised irradiance), not Cycles: the numbers say how far each estimator is
  * from GI-1.2's own answer.
  */
-import type { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/gpu-timer.ts';
-import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { GpuTimer } from '../../../../packages/core/src/platform/timing/gpu-timer.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
 import { accuracyNumbers, rgbOfRgba, type RgbImage } from '../radiance-cache-accuracy/accuracy.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import type { PageCamera } from '../radiance-cache-probes/screen.ts';
