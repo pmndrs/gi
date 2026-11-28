@@ -44,7 +44,7 @@
  * `pnpm test:gpu --filter platform-compute --gpu nvidia` (or intel).
  */
 
-import { SCAN_TILE_ITEMS } from '../../../../packages/bvh/src/gpu-scan.ts';
+import { SCAN_TILE_ITEMS } from '../../../../packages/core/src/platform/compute/scan.ts';
 import type { ComputeReduction, GpuCompaction, GpuIndirectArgs, GpuPrefixScan } from '../../../../packages/core/src/platform/contract/compute.ts';
 import { compactOnCpu, exclusiveScanOnCpu, indirectArgsOnCpu } from '../../../../packages/core/src/platform/compute/cpu-reference.ts';
 import { PlatformGpuCompute } from '../../../../packages/core/src/platform/compute/gpu-compute.ts';

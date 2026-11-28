@@ -12,8 +12,8 @@
  *
  * Inside a workgroup they use subgroup operations where the device has
  * `subgroups`, and the declared fallback in workgroup memory where it hasn't
- * (DECISIONS 2026-11-04). Both give the same results; the scan is the one
- * `@pmndrs/bvh` builds its trees with (packages/bvh/src/gpu-scan.ts).
+ * (DECISIONS 2026-11-04). Both give the same results; the scan is the
+ * platform's own (platform/compute/scan.ts).
  *
  * **Every encode runs with its own count,** also several encodes of one
  * object, with different counts, in one submit: each count has a uniform

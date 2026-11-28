@@ -16,7 +16,7 @@ import {
 import { volumeEdgeCoverage } from './volumes.ts';
 import { DDGI_SCROLL_WGSL, SCROLL_UNIFORM_BYTES, SCROLL_UNIFORM_WORD } from './wgsl/scroll.ts';
 import { DDGI_COMMON_WGSL } from './wgsl/common.ts';
-import { wgslNameProblems } from '@pmndrs/bvh/wgsl-names';
+import { wgslNameProblems } from '@pmndrs/gi-core/platform/testing/wgsl-names';
 
 // The fly-through's volume (m3-moving.md §4.2, Dennis 2026-11-05): 32 x 12 x 32 probes at 1.5 m.
 const SPACING = 1.5;

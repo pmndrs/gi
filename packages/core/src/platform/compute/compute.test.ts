@@ -1,9 +1,9 @@
-import { scanWgsl, SCAN_TILE_ITEMS } from '@pmndrs/bvh/gpu-scan';
-import { wgslNameProblems } from '@pmndrs/bvh/wgsl-names';
 import { describe, expect, it } from 'vitest';
+import { wgslNameProblems } from '../testing/wgsl-names.ts';
 import { GILimitError } from '../contract/errors.ts';
 import { compactOnCpu, exclusiveScanOnCpu, indirectArgsOnCpu } from './cpu-reference.ts';
 import { PlatformGpuCompute } from './gpu-compute.ts';
+import { scanWgsl, SCAN_TILE_ITEMS } from './scan.ts';
 import { COMPACTION_IO, INDIRECT_ARGS_MODULE, INDIRECT_WRITER_WGSL, SCAN_IN_PLACE_IO, SCAN_TO_OUTPUT_IO } from './wgsl.ts';
 
 describe('the CPU references', () => {

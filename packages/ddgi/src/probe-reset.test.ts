@@ -5,7 +5,7 @@ import { DDGITechnique } from './ddgi-technique.ts';
 import { PROBE_STATE } from './layout.ts';
 import { PendingProbeReset, probeResetFlags, ProbeResetPass, resetProbeDataTexel, type ProbeResetVolume } from './probe-reset.ts';
 import { DDGI_PROBE_RESET_WGSL, PROBE_RESET_UNIFORM_BYTES, PROBE_RESET_UNIFORM_WORD, PROBE_RESET_WORKGROUP_SIZE } from './wgsl/probe-reset.ts';
-import { wgslNameProblems } from '@pmndrs/bvh/wgsl-names';
+import { wgslNameProblems } from '@pmndrs/gi-core/platform/testing/wgsl-names';
 
 describe('what resetProbes asks for (DV-12)', () => {
     it('asks for nothing with {}, no argument, or both flags false: each flag defaults to false', () => {

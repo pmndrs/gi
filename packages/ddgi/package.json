@@ -12,8 +12,5 @@
     },
     "dependencies": {
         "@pmndrs/gi-core": "workspace:*"
-    },
-    "devDependencies": {
-        "@pmndrs/bvh": "workspace:*"
     }
 }

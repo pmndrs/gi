@@ -3,11 +3,11 @@
  * platform/contract/compute.ts): prefix scan, stream compaction and indirect
  * dispatch arguments.
  *
- * **One scan.** The scan and the compaction run `@pmndrs/bvh`'s three scan
- * kernels (reduce, across tiles, downsweep; packages/bvh/src/gpu-scan.ts),
- * which build the BVHs too, with an io from ./wgsl.ts. Subgroups first; on a
+ * **One scan.** The scan and the compaction run the platform's three scan
+ * kernels (reduce, across tiles, downsweep; ./scan.ts), with an io from
+ * ./wgsl.ts. Subgroups first; on a
  * device without `subgroups` the same kernels are compiled with the declared
- * fallback in workgroup memory (gpu-workgroup-scan.ts), which assumes nothing
+ * fallback in workgroup memory (./workgroup-scan.ts), which assumes nothing
  * about subgroup lanes. Both give the same results (the
  * `platform-compute` GPU page checks it on the RTX 3060 and the Intel UHD).
  *
@@ -16,7 +16,7 @@
  * itself only allocates its scratch and a bind group.
  */
 
-import { createScanPipelines, encodeScan, SCAN_BINDING, SCAN_PARAMS_BYTES, scanParams, scanTileSumWords, type ScanIo, type ScanPipelines } from '@pmndrs/bvh/gpu-scan';
+import { createScanPipelines, encodeScan, SCAN_BINDING, SCAN_PARAMS_BYTES, scanParams, scanTileSumWords, type ScanIo, type ScanPipelines } from './scan.ts';
 import { GILimitError } from '../contract/errors.ts';
 import type {
     CompactionOptions,

@@ -325,6 +325,7 @@ const PIPELINE_SOURCES: Readonly<Record<string, RegExp | 'no storage buffers'>> 
     'bvh/src/gpu-refit.ts': /refit bvhRefit/,
     'bvh/src/gpu-scan.ts': /mesh trees scan/,
     'core/src/platform/compute/gpu-compute.ts': /gi\/indirect-args|gi\/compaction/,
+    'core/src/platform/compute/scan.ts': /gi\/(scan |compaction)/,
     'core/src/platform/kernel-builder.ts': /radiance-cache\/|ddgi\//,
     'core/src/platform/scene/gpu-mesh-packing.ts': /gi mesh pack/,
     'core/src/platform/scene/gpu-pose-copy.ts': /gi\/pose-copy/,

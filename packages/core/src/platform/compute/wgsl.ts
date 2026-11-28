@@ -1,8 +1,8 @@
 /**
  * WGSL of the platform's GPU utilities (platform/contract/compute.ts).
  *
- * The scan and the compaction are `@pmndrs/bvh`'s scan kernels
- * (packages/bvh/src/gpu-scan.ts) with an io of their own: the io says what
+ * The scan and the compaction are the platform's scan kernels (./scan.ts)
+ * with an io of their own: the io says what
  * the kernels read and what they do with each prefix. Their bindings in group
  * 0 are the scan's tile sums and parameters, then the io's:
  *
@@ -18,7 +18,7 @@
  * The indirect-arguments writer is a one-thread kernel of its own.
  */
 
-import { SCAN_IO_FIRST_BINDING, type ScanIo } from '@pmndrs/bvh/gpu-scan';
+import { SCAN_IO_FIRST_BINDING, type ScanIo } from './scan.ts';
 import type { WgslModule } from '../contract/wgsl.ts';
 
 /** The io bindings (see the table above). */
