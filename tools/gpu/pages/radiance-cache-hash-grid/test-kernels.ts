@@ -5,10 +5,10 @@
  * nothing here is in the production shaders.
  */
 
-import { HASH_GRID_CACHE_GROUP_ENTRIES } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-wgsl.ts';
-import type { HashGridCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
+import { HASH_GRID_CACHE_GROUP_ENTRIES } from '../../../../packages/cache/src/world-cache/hash-grid-wgsl.ts';
+import type { HashGridCache } from '../../../../packages/cache/src/world-cache/hash-grid-cache.ts';
 import type { ComputeKernel, KernelBuilder } from '../../../../packages/core/src/platform/contract/wgsl.ts';
-import { WORLD_CACHE_PROBE_RAYS_WGSL } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { WORLD_CACHE_PROBE_RAYS_WGSL } from '../../../../packages/cache/src/world-cache/world-cache.ts';
 
 export const TEST_WORKGROUP_SIZE = 64;
 

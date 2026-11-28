@@ -35,9 +35,9 @@ import type { LightHandle } from '../../../../packages/core/src/platform/contrac
 import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { halfBitsToFloat } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { setCompareValues } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { halfBitsToFloat } from '../../../../packages/cache/src/capsaicin-math.ts';
+import { setCompareValues } from '../../../../packages/cache/src/compare-toggles.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/cache/src/settings.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';

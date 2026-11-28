@@ -31,10 +31,10 @@ import type { TechniqueContext } from '../../../../packages/core/src/platform/co
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { GpuTimer } from '../../../../packages/core/src/platform/timing/gpu-timer.ts';
-import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { PROBE_TRACE_SECTIONS, timedPassName } from '../../../../packages/core/src/techniques/radiance-cache/timed-pass.ts';
-import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
-import { HASH_GRID_COUNTER } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { PROBE_TRACE_SECTIONS, timedPassName } from '../../../../packages/cache/src/timed-pass.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/cache/src/world-cache/capacity.ts';
 import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';

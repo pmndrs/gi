@@ -26,9 +26,6 @@ importers:
       '@webgpu/types':
         specifier: ^0.1.64
         version: 0.1.74
-      denoiser:
-        specifier: 2.1.0
-        version: 2.1.0(three@0.187.0)
       eslint:
         specifier: ^9.18.0
         version: 9.39.5
@@ -88,6 +85,15 @@ importers:
 
   packages/bvh: {}
 
+  packages/cache:
+    dependencies:
+      '@pmndrs/gi-core':
+        specifier: workspace:*
+        version: link:../core
+      denoiser:
+        specifier: 2.1.0
+        version: 2.1.0(three@0.187.0)
+
   packages/core:
     dependencies:
       '@pmndrs/bvh':
@@ -125,6 +131,9 @@ importers:
         specifier: 2.1.0
         version: 2.1.0(three@0.187.0)
     devDependencies:
+      '@pmndrs/gi-cache':
+        specifier: workspace:*
+        version: link:../cache
       '@pmndrs/gi-core':
         specifier: workspace:*
         version: link:../core

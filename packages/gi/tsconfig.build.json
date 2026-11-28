@@ -11,19 +11,21 @@
         // declarations of it only, never to a private clone, so rollup-plugin-dts inlines
         // those few types and the published .d.ts never imports the package.
         "paths": {
-            "@pathtracer/mlp": ["packages/core/src/techniques/radiance-cache/neural-cache/mlp-unavailable.d.ts"],
+            "@pathtracer/mlp": ["packages/cache/src/neural-cache/mlp-unavailable.d.ts"],
             "@pmndrs/gi": ["packages/gi/src/index.ts"],
             "@pmndrs/gi/core": ["packages/gi/src/core.ts"],
             "@pmndrs/gi/ddgi": ["packages/gi/src/ddgi.ts"],
             "@pmndrs/gi/three": ["packages/gi/src/three.ts"],
             "@pmndrs/gi-core": ["packages/core/src/index.ts"],
             "@pmndrs/gi-core/*": ["packages/core/src/*"],
+            "@pmndrs/gi-cache": ["packages/cache/src/index.ts"],
+            "@pmndrs/gi-cache/*": ["packages/cache/src/*"],
             "@pmndrs/gi-three": ["packages/three/src/index.ts"],
             "@pmndrs/gi-three/*": ["packages/three/src/*"],
             "@pmndrs/gi-ddgi-three": ["packages/ddgi-three/src/index.ts"],
             "@pmndrs/gi-ddgi-three/*": ["packages/ddgi-three/src/*"]
         }
     },
-    "include": ["src", "../core/src", "../three/src", "../ddgi-three/src"],
+    "include": ["src", "../core/src", "../cache/src", "../three/src", "../ddgi-three/src"],
     "exclude": ["**/*.test.ts"]
 }

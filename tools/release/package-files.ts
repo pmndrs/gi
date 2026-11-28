@@ -23,10 +23,11 @@ import { isDirectRun } from './release-version.ts';
 const REPOSITORY_ROOT = resolve(import.meta.dirname, '../..');
 const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/gi');
 const BUNDLED_LICENSES = join(REPOSITORY_ROOT, 'packages/bvh/licenses');
-/** Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4) and the radiance cache's (AMD Capsaicin). */
-const TECHNIQUE_LICENSES = ['radiance-cascades', 'radiance-cache'].map((technique) =>
-    join(REPOSITORY_ROOT, 'packages/core/src/techniques', technique, 'licenses'),
-);
+/**
+ * Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4; inside
+ * packages/core until it moves to packages/radiance-cascades) and the radiance cache's (AMD Capsaicin).
+ */
+const TECHNIQUE_LICENSES = ['packages/core/src/techniques/radiance-cascades/licenses', 'packages/cache/src/licenses'].map((folder) => join(REPOSITORY_ROOT, folder));
 /** Licence texts for code the platform bundles beyond Capsaicin's: the SSGI pass's rtoy-samples and assimp parts. */
 const PLATFORM_LICENSES = join(REPOSITORY_ROOT, 'packages/core/src/platform/licenses');
 

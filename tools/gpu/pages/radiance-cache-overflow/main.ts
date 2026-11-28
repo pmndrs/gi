@@ -22,9 +22,9 @@
 import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { HASH_GRID_COUNTER } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/cache/src/world-cache/capacity.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/cache/src/world-cache/world-cache.ts';
 import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';

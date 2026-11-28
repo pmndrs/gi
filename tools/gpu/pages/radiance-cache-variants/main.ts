@@ -66,8 +66,8 @@ import { BoxGeometry, FloatType, Mesh, MeshStandardMaterial, NodeMaterial, Persp
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type CompareValues, type RadianceCacheVariantPreset } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type CompareValues, type RadianceCacheVariantPreset } from '../../../../packages/cache/src/compare-toggles.ts';
 import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
 import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
 import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';

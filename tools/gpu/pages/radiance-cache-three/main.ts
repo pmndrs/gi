@@ -41,8 +41,8 @@
 
 import type { Node } from 'three/webgpu';
 import { isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
-import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { RADIANCE_CACHE_DEBUG_VIEW } from '../../../../packages/core/src/techniques/radiance-cache/wgsl/debug.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { RADIANCE_CACHE_DEBUG_VIEW } from '../../../../packages/cache/src/wgsl/debug.ts';
 import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
 import { GILight } from '../../../../packages/three/src/gi-light.ts';
 import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';

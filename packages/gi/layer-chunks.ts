@@ -15,7 +15,7 @@
 //   rc        Split radiance cascades (techniques/radiance-cascades);
 //             `/radiance-cascades` loads it and the platform
 //   radiance-cache
-//             the radiance cache (techniques/radiance-cache);
+//             the radiance cache (packages/cache);
 //             `/radiance-cache` loads it and the platform
 //
 // The chunk names say which layer a file holds, so scripts/verify-artifacts.mjs
@@ -41,7 +41,7 @@ export const ENTRY_LAYERS: Record<string, readonly Layer[]> = {
 export function layerChunk(id: string): Layer | undefined {
     const path = id.replaceAll('\\', '/');
     if (path.includes('/techniques/radiance-cascades/')) return 'rc';
-    if (path.includes('/packages/core/src/techniques/radiance-cache/')) return 'radiance-cache';
+    if (path.includes('/packages/cache/src/')) return 'radiance-cache';
     if (path.includes('/packages/three/src/') || path.includes('/packages/ddgi-three/src/')) return 'three';
     if (path.includes('/packages/core/src/techniques/ddgi/')) return 'ddgi';
     if (path.includes('/packages/core/src/platform/') || path.includes('/packages/bvh/')) return 'platform';

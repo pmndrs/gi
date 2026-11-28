@@ -25,7 +25,7 @@
             "@pmndrs/gi/core": ["packages/gi/src/core.ts"],
             "@pmndrs/gi/ddgi": ["packages/gi/src/ddgi.ts"],
             "@pmndrs/gi/three": ["packages/gi/src/three.ts"],
-            "@pathtracer/mlp": ["../pmndrs-pathtracer/packages/mlp/src/index.ts", "packages/core/src/techniques/radiance-cache/neural-cache/mlp-unavailable.d.ts"]
+            "@pathtracer/mlp": ["../pmndrs-pathtracer/packages/mlp/src/index.ts", "packages/cache/src/neural-cache/mlp-unavailable.d.ts"]
         }
     },
     "include": ["packages/*/src", "packages/*/test", "apps/*/src", "examples", "scenes/src", "scenes/check", "tools"],

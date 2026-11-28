@@ -110,12 +110,12 @@ import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
 import type { DDGISettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
-import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
-import { HASH_GRID_COUNTER } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import type { HashGridCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
-import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/cache/src/capsaicin-math.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/cache/src/world-cache/capacity.ts';
+import type { HashGridCache } from '../../../../packages/cache/src/world-cache/hash-grid-cache.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/cache/src/world-cache/world-cache.ts';
 import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

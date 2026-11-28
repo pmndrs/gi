@@ -49,8 +49,8 @@ import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import type { GpuTimerScope } from '../../../../packages/core/src/platform/contract/timing.ts';
-import { cellResetFrameWords, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import { HashGridCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
+import { cellResetFrameWords, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/cache/src/world-cache/capacity.ts';
+import { HashGridCache } from '../../../../packages/cache/src/world-cache/hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
     hashGridCacheCellSizeConstant,
@@ -62,7 +62,7 @@ import {
     xxHash,
     type HashGridCacheDesc,
     type HashGridCacheDescConstants,
-} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+} from '../../../../packages/cache/src/world-cache/hash-grid-cpu.ts';
 import {
     WORLD_CACHE_PROBE_RAY_BYPASS,
     WORLD_CACHE_PROBE_RAY_BYTES,
@@ -70,8 +70,8 @@ import {
     type WorldCacheContext,
     type WorldCacheFrame,
     type WorldCacheProbeRays,
-} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
-import { floatToHalfBits } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
+} from '../../../../packages/cache/src/world-cache/world-cache.ts';
+import { floatToHalfBits } from '../../../../packages/cache/src/capsaicin-math.ts';
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { COUNTER, createProbeRayReader, createTestIo, createTestKernels, HIT_WORDS, PROBE_RAY_READ_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';

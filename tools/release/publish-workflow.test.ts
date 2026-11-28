@@ -430,7 +430,7 @@ describe('triggers and structure', () => {
     });
 
     test('publishes packages/gi, not the private workspace root', () => {
-        expect(step('Publish to npm').run).toMatch(/cd packages\/ddgi\nnpm publish --access public --tag "\$DIST_TAG"/);
+        expect(step('Publish to npm').run).toMatch(/cd packages\/gi\nnpm publish --access public --tag "\$DIST_TAG"/);
     });
 
     test('CI and publishing install the same npm', () => {
@@ -448,7 +448,7 @@ describe('ci.yml', () => {
     test('runs the checks in order, each a script the repository has', () => {
         expect(runs).toEqual([
             'npm install -g npm@^11.5.1',
-            // Clones the linked siblings (root package.json `linkedSiblings`): now only the
+            // Clones the linked siblings (`linkedSiblings`; packages/cache pins it): now only the
             // optional `@pathtracer/mlp`, so CI also runs the radiance cache's neural tail.
             // Goes away when that is on npm too.
             'corepack enable && node tools/linked-siblings.ts --fetch',
@@ -488,7 +488,7 @@ describeRuns('a tag push (including a tag made in the GitHub UI)', () => {
                 expect(job.outputs.dist).toEqual({ tag: 'latest' });
                 expect(job.installs).toEqual(['pnpm install --frozen-lockfile']);
                 expect(job.publishes).toEqual(['publish --access public --tag latest']);
-                expect(job.published).toEqual(['@pmndrs/gi@0.2.0 from ddgi']);
+                expect(job.published).toEqual(['@pmndrs/gi@0.2.0 from gi']);
                 expect(job.releases).toHaveLength(1);
                 expect(job.releases[0]).toMatch(/^release create v0\.2\.0 .*--verify-tag.* --latest$/);
                 expect(job.notes).toContain('Notes for 0.2.0.');
@@ -662,7 +662,7 @@ describeRuns('the Run workflow button', () => {
 
                 expect(job.failed, job.output).toBeNull();
                 expect(job.outputs.resolve).toEqual({ tag: 'v0.2.0', mode: 'cut' });
-                expect(job.published).toEqual(['@pmndrs/gi@0.2.0 from ddgi']);
+                expect(job.published).toEqual(['@pmndrs/gi@0.2.0 from gi']);
                 expect(job.releases).toHaveLength(1);
                 expect(job.notes).toContain('Notes for 0.2.0.');
                 expect(mainSubjects(fixture).slice(0, 2)).toEqual(['release: v0.2.0 [skip ci]', 'Notes for 0.2.0 and 0.3.0']);

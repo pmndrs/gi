@@ -67,7 +67,7 @@ import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { GiMode } from '../../../../apps/viewer/src/scene/layers.ts';
 import { RcCompareControls } from '../../../../apps/viewer/src/ui/rc-compare-controls.ts';
-import { compareSettingValue, isHostToggle, RADIANCE_CACHE_COMPARE_TOGGLES, RADIANCE_CACHE_VARIANT_PRESETS, type CompareToggle, type CompareValues } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
+import { compareSettingValue, isHostToggle, RADIANCE_CACHE_COMPARE_TOGGLES, RADIANCE_CACHE_VARIANT_PRESETS, type CompareToggle, type CompareValues } from '../../../../packages/cache/src/compare-toggles.ts';
 
 const WIDTH = 1280;
 const HEIGHT = 720;

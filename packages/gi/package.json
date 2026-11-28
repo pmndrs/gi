@@ -76,6 +76,7 @@
         }
     },
     "devDependencies": {
+        "@pmndrs/gi-cache": "workspace:*",
         "@pmndrs/gi-core": "workspace:*",
         "@pmndrs/gi-ddgi-three": "workspace:*",
         "@pmndrs/gi-three": "workspace:*",

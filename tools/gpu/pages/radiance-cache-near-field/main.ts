@@ -44,12 +44,12 @@ import type { EnvironmentDescriptor, MaterialDescriptor } from '../../../../pack
 import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
-import { cameraRelativeInverseViewProjection } from '../../../../packages/core/src/techniques/radiance-cache/camera.ts';
-import { filterScreenProbesCell, unpackSeed, type Direction, type ProbeFilterInputs } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { screenProbeCellSize, viewForward } from '../../../../packages/core/src/techniques/radiance-cache/screen-irradiance.ts';
-import type { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { PROBE_SIZE } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
-import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
+import { cameraRelativeInverseViewProjection } from '../../../../packages/cache/src/camera.ts';
+import { filterScreenProbesCell, unpackSeed, type Direction, type ProbeFilterInputs } from '../../../../packages/cache/src/capsaicin-math.ts';
+import { screenProbeCellSize, viewForward } from '../../../../packages/cache/src/screen-irradiance.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { PROBE_SIZE } from '../../../../packages/cache/src/settings.ts';
+import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/cache/src/wgsl/screen-probes.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
 import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';

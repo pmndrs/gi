@@ -210,10 +210,10 @@ import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { DIRECT_SKY_LIGHT } from '../../../../packages/core/src/platform/shade/wgsl.ts';
-import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { HASH_GRID_COUNTER, type HashGridCacheCapacity } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import type { HashGridCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/cache/src/capsaicin-math.ts';
+import { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { HASH_GRID_COUNTER, type HashGridCacheCapacity } from '../../../../packages/cache/src/world-cache/capacity.ts';
+import type { HashGridCache } from '../../../../packages/cache/src/world-cache/hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
     hashGridCacheCellOffsetMip0,
@@ -223,7 +223,7 @@ import {
     updateTilesAccumulate,
     verticalFieldOfView,
     type CellValue,
-} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+} from '../../../../packages/cache/src/world-cache/hash-grid-cpu.ts';
 import {
     BYPASS_CACHE_BIT,
     MULTIBOUNCE_DIRECT_WORDS,
@@ -231,16 +231,16 @@ import {
     MULTIBOUNCE_MISS_CELL,
     MULTIBOUNCE_RAY_WORDS,
     RESERVOIR_WORDS,
-} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+} from '../../../../packages/cache/src/world-cache/hash-grid-population-wgsl.ts';
 import {
     multibounceBypassAddition,
     multibounceDraw,
     multibounceSample,
     multibounceSettledIndirect,
     sampleBRDFAndEvaluateDiffuse,
-} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/multibounce-cpu.ts';
-import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
-import { WORLD_CACHE_PROBE_RAY_BYPASS, WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+} from '../../../../packages/cache/src/world-cache/multibounce-cpu.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
+import { WORLD_CACHE_PROBE_RAY_BYPASS, WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/cache/src/world-cache/world-cache.ts';
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';

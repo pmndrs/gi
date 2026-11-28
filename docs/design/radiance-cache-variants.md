@@ -6,7 +6,7 @@ The radiance cache's world cache (the cache the screen probes' rays end in) has 
 
 ## The variants
 
-Each is a preset in the viewer's compare panel ("Radiance cache · compare", the **Variant** list), so it can be seen live, and a name the GPU pages take (`VITE_RC_COMPARE=variant=<id>`). The presets are `RADIANCE_CACHE_VARIANT_PRESETS` in `packages/core/src/techniques/radiance-cache/compare-toggles.ts`.
+Each is a preset in the viewer's compare panel ("Radiance cache · compare", the **Variant** list), so it can be seen live, and a name the GPU pages take (`VITE_RC_COMPARE=variant=<id>`). The presets are `RADIANCE_CACHE_VARIANT_PRESETS` in `packages/cache/src/compare-toggles.ts`.
 
 | Preset | What it is | Needs from the host | Register |
 |---|---|---|---|

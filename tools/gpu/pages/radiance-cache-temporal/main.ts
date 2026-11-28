@@ -2,7 +2,7 @@
  * RC4.1: the radiance cache's screen probes with history on the GPU
  * (reprojection, the off-screen probe cache, the patch, ray guiding, the
  * blend), checked against analytic answers and CPU ports
- * (packages/core/src/techniques/radiance-cache/screen-probe-history-cpu.ts).
+ * (packages/cache/src/screen-probe-history-cpu.ts).
  * Engine-free: the `FrameScreen` (depth, normals, velocity) is drawn by
  * primary rays through the platform's tracer (radiance-cache-probes/screen.ts).
  *
@@ -57,7 +57,7 @@ import type { FrameInput } from '../../../../packages/core/src/platform/contract
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { equirectUvToDirection } from '../../../../packages/core/src/platform/sky/equirect.ts';
-import { cameraRelativeInverseViewProjection } from '../../../../packages/core/src/techniques/radiance-cache/camera.ts';
+import { cameraRelativeInverseViewProjection } from '../../../../packages/cache/src/camera.ts';
 import {
     calculateHaltonSequence,
     CpuRandom,
@@ -71,15 +71,15 @@ import {
     unpackHalf3,
     unpackSeed,
     type Direction,
-} from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
-import type { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { screenProbeCellSize } from '../../../../packages/core/src/techniques/radiance-cache/screen-irradiance.ts';
-import { CACHED_TILE_NEW, luminance, reprojectProbeTile, type ReprojectionInputs } from '../../../../packages/core/src/techniques/radiance-cache/screen-probe-history-cpu.ts';
-import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
-import { COUNTER, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_PROBE_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
+} from '../../../../packages/cache/src/capsaicin-math.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import { screenProbeCellSize } from '../../../../packages/cache/src/screen-irradiance.ts';
+import { CACHED_TILE_NEW, luminance, reprojectProbeTile, type ReprojectionInputs } from '../../../../packages/cache/src/screen-probe-history-cpu.ts';
+import { PROBE_CELLS, PROBE_SIZE } from '../../../../packages/cache/src/settings.ts';
+import { COUNTER, PROBE_RAY_BYTES, PROBE_RAYS_HEADER_BYTES, PROBE_SPAWN_PROBE_BYTES, PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/cache/src/wgsl/screen-probes.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
-import type { HistorySection } from '../../../../packages/core/src/techniques/radiance-cache/screen-probe-history.ts';
+import type { HistorySection } from '../../../../packages/cache/src/screen-probe-history.ts';
 import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';
 import { readTexture } from '../radiance-cache-probes/readback.ts';
 import { frameCamera, PageScreen, type PageCamera } from '../radiance-cache-probes/screen.ts';

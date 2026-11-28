@@ -27,8 +27,8 @@ import type { FrameInput } from '../../../../packages/core/src/platform/contract
 import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
 import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
-import { RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE, RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { RADIANCE_CACHE_STORAGE_BUFFERS_PER_STAGE, RadianceCacheTechnique } from '../../../../packages/cache/src/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/cache/src/settings.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';
 import { PageScreen, frameCamera, type PageCamera } from '../radiance-cache-probes/screen.ts';
