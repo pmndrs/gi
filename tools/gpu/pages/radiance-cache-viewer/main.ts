@@ -40,6 +40,11 @@
  *   value (the DDGI volume stacked or not with it), leave no NaN, infinite or
  *   negative value, and log no error; its picture against ours is recorded.
  *
+ * - Wherever a toggle or variant turns temporal feedback on (`useTemporalFeedback`,
+ *   read at construction), the technique must ask for the lit picture and albedo
+ *   and the scene pass must render the albedo. Set after construction, it never
+ *   reaches the screen inputs, and temporal feedback silently reads the cache.
+ *
  * - RC4.6: the radiance cache starts with a DDGI volume stacked under it (what
  *   ships); "Run the cache alone" makes it again without, and back.
  *
@@ -63,6 +68,7 @@ import { HdrReader } from '../three-composite-shared/composite-check.ts';
 import { isBackgroundDepth, uv, vec4 } from 'three/tsl';
 import type { Node, WebGPURenderer } from 'three/webgpu';
 import { GI_ALBEDO_OUTPUT } from '../../../../packages/three/src/composite.ts';
+import { GI_SCREEN_ALBEDO_OUTPUT } from '../../../../packages/three/src/screen-inputs.ts';
 import { ViewerCore, type ViewLayout } from '../../../../apps/viewer/src/core/viewer-core.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { RADIANCE_CACHE_SCREEN_VIEWS, RadianceCacheViewerTechnique, type RadianceCacheScreenView } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
@@ -277,6 +283,18 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
         await showReady(core, { left: 'rc', right: null, giMode: 'on' });
         if (rc().failed) failures.push(`${sceneId}: the radiance cache failed: ${rc().failed}`);
     };
+    // With temporal feedback on, the technique asks for the lit picture and albedo at construction,
+    // and the scene pass renders the albedo for it (without them it silently reads the cache instead).
+    const checkLitPicture = (name: string): void => {
+        const technique = rc().radianceCache;
+        if (!technique?.settings.useTemporalFeedback) return;
+        const screen = technique.requirements.screen;
+        const channels = typeof screen === 'object' ? screen : {};
+        const albedoRendered = rc().giNodes?.scenePass.getMRT()?.has(GI_SCREEN_ALBEDO_OUTPUT) === true;
+        if (channels.lighting !== true || channels.albedo !== true || !albedoRendered) {
+            failures.push(`${sceneId}, ${name}: temporal feedback is on but the lit picture isn't wired (lighting ${String(channels.lighting)}, albedo ${String(channels.albedo)}, albedo rendered ${String(albedoRendered)})`);
+        }
+    };
     clickButton(section, 'all-ours');
     await drawFrames(core, COMPARE_FRAMES);
     const ours = await irradianceImage(core, rc());
@@ -298,6 +316,7 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
         clickToggle(section, entry, value);
         await settle();
         if (valueOf(entry) !== value) failures.push(`${sceneId}: clicking ${entry.setting} to ${String(value)} left the technique at ${String(valueOf(entry))}`);
+        checkLitPicture(`${entry.setting} = ${String(value)}`);
         await drawFrames(core, COMPARE_FRAMES);
         const image = await irradianceImage(core, rc());
         await scan(`${entry.setting} = ${String(value)}`);
@@ -346,6 +365,7 @@ async function checkCompareToggles(core: ViewerCore, controls: RcCompareControls
             if (valueOf(entry) !== wanted) failures.push(`${sceneId}: the variant ${preset.id} left ${entry.setting} at ${String(valueOf(entry))}, not ${String(wanted)}`);
         }
         if (variantSelect.value !== preset.id) failures.push(`${sceneId}: after picking the variant ${preset.id} the list shows "${variantSelect.value}"`);
+        checkLitPicture(`variant ${preset.id}`);
         await drawFrames(core, COMPARE_FRAMES);
         await scan(`variant ${preset.id}`);
         variants[preset.id] = { ...imageChange(ours, await irradianceImage(core, rc())), ddgiStacked: rc().stackedDdgi !== null, readout: rc().changeReadout };
