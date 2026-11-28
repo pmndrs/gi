@@ -16,7 +16,7 @@
  *   has a cell there, 0 where it doesn't.
  */
 
-import type { WorldCacheLookup } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import type { WorldCacheLookup } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 
 const WORKGROUP = 8;
 

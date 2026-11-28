@@ -72,10 +72,10 @@
 import { RenderPipeline, UnsignedByteType, type Node, type PerspectiveCamera } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
-import { markCompositePass, type MarkablePass } from '../../../../packages/ddgi-three/src/composite-mark.ts';
+import { markCompositePass, type MarkablePass } from '../../../../packages/three/src/composite-mark.ts';
 import { AccumulatedOcclusion, compositePassAt, gtaoOn, ssaoOn, upscaledComposite, upscaledScene, upscalerMs, type UpscalePreset } from '../three-composite-shared/variants.ts';
-import { DDGICompositeNode } from '../../../../packages/ddgi-three/src/composite.ts';
-import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
+import { DDGICompositeNode } from '../../../../packages/three/src/composite.ts';
+import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import {
     CompositeRoutes,

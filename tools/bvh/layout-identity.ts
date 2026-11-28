@@ -20,8 +20,8 @@
  */
 
 import { createTinyBvhBuilder, type GpuLayoutMeshBvh, type TinyBvhBuilder } from '../../packages/bvh/src/index.ts';
-import type { MeshBvh } from '../../packages/ddgi-core/src/platform/trace/mesh-bvh.ts';
-import { buildMeshBvhFromTopology } from '../../packages/ddgi-core/src/platform/trace/mesh-bvh-topology.ts';
+import type { MeshBvh } from '../../packages/core/src/platform/trace/mesh-bvh.ts';
+import { buildMeshBvhFromTopology } from '../../packages/core/src/platform/trace/mesh-bvh-topology.ts';
 import { readSceneMeshes } from './scene-meshes.ts';
 
 const DEFAULT_SCENES = ['sponza', 'bistro-exterior', 'bistro-interior'];

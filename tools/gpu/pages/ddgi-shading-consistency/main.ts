@@ -42,15 +42,15 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-core/src/platform/contract/shading-module.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import { FIXED_VOLUME_FADE, VOLUME_TABLE_ROW_FLOATS, VOLUME_TABLE_TEXEL } from '../../../../packages/ddgi-core/src/techniques/ddgi/volumes.ts';
-import { COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT, DDGI_DEBUG_COLORS, DDGI_DEBUG_VIEW } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/shading.ts';
+import type { ShadingModule, ShadingParameter } from '../../../../packages/core/src/platform/contract/shading-module.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { PROBE_STATE } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import { FIXED_VOLUME_FADE, VOLUME_TABLE_ROW_FLOATS, VOLUME_TABLE_TEXEL } from '../../../../packages/core/src/techniques/ddgi/volumes.ts';
+import { COVERAGE_FADE_SPACINGS, COVERAGE_FULL_MARGIN_SPACINGS, COVERAGE_FULL_WEIGHT, DDGI_DEBUG_COLORS, DDGI_DEBUG_VIEW } from '../../../../packages/core/src/techniques/ddgi/wgsl/shading.ts';
 import { ForwardRenderer, type RenderView } from '../../../../examples/webgpu/hello/src/renderer.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
-import { DDGI_SHADING_PARAMETER_NAMES } from '../../../../packages/ddgi-core/src/techniques/ddgi/shading.ts';
+import { DDGI_SHADING_PARAMETER_NAMES } from '../../../../packages/core/src/techniques/ddgi/shading.ts';
 import { imageMean, readProbeData, readTextureBytes, releaseDeviceOnPageHide, runFrames, TestView, type ProbeRecord } from '../ddgi-shared/harness.ts';
 import { createHelloScene, readRgba32FloatAsRgb } from '../ddgi-shading-shared/hello-scene.ts';
 

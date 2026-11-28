@@ -10,9 +10,9 @@
  * Not a page itself (no index.html).
  */
 
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { DDGI_SAMPLE_WGSL } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/sample.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGI_SAMPLE_WGSL } from '../../../../packages/core/src/techniques/ddgi/wgsl/sample.ts';
 import { FIELD_GROUP, fieldBindGroup, IO_GROUP, readBuffer } from './harness.ts';
 
 export interface ProbeDirection {

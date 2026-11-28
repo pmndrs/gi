@@ -31,13 +31,13 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-denoiser-change --gpu nvidia`
  */
 
-import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { halfBitsToFloat } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { setCompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
+import type { LightHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { halfBitsToFloat } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { setCompareValues } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { describeScene, loadManifest, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { PAGE_COMPARE_VALUES, pageRadianceCache } from '../radiance-cache-probes/compare-env.ts';

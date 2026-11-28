@@ -16,12 +16,12 @@
 import { FloatType, MeshStandardMaterial, NodeMaterial, PerspectiveCamera, QuadMesh, RenderTarget, UnsignedByteType, Vector2 } from 'three/webgpu';
 import type { Camera, Material, Mesh, Node, Object3D, Scene, WebGPURenderer } from 'three/webgpu';
 import { type context, isBackgroundDepth, mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
-import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { GITechnique } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type DDGICompositeOptions } from '../../../../packages/ddgi-three/src/composite.ts';
+import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { GITechnique } from '../../../../packages/core/src/platform/contract/technique.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
+import { DDGICompositeNode, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT, type DDGICompositeOptions } from '../../../../packages/three/src/composite.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { loadScene, type LoadedScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

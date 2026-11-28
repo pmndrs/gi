@@ -33,10 +33,10 @@
 
 import { RenderPipeline, type Node, type PerspectiveCamera } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
-import { markCompositePass, type MarkablePass } from '../../../../packages/ddgi-three/src/composite-mark.ts';
-import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
-import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
-import type { ScreenChannelRequest } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
+import { markCompositePass, type MarkablePass } from '../../../../packages/three/src/composite-mark.ts';
+import { giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
+import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
+import type { ScreenChannelRequest } from '../../../../packages/core/src/platform/contract/technique.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { fullBrowserVersion } from '../trace-bench/run.ts';
 import { PassClock, advanceThreeFrame, loadCompositeScene, shadowCameras, timeInterleaved, type CompositeScene, type DeltaDefinition, type FrameVariant, type InterleavedTiming } from '../three-composite-shared/composite-check.ts';

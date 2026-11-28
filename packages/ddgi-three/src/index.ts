@@ -1,11 +1,8 @@
-// three.js r187 adapter (T1.7, T1.14): a Light subclass with a registered node reads
-// the platform's shading module; the scene sync mirrors three's scene into
-// `gi.scene`; ThreeGI runs both once per frame. The simple path is
-// `DDGIVolume.start`; the fast path for dense scenes is `ddgi()` with `giAlbedo`
-// on three's own pass() and mrt() (docs/api/three.md).
-export { jitterPixelsToNdc, ThreeGI, upscalerJitter, type ThreeGIJitter, type ThreeGIOptions, type ThreeGITimings, type UpscalerJitterLike } from './three-gi.ts';
-export { GILight, GI_LIGHT_PRIORITY, entryWgsl, wgslParameterType, type GILightOptions } from './gi-light.ts';
-export { wrapGpuTexture, type GpuTextureWrapOptions } from './external-texture.ts';
+// DDGI's own three.js code (DECISIONS 2026-11-27, "flat and technique-chained"):
+// `DDGIVolume`, a LightProbeGrid-shaped volume and the simple path
+// (`volume.start`), its LightProbeGrid export, and the volume start. The
+// three.js layer every technique shares is packages/three. Published as part of
+// `@pmndrs/gi/three` (and `.`).
 export { DDGIVolume } from './ddgi-volume.ts';
 export {
     ExportedLightProbeGrid,
@@ -18,32 +15,3 @@ export {
     type ToLightProbeGridOptions,
 } from './light-probe-grid.ts';
 export { DEFAULT_GI_BUDGET, DEFAULT_WARM_UP, ThreeGILimitError, type DDGIVolumeStartOptions, type StartedGI, type WarmUpSettings } from './volume-start.ts';
-export {
-    ddgi,
-    giAlbedo,
-    DEFAULT_GI_OCCLUSION_RADIUS,
-    GI_ALBEDO_OUTPUT,
-    GI_NORMAL_OUTPUT,
-    type CompositeGISource,
-    type DDGICompositeNode,
-    type DDGICompositeOptions,
-    type GIAlbedoNode,
-    type GIOcclusionSettings,
-    type GIOcclusionSource,
-} from './composite.ts';
-export {
-    screenInputs,
-    giDiffuseAlbedo,
-    GI_SCREEN_ALBEDO_OUTPUT,
-    GI_SCREEN_INSTANCE_OUTPUT,
-    GI_SCREEN_NORMAL_OUTPUT,
-    GI_SCREEN_VELOCITY_OUTPUT,
-    type GIScreenChannelNode,
-    type ScreenInputsNode,
-    type ScreenInputsOptions,
-    type ScreenInputsSource,
-} from './screen-inputs.ts';
-export { SceneSync, DEFAULT_EDIT_CHECKS_PER_FRAME, DEFAULT_OBJECTS_PER_FRAME, HOT_FRAMES, type SceneSyncOptions, type SyncFrameReport } from './scene-sync.ts';
-export { createGIRenderer, requestGIDevice, type GIDevice, type GIDeviceOptions, type GIRenderer, type GIRendererOptions } from './host.ts';
-export { GI_MATERIAL_USER_DATA, GI_USER_DATA } from './user-data.ts';
-export type { PmndrsSkyLike } from './environment.ts';

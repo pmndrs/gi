@@ -60,20 +60,29 @@
  */
 
 import { Color, type Camera, type ColorRepresentation, type Object3D, type OrthographicCamera, type PerspectiveCamera, type Scene } from 'three';
-import type { EnvironmentDescriptor, FrameBudget, FrameCamera, GIPlatform, ShadingModule } from '@pmndrs/ddgi-core';
+import type { EnvironmentDescriptor, FrameBudget, FrameCamera, GIPlatform, ShadingModule } from '@pmndrs/gi-core';
 import type { PmndrsSkyLike } from './environment.ts';
 import { GILight, type GILightOptions } from './gi-light.ts';
-import type { DDGIVolume } from './ddgi-volume.ts';
 import { SceneSync, type SyncFrameReport } from './scene-sync.ts';
 import type { WebGPURenderer } from 'three/webgpu';
+
+/**
+ * What ThreeGI reads from a volume each frame: DDGI's `DDGIVolume`
+ * (packages/ddgi-three) is one. Declared here by shape, so the shared three.js
+ * layer imports no technique package.
+ */
+interface ThreeGIVolume {
+    readonly intensity: number;
+    readonly priority: number;
+}
 
 export interface ThreeGIOptions {
     /** GPU work allowed per frame for GI updates. Default `{ gpuMs: 2 }`. A live object: change it any time. */
     readonly budget?: FrameBudget;
     /** Settings for the GI light added to the scene. */
     readonly light?: GILightOptions;
-    /** A LightProbeGrid-shaped volume (ddgi-volume.ts) whose `intensity` and `priority` the GI light follows each frame. */
-    readonly volume?: DDGIVolume | null;
+    /** A LightProbeGrid-shaped volume (DDGIVolume) whose `intensity` and `priority` the GI light follows each frame. */
+    readonly volume?: ThreeGIVolume | null;
     /** An environment for GI rays instead of the scene's (environment.ts). */
     readonly environment?: EnvironmentDescriptor | null;
     /** A pmndrs/sky `Sky` to take GI's sky from (environment.ts). */
@@ -183,7 +192,7 @@ export class ThreeGI {
     readonly sync: SceneSync;
     budget: FrameBudget;
     /** The volume the GI light follows, if any (see the option). */
-    volume: DDGIVolume | null;
+    volume: ThreeGIVolume | null;
     /**
      * This frame's projection jitter, read in each `update` and handed to
      * the platform as `FrameCamera.jitter`, so screen-space techniques (the

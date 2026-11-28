@@ -13,7 +13,7 @@
  * Not a page itself (no index.html).
  */
 
-import { DEFAULT_DDGI_SETTINGS, type DDGISettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { DEFAULT_DDGI_SETTINGS, type DDGISettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
 
 export type HysteresisSettings = Pick<DDGISettings, 'adaptiveHysteresis' | 'hysteresis' | 'hysteresisMemorySeconds' | 'hysteresisMaxSamples' | 'hysteresisUpdatesPerSample' | 'hysteresisRampUpdates'>;
 

@@ -25,12 +25,12 @@
  * for each 50% wall is 50% ± 3% of the open wall's.
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { MaterialHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { checkerImage, CHECKER_SIZE } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { MaterialHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { checkerImage, CHECKER_SIZE } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import { THIN_WALL_EMBED_M, THIN_WALL_ROOM_SIZE_M, THIN_WALL_THICKNESS_M } from '../../../../scenes/src/procedural/thin-wall.ts';
 import { assert, runGpuTest } from '../../client.ts';

@@ -6,9 +6,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { RAY_FLOATS } from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import { traceModuleWgsl } from '../../../../packages/ddgi-core/src/platform/trace/wgsl.ts';
+import { RAY_FLOATS } from '../../../../packages/core/src/platform/trace/index.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import { traceModuleWgsl } from '../../../../packages/core/src/platform/trace/wgsl.ts';
 import { benchWalkWgsl, COUNTED_WORD, COUNTED_WORDS, countedKernelWgsl, NO_ORIGIN, TIE_BREAKS, tieBreakKernelWgsl } from './counted-walk-wgsl.ts';
 import { makeProbeRays, offsetRayOrigin } from './rc-rays.ts';
 import {

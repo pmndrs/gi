@@ -35,7 +35,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { MaterialDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import type { MaterialDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { SEE_THROUGH_ROOM_HEIGHT_M, SEE_THROUGH_ROOM_SIZE_M } from '../../../../scenes/src/procedural/see-through-walls.ts';
 import { createDdgiScene, FieldProbe, loadManifest, releaseDeviceOnPageHide, runFrames, type SurfacePoint } from '../ddgi-shared/harness.ts';
 

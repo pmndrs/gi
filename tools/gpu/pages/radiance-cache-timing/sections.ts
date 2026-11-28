@@ -30,8 +30,8 @@
  * depth and normals kept for the next frame).
  */
 
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { POPULATE_TRACE_SECTION, RADIANCE_CACHE_TIMER_PREFIX } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/timed-pass.ts';
+import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { POPULATE_TRACE_SECTION, RADIANCE_CACHE_TIMER_PREFIX } from '../../../../packages/core/src/techniques/radiance-cache/timed-pass.ts';
 
 /** Native Capsaicin's groups, in its table's order, then SSGI, then what only the port has. */
 export const CAPSAICIN_GROUPS = ['probe tracing and cell population', 'cache update and resolve', 'screen probes', 'denoise and resolve', 'ssgi', 'ours only'] as const;

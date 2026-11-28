@@ -25,10 +25,10 @@ const PACKAGE_DIRECTORY = join(REPOSITORY_ROOT, 'packages/gi');
 const BUNDLED_LICENSES = join(REPOSITORY_ROOT, 'packages/bvh/licenses');
 /** Licence texts kept beside the techniques that bundle the code: Split RC's (the raytracer, pbrt-v4) and the radiance cache's (AMD Capsaicin). */
 const TECHNIQUE_LICENSES = ['radiance-cascades', 'radiance-cache'].map((technique) =>
-    join(REPOSITORY_ROOT, 'packages/ddgi-core/src/techniques', technique, 'licenses'),
+    join(REPOSITORY_ROOT, 'packages/core/src/techniques', technique, 'licenses'),
 );
 /** Licence texts for code the platform bundles beyond Capsaicin's: the SSGI pass's rtoy-samples and assimp parts. */
-const PLATFORM_LICENSES = join(REPOSITORY_ROOT, 'packages/ddgi-core/src/platform/licenses');
+const PLATFORM_LICENSES = join(REPOSITORY_ROOT, 'packages/core/src/platform/licenses');
 
 /** The line in the root README where the npm package's README stops. */
 export const PACKAGE_README_END = '<!-- The npm package README ends here. Below: working on this repository. -->';

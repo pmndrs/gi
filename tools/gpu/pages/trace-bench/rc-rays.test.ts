@@ -12,8 +12,8 @@ import {
     HIT_RECORD_BYTES,
     HIT_RECORD_WORD,
     RAY_FLOATS,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { RC_HALTON_FIRST_INDEX, RC_MULTI_BOUNCE_RATIO, RC_RAYS_PER_PROBE, RC_TILE_SIZE, RC_VIEW } from './config.ts';
 import { rcPredictions, traceBenchRows } from './csv-rows.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';

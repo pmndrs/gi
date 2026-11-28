@@ -32,7 +32,7 @@
  */
 
 import { Matrix4, type BufferAttribute, type BufferGeometry, type InterleavedBufferAttribute, type Mesh, type SkinnedMesh } from 'three';
-import type { Aabb, DeformedPositions } from '@pmndrs/ddgi-core';
+import type { Aabb, DeformedPositions } from '@pmndrs/gi-core';
 import { readFloatAttribute } from './convert.ts';
 import { GpuSkinningPose, type GpuPoseContext } from './gpu-skinning.ts';
 import { deformBoundsFlag, deformingFlag } from './user-data.ts';

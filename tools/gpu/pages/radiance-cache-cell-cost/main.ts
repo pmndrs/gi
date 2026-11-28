@@ -26,16 +26,16 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait -- pnpm test:gpu --filter radiance-cache-cell-cost --gpu nvidia`.
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { TechniqueContext } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/gpu-timer.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { PROBE_TRACE_SECTIONS, timedPassName } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/timed-pass.ts';
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { TechniqueContext } from '../../../../packages/core/src/platform/contract/technique.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { GpuTimer } from '../../../../packages/core/src/platform/timing/gpu-timer.ts';
+import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { PROBE_TRACE_SECTIONS, timedPassName } from '../../../../packages/core/src/techniques/radiance-cache/timed-pass.ts';
+import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

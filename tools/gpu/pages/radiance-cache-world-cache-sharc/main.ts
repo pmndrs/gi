@@ -83,21 +83,21 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "p6.1 sharc" -- pnpm test:gpu --filter radiance-cache-world-cache-sharc --gpu nvidia`.
  */
 
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import type { RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
-import type { SharcCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/sharc/sharc-cache.ts';
-import { sharcCellSize, sharcCellSizePerMetre, sharcFurnaceCeiling, sharcLevel } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/sharc/sharc-cpu.ts';
-import { DEFAULT_SHARC_SETTINGS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/sharc/sharc-settings.ts';
-import { SHARC_COUNTER, SHARC_COUNTER_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/sharc/sharc-wgsl.ts';
-import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import type { RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { hashGridCacheCellSizeConstant, hashGridCacheGetCellSize, verticalFieldOfView } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+import type { SharcCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/sharc/sharc-cache.ts';
+import { sharcCellSize, sharcCellSizePerMetre, sharcFurnaceCeiling, sharcLevel } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/sharc/sharc-cpu.ts';
+import { DEFAULT_SHARC_SETTINGS } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/sharc/sharc-settings.ts';
+import { SHARC_COUNTER, SHARC_COUNTER_WORDS } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/sharc/sharc-wgsl.ts';
+import { WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

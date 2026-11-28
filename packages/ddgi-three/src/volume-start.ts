@@ -51,11 +51,9 @@ import {
     type GIPlatform,
     type LoadedField,
     type LoadFieldOptions,
-} from '@pmndrs/ddgi-core';
-import type { PmndrsSkyLike } from './environment.ts';
-import type { GILightOptions } from './gi-light.ts';
+} from '@pmndrs/gi-core';
+import { ThreeGI, type GILightOptions, type PmndrsSkyLike } from '@pmndrs/gi-three';
 import type { DDGIVolume } from './ddgi-volume.ts';
-import { ThreeGI } from './three-gi.ts';
 
 /** The warm-up's settings, as `start` takes them; the first three become the technique's `warmUpPasses`, `warmUpMaxSeconds`, `warmUpMinPasses`. */
 export interface WarmUpSettings {

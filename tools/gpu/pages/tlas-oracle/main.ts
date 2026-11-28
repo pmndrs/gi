@@ -34,9 +34,9 @@
 
 import { GpuBvhRefit } from '../../../../packages/bvh/src/gpu-refit.ts';
 import { PRIMITIVE_BOX_FLOATS, refitOnCpu } from '../../../../packages/bvh/src/refit-cpu.ts';
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { InstanceHandle, MeshHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { InstanceHandle, MeshHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import {
     BVH_NODE_BYTES,
     HIT_RECORD_BYTES,
@@ -45,11 +45,11 @@ import {
     RAY_BYTES,
     type MeshGeometry,
     type TraceSceneInstance,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { type TracedHit } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
-import { createRandom, randomAffine, randomRays, randomTriangleSoup, tessellatedQuad, type Random } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
-import { buildTopLevelShape } from '../../../../packages/ddgi-core/src/platform/trace/top-level-shape.ts';
-import { transformBounds } from '../../../../packages/ddgi-core/src/platform/trace/top-level.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
+import { type TracedHit } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
+import { createRandom, randomAffine, randomRays, randomTriangleSoup, tessellatedQuad, type Random } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
+import { buildTopLevelShape } from '../../../../packages/core/src/platform/trace/top-level-shape.ts';
+import { transformBounds } from '../../../../packages/core/src/platform/trace/top-level.ts';
 import { assert, runGpuTest, watchDevice } from '../../client.ts';
 import { boxMesh, type OracleCase } from '../trace-oracle/cases.ts';
 import { computeReferenceAnswersYielding, evaluateCase, type ReferenceAnswers } from '../trace-oracle/check.ts';

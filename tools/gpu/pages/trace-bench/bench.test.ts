@@ -9,10 +9,10 @@ import {
     createCpuTracer,
     HIT_RECORD_BYTES,
     RAY_FLOATS,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { buildReferenceScene, traceClosestReference } from '../../../../packages/ddgi-core/src/platform/trace/reference-tracer.ts';
-import { addToTally, compareClosest, newTally } from '../../../../packages/ddgi-core/src/platform/trace/oracle-compare.ts';
-import { createRandom, randomRays, randomTriangleSoup } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
+import { buildReferenceScene, traceClosestReference } from '../../../../packages/core/src/platform/trace/reference-tracer.ts';
+import { addToTally, compareClosest, newTally } from '../../../../packages/core/src/platform/trace/oracle-compare.ts';
+import { createRandom, randomRays, randomTriangleSoup } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import { BenchConfigError, parseBenchConfig, type BenchProfileName } from './config.ts';
 import { browserFromUserAgent, deviceNameFromAdapter, formatValue, repeatedRunRows, traceBenchRows } from './csv-rows.ts';
 import { extractGltfGeometry, modelTransformMatrix, parseGlb, type GltfJson } from './gltf-geometry.ts';

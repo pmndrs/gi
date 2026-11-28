@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { LightDescriptor, MaterialDescriptor } from '../../packages/ddgi-core/src/platform/contract/scene';
+import type { LightDescriptor, MaterialDescriptor } from '../../packages/core/src/platform/contract/scene';
 import type { SceneLightData, SceneMaterialData } from './scene-data';
 
 const lightForPlatform = (light: SceneLightData): LightDescriptor => light;

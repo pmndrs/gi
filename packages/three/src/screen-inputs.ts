@@ -106,7 +106,7 @@ import {
     type WebGPURenderer,
 } from 'three/webgpu';
 import { diffuseColor, diffuseContribution, instanceIndex, normalWorld, texture, textureLoad, uint, uniform, uv, uvec2, velocity, type vec2, vec3, vec4 } from 'three/tsl';
-import { GILimitError, ScreenInputsView, type FrameScreen, type GIPlatform, type ScreenChannel, type ScreenChannelRequest, type ScreenNeeds } from '@pmndrs/ddgi-core';
+import { GILimitError, ScreenInputsView, type FrameScreen, type GIPlatform, type ScreenChannel, type ScreenChannelRequest, type ScreenNeeds } from '@pmndrs/gi-core';
 import { wrapGpuTexture } from './external-texture.ts';
 import { InstanceIdResolve, MAX_ENCODED_INSTANCE_ID } from './instance-id-resolve.ts';
 import type { SceneSync } from './scene-sync.ts';

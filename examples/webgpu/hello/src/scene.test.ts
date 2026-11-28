@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { InstanceDescriptor, MaterialDescriptor, MeshDescriptor, SceneApi, TextureDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene';
+import type { InstanceDescriptor, MaterialDescriptor, MeshDescriptor, SceneApi, TextureDescriptor } from '../../../../packages/core/src/platform/contract/scene';
 import { buildProceduralParts, mergeScenes } from '../../../../scenes/src/build-scene.ts';
 import { describeProceduralScene } from '../../../../scenes/src/platform-scene.ts';
 import { describeScene, loadManifest, supportedSceneIds } from './scene.ts';

@@ -23,7 +23,7 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, '..', '..');
  * hash when fetched, so neither counts.
  */
 export const MEASURED_PATHS = [
-    'packages/ddgi-core',
+    'packages/core',
     'packages/bvh',
     ':(glob)tools/gpu/*',
     ':(glob)tools/gpu/pages/trace-*/**',

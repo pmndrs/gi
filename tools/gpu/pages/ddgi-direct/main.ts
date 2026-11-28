@@ -30,7 +30,7 @@
  *   follow the ray, not the list's order, so they should be identical.
  */
 
-import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { assert } from '../../client.ts';
 import { halfToFloat, imageMean, readTextureBytes, TestView } from '../ddgi-shared/harness.ts';

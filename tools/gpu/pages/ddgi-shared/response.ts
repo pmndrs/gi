@@ -7,11 +7,11 @@
  * Not a page itself (no index.html).
  */
 
-import type { FrameBudget, FrameCamera, FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import type { DDGISettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { FrameBudget, FrameCamera, FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { PROBE_HISTORY_FLAGS_MASK, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import type { DDGISettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { halfToFloat, readBuffer } from './harness.ts';
 import { applyHysteresisMode, FIXED_097, parseHysteresisMode } from './hysteresis-modes.ts';

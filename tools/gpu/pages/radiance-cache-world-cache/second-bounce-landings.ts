@@ -21,11 +21,11 @@
  * cell no level of which has been lit adds no sample, as on the GPU.
  */
 
-import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import type { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { HASH_GRID_COUNTER } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import type { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
+import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.ts';
+import { halfBitsToFloat, unpackHalf3 } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
+import type { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { HASH_GRID_COUNTER } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import type { HashGridCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
     hashGridCacheCellOffsetMip0,
@@ -34,10 +34,10 @@ import {
     hashGridCacheGetCellSize,
     verticalFieldOfView,
     type CellValue,
-} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
-import { MULTIBOUNCE_DIRECT_WORDS, MULTIBOUNCE_INFO_WORDS, MULTIBOUNCE_MISS_CELL, MULTIBOUNCE_RAY_WORDS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
-import { multibounceSample } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/multibounce-cpu.ts';
-import { WORLD_CACHE_PROBE_RAY_BYPASS, WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+import { MULTIBOUNCE_DIRECT_WORDS, MULTIBOUNCE_INFO_WORDS, MULTIBOUNCE_MISS_CELL, MULTIBOUNCE_RAY_WORDS } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-population-wgsl.ts';
+import { multibounceSample } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/multibounce-cpu.ts';
+import { WORLD_CACHE_PROBE_RAY_BYPASS, WORLD_CACHE_PROBE_RAY_BYTES, WORLD_CACHE_PROBE_RAYS_HEADER_BYTES } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
 import { frameCamera, type PageCamera } from '../radiance-cache-probes/screen.ts';
 
 /** A tile under this size (its finest cells × the hit's cell size) can't reach from the ceiling to the floor 3 m below. */

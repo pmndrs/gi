@@ -51,8 +51,8 @@ function inlineWorkers(): Plugin {
 // Library build for @pmndrs/gi. One entry per public subpath: `/core` (the
 // platform), `/ddgi` (the DDGI technique), `/radiance-cache` (the radiance
 // cache), `/radiance-cascades` (Split RC), `/three` (the three.js adapter) and
-// `.` (the same as `/three`). The private workspace packages (@pmndrs/ddgi-core,
-// @pmndrs/ddgi-three) are bundled in.
+// `.` (the same as `/three`). The private workspace packages (@pmndrs/gi-core,
+// -three, -ddgi, -ddgi-three, -cache) are bundled in.
 //
 // Each module lands in exactly one chunk, so every entry sees the same classes
 // (an `instanceof` across subpaths must hold). The chunks are cut by layer

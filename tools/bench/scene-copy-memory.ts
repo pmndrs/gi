@@ -22,8 +22,8 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NONE } from '../../packages/ddgi-core/src/platform/scene/layout.ts';
-import { packMesh } from '../../packages/ddgi-core/src/platform/scene/mesh-packing.ts';
+import { NONE } from '../../packages/core/src/platform/scene/layout.ts';
+import { packMesh } from '../../packages/core/src/platform/scene/mesh-packing.ts';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 

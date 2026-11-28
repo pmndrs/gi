@@ -31,7 +31,7 @@ import { createServer } from 'vite';
 import { CdpClient } from '../../../tools/gpu/cdp.ts';
 import { discoverGpuLuid, findBrowser, removeProfile, startChrome } from '../../../tools/gpu/chrome.ts';
 import { installShutdownHandlers, registerCleanup, runCleanups } from '../../../tools/gpu/cleanup.ts';
-import { ddgiPreset, type DDGIPresetName } from '../../../packages/ddgi-core/src/techniques/ddgi/presets.ts';
+import { ddgiPreset, type DDGIPresetName } from '../../../packages/core/src/techniques/ddgi/presets.ts';
 
 const viewerDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(viewerDirectory, '..', '..');

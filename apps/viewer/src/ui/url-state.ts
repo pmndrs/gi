@@ -24,7 +24,7 @@
  *                (RC1.1): `screen-depth`, `screen-normal`, `screen-velocity`, `screen-albedo`, `screen-instance`
  * - `rcdebug`    one of the radiance cache's debug views (RC2.2): `probe-atlas`, `probe-mask`, `probe-sh`
  * - `rcblend`, `rcfill`, `rccap`, ... the radiance cache's compare toggles (RC4.5), each under its
- *                registry entry's `urlName` (packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts),
+ *                registry entry's `urlName` (packages/core/src/techniques/radiance-cache/compare-toggles.ts),
  *                written only when it differs from ours: `rcblend=capsaicin-hysteresis&rcfill=capsaicin`
  * - `probecolor` `history` colours DDGI's probe spheres by how settled they are, `irradiance` by each
  *                probe's own light (RTXGI's probe view) (default: by state)
@@ -56,8 +56,8 @@
 import { MAX_DEFAULT_EXPOSURE_EV } from '../../../../scenes/src/manifest';
 import type { GiTechniqueId, TechniqueId, UpscaleQuality } from '../techniques/types';
 import { TEXTURE_COMPRESSIONS, type TextureCompression } from '../scene/texture-compression-mode';
-import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets';
-import { COMPARE_URL_NAMES, readCompareValues, writeCompareValues, type CompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles';
+import { ddgiPreset, isDDGIPresetName, type DDGIPresetName } from '../../../../packages/core/src/techniques/ddgi/presets';
+import { COMPARE_URL_NAMES, readCompareValues, writeCompareValues, type CompareValues } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles';
 
 /**
  * The wind slider's start, a share of the strongest wind (`MAX_WIND_REACH_M`,

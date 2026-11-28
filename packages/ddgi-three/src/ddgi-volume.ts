@@ -37,9 +37,8 @@
  */
 
 import { AnalyticLightNode, Box3, Light, Vector3, type Node, type Scene, type WebGPURenderer } from 'three/webgpu';
-import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform, type LoadedField, type LoadFieldOptions, type ProbeResetRequest, type Vec3 } from '@pmndrs/ddgi-core';
-import { GI_LIGHT_PRIORITY, type GILight } from './gi-light.ts';
-import type { ThreeGI } from './three-gi.ts';
+import { exportIrradianceSH, probeGrid, type DDGIVolumeSettings, type GIPlatform, type LoadedField, type LoadFieldOptions, type ProbeResetRequest, type Vec3 } from '@pmndrs/gi-core';
+import { GI_LIGHT_PRIORITY, type GILight, type ThreeGI } from '@pmndrs/gi-three';
 import { toLightProbeGrid, type ExportedLightProbeGrid, type ToLightProbeGridOptions } from './light-probe-grid.ts';
 import { restartVolume, startVolume, type DDGIVolumeStartOptions, type StartedGI } from './volume-start.ts';
 

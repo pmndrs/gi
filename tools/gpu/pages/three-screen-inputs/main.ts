@@ -1,7 +1,7 @@
 /**
  * RC1.1 on Sponza with its curtains (`sponza`), at its first bookmark: the
  * three adapter fills the platform's `FrameScreen` from the host's own MRT
- * scene pass (`screenInputs`, packages/ddgi-three/src/screen-inputs.ts), and
+ * scene pass (`screenInputs`, packages/three/src/screen-inputs.ts), and
  * a test technique reads it inside `encodeScreen` (screen-probe.ts).
  *
  * Checks, each by read-back at a grid of sample pixels:
@@ -42,10 +42,10 @@
 import { AdditiveBlending, BlendMode, BoxGeometry, MaterialBlending, Matrix3, Mesh, MeshBasicMaterial, MeshStandardMaterial, MultiplyBlending, NormalBlending, PlaneGeometry, Raycaster, RenderPipeline, Vector2, Vector3, type Material, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { assert } from '../../client.ts';
-import { instanceDebugColor, SCREEN_CHANNELS, type ScreenChannel } from '../../../../packages/ddgi-core/src/platform/screen/screen-inputs-view.ts';
-import type { FrameScreen } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { GI_SCREEN_ALBEDO_OUTPUT, GI_SCREEN_INSTANCE_OUTPUT, GI_SCREEN_NORMAL_OUTPUT, GI_SCREEN_VELOCITY_OUTPUT, GIScreenChannelNode, screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
-import { GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
+import { instanceDebugColor, SCREEN_CHANNELS, type ScreenChannel } from '../../../../packages/core/src/platform/screen/screen-inputs-view.ts';
+import type { FrameScreen } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { GI_SCREEN_ALBEDO_OUTPUT, GI_SCREEN_INSTANCE_OUTPUT, GI_SCREEN_NORMAL_OUTPUT, GI_SCREEN_VELOCITY_OUTPUT, GIScreenChannelNode, screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
+import { GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
 import { runThreePage, type ThreePageContext } from '../three-shared/harness.ts';
 import { advanceThreeFrame, loadCompositeScene, type CompositeScene } from '../three-composite-shared/composite-check.ts';
 import { readInstanceIds, readPassTarget, readRgba8, type TargetImage } from './readback.ts';

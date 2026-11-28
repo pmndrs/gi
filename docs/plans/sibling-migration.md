@@ -5,7 +5,7 @@ Plan written 2026-11-19 for Dennis's decision of that day (DECISIONS: gi uses th
 
 Read on 2026-11-19: gi `origin/main` 0d55a09, `origin/radiance-cache` 7c80225, bvh 6163232, downsampler 78d5407. Nothing was committed or filed.
 
-## 1. Inventory (every import is in `packages/ddgi-core/src/platform/`)
+## 1. Inventory (every import is in `packages/core/src/platform/`)
 
 The trace imports are the same on both branches. 0.1.0 exports only `.`, `/worker`, `/three` and `/babylon`, so **every deep subpath import breaks**. Each one has to move to the root import.
 

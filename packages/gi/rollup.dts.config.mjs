@@ -3,7 +3,7 @@ import { dts } from 'rollup-plugin-dts';
 import { layerChunk } from './layer-chunks.ts';
 
 // Bundles one .d.ts per public entry. The private workspace packages
-// (@pmndrs/ddgi-core / -three) are inlined, so the published types never name a
+// (@pmndrs/gi-core / -three) are inlined, so the published types never name a
 // package that isn't on npm; three and the npm dependencies stay external. The
 // radiance cache's neural tail names `@pathtracer/mlp`'s types, a package that
 // isn't on npm: tsconfig.build.json maps it to the repository's declarations of

@@ -204,7 +204,7 @@ function Clear-FolderContents([string]$Path) {
 #   'cells' (default): probes sit at the centres of equal cells that cover the manifest volume
 #           exactly (the same layout as three.js LightProbeGrid): counts = ceil(size / spacing),
 #           actual spacing = size / counts.
-#   'ddgi'  : the grid of our DDGI technique (probeGrid() in packages/ddgi-core, see
+#   'ddgi'  : the grid of our DDGI technique (probeGrid() in packages/core, see
 #           docs/design/ddgi.md): counts = floor(size / spacing) + 1 per axis, spacing exactly as
 #           given. Used for timing at matched probe counts and positions (T1.9).
 function Get-VolumeGrid($Volume, [double]$ProbeSpacing = 0, [ValidateSet('cells', 'ddgi')][string]$GridRule = 'cells') {

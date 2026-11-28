@@ -76,8 +76,9 @@
         }
     },
     "devDependencies": {
-        "@pmndrs/ddgi-core": "workspace:*",
-        "@pmndrs/ddgi-three": "workspace:*",
+        "@pmndrs/gi-core": "workspace:*",
+        "@pmndrs/gi-ddgi-three": "workspace:*",
+        "@pmndrs/gi-three": "workspace:*",
         "@types/three": "0.187.0",
         "rollup": "^4.62.2",
         "rollup-plugin-dts": "^6.2.1",

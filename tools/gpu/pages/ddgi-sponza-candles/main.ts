@@ -34,7 +34,7 @@
 import type { PointLight } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
-import { MAX_UNRANGED_LIGHT_ENTRIES } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import { MAX_UNRANGED_LIGHT_ENTRIES } from '../../../../packages/core/src/techniques/ddgi/mark-table.ts';
 import { startViewerScene, yieldToCallbacks, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';
 

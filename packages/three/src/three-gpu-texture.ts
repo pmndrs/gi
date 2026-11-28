@@ -29,7 +29,7 @@ export function checkThreeRevision(revision: string): void {
     if (revision !== PINNED_THREE_REVISION) {
         throw new Error(
             `@pmndrs/gi/three: the screen inputs read three's render targets through its WebGPU backend, which was checked on three r${PINNED_THREE_REVISION}; ` +
-                `this is r${revision}. See packages/ddgi-three/src/three-gpu-texture.ts for what to check before allowing it.`,
+                `this is r${revision}. See packages/three/src/three-gpu-texture.ts for what to check before allowing it.`,
         );
     }
 }

@@ -37,11 +37,11 @@
  * `node tools/reference/bench-lock.ts run --no-cool-wait --what "rc2.2 image" -- pnpm test:gpu --filter radiance-cache-image --gpu nvidia` (or intel).
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { equirectUvToDirection } from '../../../../packages/ddgi-core/src/platform/sky/equirect.ts';
-import { cameraRelativeInverseViewProjection } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/camera.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { equirectUvToDirection } from '../../../../packages/core/src/platform/sky/equirect.ts';
+import { cameraRelativeInverseViewProjection } from '../../../../packages/core/src/techniques/radiance-cache/camera.ts';
 import {
     INVALID_ID,
     integrateHemisphereSH,
@@ -52,13 +52,13 @@ import {
     unpackSeed,
     type Direction,
     type InterpolationInputs,
-} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
-import { screenProbeCellSize, viewForward } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/screen-irradiance.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { PROBE_SIZE } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/debug.ts';
-import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
-import { SH_BLOCK_SIZE, SH_COEFFICIENTS } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/wgsl/spherical-harmonics.ts';
+} from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
+import { screenProbeCellSize, viewForward } from '../../../../packages/core/src/techniques/radiance-cache/screen-irradiance.ts';
+import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { PROBE_SIZE } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { RADIANCE_CACHE_DEBUG_VIEW, type RadianceCacheDebugViewId } from '../../../../packages/core/src/techniques/radiance-cache/wgsl/debug.ts';
+import { PROBE_SPAWN_SEEDS_OFFSET } from '../../../../packages/core/src/techniques/radiance-cache/wgsl/screen-probes.ts';
+import { SH_BLOCK_SIZE, SH_COEFFICIENTS } from '../../../../packages/core/src/techniques/radiance-cache/wgsl/spherical-harmonics.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { readBuffer } from '../ddgi-shared/harness.ts';
 import { halves, readTexture } from '../radiance-cache-probes/readback.ts';

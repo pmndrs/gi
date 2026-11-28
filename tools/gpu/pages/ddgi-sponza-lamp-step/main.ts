@@ -35,7 +35,7 @@
 import type { PointLight } from 'three/webgpu';
 import { assert } from '../../client.ts';
 import { BUILT_IN_MOTIONS, motionState, STEP_SECONDS, type CameraBookmark } from '../../../../scenes/src/manifest.ts';
-import { FAR_RULE_FRAMES } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { FAR_RULE_FRAMES } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
 import { imageMean } from '../ddgi-shared/harness.ts';
 import { describeErrors, stepResponse } from '../ddgi-shared/response.ts';
 import { convergeSponza, sponzaFrames, startSponza, VIEW_HEIGHT, VIEW_WIDTH, type SponzaUnderTest } from '../ddgi-shared/sponza-response.ts';

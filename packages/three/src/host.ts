@@ -13,7 +13,7 @@
  */
 
 import { WebGPURenderer } from 'three/webgpu';
-import { requiredLimits, type RequiredLimits } from '@pmndrs/ddgi-core';
+import { requiredLimits, type RequiredLimits } from '@pmndrs/gi-core';
 
 type RendererParameters = NonNullable<ConstructorParameters<typeof WebGPURenderer>[0]>;
 

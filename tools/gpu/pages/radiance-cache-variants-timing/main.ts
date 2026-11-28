@@ -27,15 +27,15 @@
  * `VITE_RC_VARIANTS` and `VITE_RC_VARIANT_SCENES` pick a subset (comma-separated).
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { GITechnique, TechniqueContext } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { GpuTimer } from '../../../../packages/ddgi-core/src/platform/timing/gpu-timer.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type RadianceCacheVariantPreset } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { GITechnique, TechniqueContext } from '../../../../packages/core/src/platform/contract/technique.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { GpuTimer } from '../../../../packages/core/src/platform/timing/gpu-timer.ts';
+import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { hostCompareValue, RADIANCE_CACHE_VARIANT_PRESETS, setCompareValues, type RadianceCacheVariantPreset } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
+import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { STACKED_DDGI_PROBES_PER_FRAME } from '../../../../apps/viewer/src/techniques/radiance-cache-technique.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';

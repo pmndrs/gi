@@ -47,7 +47,7 @@ import {
     type Scene,
     type Texture,
 } from 'three';
-import type { EnvironmentDescriptor, SceneApi, Vec3 } from '@pmndrs/ddgi-core';
+import type { EnvironmentDescriptor, SceneApi, Vec3 } from '@pmndrs/gi-core';
 import { luminance } from './convert.ts';
 import { CUBE_FACE_COUNT, flipPixels, mirroredCubeFaces, type CubeFacePixels, type PixelArray } from './cube-mirror.ts';
 

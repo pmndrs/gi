@@ -20,8 +20,8 @@
  */
 
 import { DataTexture, Mesh, MeshStandardMaterial, NoColorSpace, PlaneGeometry, Scene } from 'three';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { frame, ShadeKernel } from '../hit-shading-shared/harness.ts';
 

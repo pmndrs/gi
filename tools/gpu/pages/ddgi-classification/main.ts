@@ -38,10 +38,10 @@
 import { assert, runGpuTest } from '../../client.ts';
 import { createDdgiScene, readProbeData, readTextureBytes, runFrames, type DdgiScene, type ProbeRecord, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import type { ProceduralScene } from '../../../../scenes/src/scene-data.ts';
-import { BYTES_PER_TEXEL, PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import { AUTO_MIN_FRONT_FACE_SHARE, resolveBias } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
-import { probeResetFlags, resetProbeDataTexel, type ProbeResetRequest } from '../../../../packages/ddgi-core/src/techniques/ddgi/probe-reset.ts';
-import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
+import { BYTES_PER_TEXEL, PROBE_STATE } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import { AUTO_MIN_FRONT_FACE_SHARE, resolveBias } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { probeResetFlags, resetProbeDataTexel, type ProbeResetRequest } from '../../../../packages/core/src/techniques/ddgi/probe-reset.ts';
+import type { PhaseBReduction } from '../../../../packages/core/src/techniques/ddgi/wgsl/blend.ts';
 import { CORNELL_DEPTH_M, CORNELL_HEIGHT_M, CORNELL_WIDTH_M } from '../../../../scenes/src/procedural/cornell-box.ts';
 import { CABINET_ROOM_SIZE_M } from '../../../../scenes/src/procedural/cabinet-row.ts';
 

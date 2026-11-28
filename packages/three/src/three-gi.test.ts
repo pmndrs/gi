@@ -1,7 +1,6 @@
 import { BoxGeometry, Color, Matrix4, Mesh, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, PointLight, Scene, Texture, Vector3, type Camera } from 'three';
 import { describe, expect, it } from 'vitest';
-import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/ddgi-core';
-import { DDGIVolume } from './ddgi-volume.ts';
+import type { FrameInput, GIPlatform, SceneApi, ShadingModule } from '@pmndrs/gi-core';
 import { jitterPixelsToNdc, ThreeGI, upscalerJitter } from './three-gi.ts';
 
 /** A shading module whose shape can be changed, like a technique switching its code. */
@@ -163,18 +162,16 @@ describe('ThreeGI', () => {
         expect(scene.children.filter((child) => (child as { isGILight?: boolean }).isGILight)).toHaveLength(1);
     });
 
-    it('has the GI light follow the intensity and priority of a DDGIVolume', () => {
+    it('has the GI light follow the intensity and priority of a volume (a DDGIVolume, packages/ddgi-three)', () => {
         const platform = fakePlatform(fakeShading());
         const scene = new Scene();
-        const volume = new DDGIVolume(4, 4, 4);
-        scene.add(volume);
+        const volume = { intensity: 1, priority: 0 };
         const threeGI = new ThreeGI(platform.gi, scene, { volume });
         volume.intensity = 0.5;
         volume.priority = 7;
         threeGI.update(new PerspectiveCamera());
         expect(threeGI.light.intensity).toBe(0.5);
         expect(threeGI.light.priority).toBe(7);
-        expect(threeGI.sync.counts.lights).toBe(0);
     });
 
     it('computes coverage for a material with its own envMap, without scene.environment', () => {

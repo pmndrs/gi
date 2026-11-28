@@ -1,6 +1,6 @@
 /**
  * three.js objects to the platform's plain scene descriptors (`SceneApi`,
- * packages/ddgi-core/src/platform/contract/scene.ts).
+ * packages/core/src/platform/contract/scene.ts).
  *
  * Pure conversions: nothing here touches the GPU or keeps state, so each rule
  * has a unit test (convert.test.ts). The scene sync (scene-sync.ts) decides
@@ -73,7 +73,7 @@ import type {
     UvMapping,
     UvWrap,
     Vec3,
-} from '@pmndrs/ddgi-core';
+} from '@pmndrs/gi-core';
 import { blocksLightOptIn, castsShadowsForGI, giAlbedoMapOverride, giAlbedoOverride, giEmissiveOverride, lightGroup, singleSidedForGI } from './user-data.ts';
 
 // ---------------------------------------------------------------------------

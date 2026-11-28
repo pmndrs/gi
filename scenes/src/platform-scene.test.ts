@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { InstanceDescriptor, MaterialDescriptor, MeshDescriptor, SceneApi, TextureDescriptor } from '../../packages/ddgi-core/src/platform/contract/scene';
+import type { InstanceDescriptor, MaterialDescriptor, MeshDescriptor, SceneApi, TextureDescriptor } from '../../packages/core/src/platform/contract/scene';
 import { describeProceduralScene } from './platform-scene';
 import { buildAlphaChecker, buildGlassWall } from './procedural/see-through-walls';
 import { buildTexturedFurnace } from './procedural/textured-furnace';

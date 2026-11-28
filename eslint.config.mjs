@@ -4,7 +4,7 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import globals from 'globals';
 
-/** What ddgi-core may never import: engines, the adapters, or the published package. */
+/** What gi-core may never import: engines, the adapters, or the published package. */
 const ENGINE_FREE_IMPORTS = {
     group: [
         'three',
@@ -14,11 +14,14 @@ const ENGINE_FREE_IMPORTS = {
         'pixi.js/*',
         '@pmndrs/gi',
         '@pmndrs/gi/*',
-        '@pmndrs/ddgi-three',
-        '@pmndrs/ddgi-three/*',
+        '@pmndrs/gi-three',
+        '@pmndrs/gi-three/*',
+        '@pmndrs/gi-ddgi-three',
+        '@pmndrs/gi-ddgi-three/*',
+        '**/three/src/**',
         '**/ddgi-three/**',
     ],
-    message: 'ddgi-core must stay engine-free: do not import three, babylon, pixi or ddgi-three here. Put engine code in an adapter package.',
+    message: 'gi-core must stay engine-free: do not import three, babylon, pixi or the three.js packages here. Put engine code in an adapter package.',
 };
 
 // The core's layers (SPEC "Engine boundary"; docs/design/radiance-cache.md):
@@ -35,14 +38,14 @@ const ENGINE_FREE_IMPORTS = {
 // import against the importing file and judges the file it lands on, so
 // `../../platform/contract/../trace/x.ts`, any number of `../` and a
 // technique's own folder named like another technique are all judged right.
-const CORE_SRC = fileURLToPath(new URL('./packages/ddgi-core/src/', import.meta.url));
+const CORE_SRC = fileURLToPath(new URL('./packages/core/src/', import.meta.url));
 const PACKAGES_DIR = fileURLToPath(new URL('./packages/', import.meta.url));
 const TECHNIQUE_IMPORT_MESSAGE = 'A technique may import only platform/contract and its own folder. Reach platform features through the contract (add to it if something is missing), not through platform internals, the core entry point, the BVH package or another technique.';
 const PLATFORM_IMPORT_MESSAGE = 'The platform may not import a technique (or the core entry point that assembles them): techniques depend on the platform, never the other way round. Put shared code in the platform and export it through platform/contract.';
 // Package names that lead into the repo's own packages from a bare specifier.
-const OWN_PACKAGE_PREFIXES = ['@pmndrs/bvh', '@pmndrs/ddgi-core'];
+const OWN_PACKAGE_PREFIXES = ['@pmndrs/bvh', '@pmndrs/gi-core'];
 
-/** Path segments of `file` below ddgi-core's `src/`, or null when it is outside. */
+/** Path segments of `file` below gi-core's `src/`, or null when it is outside. */
 function coreSegments(file) {
     const fromCore = path.relative(CORE_SRC, file);
     if (fromCore.startsWith('..') || path.isAbsolute(fromCore)) return null;
@@ -125,13 +128,13 @@ export default tseslint.config(
     },
     {
         // The core runs on a bare GPUDevice; engines live in their adapters.
-        files: ['packages/ddgi-core/**/*.ts'],
+        files: ['packages/core/**/*.ts'],
         rules: {
             'no-restricted-imports': ['error', { patterns: [ENGINE_FREE_IMPORTS] }],
             // no-restricted-imports only sees static imports, so catch import('three') too.
             'no-restricted-syntax': ['error', {
-                selector: "ImportExpression[source.value=/^(three|@babylonjs\\/|pixi\\.js|@pmndrs\\/gi(\\/|$))|ddgi-three/]",
-                message: 'ddgi-core must stay engine-free: do not import three, babylon, pixi or ddgi-three here. Put engine code in an adapter package.',
+                selector: "ImportExpression[source.value=/^(three|@babylonjs\\/|pixi\\.js|@pmndrs\\/gi(\\/|$))|gi-three|ddgi-three|three\\/src/]",
+                message: 'gi-core must stay engine-free: do not import three, babylon, pixi or the three.js packages here. Put engine code in an adapter package.',
             }],
         },
     },
@@ -140,7 +143,7 @@ export default tseslint.config(
         // may not import a technique; techniques build on the platform, not the other way.
         // Tests may, to drive the platform with DDGI. The engine patterns are repeated:
         // a later block's options for a rule replace an earlier block's.
-        files: ['packages/ddgi-core/src/platform/**/*.ts'],
+        files: ['packages/core/src/platform/**/*.ts'],
         ignores: ['**/*.test.ts'],
         rules: {
             'no-restricted-imports': ['error', {
@@ -157,7 +160,7 @@ export default tseslint.config(
     {
         // Techniques import only platform/contract and their own folder; the
         // platform never imports a technique (see coreLayersRule above).
-        files: ['packages/ddgi-core/src/**/*.ts'],
+        files: ['packages/core/src/**/*.ts'],
         plugins: { local: localPlugin },
         rules: {
             'local/core-layers': 'error',
@@ -180,31 +183,33 @@ export default tseslint.config(
                         'pixi.js/*',
                         '@pmndrs/gi',
                         '@pmndrs/gi/*',
-                        '@pmndrs/ddgi-core',
-                        '@pmndrs/ddgi-core/*',
-                        '@pmndrs/ddgi-three',
-                        '@pmndrs/ddgi-three/*',
-                        '**/ddgi-core/**',
-                        '**/ddgi-three/**',
+                        '@pmndrs/gi-core',
+                        '@pmndrs/gi-core/*',
+                        '@pmndrs/gi-*',
+                        '**/core/src/**',
+                        '**/three/src/**',
                         '**/ddgi/src/**',
+                        '**/ddgi-three/src/**',
+                        '**/cache/src/**',
+                        '**/gi/src/**',
                     ],
-                    message: 'packages/bvh must stay engine-free and independent of the GI code: no ddgi-core, ddgi-three, three or other engines here.',
+                    message: 'packages/bvh must stay engine-free and independent of the GI code: no gi-core, the technique or three.js packages, three or other engines here.',
                 }],
             }],
             'no-restricted-syntax': ['error', {
-                selector: "ImportExpression[source.value=/^(three|@babylonjs\\/|pixi\\.js|@pmndrs\\/gi(\\/|$))|ddgi-(core|three)/]",
-                message: 'packages/bvh must stay engine-free and independent of the GI code: no ddgi-core, ddgi-three, three or other engines here.',
+                selector: "ImportExpression[source.value=/^(three|@babylonjs\\/|pixi\\.js|@pmndrs\\/gi(\\/|-|$))/]",
+                message: 'packages/bvh must stay engine-free and independent of the GI code: no gi-core, the technique or three.js packages, three or other engines here.',
             }],
         },
     },
     {
         // The three.js adapter depends on the core and three only.
-        files: ['packages/ddgi-three/**/*.ts'],
+        files: ['packages/three/**/*.ts', 'packages/ddgi-three/**/*.ts'],
         rules: {
             'no-restricted-imports': ['error', {
                 patterns: [{
                     group: ['@babylonjs/*', 'pixi.js', 'pixi.js/*', '@pmndrs/gi', '@pmndrs/gi/*'],
-                    message: 'ddgi-three may import only three and @pmndrs/ddgi-core.',
+                    message: 'The three.js packages may import only three and the gi workspace packages.',
                 }],
             }],
         },

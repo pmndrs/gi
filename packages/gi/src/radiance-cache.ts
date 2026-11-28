@@ -7,4 +7,4 @@
 // Its image-space denoiser is the `denoiser` package's `Gi1Denoiser` (a dependency).
 // The optional neural tail (`neuralCache: 'tail'`) loads `@pathtracer/mlp` at run
 // time; it isn't on npm or a dependency, and without it the tail turns off.
-export * from '@pmndrs/ddgi-core/techniques/radiance-cache/index';
+export * from '@pmndrs/gi-core/techniques/radiance-cache/index';

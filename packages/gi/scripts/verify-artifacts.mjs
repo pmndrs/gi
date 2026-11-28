@@ -11,7 +11,7 @@ import { ENTRY_LAYERS, LAYER_CHUNKS } from '../layer-chunks.ts';
 const packageRoot = resolve(import.meta.dirname, '..');
 const dist = resolve(packageRoot, 'dist');
 const publicEntries = ['index', 'core', 'ddgi', 'three', 'radiance-cascades', 'radiance-cache'];
-const privatePackagePrefix = '@pmndrs/ddgi-';
+const privatePackagePrefix = '@pmndrs/gi-';
 
 const problems = [];
 

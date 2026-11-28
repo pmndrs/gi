@@ -15,8 +15,8 @@
 
 import { assert, runGpuTest } from '../../client.ts';
 import { createDdgiScene, runFrame, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { FrameBudget } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { FrameBudget } from '../../../../packages/core/src/platform/contract/frame.ts';
 
 const SCENES = ['cornell-box-point', 'two-room'] as const;
 const UNITS = [128, 512, 1024] as const;

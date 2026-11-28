@@ -49,10 +49,10 @@
 import { Box3, BoxGeometry, Euler, FloatType, Layers, Matrix4, Mesh as ThreeMesh, MeshStandardMaterial, PerspectiveCamera, RenderPipeline, RenderTarget, Vector3, type Mesh, type Node, type Object3D, type Scene, type WebGPURenderer } from 'three/webgpu';
 import { vec4 } from 'three/tsl';
 import { assert } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
-import { DDGICompositeNode, DEFAULT_GI_OCCLUSION_RADIUS, type GIOcclusionSettings } from '../../../../packages/ddgi-three/src/composite.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
+import { DDGICompositeNode, DEFAULT_GI_OCCLUSION_RADIUS, type GIOcclusionSettings } from '../../../../packages/three/src/composite.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { runSteps, runThreePage, type ThreePageContext } from '../three-shared/harness.ts';

@@ -54,12 +54,12 @@
 
 import type { PerspectiveCamera } from 'three/webgpu';
 import { assert, runGpuTest } from '../../client.ts';
-import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-core/src/platform/contract/shading-module.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { DDGIFieldVolume } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { PROBE_HISTORY_FLAG, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import type { DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
-import { WINDOW_MOVE_SPACINGS, windowProbeOf } from '../../../../packages/ddgi-core/src/techniques/ddgi/scroll.ts';
+import type { ShadingModule, ShadingParameter } from '../../../../packages/core/src/platform/contract/shading-module.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { DDGIFieldVolume } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { PROBE_HISTORY_FLAG, PROBE_HISTORY_UPDATES, PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS, PROBE_STATE } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import type { DDGIVolumeSettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { WINDOW_MOVE_SPACINGS, windowProbeOf } from '../../../../packages/core/src/techniques/ddgi/scroll.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { halfToFloat, loadManifest, readBuffer, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { startViewerScene, warmUp, yieldToCallbacks, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';

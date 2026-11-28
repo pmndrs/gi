@@ -50,11 +50,11 @@ import {
 } from 'three/webgpu';
 import { DataUtils, FloatType } from 'three';
 import { assert } from '../../client.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
-import { GILight } from '../../../../packages/ddgi-three/src/gi-light.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
+import { GILight } from '../../../../packages/three/src/gi-light.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { frame, ready, ShadeKernel, type Vec3 } from '../hit-shading-shared/harness.ts';
 import { runSteps, runThreePage } from '../three-shared/harness.ts';
 

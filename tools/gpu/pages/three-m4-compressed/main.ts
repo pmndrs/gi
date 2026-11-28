@@ -21,10 +21,10 @@
  */
 
 import { BoxGeometry, CompressedTexture, DataTexture, Mesh, MeshStandardMaterial, NoColorSpace, RGBA_BPTC_Format, SRGBColorSpace, Scene, type Texture } from 'three';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { CompressedPixelData } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { SceneSync } from '../../../../packages/ddgi-three/src/scene-sync.ts';
-import { textureDescriptor } from '../../../../packages/ddgi-three/src/convert.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { CompressedPixelData } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { SceneSync } from '../../../../packages/three/src/scene-sync.ts';
+import { textureDescriptor } from '../../../../packages/three/src/convert.ts';
 import { assert, runGpuTest } from '../../client.ts';
 import { frameInput } from '../ddgi-shared/harness.ts';
 import { bc7Level, blockColour, blockImage, largestByteDifference, readLayer, type LayerLevels } from '../textures-shared/textures.ts';

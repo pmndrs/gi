@@ -50,11 +50,11 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-core/src/platform/contract/shading-module.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { DDGIField } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import type { DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
-import { volumeEdgeCoverage, VOLUME_TABLE_FORMAT, VOLUME_TABLE_TEXELS } from '../../../../packages/ddgi-core/src/techniques/ddgi/volumes.ts';
+import type { ShadingModule, ShadingParameter } from '../../../../packages/core/src/platform/contract/shading-module.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { DDGIField } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import type { DDGIVolumeSettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import { volumeEdgeCoverage, VOLUME_TABLE_FORMAT, VOLUME_TABLE_TEXELS } from '../../../../packages/core/src/techniques/ddgi/volumes.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { createDdgiScene, readBuffer, releaseDeviceOnPageHide, runFrame } from '../ddgi-shared/harness.ts';
 

@@ -27,7 +27,7 @@
 import type { SkinnedMesh } from 'three';
 import { ExternalTexture, FloatType, NearestFilter, RGBAFormat, type ComputeNode, type Node, type StorageTexture, type WebGPURenderer } from 'three/webgpu';
 import { computeSkinning, Fn, If, instanceIndex, textureStore, uvec2, vec4 } from 'three/tsl';
-import type { DeformedPositions } from '@pmndrs/ddgi-core';
+import type { DeformedPositions } from '@pmndrs/gi-core';
 import type { PoseSource } from './deforming.ts';
 
 /**

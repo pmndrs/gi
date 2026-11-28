@@ -2,7 +2,7 @@
  * The tracer's GPU layout, as tinybvh's WASM writes it (stage B0b): what a
  * builder hands to the tracer when it writes the layout itself instead of a
  * `MeshTreeTopology` (topology.ts). The layout is defined, word by word, in
- * `packages/ddgi-core/src/platform/trace/layout.ts` (and the WGSL generated
+ * `packages/core/src/platform/trace/layout.ts` (and the WGSL generated
  * from it); `native/tinybvh-wasm.cpp` repeats it as C structs.
  *
  * The sizes and limits below are the one definition: layout.ts imports them

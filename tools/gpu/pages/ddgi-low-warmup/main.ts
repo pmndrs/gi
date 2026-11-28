@@ -9,7 +9,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { ddgiPreset, isDDGIPresetName } from '../../../../packages/ddgi-core/src/techniques/ddgi/presets.ts';
+import { ddgiPreset, isDDGIPresetName } from '../../../../packages/core/src/techniques/ddgi/presets.ts';
 import { createDdgiScene, frameInput, halfToFloat, loadManifest, readTextureBytes, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 
 const env = import.meta.env as Record<string, unknown>;

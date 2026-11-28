@@ -113,7 +113,7 @@
  */
 
 import { Matrix4, type Layers, type BufferAttribute, type BufferGeometry, type DirectionalLight, type InstancedMesh, type InterleavedBufferAttribute, type Light, type Material, type Mesh, type Object3D, type PointLight, type Scene, type Texture } from 'three';
-import type { Aabb, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/ddgi-core';
+import type { Aabb, EnvironmentDescriptor, InstanceHandle, LightChanges, LightDescriptor, LightHandle, MaterialDescriptor, MaterialHandle, MeshHandle, SceneApi, TextureHandle } from '@pmndrs/gi-core';
 import { LIGHT_NUMBER_COUNT, MaterialSnapshot, PHYSICAL_DECAY, readLightNumbers, lightDescriptor, luminance, materialDescriptor, materialSlotCount, meshDescriptor, textureDescriptor, unreadableTextureReason, usesUvChannel1 } from './convert.ts';
 import { EnvironmentSync, type EnvironmentSources, type PmndrsSkyLike, type SkyMeshLike, type Warn } from './environment.ts';
 import { hookMatrixWorld, matrixHookInPlace, StructureWatch, unhookMatrixWorld, type MatrixHook } from './change-watch.ts';

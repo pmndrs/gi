@@ -48,7 +48,7 @@ import type {
     SceneApi,
     TextureDescriptor,
     TextureHandle,
-} from '@pmndrs/ddgi-core';
+} from '@pmndrs/gi-core';
 import { ALWAYS_CHECKED_LIGHTS, DEFAULT_LIGHTS_PER_FRAME, HOT_FRAMES, SceneSync } from './scene-sync.ts';
 
 /** A SceneApi that records every call and keeps the live objects, for checking what the sync sent. */

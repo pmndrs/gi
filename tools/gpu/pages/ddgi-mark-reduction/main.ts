@@ -35,10 +35,10 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/ddgi-core/src/techniques/ddgi/layout.ts';
-import type { PhaseBReduction } from '../../../../packages/ddgi-core/src/techniques/ddgi/wgsl/blend.ts';
-import { ENVIRONMENT_CHANGE, MAX_GLOBAL_CHANGE } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+import { PROBE_HISTORY_WORD, PROBE_HISTORY_WORDS } from '../../../../packages/core/src/techniques/ddgi/layout.ts';
+import type { PhaseBReduction } from '../../../../packages/core/src/techniques/ddgi/wgsl/blend.ts';
+import { ENVIRONMENT_CHANGE, MAX_GLOBAL_CHANGE } from '../../../../packages/core/src/techniques/ddgi/mark-table.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import { createDdgiScene, readBuffer, readProbeData, readTextureBytes, releaseDeviceOnPageHide, runFrames } from '../ddgi-shared/harness.ts';
 
 const WARM_FRAMES = 64;

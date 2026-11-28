@@ -102,7 +102,7 @@
 
 import { AnalyticLightNode, Light, NodeUpdateType, Vector4, type Camera, type ExternalTexture, type Node, type NodeBuilder, type NodeFrame } from 'three/webgpu';
 import { If, INFINITY, cameraPosition, float, normalWorld, positionWorld, property, renderGroup, screenUV, select, texture, texture3D, uniform, vec3, wgsl, wgslFn } from 'three/tsl';
-import type { ShadingModule, ShadingParameter } from '@pmndrs/ddgi-core';
+import type { ShadingModule, ShadingParameter } from '@pmndrs/gi-core';
 import { compositeTakesGI } from './composite-mark.ts';
 import { wrapGpuTexture } from './external-texture.ts';
 

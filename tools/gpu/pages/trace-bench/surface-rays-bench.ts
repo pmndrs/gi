@@ -23,8 +23,8 @@ import {
     uploadTraceScene,
     type TraceSceneBuffers,
     type TraceSceneData,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
-import { createRandom } from '../../../../packages/ddgi-core/src/platform/trace/oracle-fixtures.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
+import { createRandom } from '../../../../packages/core/src/platform/trace/oracle-fixtures.ts';
 import type { AdapterSummary } from '../../contract.ts';
 import { drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { BENCH_SCENE_SUBSETS, RAY_DIRECTION_SEED, RC_HALTON_FIRST_INDEX, RC_RAYS_PER_PROBE, RC_SEED, RC_TILE_SIZE, RC_VIEW } from './config.ts';

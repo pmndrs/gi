@@ -23,7 +23,7 @@
  *
  * Until M4, the three adapter averages the colours of the base colour,
  * emissive and metalness maps on the CPU for GI's albedo and emission
- * (packages/ddgi-three/src/texture-average.ts), and it can't read a
+ * (packages/three/src/texture-average.ts), and it can't read a
  * `CompressedTexture`. Compressing those maps would make GI see the material's
  * plain colour instead (white on every Bistro material). So the default,
  * `'compressed'`, leaves those three maps as they are; `'all-compressed'`

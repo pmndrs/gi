@@ -39,7 +39,7 @@
 
 import { BoxGeometry, Box3, Mesh, MeshStandardMaterial, type Object3D } from 'three/webgpu';
 import { assert, runGpuTest } from '../../client.ts';
-import { NEAR_SET_SPACINGS } from '../../../../packages/ddgi-core/src/techniques/ddgi/mark-table.ts';
+import { NEAR_SET_SPACINGS } from '../../../../packages/core/src/techniques/ddgi/mark-table.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { TestView } from '../ddgi-shared/harness.ts';
 import { markRecall, missedByDistance, nearBox, perPixelError, probeSnapshot } from '../ddgi-shared/moving.ts';

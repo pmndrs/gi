@@ -17,9 +17,9 @@
  * `platform.encode` as `FrameCamera`.
  */
 
-import type { FrameCamera, FrameScreen } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { ComputeKernel } from '../../../../packages/ddgi-core/src/platform/contract/wgsl.ts';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { FrameCamera, FrameScreen } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { ComputeKernel } from '../../../../packages/core/src/platform/contract/wgsl.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 
 type Vector = [number, number, number];
 

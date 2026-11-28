@@ -44,11 +44,11 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { LightHandle } from '../../../../packages/ddgi-core/src/platform/contract/handles.ts';
-import type { ColorRGB } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import type { LightDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import type { DDGIField, DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import type { DDGISettingsInput } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { LightHandle } from '../../../../packages/core/src/platform/contract/handles.ts';
+import type { ColorRGB } from '../../../../packages/core/src/platform/contract/math.ts';
+import type { LightDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import type { DDGIField, DDGITechniqueOptions } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import type { DDGISettingsInput } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
 import { createDdgiScene, halfToFloat, imageMean, readBuffer, readTextureBytes, releaseDeviceOnPageHide, runFrame, runFrames, TestView, type DdgiScene } from '../ddgi-shared/harness.ts';
 
 const env = import.meta.env as Record<string, unknown>;

@@ -13,8 +13,8 @@
  * Engine-free; the contract is imported for types only.
  */
 
-import type { InstanceHandle, MaterialHandle, MeshHandle, TextureHandle } from '../../packages/ddgi-core/src/platform/contract/handles';
-import type { MaterialDescriptor, SceneApi, UvMapping } from '../../packages/ddgi-core/src/platform/contract/scene';
+import type { InstanceHandle, MaterialHandle, MeshHandle, TextureHandle } from '../../packages/core/src/platform/contract/handles';
+import type { MaterialDescriptor, SceneApi, UvMapping } from '../../packages/core/src/platform/contract/scene';
 import { uvMappingMatrix } from './procedural/textures';
 import type { ProceduralScene, SceneTextureReference } from './scene-data';
 

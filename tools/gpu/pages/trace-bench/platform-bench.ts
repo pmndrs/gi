@@ -14,8 +14,8 @@
  * reports the platform's memory: the scene copy and the acceleration buffers.
  */
 
-import type { FrameInput } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { FrameInput } from '../../../../packages/core/src/platform/contract/frame.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 import type { TracerId } from './config.ts';
 import type { DispatchTimer } from './dispatch-timer.ts';
 import type { BenchInstance, BenchMeshGeometry } from './gltf-geometry.ts';

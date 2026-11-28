@@ -70,7 +70,7 @@ The task reports in PROGRESS:
 
 ## Files
 
-- `packages/ddgi-three/src/`: `gi-volume.ts` (`start`), `gi-light.ts` (render-time update, the composite mark), new `composite.ts` (`ddgiComposite`, `giAlbedo`), `index.ts`.
+- `packages/three/src/`: `gi-volume.ts` (`start`), `gi-light.ts` (render-time update, the composite mark), new `composite.ts` (`ddgiComposite`, `giAlbedo`), `index.ts`.
 - `examples/three/` (new).
 - `tools/gpu/pages/three-composite/` (new): the match and cost checks.
 - The viewer gets a "GI composite" toggle afterwards, once Budget v2 and T1.13 are out of `apps/viewer`.

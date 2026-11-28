@@ -4,4 +4,4 @@
  * keeps the old import path working for the tools that name it.
  */
 
-export * from '../../../packages/ddgi-core/src/platform/sky/equirect.ts';
+export * from '../../../packages/core/src/platform/sky/equirect.ts';

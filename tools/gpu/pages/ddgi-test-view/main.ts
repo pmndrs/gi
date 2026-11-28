@@ -20,7 +20,7 @@
  */
 
 import { assert, runGpuTest } from '../../client.ts';
-import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import type { DDGISettingsInput, DDGIVolumeSettings } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
 import type { CameraBookmark } from '../../../../scenes/src/manifest.ts';
 import { createDdgiScene, floatsToBase64, imageMean, runFrames, TestView, type TestViewImages, releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { CORNELL_POINT_IN_AIR_VOLUME } from '../ddgi-shared/volumes.ts';

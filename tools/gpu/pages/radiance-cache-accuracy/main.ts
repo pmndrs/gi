@@ -92,14 +92,14 @@
 
 import { FloatType, NodeMaterial, PerspectiveCamera, QuadMesh, RenderTarget, type Mesh, type Node, type Object3D } from 'three/webgpu';
 import { mrt, normalView, output, packNormalToRGB, pass, uv, vec4 } from 'three/tsl';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { setCompareValues } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings, type WorldCacheKind } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
-import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { setCompareValues } from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings, type WorldCacheKind } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
+import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import { assert } from '../../client.ts';

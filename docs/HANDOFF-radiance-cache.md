@@ -4,7 +4,7 @@ Written on the Windows laptop for the next lead, a new agent on Dennis's Mac (M5
 
 ## What this track is
 
-The `radiance-cache` technique ports AMD's two-level radiance cache: GI-1.0, as shipped as GI-1.2 in Capsaicin v1.3, MIT licensed. It has screen-space probes plus a world-space hash-grid cache, and it is the second technique on the platform next to DDGI. The code lives in `packages/ddgi-core/src/techniques/radiance-cache/`. Research and the full plan are in the `ddgi` repo (`DennisSmolek/ddgi`), branch `claude/amd-gi-cache-research-e46e2e`, folder `research/gi-1.0/`. Start with `PLAN.md`, then `source-map.md`, `native-capsaicin.md` and `idtech8-performance.md`.
+The `radiance-cache` technique ports AMD's two-level radiance cache: GI-1.0, as shipped as GI-1.2 in Capsaicin v1.3, MIT licensed. It has screen-space probes plus a world-space hash-grid cache, and it is the second technique on the platform next to DDGI. The code lives in `packages/core/src/techniques/radiance-cache/`. Research and the full plan are in the `ddgi` repo (`DennisSmolek/ddgi`), branch `claude/amd-gi-cache-research-e46e2e`, folder `research/gi-1.0/`. Start with `PLAN.md`, then `source-map.md`, `native-capsaicin.md` and `idtech8-performance.md`.
 
 ## Branches (all pushed to origin)
 

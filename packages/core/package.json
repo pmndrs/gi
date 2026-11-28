@@ -1,8 +1,8 @@
 {
-    "name": "@pmndrs/ddgi-core",
+    "name": "@pmndrs/gi-core",
     "version": "0.0.0",
     "private": true,
-    "description": "Engine-agnostic WebGPU core of @pmndrs/gi: the GI platform and its techniques, on a bare GPUDevice. Bundled into the published package; never published on its own.",
+    "description": "The engine-free GI platform of @pmndrs/gi on a bare GPUDevice (and, until it moves to packages/radiance-cascades, Split RC). Bundled into the published package; never published on its own.",
     "license": "MIT",
     "type": "module",
     "sideEffects": false,

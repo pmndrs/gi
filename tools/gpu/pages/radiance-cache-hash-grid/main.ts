@@ -1,5 +1,5 @@
 /**
- * RC3.1: the radiance cache's hash grid (packages/ddgi-core/src/techniques/
+ * RC3.1: the radiance cache's hash grid (packages/core/src/techniques/
  * radiance-cache/world-cache) on the GPU, at Capsaicin's default capacity
  * (2^14 buckets × 16 tiles × 85 cells, about 1 GiB).
  *
@@ -43,14 +43,14 @@
  * `pnpm test:gpu --filter radiance-cache-hash-grid --gpu nvidia` (or intel).
  */
 
-import { GILimitError } from '../../../../packages/ddgi-core/src/platform/contract/errors.ts';
-import type { FrameCamera } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { Vec3 } from '../../../../packages/ddgi-core/src/platform/contract/math.ts';
-import { optionalFeatures, requiredLimits } from '../../../../packages/ddgi-core/src/platform/device-requirements.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { GpuTimerScope } from '../../../../packages/ddgi-core/src/platform/contract/timing.ts';
-import { cellResetFrameWords, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/capacity.ts';
-import { HashGridCache } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
+import { GILimitError } from '../../../../packages/core/src/platform/contract/errors.ts';
+import type { FrameCamera } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { Vec3 } from '../../../../packages/core/src/platform/contract/math.ts';
+import { optionalFeatures, requiredLimits } from '../../../../packages/core/src/platform/device-requirements.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { GpuTimerScope } from '../../../../packages/core/src/platform/contract/timing.ts';
+import { cellResetFrameWords, DEFAULT_HASH_GRID_CACHE_OPTIONS, hashGridCacheCapacity, type HashGridCacheOptions } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/capacity.ts';
+import { HashGridCache } from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cache.ts';
 import {
     hashGridCacheCellIndex,
     hashGridCacheCellSizeConstant,
@@ -62,7 +62,7 @@ import {
     xxHash,
     type HashGridCacheDesc,
     type HashGridCacheDescConstants,
-} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
+} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/hash-grid-cpu.ts';
 import {
     WORLD_CACHE_PROBE_RAY_BYPASS,
     WORLD_CACHE_PROBE_RAY_BYTES,
@@ -70,8 +70,8 @@ import {
     type WorldCacheContext,
     type WorldCacheFrame,
     type WorldCacheProbeRays,
-} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/world-cache/world-cache.ts';
-import { floatToHalfBits } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/capsaicin-math.ts';
+} from '../../../../packages/core/src/techniques/radiance-cache/world-cache/world-cache.ts';
+import { floatToHalfBits } from '../../../../packages/core/src/techniques/radiance-cache/capsaicin-math.ts';
 import { assert, drainDevice, reportGpuTest, summarizeAdapterInfo, watchDevice } from '../../client.ts';
 import { releaseDeviceOnPageHide } from '../ddgi-shared/harness.ts';
 import { COUNTER, createProbeRayReader, createTestIo, createTestKernels, HIT_WORDS, PROBE_RAY_READ_WORDS, RESULT_WORDS, TEST_WORKGROUP_SIZE, type TestIo, type TestKernel, type TestKernelName } from './test-kernels.ts';

@@ -50,7 +50,7 @@ import {
 } from 'three/webgpu';
 import { color as colorNode } from 'three/tsl';
 import { describe, expect, it } from 'vitest';
-import type { CompressedPixelData, MaterialDescriptor, PixelData, TextureHandle } from '@pmndrs/ddgi-core';
+import type { CompressedPixelData, MaterialDescriptor, PixelData, TextureHandle } from '@pmndrs/gi-core';
 import {
     CUSTOM_SHADING_ALBEDO,
     LIGHT_NUMBER_COUNT,

@@ -21,7 +21,7 @@ import {
     NODE_WORD,
     TOP_HEADER_WORD,
     TOP_LEVEL_HEADER_WORDS,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
 
 /** An instance box may be at most this much looser than the exact box, relative to the coordinates' size. */
 const BOX_SLACK = 1e-4;

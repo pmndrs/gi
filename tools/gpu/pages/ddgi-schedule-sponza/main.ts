@@ -37,9 +37,9 @@
 
 import { PointLight, Vector3, type DirectionalLight } from 'three/webgpu';
 import { assert } from '../../client.ts';
-import { cameraWeight, frustumPlanes } from '../../../../packages/ddgi-core/src/techniques/ddgi/camera.ts';
-import { priorityCount } from '../../../../packages/ddgi-core/src/techniques/ddgi/schedule.ts';
-import { DEFAULT_PRIORITY_SHARE, NEAR_CAMERA_WEIGHT } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
+import { cameraWeight, frustumPlanes } from '../../../../packages/core/src/techniques/ddgi/camera.ts';
+import { priorityCount } from '../../../../packages/core/src/techniques/ddgi/schedule.ts';
+import { DEFAULT_PRIORITY_SHARE, NEAR_CAMERA_WEIGHT } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
 import { imageMean, readProbeData, TestView } from '../ddgi-shared/harness.ts';
 import { applyHysteresisMode, FIXED_097, parseHysteresisMode } from '../ddgi-shared/hysteresis-modes.ts';

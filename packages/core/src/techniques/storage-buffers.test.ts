@@ -324,20 +324,20 @@ const PIPELINE_SOURCES: Readonly<Record<string, RegExp | 'no storage buffers'>> 
     'bvh/src/gpu-radix-sort.ts': /mesh trees sort/,
     'bvh/src/gpu-refit.ts': /refit bvhRefit/,
     'bvh/src/gpu-scan.ts': /mesh trees scan/,
-    'ddgi-core/src/platform/compute/gpu-compute.ts': /gi\/indirect-args|gi\/compaction/,
-    'ddgi-core/src/platform/kernel-builder.ts': /radiance-cache\/|ddgi\//,
-    'ddgi-core/src/platform/scene/gpu-mesh-packing.ts': /gi mesh pack/,
-    'ddgi-core/src/platform/scene/gpu-pose-copy.ts': /gi\/pose-copy/,
-    'ddgi-core/src/platform/screen/screen-history.ts': /gi\/screen-history/,
-    'ddgi-core/src/platform/screen/screen-inputs-view.ts': 'no storage buffers',
-    'ddgi-core/src/platform/screen/ssgi.ts': /ssgi/,
-    'ddgi-core/src/platform/sky/platform-sky.ts': /gi sky /,
-    'ddgi-core/src/platform/textures/texture-store.ts': /gi\/texture-store/,
-    'ddgi-core/src/platform/trace/trace-gpu.ts': /batch (closest|any)/,
-    'ddgi-core/src/techniques/ddgi/irradiance-sh.ts': /export-sh/,
-    'ddgi-core/src/techniques/radiance-cascades/native.ts': /^RC (begin|gather)/,
-    'ddgi-core/src/techniques/radiance-cascades/transport.ts': /^RC transport /,
-    'ddgi-three/src/instance-id-resolve.ts': 'no storage buffers',
+    'core/src/platform/compute/gpu-compute.ts': /gi\/indirect-args|gi\/compaction/,
+    'core/src/platform/kernel-builder.ts': /radiance-cache\/|ddgi\//,
+    'core/src/platform/scene/gpu-mesh-packing.ts': /gi mesh pack/,
+    'core/src/platform/scene/gpu-pose-copy.ts': /gi\/pose-copy/,
+    'core/src/platform/screen/screen-history.ts': /gi\/screen-history/,
+    'core/src/platform/screen/screen-inputs-view.ts': 'no storage buffers',
+    'core/src/platform/screen/ssgi.ts': /ssgi/,
+    'core/src/platform/sky/platform-sky.ts': /gi sky /,
+    'core/src/platform/textures/texture-store.ts': /gi\/texture-store/,
+    'core/src/platform/trace/trace-gpu.ts': /batch (closest|any)/,
+    'core/src/techniques/ddgi/irradiance-sh.ts': /export-sh/,
+    'core/src/techniques/radiance-cascades/native.ts': /^RC (begin|gather)/,
+    'core/src/techniques/radiance-cascades/transport.ts': /^RC transport /,
+    'three/src/instance-id-resolve.ts': 'no storage buffers',
 };
 
 /** Pipelines from dependencies, made on our device through the files above: the labels they must show up under. */
@@ -466,7 +466,7 @@ describe('storage buffers per shader stage in every pipeline gi builds (pmndrs/g
 
     // Reads what the tests above counted, so it runs after them (alone, with -t, it reports everything uncounted).
     it('every source file that makes a pipeline is covered above (counted, or declares no storage buffer)', () => {
-        const makers = ['bvh/src', 'ddgi-core/src', 'ddgi-three/src']
+        const makers = ['bvh/src', 'core/src', 'three/src', 'ddgi-three/src']
             .flatMap((directory) => sourceFiles(join(PACKAGES, directory)))
             .filter((path) => MAKES_PIPELINE.test(readFileSync(path, 'utf8')))
             .map((path) => relative(PACKAGES, path).replaceAll('\\', '/'))

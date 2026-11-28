@@ -32,7 +32,7 @@ import {
     type MeshBvh,
     type MeshGeometry,
     type MeshTreeTopology,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
 
 /** Size of one three-mesh-bvh node, in 32-bit words and 16-bit halves. */
 const TMBVH_WORDS_PER_NODE = 8;

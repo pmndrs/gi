@@ -1,6 +1,6 @@
 import { Color, CubeTexture, DataTexture, DirectionalLight, EquirectangularReflectionMapping, FloatType, RGBAFormat, Scene, Texture } from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import type { EnvironmentDescriptor } from '@pmndrs/ddgi-core';
+import type { EnvironmentDescriptor } from '@pmndrs/gi-core';
 import { chooseEnvironment, environmentDescriptor, sameChoice, sunIlluminance, type PmndrsSkyLike, type SkyMeshLike } from './environment.ts';
 
 const FAKE_GPU_TEXTURE = { label: 'uploaded' } as unknown as GPUTexture;

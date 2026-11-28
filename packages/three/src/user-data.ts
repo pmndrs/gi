@@ -40,7 +40,7 @@
  * The flag is read from the object itself, not inherited from its parents.
  */
 
-import type { Aabb } from '@pmndrs/ddgi-core';
+import type { Aabb } from '@pmndrs/gi-core';
 import type { Color, Object3D, Texture } from 'three';
 
 export const GI_USER_DATA = {

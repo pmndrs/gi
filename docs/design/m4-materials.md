@@ -114,13 +114,13 @@ With both: three's textures 1.25 GB, DDGI ~0.6 GB, GI's store ~35 MB. That leave
 
 M3 (branch `m3`) owns tree building and refit (`trace/mesh-bvh*`, `gpu-mesh-trees.ts`, `top-level*`, `sah-builder.ts`, `packages/bvh`), the change feed (`scene/change-log.ts`, `scene/instance-transforms.ts`, the contract's change-feed types) and volumes. M4 stays out of those.
 
-Paths below are under `packages/ddgi-core/src/platform/` unless they say otherwise.
+Paths below are under `packages/core/src/platform/` unless they say otherwise.
 
 | Task | Touches |
 | --- | --- |
 | T4.1 | **new** `textures/` (store, `gi/texture-store`, sources); `shade/wgsl.ts`, `shade/hit-shading.ts` (`giSurfaceAt`, `giSurfaceAtCone`); `scene/layout.ts` **material record words only** (`MATERIAL_WORD`: texture layer, metalness, metalness map, opacity, alpha mode); `scene/wgsl.ts` (`GiMaterial`); `scene/platform-scene.ts` (texture entries); `contract/scene.ts` (texture source, material fields); `device-requirements.ts`; `gi-platform.ts` (wiring) |
 | T4.2 | **new** `trace/material-test-wgsl.ts` (`giMaterialPasses`), **new** `trace/triangle-flags.ts` (`gi/triangle-flags`); `trace/wgsl.ts`, **one call in the leaf test** plus an instance flag bit; `trace/ray-queries.ts` (capabilities, store binding, running the flags kernel after a tree install); `trace/reference-tracer.ts`, `trace/cpu-traversal.ts`, `trace/oracle-fixtures.ts` (CPU reference with materials) |
-| T4.3 | `packages/ddgi-three/src/`: `convert.ts`, `scene-sync.ts`, `user-data.ts`, `texture-average.ts` (deleted); `docs/api/three.md` |
+| T4.3 | `packages/three/src/`: `convert.ts`, `scene-sync.ts`, `user-data.ts`, `texture-average.ts` (deleted); `docs/api/three.md` |
 | T4.4 | `apps/viewer/src/scene/` and the viewer's debug views; scene manifests and the procedural scene builders; `tools/reference/cycles` (textured renders); new GPU test pages |
 | T4.5 | `docs/milestones/M4.md`, PROGRESS, `bench/results` |
 

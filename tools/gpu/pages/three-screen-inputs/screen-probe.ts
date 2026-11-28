@@ -8,8 +8,8 @@
  * Not a page itself (no index.html).
  */
 
-import type { FrameScreen } from '../../../../packages/ddgi-core/src/platform/contract/frame.ts';
-import type { GITechnique, TechniqueContext, TechniqueScreenFrame } from '../../../../packages/ddgi-core/src/platform/contract/technique.ts';
+import type { FrameScreen } from '../../../../packages/core/src/platform/contract/frame.ts';
+import type { GITechnique, TechniqueContext, TechniqueScreenFrame } from '../../../../packages/core/src/platform/contract/technique.ts';
 
 /** One pixel's channels as the technique read them. */
 export interface ScreenSample {

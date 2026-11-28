@@ -160,7 +160,7 @@ describe('checkTarballContents', () => {
     test('refuses dependencies a consumer could not install', () => {
         const failures = checkTarballContents(complete, {
             ...manifest,
-            dependencies: { '@pmndrs/ddgi-core': 'workspace:*', '@pmndrs/bvh': '0.0.0' },
+            dependencies: { '@pmndrs/gi-core': 'workspace:*', '@pmndrs/bvh': '0.0.0' },
         });
         expect(failures).toHaveLength(2);
     });
@@ -172,7 +172,7 @@ describe('checkTarballContents', () => {
     });
 
     test('allows workspace devDependencies, which consumers never install', () => {
-        expect(checkTarballContents(complete, { ...manifest, devDependencies: { '@pmndrs/ddgi-core': 'workspace:*' } })).toEqual([]);
+        expect(checkTarballContents(complete, { ...manifest, devDependencies: { '@pmndrs/gi-core': 'workspace:*' } })).toEqual([]);
     });
 });
 

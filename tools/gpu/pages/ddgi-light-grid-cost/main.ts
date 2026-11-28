@@ -28,7 +28,7 @@
  */
 
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
-import { LIGHT_GRID_PASS } from '../../../../packages/ddgi-core/src/platform/shade/light-grid.ts';
+import { LIGHT_GRID_PASS } from '../../../../packages/core/src/platform/shade/light-grid.ts';
 import { assert } from '../../client.ts';
 import { startViewerScene, yieldToCallbacks, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';
 import { runThreePage } from '../three-shared/harness.ts';

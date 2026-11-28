@@ -25,7 +25,7 @@ import {
     variantPreset,
     type CompareToggle,
     type CompareValues,
-} from '../../../../packages/ddgi-core/src/techniques/radiance-cache/compare-toggles.ts';
+} from '../../../../packages/core/src/techniques/radiance-cache/compare-toggles.ts';
 import { h } from './dom';
 import { withHelp } from './panel';
 

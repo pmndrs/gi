@@ -74,8 +74,8 @@ export default defineConfig({
                 // plain-WebGPU example doesn't download three.
                 manualChunks(id) {
                     if (id.includes('/node_modules/')) return id.includes('/three/') ? 'three' : 'vendor';
-                    if (id.includes('/packages/ddgi-three/')) return 'ddgi-three';
-                    if (id.includes('/packages/')) return 'ddgi-core';
+                    if (id.includes('/packages/three/') || id.includes('/packages/ddgi-three/')) return 'gi-three';
+                    if (id.includes('/packages/')) return 'gi-core';
                     return undefined;
                 },
             },

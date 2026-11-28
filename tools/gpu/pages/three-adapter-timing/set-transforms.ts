@@ -21,7 +21,7 @@
  */
 
 import { InstancedMesh, Matrix4, MeshStandardMaterial, SphereGeometry, type Scene } from 'three/webgpu';
-import type { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
+import type { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
 
 export const SET_TRANSFORMS_INSTANCES = 10_000;
 /** T2.M1 item 1's bar (TASKS): 10,000 transforms through one call in at most 2 ms of CPU. */

@@ -51,13 +51,13 @@
 
 import { mrt, normalView, output, packNormalToRGB, pass } from 'three/tsl';
 import { NodeMaterial, QuadMesh, type Mesh, type Node, type Object3D, type WebGPURenderer } from 'three/webgpu';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { RadianceCacheTechnique } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/radiance-cache-technique.ts';
-import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings } from '../../../../packages/ddgi-core/src/techniques/radiance-cache/settings.ts';
-import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/ddgi-three/src/composite.ts';
-import { screenInputs } from '../../../../packages/ddgi-three/src/screen-inputs.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { RadianceCacheTechnique } from '../../../../packages/core/src/techniques/radiance-cache/radiance-cache-technique.ts';
+import { DEFAULT_RADIANCE_CACHE_SETTINGS, type RadianceCacheSettings } from '../../../../packages/core/src/techniques/radiance-cache/settings.ts';
+import { ddgi, giAlbedo, GI_ALBEDO_OUTPUT, GI_NORMAL_OUTPUT } from '../../../../packages/three/src/composite.ts';
+import { screenInputs } from '../../../../packages/three/src/screen-inputs.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadScene } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';

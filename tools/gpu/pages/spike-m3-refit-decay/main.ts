@@ -37,7 +37,7 @@ import {
     TraceBatchKernel,
     type TraceRay,
     type TraceSceneBuffers,
-} from '../../../../packages/ddgi-core/src/platform/trace/index.ts';
+} from '../../../../packages/core/src/platform/trace/index.ts';
 import { GpuHplocBuilder } from '../../../../packages/bvh/src/gpu-hploc.ts';
 import type { GpuLayoutMeshBvh } from '../../../../packages/bvh/src/gpu-layout.ts';
 import { GpuMeshRefit } from '../../../../packages/bvh/src/gpu-mesh-refit.ts';

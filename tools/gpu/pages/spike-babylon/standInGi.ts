@@ -15,7 +15,7 @@
  * Only the contract's types are imported (no runtime code from ddgi-core).
  */
 
-import type { ShadingModule, ShadingParameter } from '../../../../packages/ddgi-core/src/platform/contract/shading-module.ts';
+import type { ShadingModule, ShadingParameter } from '../../../../packages/core/src/platform/contract/shading-module.ts';
 
 export type Rgb = readonly [number, number, number];
 

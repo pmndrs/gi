@@ -51,21 +51,21 @@
  *    turbidity, intensity or sunIlluminance.
  */
 
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import { buildCalibratedSky, DEFAULT_TURBIDITY } from '../../../../packages/ddgi-core/src/platform/sky/calibrated-sky.ts';
-import { liftSunAboveMinimum } from '../../../../packages/ddgi-core/src/platform/sky/procedural-sky.ts';
-import { MAX_TURBIDITY, MIN_TURBIDITY } from '../../../../packages/ddgi-core/src/platform/sky/preetham.ts';
-import { floatToHalf, halfImageToTextureRgba, halfToFloat } from '../../../../packages/ddgi-core/src/platform/sky/half-float.ts';
-import { PlatformSky, RADIANCE_MAP_HEIGHT, RADIANCE_MAP_WIDTH } from '../../../../packages/ddgi-core/src/platform/sky/platform-sky.ts';
-import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../../../../packages/ddgi-core/src/platform/sky/projection-wgsl.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import { buildCalibratedSky, DEFAULT_TURBIDITY } from '../../../../packages/core/src/platform/sky/calibrated-sky.ts';
+import { liftSunAboveMinimum } from '../../../../packages/core/src/platform/sky/procedural-sky.ts';
+import { MAX_TURBIDITY, MIN_TURBIDITY } from '../../../../packages/core/src/platform/sky/preetham.ts';
+import { floatToHalf, halfImageToTextureRgba, halfToFloat } from '../../../../packages/core/src/platform/sky/half-float.ts';
+import { PlatformSky, RADIANCE_MAP_HEIGHT, RADIANCE_MAP_WIDTH } from '../../../../packages/core/src/platform/sky/platform-sky.ts';
+import { RADIANCE_SH_COUNT, SKY_HARMONICS_LAYOUT } from '../../../../packages/core/src/platform/sky/projection-wgsl.ts';
 import {
     bruteForceIrradiance,
     convolveWithCosineLobe,
     projectEquirectRadiance,
     SH_COEFFICIENT_COUNT,
-} from '../../../../packages/ddgi-core/src/platform/sky/spherical-harmonics.ts';
-import { sampleEquirectBilinear } from '../../../../packages/ddgi-core/src/platform/sky/equirect.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
+} from '../../../../packages/core/src/platform/sky/spherical-harmonics.ts';
+import { sampleEquirectBilinear } from '../../../../packages/core/src/platform/sky/equirect.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { loadSkyFile, type SkySidecar } from '../../../../scenes/src/sky/sky-file.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';

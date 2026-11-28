@@ -18,7 +18,7 @@ It is built from AMD's GI-1.0, as GI-1.2 in [Capsaicin](https://github.com/GPUOp
 
 Every difference from Capsaicin, with its reason, is in the design doc's divergence register ([docs/design/radiance-cache.md](../design/radiance-cache.md)). Its settings each name the register row they come from.
 
-The code is in [`packages/ddgi-core/src/techniques/radiance-cache/`](../../packages/ddgi-core/src/techniques/radiance-cache/). [Every export](#every-export-of-pmndrsgiradiance-cache) is listed at the end. Which of the two techniques to use, and how they stack, is in [the guide](../guides/ddgi-or-radiance-cache.md). The working example is [`examples/12-radiance-cache`](../../examples/12-radiance-cache/).
+The code is in [`packages/core/src/techniques/radiance-cache/`](../../packages/core/src/techniques/radiance-cache/). [Every export](#every-export-of-pmndrsgiradiance-cache) is listed at the end. Which of the two techniques to use, and how they stack, is in [the guide](../guides/ddgi-or-radiance-cache.md). The working example is [`examples/12-radiance-cache`](../../examples/12-radiance-cache/).
 
 ## Getting started with three.js
 

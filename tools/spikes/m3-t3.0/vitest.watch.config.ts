@@ -16,7 +16,7 @@ export default mergeConfig(
     defineConfig({
         root: repo,
         test: {
-            include: ['packages/ddgi-three/**/*.test.ts', 'packages/gi/**/*.test.ts'],
+            include: ['packages/three/**/*.test.ts', 'packages/ddgi-three/**/*.test.ts', 'packages/gi/**/*.test.ts'],
             setupFiles: [resolve(__dirname, 'vitest-setup.ts')],
         },
     }),

@@ -21,7 +21,7 @@
 
 import { Mesh, type Material } from 'three';
 import { loadAllManifests } from '../../../../apps/viewer/src/scene/manifests.ts';
-import type { DDGITechnique } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
+import type { DDGITechnique } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
 import { assert } from '../../client.ts';
 import { halfToFloat, readTextureBytes } from '../ddgi-shared/harness.ts';
 import { startViewerScene, type ViewerScene } from '../ddgi-shared/viewer-scene.ts';

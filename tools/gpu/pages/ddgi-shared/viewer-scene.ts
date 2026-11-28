@@ -12,12 +12,12 @@
  */
 
 import { PerspectiveCamera } from 'three/webgpu';
-import { GIPlatformImpl } from '../../../../packages/ddgi-core/src/platform/gi-platform.ts';
-import type { EnvironmentDescriptor } from '../../../../packages/ddgi-core/src/platform/contract/scene.ts';
-import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/ddgi-core/src/techniques/ddgi/ddgi-technique.ts';
-import { DEFAULT_WARM_UP_PASSES, type DDGISettingsInput } from '../../../../packages/ddgi-core/src/techniques/ddgi/settings.ts';
-import type { MeshTreeOptions } from '../../../../packages/ddgi-core/src/platform/trace/ray-queries.ts';
-import { ThreeGI } from '../../../../packages/ddgi-three/src/three-gi.ts';
+import { GIPlatformImpl } from '../../../../packages/core/src/platform/gi-platform.ts';
+import type { EnvironmentDescriptor } from '../../../../packages/core/src/platform/contract/scene.ts';
+import { DDGITechnique, type DDGITechniqueOptions } from '../../../../packages/core/src/techniques/ddgi/ddgi-technique.ts';
+import { DEFAULT_WARM_UP_PASSES, type DDGISettingsInput } from '../../../../packages/core/src/techniques/ddgi/settings.ts';
+import type { MeshTreeOptions } from '../../../../packages/core/src/platform/trace/ray-queries.ts';
+import { ThreeGI } from '../../../../packages/three/src/three-gi.ts';
 import { loadScene, type LoadedScene, type LoadSceneOptions } from '../../../../apps/viewer/src/scene/load-scene.ts';
 import type { SceneManifest } from '../../../../scenes/src/manifest.ts';
 import { platformSkyEnvironment } from '../../../../scenes/src/sky/sky-image.ts';
